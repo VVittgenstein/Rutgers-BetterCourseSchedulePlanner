@@ -119,9 +119,9 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "done",
           "dependencies": [],
-          "blocked": true,
+          "blocked": false,
           "blocked_by": [
             {
               "dep_id": "DEP-001",
@@ -151,7 +151,7 @@
             "Q-01"
           ],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-15T09:55:03Z",
           "owner": "tbd",
           "tags": [
             "subtask",
