@@ -1,0 +1,855 @@
+{
+  "project_context": {
+    "brief": "构建一个基于 Rutgers SOC 公开数据的选课查询与空位提醒网站，在“浏览/筛选课程 + 订阅空位提醒”场景下替代 CSP 和 WebReg 的日常使用体验，同时保持低运营成本与开源可一键部署能力。",
+    "mvp_goal": "在每个部署环境内运行本地 SQLite 数据库 + 轻量 API 服务 + 前端 UI，实现针对多学期与多校区课程的浏览、多维筛选与邮箱/Discord 空位提醒闭环，并保持低运营成本与可在个人电脑/服务器一键部署。",
+    "non_goals": [
+      "不接入 WebReg 或任何需要登录的系统页面，不在本项目中执行自动选课/退课操作。",
+      "不实现完整的学位规划、毕业审核或复杂先修关系校验，仅在 UI 展示先修与核心课程标签。",
+      "不处理除邮箱地址与 Discord 标识之外的用户敏感信息，也不构建账号/登录体系。",
+      "不承担对 Rutgers 官方课程与容量信息的权威解释责任，数据以官方 SOC 为准。",
+      "MVP 不支持短信等额外通知渠道，仅聚焦邮箱和 Discord。",
+      "MVP 不强求覆盖全部校区与研究生课程，具体范围后续确认。"
+    ]
+  },
+  "md_source": "2025-11-11-dr.md",
+  "generated_at": "2025-11-13T00:00:00Z",
+  "tasks": {
+    "T-20251113-soc-api-validation": {
+      "seed_id": null,
+      "title": "验证 Rutgers SOC API 参数、限流与字段行为",
+      "type": "research",
+      "summary": "围绕 C2、R-20251113-soc-api-change 与开放问题 Q-01，对 Rutgers SOC API 的参数组合、拉取全校课程的策略、速率限制与返回字段进行实测，产出可复用的调用指南，降低后续抓取脚本与通知轮询的风险。",
+      "acceptance_draft": [
+        "整理出在多学期、多校区场景下获取全部课程的推荐调用策略（例如按 term + campus / subject 分批），并估算完整抓取一次全量以及常规增量更新所需时间。",
+        "记录 SOC API 的关键参数与典型响应样例，确认字段覆盖 FR-01/FR-02 所需信息，并标记可能缺失或不稳定的字段。",
+        "通过高频调用实验观察速率限制与错误码，给出可接受的最大抓取与轮询频率建议，并形成一份内部说明文档。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "需要在开发前期通过实测确认可用参数、速率限制和结构稳定性。"
+        }
+      ],
+      "unblock_plan": "在测试环境以较低频率尝试多种参数组合，逐步提高频率观察限流行为，将结果记录到 docs/soc_api_notes 中并同步到抓取脚本与通知配置。",
+      "estimate_h": 4,
+      "risk": "high",
+      "confidence": 0.65,
+      "interfaces_touched": [
+        "data-source",
+        "observability"
+      ],
+      "artifacts": [
+        "docs/soc_api_notes.md"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "R-20251113-soc-api-change",
+        "Q-01"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "research",
+        "soc-api"
+      ]
+    },
+    "T-20251113-act-001-soc-json-scraper": {
+      "seed_id": "ACT-001",
+      "title": "封装 Rutgers SOC 数据抓取与本地数据库初始化脚本",
+      "type": "coding",
+      "summary": "基于 D-20251113-data-source-soc，从 Rutgers SOC 接口按学期与校区批量抓取课程与 Section，使用事务将结果写入本地 SQLite 数据库，为查询 API 与通知进程提供统一数据源，并验证字段覆盖 FR-01/FR-02。",
+      "acceptance_draft": [
+        "脚本支持以 term + campus 为输入，或接收 term/campus 列表批量处理，针对每个组合调用 SOC API 并将课程/Section 写入 SQLite 数据库（事务 + 幂等 upsert），失败时提供重试与清晰错误日志。",
+        "数据库中的 courses/sections 等表字段覆盖 FR-01/FR-02 中列出的关键字段（课程标题、代码、学分、院系、Index、Section、时间地点、核心代码、先修、授课模式等），随机抽样 ≥10 门课与官方 SOC 页面比对值一致。",
+        "脚本输出更新摘要（新增/更新/删除条数、学期/校区范围），支持“全量初始化”和“增量更新”两种模式，增量模式仅替换状态发生变化的记录。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-007-local-db-schema"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "接口无正式公开文档，速率限制与长期稳定性未知；结构或访问策略变更将直接影响数据抓取与通知准确性。"
+        }
+      ],
+      "unblock_plan": "先完成 T-20251113-soc-api-validation 与 T-20251113-act-007-local-db-schema，锁定字段/索引定义后再实现写入与增量更新逻辑，并在 CI 中加入数据库一致性校验。",
+      "estimate_h": 6,
+      "risk": "high",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "data-source",
+        "database",
+        "build-script"
+      ],
+      "artifacts": [
+        "scripts/fetch_soc_data.ts",
+        "data/courses.sqlite"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "R-20251113-soc-api-change",
+        "#md-4-1-fr-01"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-001",
+        "backend",
+        "soc-api",
+        "data-pipeline"
+      ]
+    },
+    "T-20251113-act-002-frontend-filter-mvp": {
+      "seed_id": "ACT-002",
+      "title": "实现基于本地查询 API 的课程列表与多维筛选（MVP）",
+      "type": "coding",
+      "summary": "前端 SPA 不再一次性加载全部课程 JSON，而是通过本地查询 API 按需请求课程/Section 数据，提供与 FR-01/FR-02/FR-03 对齐的多维筛选、周视图及分页体验，确保 UI 与数据库保持一致。",
+      "acceptance_draft": [
+        "用户选择 term + campus 后，前端调用本地 API 拉取分页课程/Section 数据并展示完整字段，随机抽样 ≥10 门课核对与 SOC 数据库存储一致。",
+        "筛选 UI 支持标题/代码关键字、学分、院系、课程层次、先修、核心代码、Index/Section、教师、状态、星期/时间区间、校区/教学楼/教室、授课模式等字段的单条件与多条件组合，前端会将条件映射为 API 查询参数并保证结果一致。",
+        "在约 4500 门课程（含 1 万+ Section）的数据量下，常见筛选、分页与视图切换的“API 往返 + 前端渲染”整体响应 < 0.5 秒；当本地 API 不可用时给出明确的错误提示。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-001-soc-json-scraper",
+        "T-20251113-act-008-local-query-api"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 8,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "frontend",
+        "api-client",
+        "filter-logic",
+        "calendar-view"
+      ],
+      "artifacts": [
+        "src/pages/courses.tsx",
+        "src/components/filters/*",
+        "src/components/calendar-view/*",
+        "src/api/hooks/useCourses.ts"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "EVID-006",
+        "R-20251113-frontend-perf",
+        "D-20251113-arch-static-frontend-b"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-002",
+        "frontend",
+        "filter",
+        "mvp"
+      ]
+    },
+    "T-20251113-act-003-mail-notify-function": {
+      "seed_id": "ACT-003",
+      "title": "实现课程空位邮件通知功能（本地定时任务）",
+      "type": "coding",
+      "summary": "依据 D-20251113-notify-channels-email-discord，在每个部署环境中运行本地后台进程定期轮询 SOC openSections，结合本地数据库中的订阅记录判断 Closed→Open 事件，并通过可配置的邮件发送模块通知用户，满足 FR-04/FR-05/FR-06 与 NFR-02 的延迟与可靠性要求。",
+      "acceptance_draft": [
+        "在本地测试环境模拟 Closed→Open 场景时，记录从状态变化到邮件发送的时间，平均延迟 < 30 秒、最大延迟 < 60 秒，且同一开放事件同一邮箱只收到 1 封邮件。",
+        "邮件正文包含课程名称、Index、Section、上课时间地点与订阅人信息，并提供安全的本地退订/管理链接；退订后同一订阅不再收到后续通知。",
+        "本地通知进程支持自定义轮询频率、日志与错误重试，能够在网络异常/进程重启后恢复状态，不会静默丢失事件。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-009-subscription-management",
+        "T-20251113-act-010-local-polling-notify",
+        "T-20251113-act-011-mail-sender-module"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "接口无正式公开文档，速率限制与长期稳定性未知；若访问策略收紧，将影响通知准确性。"
+        },
+        {
+          "dep_id": "DEP-002",
+          "name": "SendGrid 或同类邮件发送服务",
+          "type": "api",
+          "status": "approved",
+          "doc_url": "",
+          "note": "免费额度有限且需要正确配置发件域名与内容策略，以降低被判为垃圾邮件的风险。"
+        }
+      ],
+      "unblock_plan": "基于 T-20251113-act-010-local-polling-notify 提供的轮询结果与 T-20251113-act-011-mail-sender-module 中的发送适配器，设计本地 cron/worker，验证多次重试与恢复逻辑后再开放配置。",
+      "estimate_h": 8,
+      "risk": "high",
+      "confidence": 0.65,
+      "interfaces_touched": [
+        "local-service",
+        "notification-service",
+        "email-provider",
+        "scheduler"
+      ],
+      "artifacts": [
+        "services/notifier/email_worker.ts",
+        "templates/email/*",
+        "config/email.json"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "EVID-005",
+        "R-20251113-notify-delay",
+        "R-20251113-spam"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-003",
+        "backend",
+        "email",
+        "notification"
+      ]
+    },
+    "T-20251113-act-004-discord-notify-channel": {
+      "seed_id": "ACT-004",
+      "title": "实现 Discord 通知通道并评估私信与频道策略",
+      "type": "coding",
+      "summary": "在本地通知管道中新增 Discord Bot 通道，运行本地 Bot 客户端将课程开放提醒发送给用户或频道，并结合 Q-04 评估“私信 vs 频道广播”的可行性、噪音与速率限制表现，为默认策略提供依据。",
+      "acceptance_draft": [
+        "在本地或测试服务器中，Bot 能根据数据库内的订阅记录成功向指定用户或频道发送包含课程名、Index 与时间地点的提醒消息。",
+        "实现对 Discord API 速率限制的节流与重试逻辑，本地轮询高频触发时仍保持稳定，不出现长期封禁或严重错误。",
+        "文档中记录不同通知模式（私信/频道）的优缺点与推荐默认值，并与产品负责人达成一致。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P2",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-009-subscription-management",
+        "T-20251113-act-010-local-polling-notify",
+        "T-20251113-act-003-mail-notify-function"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "接口结构与速率限制的不确定性会影响 Discord 通知的触发准确性。"
+        },
+        {
+          "dep_id": "DEP-003",
+          "name": "Discord Bot API",
+          "type": "api",
+          "status": "approved",
+          "doc_url": "",
+          "note": "受速率限制和内容政策约束，过于频繁或模板化的消息可能被限流或封禁。"
+        }
+      ],
+      "unblock_plan": "在本地环境运行 Bot，复用 T-20251113-act-010-local-polling-notify 的事件推送，结合 Discord Sandbox 逐步提升频率以摸清速率限制，再决定默认通知模式。",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.6,
+      "interfaces_touched": [
+        "local-service",
+        "notification-service",
+        "discord-bot"
+      ],
+      "artifacts": [
+        "services/notifier/discord_bot.ts",
+        "config/discord.json"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-004",
+        "R-20251113-notify-delay",
+        "R-20251113-spam"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-004",
+        "backend",
+        "discord",
+        "notification"
+      ]
+    },
+    "T-20251113-act-005-frontend-i18n-setup": {
+      "seed_id": "ACT-005",
+      "title": "搭建前端 i18n 架构并完成中英文界面",
+      "type": "coding",
+      "summary": "依据决策 D-20251113-multi-lang-day1，在前端引入标准 i18n 库，将所有静态文案（包括错误提示与表单标签）集中到多语言资源文件中，至少完成中英文版本，并为后续小语种支持预留扩展空间。",
+      "acceptance_draft": [
+        "所有界面文案均通过 i18n 资源文件管理，不再直接硬编码在组件中。",
+        "用户可在 UI 中切换中/英文，切换后界面无混合语言或乱码，课程数据本身保留英文但核心代码/字段标签可本地化说明。",
+        "构建或 CI 阶段能检测到新增 key 未提供翻译的情况，并给出告警或失败。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-002-frontend-filter-mvp"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.75,
+      "interfaces_touched": [
+        "frontend",
+        "i18n"
+      ],
+      "artifacts": [
+        "src/i18n/index.ts",
+        "locales/en/*.json",
+        "locales/zh/*.json"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-008",
+        "R-20251113-i18n-maintenance"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-005",
+        "frontend",
+        "i18n",
+        "ux"
+      ]
+    },
+    "T-20251113-act-006-deploy-docs-cicd": {
+      "seed_id": "ACT-006",
+      "title": "编写并验证本地一键部署文档与辅助脚本",
+      "type": "docs",
+      "summary": "围绕“本地数据库 + 轻量 API 服务 + 前端 UI + 后台通知进程”的架构，整理本地部署步骤与环境要求，编写 README 与辅助脚本，使普通用户在个人电脑或服务器上无需修改代码即可初始化数据库、运行 API/前端/通知服务并完成配置。",
+      "acceptance_draft": [
+        "README 提供针对至少两种主流桌面操作系统（例如 Windows 与 macOS 或 Linux）的本地部署步骤，包含：安装 Node.js/bun、SQLite 或嵌入式数据库依赖、项目初始化、环境变量与密钥配置、如何执行数据库初始化/增量更新脚本，以及如何同时启动前端、API 服务与本地通知进程。",
+        "仓库包含可直接使用的本地辅助脚本（例如 scripts/setup_local_env.sh 和 scripts/run_local.sh），在一台全新环境的个人电脑上，用户 clone 仓库后运行脚本即可完成依赖安装校验、数据库初始化、服务启动与通知模块验证。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-001-soc-json-scraper",
+        "T-20251113-act-002-frontend-filter-mvp",
+        "T-20251113-act-003-mail-notify-function",
+        "T-20251113-act-008-local-query-api",
+        "T-20251113-act-009-subscription-management",
+        "T-20251113-act-010-local-polling-notify"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "以本地单机运行与容器部署为一等公民目标设计流程：在至少两种主流桌面环境验证脚本可初始化 SQLite、启动 API/前端/通知服务，再整理成 README。",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "docs",
+        "local-dev",
+        "deployment"
+      ],
+      "artifacts": [
+        "README.md",
+        ".env.example",
+        "scripts/setup_local_env.sh",
+        "scripts/run_local.sh"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-006",
+        "EVID-007",
+        "R-20251113-oss-governance"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-006",
+        "docs",
+        "deployment",
+        "local-deploy"
+      ]
+    },
+    "T-20251113-act-007-local-db-schema": {
+      "seed_id": "ACT-007",
+      "title": "设计本地数据库模式与增量更新机制",
+      "type": "coding",
+      "summary": "定义 SQLite 等嵌入式数据库中的课程、Section、会议信息与订阅表结构，设计索引与约束，并实现初始化/迁移与增量更新策略，使数据成为筛选与通知的单一可信源。",
+      "acceptance_draft": [
+        "提供 schema 定义（课程、Section、meeting_times、订阅等表）与必要索引/约束，字段覆盖 FR-01/FR-02/FR-04 所需信息，并附带 ER/说明文档。",
+        "实现 scripts/migrate_db.* 可初始化或升级数据库，重复运行不会破坏已有数据；随机抽样记录验证字段与 SOC 返回一致。",
+        "定义增量更新策略（例如基于 upsert、事务或临时表交换），在模拟部分课程状态变化的场景下，仅更新发生变化的数据且不中断前端/API 查询。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-soc-api-validation"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "接口结构与速率限制需要先通过 T-20251113-soc-api-validation 实测后，才能确定 schema 设计所需字段。"
+        }
+      ],
+      "unblock_plan": "在 T-20251113-soc-api-validation 中确认字段/速率后，设计 schema 与索引并用小样本跑通迁移脚本，再推广到完整数据集。",
+      "estimate_h": 8,
+      "risk": "mid",
+      "confidence": 0.65,
+      "interfaces_touched": [
+        "database",
+        "data-pipeline"
+      ],
+      "artifacts": [
+        "db/schema.sql",
+        "scripts/migrate_db.ts",
+        "docs/db_schema.md"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "EVID-006",
+        "R-20251113-frontend-perf"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-007",
+        "backend",
+        "database",
+        "data-pipeline"
+      ]
+    },
+    "T-20251113-act-008-local-query-api": {
+      "seed_id": "ACT-008",
+      "title": "实现本地课程查询 API 服务",
+      "type": "coding",
+      "summary": "基于 SQLite 数据库实现 RESTful API（如 /api/courses、/api/sections、/api/filters），支持多字段过滤、分页与排序，为前端筛选与订阅面板提供一致的数据访问层。",
+      "acceptance_draft": [
+        "实现至少 /api/courses 与 /api/sections 两个端点，接受 term/campus/subject/关键字/时间/core_code/level 等查询参数，返回 JSON 包含分页信息，任意组合筛选均能得到与数据库一致的结果。",
+        "在 4500+ 课程数据规模下，常见查询（含 3~5 个过滤条件）响应时间 < 300 ms，提供必要索引与缓存并通过压测记录指标。",
+        "API 提供错误处理与健康检查端点（例如 /api/health），当前端无法连接时能返回明确错误码与原因，便于 UI 友好提示。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-007-local-db-schema",
+        "T-20251113-act-001-soc-json-scraper"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "复用抓取脚本产出的 SQLite 数据，挑选轻量框架（Express/Fastify/FastAPI 等）实现端点，并通过自动化测试覆盖主要组合筛选。",
+      "estimate_h": 8,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "backend",
+        "api",
+        "database"
+      ],
+      "artifacts": [
+        "services/api/server.ts",
+        "services/api/routes/courses.ts",
+        "tests/api/courses.test.ts"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-006",
+        "R-20251113-frontend-perf"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-008",
+        "backend",
+        "api",
+        "database"
+      ]
+    },
+    "T-20251113-act-009-subscription-management": {
+      "seed_id": "ACT-009",
+      "title": "实现订阅管理接口与本地存储",
+      "type": "coding",
+      "summary": "为课程/Section 提供订阅与退订 UI，以及与数据库衔接的 /api/subscribe、/api/unsubscribe 等接口，将用户邮箱/Discord 标识与目标课程索引安全写入本地订阅表。",
+      "acceptance_draft": [
+        "在课程列表或详情中提供“订阅空位”入口，点击后调用 /api/subscribe 写入数据库，并支持校验输入（邮箱或 Discord 标识）以及重复订阅提示。",
+        "实现 /api/unsubscribe（含带签名的退订链接）与订阅列表查询接口，用户可从邮件/Discord 链接或 UI 中退订，数据库记录同步更新。",
+        "在本地运行环境中执行一次完整流程（订阅→模拟开放→退订），确认数据库记录、API 响应与通知任务读取到的数据一致。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-002-frontend-filter-mvp",
+        "T-20251113-act-007-local-db-schema",
+        "T-20251113-act-008-local-query-api"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "在完成课程列表与 API 基础后，扩展 UI 和接口，编写端到端测试验证订阅/退订流程与数据库同步。",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "frontend",
+        "api",
+        "database",
+        "notification-service"
+      ],
+      "artifacts": [
+        "src/components/subscription/*",
+        "services/api/routes/subscriptions.ts",
+        "db/subscriptions.sql"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-005",
+        "R-20251113-notify-delay"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-009",
+        "frontend",
+        "backend",
+        "notification"
+      ]
+    },
+    "T-20251113-act-010-local-polling-notify": {
+      "seed_id": "ACT-010",
+      "title": "本地空位轮询与通知调度服务",
+      "type": "coding",
+      "summary": "实现常驻后台任务或定时器，每 30–60 秒轮询 Rutgers openSections 接口，结合本地订阅数据判断课程状态变化，触发事件管道供邮箱/Discord 等通道消费，并处理幂等与错误恢复。",
+      "acceptance_draft": [
+        "可配置轮询频率与 term/campus 范围，模拟 Section 状态从 Closed→Open 的过程，确认在一个轮询周期内生成事件并写入去重缓存。",
+        "同一开放事件最多触发一次通知，短时间内频繁开关的 Section 不会造成重复推送；提供幂等键或状态表来记录已通知事件。",
+        "轮询任务具备日志、指标与错误恢复能力（例如网络失败自动重试、进程重启后继续），并可将事件推送到邮箱/Discord 等通道的队列。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-007-local-db-schema",
+        "T-20251113-act-009-subscription-management"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "需要确认 openSections 的速率限制与字段稳定性后才能设定本地轮询与节流策略。"
+        }
+      ],
+      "unblock_plan": "基于 T-20251113-soc-api-validation 成果，选定轮询频率与批量参数，先在小范围 term/campus 上验证事件生成、幂等与日志，再扩展到完整数据集。",
+      "estimate_h": 8,
+      "risk": "high",
+      "confidence": 0.6,
+      "interfaces_touched": [
+        "local-service",
+        "notification-service",
+        "scheduler"
+      ],
+      "artifacts": [
+        "services/notifier/poller.ts",
+        "services/notifier/event_store.ts",
+        "tests/notifier/poller.test.ts"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "R-20251113-notify-delay"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-010",
+        "backend",
+        "notification",
+        "scheduler"
+      ]
+    },
+    "T-20251113-act-011-mail-sender-module": {
+      "seed_id": "ACT-011",
+      "title": "邮件发送模块多平台支持",
+      "type": "coding",
+      "summary": "抽象邮件发送接口并提供至少 SendGrid API 与 SMTP 两种实现，允许通过配置切换，同时支持多语言模板、速率限制与失败重试，以方便不同部署者使用自有邮件服务。",
+      "acceptance_draft": [
+        "提供统一的 MailSender 接口与配置（API key、SMTP host、发件人等），可在不改代码的情况下切换 SendGrid 与 SMTP，实现都能发送测试邮件。",
+        "邮件内容模板支持中英文版本，可注入课程名、Index、订阅者信息等变量；模板缺少翻译或字段时能在构建/测试阶段捕获。",
+        "在模拟配额用尽或网络错误时，模块能降级重试或记录清晰错误日志，不会导致主进程崩溃。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-009-subscription-management"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "在完成订阅存储后，先实现 SendGrid 版本，再扩展 SMTP/本地邮件发送，并接入邮件模板与单元测试。",
+      "estimate_h": 5,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "notification-service",
+        "email-provider",
+        "i18n"
+      ],
+      "artifacts": [
+        "services/notify/mail_sender.ts",
+        "config/email.example.json",
+        "templates/email/*"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-005",
+        "R-20251113-spam"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-011",
+        "backend",
+        "email",
+        "notification"
+      ]
+    }
+  },
+  "questions_for_human": [
+    "Q-01：SOC 抓取范围——是否存在官方推荐的一次性抓取全校课程的参数组合（如 subject=ALL），还是必须按院系/subject 逐个请求？如果只能逐个请求，你能接受的完整抓取时长和抓取频率上限是什么？",
+    "Q-02：课程基础信息的更新频率——静态课程信息（标题、描述、学分等）每日一次更新是否足够，还是需要在选课高峰期临时提高到每小时/每数小时一次？",
+    "Q-03：空位订阅策略——当课程在满员/有空位之间频繁切换时，是只在首次开放时发送一次通知并自动删除订阅，还是每次开放都发送，或允许用户在界面中自定义策略？",
+    "Q-04：Discord 通知形态——更偏向 Bot 私信（更即时但可能更易触发限流）还是频道广播（噪音更大但更稳），以及是否已有规划好的服务器/频道用于测试与正式使用？",
+    "Q-05：周历“框选时间找课”的语义——你更希望框选的是“上课时间完全落在选中时间段内的课程”，还是“与该时间段不冲突的所有可选课程”？该功能期望在 MVP、v1.1 还是 v2.0 交付？",
+    "Q-06：具体覆盖范围——在“需要同时支持多个学期、多校区以及本科/研究生课程”的前提下，MVP 期望最少覆盖哪些 term（例如当前学期 + 下一学期）以及哪些校区组合，以便规划数据抓取批量任务和前端筛选维度？"
+  ],
+  "assumptions": [
+    "假设 Rutgers SOC 公开接口在 2025–2026 学年仍保持可匿名访问，且字段结构与调研时基本一致。",
+    "假设 MVP 阶段需要同时覆盖多个学期、多个校区以及本科和研究生课程，主要用户群体为 Rutgers 各校区的在读学生（含本科与研究生）。",
+    "假设目标用户可以接受通过邮箱或 Discord 接收课程空位通知，不强依赖短信等其他通知渠道。",
+    "假设无需用户登录即可通过带签名的退订链接完成订阅管理，用户能够理解并接受这种轻量级身份验证方式。"
+  ],
+  "risks": [
+    {
+      "id": "R-20251113-soc-api-change",
+      "summary": "Rutgers SOC API 结构或访问策略变更、速率限制收紧，导致课程数据抓取失败或不完整。",
+      "severity": "high",
+      "mitigation": "封装独立的数据访问层，增加结构版本检测与失败重试；对调用错误设置监控与告警；预备基于 HTML 页面解析的备选抓取方式，并控制抓取频率以避免触发限流。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ]
+    },
+    {
+      "id": "R-20251113-notify-delay",
+      "summary": "课程状态变化与用户收到通知之间的延迟过长，或出现漏报/重复通知，削弱“狙击空位”的价值。",
+      "severity": "high",
+      "mitigation": "合理设置轮询周期（例如 30–60 秒），优先使用 openSections 等批量接口；在通知管道中实现幂等处理；为关键任务配置心跳与告警，并通过长期测试收集延迟分布与失败率。",
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "EVID-005"
+      ]
+    },
+    {
+      "id": "R-20251113-frontend-perf",
+      "summary": "在低端设备或数据量增大时，前端渲染与筛选性能不足，导致明显卡顿或响应超时。",
+      "severity": "mid",
+      "mitigation": "使用虚拟列表、分页与延迟渲染减少 DOM 压力；优化筛选算法（尽量 O(n) 扫描、必要时排序）；必要时引入 Web Worker 或 WASM，并通过性能脚本持续监控。",
+      "citations": [
+        "EVID-001",
+        "EVID-006"
+      ]
+    },
+    {
+      "id": "R-20251113-spam",
+      "summary": "邮件或 Discord 消息被用户或平台判定为垃圾信息，导致送达率下降甚至账号/应用被封禁。",
+      "severity": "mid",
+      "mitigation": "使用成熟邮件服务并正确配置发件域名；控制通知频率与内容个性化；在邮件中提供清晰退订入口与订阅说明；为 Discord Bot 设置速率限制与重试策略，必要时采用频道摘要替代大量私信。",
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "EVID-004",
+        "EVID-005"
+      ]
+    },
+    {
+      "id": "R-20251113-i18n-maintenance",
+      "summary": "多语言内容维护滞后，新功能上线时部分语言缺失翻译或内容不一致，影响非英文用户体验。",
+      "severity": "mid",
+      "mitigation": "所有界面文案统一走 i18n 资源文件；在 CI 中加入缺失翻译检查；对未翻译 key 统一回退英文并标记 TODO，定期清理。",
+      "citations": [
+        "EVID-001",
+        "EVID-008"
+      ]
+    },
+    {
+      "id": "R-20251113-oss-governance",
+      "summary": "开源仓库缺乏持续维护，Issue/PR 堆积或依赖安全漏洞得不到修复，削弱社区信任。",
+      "severity": "mid",
+      "mitigation": "制定贡献指南与代码规范；配置依赖安全扫描与自动升级工具；鼓励社区维护者参与协作，并在 README 中明确官方维护范围与责任边界。",
+      "citations": [
+        "EVID-001"
+      ]
+    }
+  ],
+  "external_dependencies": [
+    {
+      "dep_id": "DEP-001",
+      "name": "Rutgers SOC API（courses.json / openSections）",
+      "type": "api",
+      "status": "unknown",
+      "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+      "note": "接口无正式公开文档，速率限制与长期稳定性未知；任何结构或访问策略变更都会影响数据抓取与通知准确性。"
+    },
+    {
+      "dep_id": "DEP-002",
+      "name": "SendGrid 或同类邮件发送服务",
+      "type": "api",
+      "status": "approved",
+      "doc_url": "",
+      "note": "免费额度有限，若用户规模增长可能超限；需要正确配置发件域名与发送策略以降低被判为垃圾邮件的风险。"
+    },
+    {
+      "dep_id": "DEP-003",
+      "name": "Discord Bot API",
+      "type": "api",
+      "status": "approved",
+      "doc_url": "",
+      "note": "受速率限制和内容政策约束，过于频繁或模板化的消息可能被限流或封禁。"
+    },
+    {
+      "dep_id": "DEP-004",
+      "name": "本地运行环境/容器（Node.js + SQLite + 定时任务）",
+      "type": "tool",
+      "status": "approved",
+      "doc_url": "",
+      "note": "每个部署实例需要具备运行 Node.js 服务、SQLite 数据库与后台定时任务的能力，可通过本地运行或容器化实现；不再依赖纯静态托管平台。"
+    }
+  ],
+  "facts": [
+    "本 JSON 基于 2025-11-11-dr 研究结论整理，数据源为 Rutgers SOC 与相关开源/社区资料。:contentReference[oaicite:0]{index=0}",
+    "项目目标是在“浏览筛选课程 + 订阅空位提醒”场景下替代 CSP 和 WebReg 的日常使用体验，而不是替代官方 WebReg 的选课注册流程。",
+    "系统统一使用 Rutgers SOC 公开接口（courses.json、openSections 等）作为课程与容量数据来源，不抓取需要登录的 WebReg 页面。",
+    "架构采用“本地 SQLite 数据库 + 轻量 API 服务 + 前端 SPA + 本地后台通知”的组合，各部署实例独立运行数据库与通知进程，避免浏览器一次性加载几十 MB JSON。",
+    "通知渠道 MVP 聚焦邮箱和 Discord，并通过显式退订/管理入口满足隐私与反垃圾邮件规范。",
+    "项目从 day-1 起按多语言架构设计，至少支持中英文 UI，并通过 i18n 资源文件管理文案以方便后续扩展其他语言。"
+  ],
+  "decisions": [
+    {
+      "id": "D-20251113-arch-static-frontend-b",
+      "summary": "v1.x 阶段采用“本地 SQLite 数据库 + 轻量 API 服务 + 前端 SPA”的一体化架构，而不是继续依赖纯静态前端加载大 JSON 与云函数通知。",
+      "rationale": "courses.json 体积已达 20–40 MB，纯前端加载造成性能、带宽与更新成本过高；将数据落地到本地 SQLite，并由轻量 API/后台任务统一负责筛选与通知，可以增量更新、降低前端负担，并保持每个部署实例独立运行。",
+      "citations": [
+        "EVID-001",
+        "EVID-006",
+        "R-20251113-frontend-perf",
+        "R-20251113-notify-delay"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-data-source-soc",
+      "summary": "课程与空位数据统一使用 Rutgers SOC 公开接口（courses.json / openSections 等），禁止抓取 WebReg 或需要登录的页面。",
+      "rationale": "SOC 提供官方公开的课程与容量数据，是合法且稳定的主要来源；避免抓取需要登录的 WebReg 页面，可以减少合规和技术风险。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-client-side-filter",
+      "summary": "课程筛选与排序主要由嵌入式数据库与本地查询 API 承担，前端仅负责构建条件并展示结果，不再预加载全量数据。",
+      "rationale": "在多学期/多校区场景下数据量动辄数千课程，浏览器内存筛选难以兼顾性能与增量更新；利用 SQLite 索引与 API 分页可以维持 <0.5 秒响应并复用同一份数据给通知管道。",
+      "citations": [
+        "EVID-001",
+        "EVID-006",
+        "R-20251113-frontend-perf"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-notify-channels-email-discord",
+      "summary": "通知渠道优先支持邮箱和 Discord，短信等其他渠道暂不在 MVP 范围内。",
+      "rationale": "邮件和 Discord 在 Rutgers 学生群体中使用广泛、成本可控且生态成熟；短信成本高且合规复杂，因此在满足 MVP 的前提下优先实现邮箱与 Discord。",
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "EVID-004",
+        "EVID-005"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-multi-lang-day1",
+      "summary": "项目从 day-1 起按多语言架构设计，至少支持中英文 UI，通过标准 i18n 库管理所有文案。",
+      "rationale": "多语言需求在项目初期已被明确，及早引入 i18n 能避免后续大规模重构，同时方便支持小语种学生群体。",
+      "citations": [
+        "EVID-001",
+        "EVID-008"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-coverage-multi-term-campus",
+      "summary": "MVP 阶段即支持多学期、多校区以及本科/研究生课程的联合浏览与筛选，不以单一校区本科课程为起点。",
+      "rationale": "真实选课场景中，学生往往需要在不同学期与不同校区的本科/研究生课程之间做整体规划；从一开始按多维度覆盖设计数据抓取与前端筛选，可以避免后续为扩展范围进行架构级重构。",
+      "citations": [
+        "EVID-001",
+        "Q-06"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    }
+  ]
+}
