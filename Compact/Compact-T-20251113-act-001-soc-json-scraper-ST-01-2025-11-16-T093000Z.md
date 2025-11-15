@@ -14,3 +14,6 @@
 
 ## Interfaces / Impact
 - Database/Docs teams must consume `docs/db/ready_checklist.md` as the acceptance contract before promoting any term×campus dataset; downstream build scripts should emit the specified JSON payload and update the readiness log after each successful run.
+
+## Code Review - T-20251113-act-001-soc-json-scraper-ST-01 - 2025-11-15T21:57:51Z
+Codex Review: Didn't find any major issues. Can't wait for the next one!
