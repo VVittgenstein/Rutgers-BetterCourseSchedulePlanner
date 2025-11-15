@@ -16,3 +16,6 @@
 
 ## Self-Test Evidence
 - 自测通过 `requests` 脚本在生产端点顺序执行所有调用矩阵与速率实验，UA=`BetterCourseSchedulePlanner/0.1` 并启用 gzip (`docs/soc_api_test_report.md:1-3`).
+
+## Code Review - T-20251113-soc-api-validation-ST-02 - 2025-11-15T10:10:30Z
+Codex Review: Didn't find any major issues. Keep them coming!
