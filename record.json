@@ -630,7 +630,13 @@
               "尚需实现 ready check 自动化脚本并将其接入 CI，否则 checklist 只能手动执行。",
               "openSections 当前返回全校区列表，该假设若被 Rutgers 调整需更新文档中的 diff 校验策略。"
             ],
-            "code_review": "Codex Review: Pending."
+            "code_review": {
+              "latest": {
+                "source": "Compact/Compact-T-20251113-act-001-soc-json-scraper-ST-01-2025-11-16-T093000Z.md",
+                "captured_at": "2025-11-15T21:57:51Z",
+                "content": "Codex Review: Didn't find any major issues. Can't wait for the next one!"
+              }
+            }
           }
         },
         "T-20251113-act-001-soc-json-scraper-ST-02": {
