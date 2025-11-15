@@ -462,7 +462,7 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "done",
           "dependencies": [
             "T-20251113-act-007-local-db-schema-ST-01",
             "T-20251113-act-007-local-db-schema-ST-02"
@@ -489,13 +489,30 @@
             "R-20251113-frontend-perf"
           ],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-15T20:56:13Z",
           "owner": "tbd",
           "tags": [
             "subtask",
             "database",
             "design"
-          ]
+          ],
+          "latest_compact": {
+            "source": "docs/db/conceptual_model.md",
+            "captured_at": "2025-11-15T20:56:13Z",
+            "confirmed_facts": [
+              "`docs/db/conceptual_model.md` 定义了 raw_snapshots/dataset_versions/courses/sections/meetings/open_section_states/subscriptions 等实体与主键关系，并明确 `raw_payload` 列保证 0 字段丢失。",
+              "文档描述数据保留策略：raw JSON 永久保存在 `data/raw/*` + `raw_snapshots` metadata，规范表也保存每条 Course/Section/Meeting 的原始 JSON，未知字段可落入 attributes 表。",
+              "文档详细给出了全量刷新、增量刷新与 rollback 流程（staging→dataset_versions→vw_active_* 视图），以及 openSections diff / open_section_events 的生成方式。"
+            ],
+            "interface_impact": [
+              "database：`db/schema.sql` 将依据该概念模型创建 raw/normalized/derived 三层表，迁移脚本需要遵循 dataset_versions + staging 交换流程。",
+              "data-pipeline：`scripts/fetch_soc_samples.py` 与未来的 migrate/normalize 命令需同时写入 raw 文件与 `raw_snapshots` 表，空位提醒依赖 `open_section_events`。"
+            ],
+            "risks_todo": [
+              "模型假设 openSections 继续返回全校区列表；若 Rutgers 调整行为，需要更新 `open_section_states` 列的刷新逻辑。"
+            ],
+            "code_review": "Codex Review: Pending."
+          }
         }
       }
     },
