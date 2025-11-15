@@ -584,7 +584,7 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "done",
           "dependencies": [
             "T-20251113-act-007-local-db-schema"
           ],
@@ -608,13 +608,30 @@
             "#md-4-1-fr-01"
           ],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-16T09:30:00Z",
           "owner": "tbd",
           "tags": [
             "subtask",
             "data-pipeline",
             "database"
-          ]
+          ],
+          "latest_compact": {
+            "source": "docs/db/ready_checklist.md",
+            "captured_at": "2025-11-16T09:30:00Z",
+            "confirmed_facts": [
+              "`docs/db/ready_checklist.md` 定义 term×campus 数据切片达到 ready 的标准，包括 raw_snapshots/dataset_versions 状态、courses/sections/meetings/open_section_states 等表的必备字段、索引与覆盖率指标。",
+              "文档规定自动化脚本输出 JSON 指标（rows、record_count、not_null/index 检查）以及 PRAGMA/COUNT 校验与人工抽样流程，确保建库质量可在 CI 中复现。",
+              "新增 term/campus 元数据登记模板与 Spring 2026 NB 示例行，要求记录 dataset_version_id、snapshot_id、fetch command、脚本哈希与 sample reviewer，保证可追溯性。"
+            ],
+            "interface_impact": [
+              "database/docs：ready checklist 成为建库验收的唯一标准，`scripts/db_ready_check.py` 及后续运维流程必须输出文档约定的指标与日志。"
+            ],
+            "risks_todo": [
+              "尚需实现 ready check 自动化脚本并将其接入 CI，否则 checklist 只能手动执行。",
+              "openSections 当前返回全校区列表，该假设若被 Rutgers 调整需更新文档中的 diff 校验策略。"
+            ],
+            "code_review": "Codex Review: Pending."
+          }
         },
         "T-20251113-act-001-soc-json-scraper-ST-02": {
           "seed_id": null,
