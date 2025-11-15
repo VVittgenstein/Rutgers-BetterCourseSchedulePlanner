@@ -366,7 +366,7 @@
           ],
           "latest_compact": {
             "source": "Compact/Compact-T-20251113-act-007-local-db-schema-ST-01-2025-11-15-T202750Z.md",
-            "captured_at": "2025-11-15T20:27:50Z",
+            "captured_at": "2025-11-15T20:34:11Z",
             "confirmed_facts": [
               "`scripts/fetch_soc_samples.py` 现可按 `year=2026, term=1, campuses=NB,NK,CM` 抓取 Spring 2026 的 courses/openSections，自动解压、校验 JSON，统计课程/section 数量并写入 `data/raw/spring-2026-<endpoint>-<campus>.json` 与统一 metadata。",
               "`data/raw/spring-2026-metadata.json` 为每个 campus/endpoint 记录 URL、headers、内容大小、SHA256 及 `record_count/section_count/distinct_subjects`，供后续脚本溯源。",
@@ -384,7 +384,7 @@
               "抓取脚本目前遇到首个 HTTP/URL 错误即退出，未来可能需要重试/退避以应对 SOC 不稳定。"
             ],
             "self_test_evidence": "`python3 scripts/fetch_soc_samples.py`（默认参数）顺利产出 NB/NK/CM 的 courses/openSections JSON 及 metadata，stderr 日志记录文件路径与记录数。",
-            "code_review": "Pending review."
+            "code_review": "Codex Review: Didn't find any major issues. Breezy!"
           }
         },
         "T-20251113-act-007-local-db-schema-ST-02": {
