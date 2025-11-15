@@ -275,7 +275,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "in-progress",
       "dependencies": [
         "T-20251113-soc-api-validation"
       ],
@@ -310,7 +310,7 @@
         "R-20251113-frontend-perf"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-16T12:45:00Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-007",
@@ -528,7 +528,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "in-progress",
       "dependencies": [
         "T-20251113-act-007-local-db-schema"
       ],
@@ -563,7 +563,7 @@
         "#md-4-1-fr-01"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-16T12:45:00Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-001",
@@ -645,7 +645,7 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "done",
           "dependencies": [
             "T-20251113-act-001-soc-json-scraper-ST-01",
             "T-20251113-soc-api-validation"
@@ -671,12 +671,30 @@
             "#md-4-1-fr-01"
           ],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-16T12:45:00Z",
           "owner": "tbd",
           "tags": [
             "subtask",
             "data-pipeline"
-          ]
+          ],
+          "latest_compact": {
+            "source": "docs/data_pipeline/init_flow.md",
+            "captured_at": "2025-11-16T12:45:00Z",
+            "confirmed_facts": [
+              "`docs/data_pipeline/init_flow.md` 将 term×campus 抓取链路拆为 Stage A–F（队列扩展、调度抓取、快照登记、staging 归一化、diff/promote、ready 检查），并提供 Mermaid+ASCII 流程以指导脚本实现。",
+              "文档为每阶段列出输入、动作、输出与产物，例如 `data/raw/*.json.gz`、`manifest.jsonl`、`raw_snapshots`、`staging_*`、`dataset_versions`、`ready_report_*`，并标注可并行与必须串行的环节。",
+              "明确 `scripts/fetch_soc_data.ts` orchestrator、`scripts/fetch_soc_samples.py` 抓取器与 `scripts/migrate_db.ts` DB 操作的接口边界、CLI 参数（terms/campuses/mode/max-workers/inline-blob/resume-run）及日志/指标输出。"
+            ],
+            "interface_impact": [
+              "data-pipeline/build-script：`scripts/fetch_soc_data.ts` 需按照 Stage A–F 组织 API 调用、快照登记与 DB promote，并实现日志/退避策略。",
+              "database：`migrate_db` 相关函数将按照文档约定的 staging→diff→dataset_versions 流程更新 SQLite，ready checklist 产出 `ready_report_*`。"
+            ],
+            "risks_todo": [
+              "流程仍需代码化：scheduler 并发控制、resume-run 与 ready 自动化脚本尚未实装，需在实现阶段验证。",
+              "CI/告警尚未串联 logs/jsonl 与 dataset_version_events，需在后续 observability 任务完善。"
+            ],
+            "code_review": "Codex Review: Pending."
+          }
         },
         "T-20251113-act-001-soc-json-scraper-ST-03": {
           "seed_id": null,
