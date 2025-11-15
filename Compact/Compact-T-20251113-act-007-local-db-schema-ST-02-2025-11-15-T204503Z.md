@@ -13,3 +13,6 @@
 
 ## Self-test
 - `python3 scripts/analyze_soc_sample.py --metadata data/raw/spring-2026-metadata.json --output data/raw/spring-2026-field-stats.json`
+
+## Code Review - T-20251113-act-007-local-db-schema-ST-02 - 2025-11-15T20:49:19Z
+Codex Review: Didn't find any major issues. 🚀
