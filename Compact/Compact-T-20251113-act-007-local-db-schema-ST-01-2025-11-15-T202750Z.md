@@ -18,3 +18,7 @@
 
 ## Test evidence
 - `python3 scripts/fetch_soc_samples.py` (default arguments) – executed successfully, producing NB/NK/CM course and openSections files plus metadata; stderr logs confirm record counts and file paths.
+
+## Code Review - T-20251113-act-007-local-db-schema-ST-01 - 2025-11-15T20:34:11Z
+Codex Review: Didn't find any major issues. Breezy!
+
