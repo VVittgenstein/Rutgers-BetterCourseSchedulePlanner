@@ -399,7 +399,7 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "done",
           "dependencies": [
             "T-20251113-act-007-local-db-schema-ST-01"
           ],
@@ -414,7 +414,10 @@
             "docs"
           ],
           "artifacts": [
-            "docs/db/field_dictionary.md"
+            "docs/db/field_dictionary.md",
+            "docs/db/sample_notes.md",
+            "scripts/analyze_soc_sample.py",
+            "data/raw/spring-2026-field-stats.json"
           ],
           "citations": [
             "EVID-001",
@@ -423,13 +426,29 @@
             "R-20251113-frontend-perf"
           ],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-16T02:00:00Z",
           "owner": "tbd",
           "tags": [
             "subtask",
             "database",
             "analysis"
-          ]
+          ],
+          "latest_compact": {
+            "source": "Compact/Compact-T-20251113-act-007-local-db-schema-ST-02-2025-11-16-T020000Z.md",
+            "captured_at": "2025-11-16T02:00:00Z",
+            "confirmed_facts": [
+              "`docs/db/field_dictionary.md` 列出 Course→Section→Meeting→openSections 的层级关系、字段类型、是否必填及 FR-01/FR-02 映射，并给出 schema 设计要点（课程简介缺失、core/prereq 稀疏、openSections join 方式等）。",
+              "`scripts/analyze_soc_sample.py` 读取 `data/raw/spring-2026-metadata.json`，整合 NB/NK/CM 样本生成字段覆盖率并输出到 `data/raw/spring-2026-field-stats.json`，为字典和后续 schema 计算提供自动化依据。",
+              "`docs/db/sample_notes.md` 新增“Field coverage & sparsity”表格，列出 ≥10 个关键字段的存在比例及特殊值说明（如 meetingDay 仅 62.9%、courseDescription 0%、instructors 79.7%），满足稀疏度统计验收。"
+            ],
+            "interface_impact": [
+              "database/docs：字段字典与统计成为后续 schema/migration 的事实来源，明确需要额外派生列与 openSections 关联方式。"
+            ],
+            "risks_todo": [
+              "若 Rutgers 后续调整字段或新增 term，需要重新运行 analyzer 刷新 `field_dictionary.md` 与稀疏度表，避免 DB schema 失配。"
+            ],
+            "code_review": "Codex Review: Pending."
+          }
         },
         "T-20251113-act-007-local-db-schema-ST-03": {
           "seed_id": null,

@@ -1,0 +1,438 @@
+{
+  "totals": {
+    "courses": 6781,
+    "sections": 15829,
+    "meeting_times": 22564,
+    "open_section_indexes": 13780
+  },
+  "courses": [
+    {
+      "field": "title",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "string",
+      "example": "ODASIS PROGRAM"
+    },
+    {
+      "field": "subject",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "string",
+      "example": "001"
+    },
+    {
+      "field": "subjectDescription",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "string",
+      "example": "Exchange"
+    },
+    {
+      "field": "courseNumber",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "string",
+      "example": "161"
+    },
+    {
+      "field": "courseString",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "string",
+      "example": "01:001:161"
+    },
+    {
+      "field": "credits",
+      "present": 6081,
+      "total": 6781,
+      "percent": 89.68,
+      "type": "integer",
+      "example": "1"
+    },
+    {
+      "field": "creditsObject",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "object",
+      "example": "{\"code\": \"1_0\", \"description\": \"1.0 credit\"}"
+    },
+    {
+      "field": "synopsisUrl",
+      "present": 3832,
+      "total": 6781,
+      "percent": 56.51,
+      "type": "string",
+      "example": "https://www.amesall.rutgers.edu/academics/undergraduate-program/course-descriptions"
+    },
+    {
+      "field": "courseDescription",
+      "present": 0,
+      "total": 6781,
+      "percent": 0.0,
+      "type": "unknown",
+      "example": ""
+    },
+    {
+      "field": "preReqNotes",
+      "present": 1994,
+      "total": 6781,
+      "percent": 29.41,
+      "type": "string",
+      "example": "(01:013:140 ELEMENTARY ARABIC I )<em> OR </em>(01:074:140 ELEMENTARY ARABIC I )"
+    },
+    {
+      "field": "courseNotes",
+      "present": 191,
+      "total": 6781,
+      "percent": 2.82,
+      "type": "string",
+      "example": "Register in person at any SAS Advising Center"
+    },
+    {
+      "field": "coreCodes",
+      "present": 1549,
+      "total": 6781,
+      "percent": 22.84,
+      "type": "array<object>",
+      "example": "[{\"id\": \"2026101013130  20\", \"year\": \"2026\", \"term\": \"1\", \"supplement\": \"  \", \"description\": \"Historical Analysis\", \"..."
+    },
+    {
+      "field": "campusLocations",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "array<object>",
+      "example": "[{\"code\": \"2\", \"description\": \"Busch\"}]"
+    },
+    {
+      "field": "openSections",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "integer",
+      "example": "0"
+    },
+    {
+      "field": "mainCampus",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "string",
+      "example": "NB"
+    },
+    {
+      "field": "school",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "object",
+      "example": "{\"code\": \"01\", \"description\": \"School of Arts and Sciences\"}"
+    },
+    {
+      "field": "offeringUnitCode",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "string",
+      "example": "01"
+    },
+    {
+      "field": "offeringUnitTitle",
+      "present": 0,
+      "total": 6781,
+      "percent": 0.0,
+      "type": "unknown",
+      "example": ""
+    },
+    {
+      "field": "level",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "string",
+      "example": "U"
+    },
+    {
+      "field": "sections",
+      "present": 6781,
+      "total": 6781,
+      "percent": 100.0,
+      "type": "array<object>",
+      "example": "[{\"sectionEligibility\": \"\", \"sessionDatePrintIndicator\": \"Y\", \"examCode\": \"O\", \"specialPermissionAddCode\": null, \"cro..."
+    }
+  ],
+  "sections": [
+    {
+      "field": "index",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "string",
+      "example": "24075"
+    },
+    {
+      "field": "number",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "string",
+      "example": "Z2"
+    },
+    {
+      "field": "openStatus",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "boolean",
+      "example": "False"
+    },
+    {
+      "field": "openStatusText",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "string",
+      "example": "CLOSED"
+    },
+    {
+      "field": "campusCode",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "string",
+      "example": "NB"
+    },
+    {
+      "field": "sectionCampusLocations",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "array<object>",
+      "example": "[{\"code\": \"2\", \"description\": \"Busch\"}]"
+    },
+    {
+      "field": "sectionNotes",
+      "present": 4938,
+      "total": 15829,
+      "percent": 31.2,
+      "type": "string",
+      "example": "PREREQ: 01:013:140 OR 01:074:140 OR PLACEMENT TEST  "
+    },
+    {
+      "field": "meetingTimes",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "array<object>",
+      "example": "[{\"campusLocation\": \"2\", \"roomNumber\": \"203\", \"campusAbbrev\": \"BUS\", \"campusName\": \"BUSCH\", \"startTimeMilitary\": \"170..."
+    },
+    {
+      "field": "honorPrograms",
+      "present": 117,
+      "total": 15829,
+      "percent": 0.74,
+      "type": "array<object>",
+      "example": "[{\"code\": \"F\"}]"
+    },
+    {
+      "field": "sessionDates",
+      "present": 0,
+      "total": 15829,
+      "percent": 0.0,
+      "type": "unknown",
+      "example": ""
+    },
+    {
+      "field": "subtopic",
+      "present": 0,
+      "total": 15829,
+      "percent": 0.0,
+      "type": "unknown",
+      "example": ""
+    },
+    {
+      "field": "subtitle",
+      "present": 1628,
+      "total": 15829,
+      "percent": 10.28,
+      "type": "string",
+      "example": "ELEMENTARY PERSIAN II"
+    },
+    {
+      "field": "commentsText",
+      "present": 7271,
+      "total": 15829,
+      "percent": 45.93,
+      "type": "string",
+      "example": "Hybrid Section - Some Meetings Online, Go to http://canvas.rutgers.edu, First-year students welcome"
+    },
+    {
+      "field": "comments",
+      "present": 7271,
+      "total": 15829,
+      "percent": 45.93,
+      "type": "array<object>",
+      "example": "[{\"code\": \"23\", \"description\": \"Hybrid Section - Some Meetings Online\"}]"
+    },
+    {
+      "field": "instructors",
+      "present": 12612,
+      "total": 15829,
+      "percent": 79.68,
+      "type": "array<object>",
+      "example": "[{\"name\": \"KOERBER\"}]"
+    },
+    {
+      "field": "instructorsText",
+      "present": 12612,
+      "total": 15829,
+      "percent": 79.68,
+      "type": "string",
+      "example": "KOERBER"
+    },
+    {
+      "field": "openToText",
+      "present": 4952,
+      "total": 15829,
+      "percent": 31.28,
+      "type": "string",
+      "example": "MAJ: 014 (Africana/Afro-American and African Studies); MINOR: 014 (Africana Studies)"
+    },
+    {
+      "field": "legendKey",
+      "present": 0,
+      "total": 15829,
+      "percent": 0.0,
+      "type": "unknown",
+      "example": ""
+    },
+    {
+      "field": "sectionEligibility",
+      "present": 1005,
+      "total": 15829,
+      "percent": 6.35,
+      "type": "string",
+      "example": "JUNIORS AND SENIORS"
+    },
+    {
+      "field": "finalExam",
+      "present": 0,
+      "total": 15829,
+      "percent": 0.0,
+      "type": "unknown",
+      "example": ""
+    },
+    {
+      "field": "sessionDatePrintIndicator",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "string",
+      "example": "Y"
+    },
+    {
+      "field": "examCode",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "string",
+      "example": "O"
+    },
+    {
+      "field": "examCodeText",
+      "present": 15829,
+      "total": 15829,
+      "percent": 100.0,
+      "type": "string",
+      "example": "No final exam"
+    }
+  ],
+  "meeting_times": [
+    {
+      "field": "meetingDay",
+      "present": 14203,
+      "total": 22564,
+      "percent": 62.95,
+      "type": "string",
+      "example": "M"
+    },
+    {
+      "field": "startTimeMilitary",
+      "present": 14203,
+      "total": 22564,
+      "percent": 62.95,
+      "type": "string",
+      "example": "1701"
+    },
+    {
+      "field": "endTimeMilitary",
+      "present": 14203,
+      "total": 22564,
+      "percent": 62.95,
+      "type": "string",
+      "example": "2230"
+    },
+    {
+      "field": "pmCode",
+      "present": 14203,
+      "total": 22564,
+      "percent": 62.95,
+      "type": "string",
+      "example": "P"
+    },
+    {
+      "field": "meetingModeCode",
+      "present": 22564,
+      "total": 22564,
+      "percent": 100.0,
+      "type": "string",
+      "example": "98"
+    },
+    {
+      "field": "meetingModeDesc",
+      "present": 22564,
+      "total": 22564,
+      "percent": 100.0,
+      "type": "string",
+      "example": "ROOM BLOCK"
+    },
+    {
+      "field": "buildingCode",
+      "present": 13573,
+      "total": 22564,
+      "percent": 60.15,
+      "type": "string",
+      "example": "ARC"
+    },
+    {
+      "field": "campusLocation",
+      "present": 18500,
+      "total": 22564,
+      "percent": 81.99,
+      "type": "string",
+      "example": "2"
+    },
+    {
+      "field": "campusName",
+      "present": 18500,
+      "total": 22564,
+      "percent": 81.99,
+      "type": "string",
+      "example": "BUSCH"
+    },
+    {
+      "field": "roomNumber",
+      "present": 13567,
+      "total": 22564,
+      "percent": 60.13,
+      "type": "string",
+      "example": "203"
+    }
+  ]
+}
