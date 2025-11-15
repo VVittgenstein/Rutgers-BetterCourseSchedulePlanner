@@ -26,7 +26,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "in-progress",
       "dependencies": [],
       "blocked": true,
       "blocked_by": [
@@ -48,7 +48,8 @@
         "observability"
       ],
       "artifacts": [
-        "docs/soc_api_notes.md"
+        "docs/soc_api_notes.md",
+        "docs/soc_api_map.md"
       ],
       "citations": [
         "EVID-001",
@@ -57,7 +58,7 @@
         "Q-01"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-15T16:20:00Z",
       "owner": "tbd",
       "tags": [
         "research",
@@ -76,19 +77,10 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "done",
           "dependencies": [],
-          "blocked": true,
-          "blocked_by": [
-            {
-              "dep_id": "DEP-001",
-              "name": "Rutgers SOC API（courses.json / openSections）",
-              "type": "api",
-              "status": "unknown",
-              "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
-              "note": "需要在开发前期通过实测确认可用参数、速率限制和结构稳定性。"
-            }
-          ],
+          "blocked": false,
+          "blocked_by": [],
           "unblock_plan": "通过低频访问逐个尝试参数组合，记录返回结构与速记笔记，整理成统一的 API 资源/参数地图。",
           "estimate_h": 2,
           "risk": "mid",
@@ -107,7 +99,7 @@
             "Q-01"
           ],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-15T16:20:00Z",
           "owner": "tbd",
           "tags": [
             "subtask",
