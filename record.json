@@ -105,7 +105,25 @@
             "subtask",
             "soc-api",
             "research"
-          ]
+          ],
+          "latest_compact": {
+            "source": "Compact/Compact-T-20251113-soc-api-validation-ST-01-2025-11-15-T082552Z.md",
+            "captured_at": "2025-11-15T08:25:52Z",
+            "confirmed_facts": [
+              "docs/soc_api_map.md 汇总了 courses.json、openSections.json、sections.json（不可用）与 initJsonData 的必填参数、示例 payload 尺寸与 gzip 行为，基于 Fall 2024 NB 与 Spring 2025 NK 实测。",
+              "仅 year + term + campus 会影响 SOC API 响应，subject/keyword/level/school 被忽略且 campus 大小写敏感，非法 term/campus 返回 200 + 空数组。",
+              "文档梳理了课程/section/meetingTime/openSections 的字段结构，以及 openSections index 与 sections[*].index 之间的映射，可用于空位跟踪。",
+              "记录了官方说明与实测差异，并给出 term+campus 批次、缓存 initJsonData、以 openSections 轮询的操作策略。"
+            ],
+            "interface_impact": [
+              "仅新增文档，未改动运行时代码；docs/soc_api_map.md 作为数据摄取模块使用的权威契约。"
+            ],
+            "risks_todo": [
+              "尚未获得速率限制与节流细节，需后续高频测试补充。",
+              "docs/soc_api_map.md 为手工维护，Rutgers 前端 JS（soc_utils.js）调整时需要同步刷新。"
+            ],
+            "code_review": "Codex Review: Didn't find any major issues."
+          }
         },
         "T-20251113-soc-api-validation-ST-02": {
           "seed_id": null,
@@ -157,7 +175,27 @@
             "subtask",
             "soc-api",
             "research"
-          ]
+          ],
+          "latest_compact": {
+            "source": "Compact/Compact-T-20251113-soc-api-validation-ST-02-2025-11-15-T100141Z.md",
+            "captured_at": "2025-11-15T10:01:41Z",
+            "confirmed_facts": [
+              "docs/soc_api_test_report.md 记录 term+campus 组合的完整调用矩阵，确认 courses.json 仅识别 year/term/campus，常规响应大小 NB Fall 约 21 MB(4367 课程)、NK Spring 约 4.67 MB(1290 课程)，openSections NB Fall 约 70 KB 对应 8614 索引。",
+              "异常参数实验覆盖非法 campus、非法 term 以及缺失必填参数，得到 400 HTML 响应，可作为脚本配置错误的判据。",
+              "速率实验在 1→4→10 req/s、58 次连续请求下均返回 200，最大耗时 1.73s，并建议 openSections <=5 req/s、courses.json 遵守 15 分钟缓存窗口。",
+              "文档保存了成功/失败响应样例（含 headers 与片段）以及 openSections 列表示例，可直接复用解析与监控。",
+              "调用/监控建议罗列出错误分类、退避策略与需监控的 headers/字段，可为后续手册直接引用。",
+              "record.json 已将 ST-02 标记为 done、blocked=false，更新时间 2025-11-15T09:55:03Z，并列出 docs/soc_api_test_report.md 作为产出。"
+            ],
+            "interface_impact": [
+              "新增文档定义 SOC API 可用参数、响应形态与速率建议，为抓取脚本与 ST-03 手册提供事实基线。"
+            ],
+            "risks_todo": [
+              "尚未触发官方限流，>10 req/s 的阈值与 429/503 恢复机制仍未知，需要后续并发 / 条件请求实验。"
+            ],
+            "self_test_evidence": "通过 requests 脚本在生产端点顺序执行所有调用矩阵与速率实验，UA=BetterCourseSchedulePlanner/0.1，并启用 gzip。",
+            "code_review": "Codex Review: Didn't find any major issues. Keep them coming!"
+          }
         },
         "T-20251113-soc-api-validation-ST-03": {
           "seed_id": null,
