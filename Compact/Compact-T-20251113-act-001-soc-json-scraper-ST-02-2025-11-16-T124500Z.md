@@ -16,3 +16,6 @@
 ## Interfaces / Impact
 - Data-pipeline/build scripts must align with the Stage A–F contract; `scripts/fetch_soc_data.ts` becomes the authoritative orchestrator entry point with the documented CLI and artifact outputs.
 - Database tooling (`scripts/migrate_db.ts`) must expose the normalize/diff/promote operations exactly as staged, so canonical tables and `dataset_versions` match the workflow; ready reports become required outputs before downstream consumers rely on a term×campus dataset.
+
+## Code Review - T-20251113-act-001-soc-json-scraper-ST-02 - 2025-11-15T22:49:47Z
+Codex Review: Didn't find any major issues. What shall we delve into next?

@@ -678,22 +678,22 @@
             "data-pipeline"
           ],
           "latest_compact": {
-            "source": "docs/data_pipeline/init_flow.md",
+            "source": "Compact/Compact-T-20251113-act-001-soc-json-scraper-ST-02-2025-11-16-T124500Z.md",
             "captured_at": "2025-11-16T12:45:00Z",
             "confirmed_facts": [
-              "`docs/data_pipeline/init_flow.md` 将 term×campus 抓取链路拆为 Stage A–F（队列扩展、调度抓取、快照登记、staging 归一化、diff/promote、ready 检查），并提供 Mermaid+ASCII 流程以指导脚本实现。",
-              "文档为每阶段列出输入、动作、输出与产物，例如 `data/raw/*.json.gz`、`manifest.jsonl`、`raw_snapshots`、`staging_*`、`dataset_versions`、`ready_report_*`，并标注可并行与必须串行的环节。",
-              "明确 `scripts/fetch_soc_data.ts` orchestrator、`scripts/fetch_soc_samples.py` 抓取器与 `scripts/migrate_db.ts` DB 操作的接口边界、CLI 参数（terms/campuses/mode/max-workers/inline-blob/resume-run）及日志/指标输出。"
+              "`docs/data_pipeline/init_flow.md` 已被整理为 Stage A–F（队列扩展、调度抓取、快照登记、staging 归一化、diff/promote、ready 检查）并在 compact 中固化 Mermaid + ASCII 流程，作为脚本实现的唯一链路描述。",
+              "每个阶段明确输入/动作/输出及产物（`data/raw/*.json.gz`, `manifest.jsonl`, `raw_snapshots`, `staging_*`, `dataset_versions`, `ready_report_*`）并区分可并行与强制串行环节，确保 term×campus 批次和全局 promote/ready 的调度约束被记录。",
+              "定义 orchestrator/组件边界：`scripts/fetch_soc_data.ts` 提供 CLI（terms/campuses/mode/max-workers/inline-blob/resume-run）并写 `logs/fetch_soc_data/*.jsonl`，`scripts/fetch_soc_samples.py` 负责 HTTP+gzip+manifest，`scripts/migrate_db.ts` 负责 normalize/diff/promote 与 `dataset_version_events` 记录。"
             ],
             "interface_impact": [
-              "data-pipeline/build-script：`scripts/fetch_soc_data.ts` 需按照 Stage A–F 组织 API 调用、快照登记与 DB promote，并实现日志/退避策略。",
-              "database：`migrate_db` 相关函数将按照文档约定的 staging→diff→dataset_versions 流程更新 SQLite，ready checklist 产出 `ready_report_*`。"
+              "data-pipeline/build-script：`scripts/fetch_soc_data.ts` 必须实现 Stage A–F 的编排、日志与退避策略，并输出 ready 报告供下游消费。",
+              "database：`migrate_db`/SQLite 必须按流程更新 staging→canonical→`dataset_versions`，ready checklist 的 `ready_report_*` 成为对外可见信号。"
             ],
             "risks_todo": [
-              "流程仍需代码化：scheduler 并发控制、resume-run 与 ready 自动化脚本尚未实装，需在实现阶段验证。",
-              "CI/告警尚未串联 logs/jsonl 与 dataset_version_events，需在后续 observability 任务完善。"
+              "流程仍待代码化：scheduler 并发控制、resume-run 状态机、ready 自动化脚本尚未实现，需要在开发阶段验证。",
+              "CI/告警体系尚未与 `logs/*.jsonl`、`dataset_version_events` 对接，运营可观测性仍是风险。"
             ],
-            "code_review": "Codex Review: Pending."
+            "code_review": "Codex Review: Didn't find any major issues. What shall we delve into next?"
           }
         },
         "T-20251113-act-001-soc-json-scraper-ST-03": {
