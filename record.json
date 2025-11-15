@@ -241,171 +241,6 @@
         "notification"
       ]
     },
-    "T-20251113-act-004-discord-notify-channel": {
-      "seed_id": "ACT-004",
-      "title": "实现 Discord 通知通道并评估私信与频道策略",
-      "type": "coding",
-      "summary": "在本地通知管道中新增 Discord Bot 通道，运行本地 Bot 客户端将课程开放提醒发送给用户或频道，并结合 Q-04 评估“私信 vs 频道广播”的可行性、噪音与速率限制表现，为默认策略提供依据。",
-      "acceptance_draft": [
-        "在本地或测试服务器中，Bot 能根据数据库内的订阅记录成功向指定用户或频道发送包含课程名、Index 与时间地点的提醒消息。",
-        "实现对 Discord API 速率限制的节流与重试逻辑，本地轮询高频触发时仍保持稳定，不出现长期封禁或严重错误。",
-        "文档中记录不同通知模式（私信/频道）的优缺点与推荐默认值，并与产品负责人达成一致。"
-      ],
-      "lane": "next",
-      "priority_suggested": "P2",
-      "status": "todo",
-      "dependencies": [
-        "T-20251113-act-009-subscription-management",
-        "T-20251113-act-010-local-polling-notify",
-        "T-20251113-act-003-mail-notify-function"
-      ],
-      "blocked": true,
-      "blocked_by": [
-        {
-          "dep_id": "DEP-001",
-          "name": "Rutgers SOC API（courses.json / openSections）",
-          "type": "api",
-          "status": "unknown",
-          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
-          "note": "接口结构与速率限制的不确定性会影响 Discord 通知的触发准确性。"
-        },
-        {
-          "dep_id": "DEP-003",
-          "name": "Discord Bot API",
-          "type": "api",
-          "status": "approved",
-          "doc_url": "",
-          "note": "受速率限制和内容政策约束，过于频繁或模板化的消息可能被限流或封禁。"
-        }
-      ],
-      "unblock_plan": "在本地环境运行 Bot，复用 T-20251113-act-010-local-polling-notify 的事件推送，结合 Discord Sandbox 逐步提升频率以摸清速率限制，再决定默认通知模式。",
-      "estimate_h": 6,
-      "risk": "mid",
-      "confidence": 0.6,
-      "interfaces_touched": [
-        "local-service",
-        "notification-service",
-        "discord-bot"
-      ],
-      "artifacts": [
-        "services/notifier/discord_bot.ts",
-        "config/discord.json"
-      ],
-      "citations": [
-        "EVID-001",
-        "EVID-004",
-        "R-20251113-notify-delay",
-        "R-20251113-spam"
-      ],
-      "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-13T00:00:00Z",
-      "owner": "tbd",
-      "tags": [
-        "seed:ACT-004",
-        "backend",
-        "discord",
-        "notification"
-      ]
-    },
-    "T-20251113-act-005-frontend-i18n-setup": {
-      "seed_id": "ACT-005",
-      "title": "搭建前端 i18n 架构并完成中英文界面",
-      "type": "coding",
-      "summary": "依据决策 D-20251113-multi-lang-day1，在前端引入标准 i18n 库，将所有静态文案（包括错误提示与表单标签）集中到多语言资源文件中，至少完成中英文版本，并为后续小语种支持预留扩展空间。",
-      "acceptance_draft": [
-        "所有界面文案均通过 i18n 资源文件管理，不再直接硬编码在组件中。",
-        "用户可在 UI 中切换中/英文，切换后界面无混合语言或乱码，课程数据本身保留英文但核心代码/字段标签可本地化说明。",
-        "构建或 CI 阶段能检测到新增 key 未提供翻译的情况，并给出告警或失败。"
-      ],
-      "lane": "next",
-      "priority_suggested": "P1",
-      "status": "todo",
-      "dependencies": [
-        "T-20251113-act-002-frontend-filter-mvp"
-      ],
-      "blocked": false,
-      "blocked_by": [],
-      "unblock_plan": "",
-      "estimate_h": 6,
-      "risk": "mid",
-      "confidence": 0.75,
-      "interfaces_touched": [
-        "frontend",
-        "i18n"
-      ],
-      "artifacts": [
-        "src/i18n/index.ts",
-        "locales/en/*.json",
-        "locales/zh/*.json"
-      ],
-      "citations": [
-        "EVID-001",
-        "EVID-008",
-        "R-20251113-i18n-maintenance"
-      ],
-      "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-13T00:00:00Z",
-      "owner": "tbd",
-      "tags": [
-        "seed:ACT-005",
-        "frontend",
-        "i18n",
-        "ux"
-      ]
-    },
-    "T-20251113-act-006-deploy-docs-cicd": {
-      "seed_id": "ACT-006",
-      "title": "编写并验证本地一键部署文档与辅助脚本",
-      "type": "docs",
-      "summary": "围绕“本地数据库 + 轻量 API 服务 + 前端 UI + 后台通知进程”的架构，整理本地部署步骤与环境要求，编写 README 与辅助脚本，使普通用户在个人电脑或服务器上无需修改代码即可初始化数据库、运行 API/前端/通知服务并完成配置。",
-      "acceptance_draft": [
-        "README 提供针对至少两种主流桌面操作系统（例如 Windows 与 macOS 或 Linux）的本地部署步骤，包含：安装 Node.js/bun、SQLite 或嵌入式数据库依赖、项目初始化、环境变量与密钥配置、如何执行数据库初始化/增量更新脚本，以及如何同时启动前端、API 服务与本地通知进程。",
-        "仓库包含可直接使用的本地辅助脚本（例如 scripts/setup_local_env.sh 和 scripts/run_local.sh），在一台全新环境的个人电脑上，用户 clone 仓库后运行脚本即可完成依赖安装校验、数据库初始化、服务启动与通知模块验证。"
-      ],
-      "lane": "next",
-      "priority_suggested": "P1",
-      "status": "todo",
-      "dependencies": [
-        "T-20251113-act-001-soc-json-scraper",
-        "T-20251113-act-002-frontend-filter-mvp",
-        "T-20251113-act-003-mail-notify-function",
-        "T-20251113-act-008-local-query-api",
-        "T-20251113-act-009-subscription-management",
-        "T-20251113-act-010-local-polling-notify"
-      ],
-      "blocked": false,
-      "blocked_by": [],
-      "unblock_plan": "以本地单机运行与容器部署为一等公民目标设计流程：在至少两种主流桌面环境验证脚本可初始化 SQLite、启动 API/前端/通知服务，再整理成 README。",
-      "estimate_h": 6,
-      "risk": "mid",
-      "confidence": 0.7,
-      "interfaces_touched": [
-        "docs",
-        "local-dev",
-        "deployment"
-      ],
-      "artifacts": [
-        "README.md",
-        ".env.example",
-        "scripts/setup_local_env.sh",
-        "scripts/run_local.sh"
-      ],
-      "citations": [
-        "EVID-001",
-        "EVID-006",
-        "EVID-007",
-        "R-20251113-oss-governance"
-      ],
-      "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-13T00:00:00Z",
-      "owner": "tbd",
-      "tags": [
-        "seed:ACT-006",
-        "docs",
-        "deployment",
-        "local-deploy"
-      ]
-    },
     "T-20251113-act-007-local-db-schema": {
       "seed_id": "ACT-007",
       "title": "设计本地数据库模式与增量更新机制",
@@ -617,6 +452,105 @@
         "scheduler"
       ]
     },
+    "T-20251113-act-005-frontend-i18n-setup": {
+      "seed_id": "ACT-005",
+      "title": "搭建前端 i18n 架构并完成中英文界面",
+      "type": "coding",
+      "summary": "依据决策 D-20251113-multi-lang-day1，在前端引入标准 i18n 库，将所有静态文案（包括错误提示与表单标签）集中到多语言资源文件中，至少完成中英文版本，并为后续小语种支持预留扩展空间。",
+      "acceptance_draft": [
+        "所有界面文案均通过 i18n 资源文件管理，不再直接硬编码在组件中。",
+        "用户可在 UI 中切换中/英文，切换后界面无混合语言或乱码，课程数据本身保留英文但核心代码/字段标签可本地化说明。",
+        "构建或 CI 阶段能检测到新增 key 未提供翻译的情况，并给出告警或失败。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-002-frontend-filter-mvp"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.75,
+      "interfaces_touched": [
+        "frontend",
+        "i18n"
+      ],
+      "artifacts": [
+        "src/i18n/index.ts",
+        "locales/en/*.json",
+        "locales/zh/*.json"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-008",
+        "R-20251113-i18n-maintenance"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-005",
+        "frontend",
+        "i18n",
+        "ux"
+      ]
+    },
+    "T-20251113-act-006-deploy-docs-cicd": {
+      "seed_id": "ACT-006",
+      "title": "编写并验证本地一键部署文档与辅助脚本",
+      "type": "docs",
+      "summary": "围绕“本地数据库 + 轻量 API 服务 + 前端 UI + 后台通知进程”的架构，整理本地部署步骤与环境要求，编写 README 与辅助脚本，使普通用户在个人电脑或服务器上无需修改代码即可初始化数据库、运行 API/前端/通知服务并完成配置。",
+      "acceptance_draft": [
+        "README 提供针对至少两种主流桌面操作系统（例如 Windows 与 macOS 或 Linux）的本地部署步骤，包含：安装 Node.js/bun、SQLite 或嵌入式数据库依赖、项目初始化、环境变量与密钥配置、如何执行数据库初始化/增量更新脚本，以及如何同时启动前端、API 服务与本地通知进程。",
+        "仓库包含可直接使用的本地辅助脚本（例如 scripts/setup_local_env.sh 和 scripts/run_local.sh），在一台全新环境的个人电脑上，用户 clone 仓库后运行脚本即可完成依赖安装校验、数据库初始化、服务启动与通知模块验证。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-001-soc-json-scraper",
+        "T-20251113-act-002-frontend-filter-mvp",
+        "T-20251113-act-003-mail-notify-function",
+        "T-20251113-act-008-local-query-api",
+        "T-20251113-act-009-subscription-management",
+        "T-20251113-act-010-local-polling-notify"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "以本地单机运行与容器部署为一等公民目标设计流程：在至少两种主流桌面环境验证脚本可初始化 SQLite、启动 API/前端/通知服务，再整理成 README。",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "docs",
+        "local-dev",
+        "deployment"
+      ],
+      "artifacts": [
+        "README.md",
+        ".env.example",
+        "scripts/setup_local_env.sh",
+        "scripts/run_local.sh"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-006",
+        "EVID-007",
+        "R-20251113-oss-governance"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-006",
+        "docs",
+        "deployment",
+        "local-deploy"
+      ]
+    },
     "T-20251113-act-011-mail-sender-module": {
       "seed_id": "ACT-011",
       "title": "邮件发送模块多平台支持",
@@ -661,6 +595,72 @@
         "seed:ACT-011",
         "backend",
         "email",
+        "notification"
+      ]
+    },
+    "T-20251113-act-004-discord-notify-channel": {
+      "seed_id": "ACT-004",
+      "title": "实现 Discord 通知通道并评估私信与频道策略",
+      "type": "coding",
+      "summary": "在本地通知管道中新增 Discord Bot 通道，运行本地 Bot 客户端将课程开放提醒发送给用户或频道，并结合 Q-04 评估“私信 vs 频道广播”的可行性、噪音与速率限制表现，为默认策略提供依据。",
+      "acceptance_draft": [
+        "在本地或测试服务器中，Bot 能根据数据库内的订阅记录成功向指定用户或频道发送包含课程名、Index 与时间地点的提醒消息。",
+        "实现对 Discord API 速率限制的节流与重试逻辑，本地轮询高频触发时仍保持稳定，不出现长期封禁或严重错误。",
+        "文档中记录不同通知模式（私信/频道）的优缺点与推荐默认值，并与产品负责人达成一致。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P2",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-009-subscription-management",
+        "T-20251113-act-010-local-polling-notify",
+        "T-20251113-act-003-mail-notify-function"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "接口结构与速率限制的不确定性会影响 Discord 通知的触发准确性。"
+        },
+        {
+          "dep_id": "DEP-003",
+          "name": "Discord Bot API",
+          "type": "api",
+          "status": "approved",
+          "doc_url": "",
+          "note": "受速率限制和内容政策约束，过于频繁或模板化的消息可能被限流或封禁。"
+        }
+      ],
+      "unblock_plan": "在本地环境运行 Bot，复用 T-20251113-act-010-local-polling-notify 的事件推送，结合 Discord Sandbox 逐步提升频率以摸清速率限制，再决定默认通知模式。",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.6,
+      "interfaces_touched": [
+        "local-service",
+        "notification-service",
+        "discord-bot"
+      ],
+      "artifacts": [
+        "services/notifier/discord_bot.ts",
+        "config/discord.json"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-004",
+        "R-20251113-notify-delay",
+        "R-20251113-spam"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-004",
+        "backend",
+        "discord",
         "notification"
       ]
     }
