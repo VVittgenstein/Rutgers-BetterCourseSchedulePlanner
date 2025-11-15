@@ -18,3 +18,22 @@
 
 ## Code Review - T-20251113-soc-api-validation-ST-03 - 2025-11-15T12:55:00Z
 Codex Review: Pending.
+
+## Code Review - T-20251113-soc-api-validation-ST-03 - 2025-11-15T19:45:55Z
+docs/soc_api_handbook.md
+Comment on lines +15 to +20
+# NB 2024 Fall 全量课程
+curl --compressed \
+  'https://sis.rutgers.edu/soc/api/courses.json?year=2024&term=9&campus=NB' \
+  -H 'Accept: application/json' \
+  -H 'User-Agent: BetterCourseSchedulePlanner/0.1' \
+  -o cache/2024-9-NB-courses.json.gz
+
+
+@chatgpt-codex-connector
+
+P2 Badge Avoid saving decompressed JSON as .gz
+
+The cURL snippet uses curl --compressed … -o cache/2024-9-NB-courses.json.gz, but --compressed both requests gzip and transparently decompresses the payload before writing it. The resulting file is plain JSON despite the .json.gz extension, while the rest of the document instructs readers to cache gzip files for later reuse. Any script that later tries to gunzip or rely on the compressed size will fail or misreport metrics. Consider dropping --compressed and letting gzip be stored, or piping the decompressed output through gzip before saving.
+
+Useful? React with 👍 / 👎.

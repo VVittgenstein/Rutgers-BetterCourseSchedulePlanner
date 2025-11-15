@@ -12,12 +12,12 @@
 
 ### 1.1 推荐示例（cURL）
 ```bash
-# NB 2024 Fall 全量课程
-curl --compressed \
+# NB 2024 Fall 全量课程（保存 gzip 原样）
+curl -sSL \
   'https://sis.rutgers.edu/soc/api/courses.json?year=2024&term=9&campus=NB' \
   -H 'Accept: application/json' \
   -H 'User-Agent: BetterCourseSchedulePlanner/0.1' \
-  -o cache/2024-9-NB-courses.json.gz
+  --compressed | gzip > cache/2024-9-NB-courses.json.gz
 
 # Newark Spring 开放席位轮询
 curl --compressed \
