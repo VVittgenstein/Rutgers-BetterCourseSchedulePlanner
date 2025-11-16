@@ -95,3 +95,6 @@ chatgpt-codex-connector bot
 P2 Badge Avoid double logging when JSON parse fails
 
 If the API returns non‑JSON data, performProbe emits a structured error in the inner catch with errorType: 'JSON_PARSE', but the outer catch immediately logs a second entry tagged as NETWORK. The duplicate log is misleading because the second message overwrites the original context and suggests a connectivity issue rather than a payload problem. Consider short‑circuiting the outer handler for errors that have already been logged or passing an explicit flag so JSON parse failures do not produce two conflicting error entries.
+
+## Code Review - ST-20251113-soc-api-validation-01-probe - 2025-11-16T13:51:09Z
+Codex Review: Didn't find any major issues. 🚀
