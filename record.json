@@ -26,19 +26,10 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "in_progress",
       "dependencies": [],
-      "blocked": true,
-      "blocked_by": [
-        {
-          "dep_id": "DEP-001",
-          "name": "Rutgers SOC API（courses.json / openSections）",
-          "type": "api",
-          "status": "unknown",
-          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
-          "note": "需要在开发前期通过实测确认可用参数、速率限制和结构稳定性。"
-        }
-      ],
+      "blocked": false,
+      "blocked_by": [],
       "unblock_plan": "在测试环境以较低频率尝试多种参数组合，逐步提高频率观察限流行为，将结果记录到 docs/soc_api_notes 中并同步到抓取脚本与通知配置。",
       "estimate_h": 4,
       "risk": "high",
@@ -57,7 +48,7 @@
         "Q-01"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-16T00:00:00Z",
       "owner": "tbd",
       "tags": [
         "research",
@@ -76,19 +67,10 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "done",
           "dependencies": [],
-          "blocked": true,
-          "blocked_by": [
-            {
-              "dep_id": "DEP-001",
-              "name": "Rutgers SOC API（courses.json / openSections）",
-              "type": "api",
-              "status": "unknown",
-              "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
-              "note": "需要在开发前期通过实测确认可用参数、速率限制和结构稳定性。"
-            }
-          ],
+          "blocked": false,
+          "blocked_by": [],
           "unblock_plan": "先用最小速率调 courses.json/openSections，确认不会被封禁，再逐步增加参数覆盖面。",
           "estimate_h": 2,
           "risk": "medium",
@@ -103,7 +85,7 @@
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-16T00:00:00Z",
           "owner": "tbd",
           "tags": [
             "soc-api",
@@ -126,17 +108,8 @@
           "dependencies": [
             "ST-20251113-soc-api-validation-01-probe"
           ],
-          "blocked": true,
-          "blocked_by": [
-            {
-              "dep_id": "DEP-001",
-              "name": "Rutgers SOC API（courses.json / openSections）",
-              "type": "api",
-              "status": "unknown",
-              "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
-              "note": "需要在开发前期通过实测确认可用参数、速率限制和结构稳定性。"
-            }
-          ],
+          "blocked": false,
+          "blocked_by": [],
           "unblock_plan": "复用探针脚本批量跑参数组合，将响应样本缓存到本地，避免重复触发限流。",
           "estimate_h": 3,
           "risk": "high",
@@ -178,12 +151,11 @@
           "blocked": true,
           "blocked_by": [
             {
-              "dep_id": "DEP-001",
-              "name": "Rutgers SOC API（courses.json / openSections）",
-              "type": "api",
-              "status": "unknown",
-              "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
-              "note": "需要在开发前期通过实测确认可用参数、速率限制和结构稳定性。"
+              "dep_id": "ST-20251113-soc-api-validation-02-field-matrix",
+              "name": "SOC 字段跑批与字段矩阵",
+              "type": "subtask",
+              "status": "todo",
+              "note": "需完成字段矩阵后再压测限流表现。"
             }
           ],
           "unblock_plan": "在低峰时段逐步提升调用频率，同时监控 HTTP header/响应时间，观察限流信号后记录。",
