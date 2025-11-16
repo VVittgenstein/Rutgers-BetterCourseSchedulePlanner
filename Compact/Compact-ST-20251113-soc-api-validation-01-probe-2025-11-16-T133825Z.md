@@ -5,7 +5,7 @@
 ## Confirmed Implementation Facts
 1. Added npm/TypeScript tooling (`package.json`, `package-lock.json`, `tsconfig.json`) with `npm run soc:probe` wired to execute `scripts/soc_probe.ts` via `tsx`.
 2. `scripts/soc_probe.ts` parses CLI flags (`term`, `campus`, `subject`, `endpoint`, `samples`, `timeout`, `level`), normalizes semester inputs into SOC `year` + `term` parameters, issues a single fetch to `https://classes.rutgers.edu/soc/api/<endpoint>.json`, and prints status code, latency, decoded size, and filtered sample rows.
-3. The probe logs structured JSON errors (request id, endpoint, retry hint) for HTTP errors, JSON parse failures, network issues, and timeouts before exiting non-zero.
+3. The probe logs structured JSON errors (request id, endpoint, retry hint) for HTTP errors, JSON parse failures, network issues, and timeouts; JSON parse failures now set an `alreadyLogged` flag so the outer handler skips duplicate “NETWORK” logs (per review fix).
 4. `docs/soc_api_notes.md` documents how to run the CLI plus three recorded scenarios (Spring24 NB subject 198, Fall24 NK subject 640, Summer24 CM openSections) with request ids, dataset sizes, and sample outputs.
 5. `record.json` marks this subtask as `done`, clears blockers, and sets `updated_at` to `2025-11-16T00:00:00Z` for traceability.
 
