@@ -1,0 +1,30 @@
+{
+  "name": "bettercoursescheduleplanner",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A modern course filtering and sniping tool for Rutgers University.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "soc:probe": "tsx scripts/soc_probe.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VVittgenstein/BetterCourseSchedulePlanner.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/VVittgenstein/BetterCourseSchedulePlanner/issues"
+  },
+  "homepage": "https://github.com/VVittgenstein/BetterCourseSchedulePlanner#readme",
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
