@@ -260,6 +260,7 @@ async function performProbe(options: CLIOptions, semester: SemesterParts): Promi
     try {
       body = JSON.parse(buffer.toString('utf-8'));
     } catch (error) {
+      const parseError = error as Error & { alreadyLogged?: boolean };
       emitStructuredError({
         requestId,
         endpoint: options.endpoint,
@@ -268,9 +269,10 @@ async function performProbe(options: CLIOptions, semester: SemesterParts): Promi
         statusText: response.statusText,
         retryHint: 'Inspect response payload, JSON parse failed',
         errorType: 'JSON_PARSE',
-        detail: (error as Error).message
+        detail: parseError.message
       });
-      throw error;
+      parseError.alreadyLogged = true;
+      throw parseError;
     }
 
     return {
@@ -283,7 +285,8 @@ async function performProbe(options: CLIOptions, semester: SemesterParts): Promi
       body
     };
   } catch (error) {
-    if ((error as Error).name === 'AbortError') {
+    const err = error as Error & { alreadyLogged?: boolean };
+    if (err.name === 'AbortError') {
       emitStructuredError({
         requestId,
         endpoint: options.endpoint,
@@ -292,14 +295,16 @@ async function performProbe(options: CLIOptions, semester: SemesterParts): Promi
         errorType: 'TIMEOUT',
         detail: 'AbortError triggered by timeout'
       });
-    } else if (!(error instanceof Error && error.message.startsWith('Request failed'))) {
+    } else if (err.alreadyLogged) {
+      // Inner handler already emitted a structured error (e.g., JSON parse), so skip duplicate logging.
+    } else if (!(err instanceof Error && err.message.startsWith('Request failed'))) {
       emitStructuredError({
         requestId,
         endpoint: options.endpoint,
         url,
         retryHint: 'Check network connectivity or VPN settings.',
         errorType: 'NETWORK',
-        detail: (error as Error).message
+        detail: err.message
       });
     }
     throw error;
