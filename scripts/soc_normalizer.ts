@@ -206,7 +206,8 @@ function normalizeSection(raw: Record<string, unknown>): NormalizedSection | nul
   }
   const sectionNumber = ensureString(raw.number ?? raw.sectionNumber) || indexNumber;
   const openStatus = ensureString(raw.openStatusText ?? raw.openStatus ?? '').toUpperCase() || 'UNKNOWN';
-  const isOpen = Boolean(raw.openStatus ?? openStatus.includes('OPEN'));
+  const isOpen =
+    typeof raw.openStatus === 'boolean' ? raw.openStatus : openStatus === 'OPEN';
   const instructors = toStringArray(raw.instructors, (entry) =>
     ensureString((entry as Record<string, unknown>)?.name ?? entry),
   ).sort();
