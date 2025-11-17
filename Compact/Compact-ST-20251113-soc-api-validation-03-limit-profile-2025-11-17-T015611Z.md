@@ -6,6 +6,7 @@
 - 引入 `scripts/soc_rate_limit.ts` + npm 脚本 `soc:rate-limit`，支持对 `courses.json` / `openSections` 进行自定义并发与间隔的批量压测，记录每个场景的 2xx/4xx/5xx/timeout/network/json 计数、平均/95 分位时延，并可输出 JSON 结果（见 docs/soc_rate_limit*.json）。
 - 在 New Brunswick 12024 学期跑通 baseline（1×1200ms、3×600ms、6×300ms）与多组 stress 场景（至 32 worker / 50ms gap 以及 openSections 50 worker 无间隔），所有请求均返回 2xx；原始数据保存于 `docs/soc_rate_limit.latest.json`, `docs/soc_rate_limit.courses_stress*.json`, `docs/soc_rate_limit.openSections_blitz.json` 等文件。
 - `docs/soc_rate_limit.md` 整理压测方法、表格化的并发/间隔 vs 实测 RPS 与延迟、推荐的全量/增量抓取与 openSections 轮询频率、以及 429/5xx/timeout 等错误码的处理建议。
+- 根据 code review，`scripts/soc_rate_limit.ts` 现对 interval=0 的场景返回有限的 `estimatedRps`，并新增 `actualRps` 字段与打印，存档 JSON 不再出现 `null` 吞掉的信息。
 - `record.json` 将该 Subtask 标记为 `done`，同时把 `docs/soc_rate_limit.md` 记为产出；满足“形成限流策略与错误码动作表”的验收要求。
 
 ### 接口 / 行为变更
@@ -24,3 +25,23 @@
 - `npm run soc:rate-limit -- --term 12024 --campus NB --endpoint courses --schedule 16:100,32:50 --iterations 40 --rest 3000 --label stress2 --output docs/soc_rate_limit.courses_stress2.json`
 - `npm run soc:rate-limit -- --term 12024 --campus NB --endpoint openSections --schedule 20:0 --iterations 120 --rest 2000 --label "openSections blitz" --output docs/soc_rate_limit.openSections_blitz.json`
 - `npm run soc:rate-limit -- --term 12024 --campus NB --endpoint openSections --schedule 50:0 --iterations 500 --rest 0`
+- `npm run soc:rate-limit -- --term 12024 --campus NB --endpoint openSections --schedule 3:0 --iterations 3 --rest 0`
+
+## Code Review - ST-20251113-soc-api-validation-03-limit-profile - 2025-11-17T02:03:33Z
+
+💡 Codex Review
+Here are some automated review suggestions for this pull request.
+
+ℹ️ About Codex in GitHub
+scripts/soc_rate_limit.ts
+Comment on lines +393 to +396
+function estimateRps(scenario: ScenarioSpec): number {
+  if (scenario.intervalMs === 0) {
+    return Infinity;
+  }
+@chatgpt-codex-connector
+chatgpt-codex-connector bot
+now
+P2 Badge Prevent null estimatedRps for zero-interval scenarios
+
+When a scenario uses intervalMs of 0 (allowed by parseSchedule, used in the blitz example), estimateRps returns Infinity. JSON serialization turns Infinity into null, so saved rate-limit payloads misreport throughput (docs/soc_rate_limit.openSections_blitz.json shows estimatedRps: null). Use a finite calculation for zero-interval runs (e.g., based on duration) or avoid serializing Infinity so zero-interval profiles retain a meaningful RPS value.
