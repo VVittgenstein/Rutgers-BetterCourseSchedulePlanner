@@ -17,3 +17,22 @@
 
 ## Testing
 - `python3 scripts/soc_field_matrix.py`
+
+## Code Review - ST-20251113-soc-api-validation-02-field-matrix - 2025-11-17T01:40:13Z
+
+Codex Review
+BetterCourseSchedulePlanner/record.json
+
+Lines 147 to 151 in 9a1f13b
+
+ "dependencies": [ 
+   "ST-20251113-soc-api-validation-01-probe", 
+   "ST-20251113-soc-api-validation-02-field-matrix" 
+ ], 
+ "blocked": true, 
+
+P2 Badge Unblock rate-limit subtask once prerequisite is done
+The rate-limit follow-up subtask (ST-20251113-soc-api-validation-03-limit-profile) remains blocked: true even though its only dependency (ST-20251113-soc-api-validation-02-field-matrix) is now marked done in the same record. With blocked still set, any tooling that skips blocked items will continue to ignore the rate-limit work despite the dependency having completed. Consider flipping blocked to false and clearing the blocked_by entry so the task can proceed.---review-end---
+
+
+Codex Review: Didn't find any major issues. Hooray!
