@@ -67,3 +67,8 @@ chatgpt-codex-connector bot
 P2 Badge Allow disabling openSections worker pool
 
 The schema forces concurrency.maxOpenSectionsWorkers to be a positiveInteger (minimum 1), so a config with 0 workers will be rejected. The docs for this pipeline describe the openSections heartbeat as optional and only running when maxOpenSectionsWorkers>0 (see docs/fetch_pipeline.md lines 72–89), meaning operators should be able to disable it by setting the worker count to 0. With the current validation, that documented switch cannot be expressed, so configs that try to turn off the poller will fail schema validation and the CLI cannot be configured as described.
+
+## Code Review - ST-20251113-act-001-01-pipeline-config - 2025-11-17T09:34:56Z
+---review-start---
+Codex Review: Didn't find any major issues. 🚀
+---review-end---
