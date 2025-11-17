@@ -330,7 +330,7 @@ The tables above list per-column mappings. The summary below focuses on the FR-c
 
 ## Derived field notes
 - **Credit parsing:** `creditsObject.description` strings like `3.0 Credits` or `BA` are parsed via regex; when parsing fails we set `credits_min`/`credits_max` to `NULL` and flag `tags -> variable_credit = true`.
-- **Meeting minutes:** Strings such as `0350` are interpreted as 3:50 PM if `pmCode == 'P'`; convert via `hour = int(start[:2]) % 12` (so `12` becomes `0`), `minute = int(start[2:])`, `base = hour * 60 + minute`, then add `12 * 60` only when `pmCode == 'P'`. This keeps 12:00 PM at 720 minutes and 12:00 AM at 0 without wraparound.
+- **Meeting minutes:** When SOC provides `startTimeMilitary`/`endTimeMilitary`, parse those 24h values directly (`int(hh) * 60 + int(mm)`) because many rows omit `pmCode`. Only fall back to the 12h clock when military fields are missing: compute `hour = int(start[:2]) % 12`, `minute = int(start[2:])`, then add `12 * 60` iff `pmCode == 'P'` so noon/midnight stay accurate.
 - **Delivery method:** If all meetings have `meetingModeCode in ('02','03','04')` and campus/building present → `in_person`. If some meetings are `ONLINE` plus physical rooms → `hybrid`. Pure online rows or `meetingTimes` empty → `online`.
 - **Has prerequisites/core:** boolean columns on `courses` allow quick toggles without string scanning during queries.
 - **Search vector:** stored in lowercase ASCII by concatenating tokens and removing punctuation. `course_search_fts` is refreshed after each ingest transaction.
