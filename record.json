@@ -148,16 +148,8 @@
             "ST-20251113-soc-api-validation-01-probe",
             "ST-20251113-soc-api-validation-02-field-matrix"
           ],
-          "blocked": true,
-          "blocked_by": [
-            {
-              "dep_id": "ST-20251113-soc-api-validation-02-field-matrix",
-              "name": "SOC 字段跑批与字段矩阵",
-              "type": "subtask",
-              "status": "done",
-              "note": "字段矩阵已完成，可继续限流实验。"
-            }
-          ],
+          "blocked": false,
+          "blocked_by": [],
           "unblock_plan": "在低峰时段逐步提升调用频率，同时监控 HTTP header/响应时间，观察限流信号后记录。",
           "estimate_h": 2,
           "risk": "medium",
