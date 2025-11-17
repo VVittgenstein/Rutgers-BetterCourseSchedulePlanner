@@ -230,7 +230,7 @@
         "R-20251113-frontend-perf"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-17T02:45:00Z",
+      "updated_at": "2025-11-17T05:05:47Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-007",
@@ -270,7 +270,7 @@
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-17T02:45:00Z",
+          "updated_at": "2025-11-17T05:05:47Z",
           "owner": "tbd",
           "tags": [
             "database",
