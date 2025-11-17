@@ -14,3 +14,6 @@
 ### Risks / TODO
 - Current validation evidence covers only term `12024` / campus `NB`; other term/campus combinations still need sampling when data is ingested.
 - Validation relies on an inline Python helper rather than a committed script; consider promoting it if repeated executions are expected.
+
+## Code Review - ST-20251113-act-001-03-data-verification - 2025-11-17T10:52:29Z
+Review: Didn't find any major issues. What shall we delve into next?
