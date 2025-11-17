@@ -4,6 +4,7 @@
 - Back the FR-01/FR-02 requirement set with a SQLite schema that stores every Rutgers SOC course/section/meeting field needed for browsing, filtering, and subscriptions.  
 - Preserve enough provenance to re-run migrations idempotently, rehydrate JSON payloads for debugging, and power notification jobs that only react to delta updates.  
 - Optimize for read-heavy local queries (term+campus/subject filtering, keyword search, meeting-time slicing) while allowing batch upserts from SOC payloads.
+- The canonical SQL definition that reflects this model is checked into `data/schema.sql` and is applied through `scripts/migrate_db.ts`.
 
 ## Entity relationship overview
 ```mermaid
