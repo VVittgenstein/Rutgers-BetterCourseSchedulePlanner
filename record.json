@@ -195,22 +195,13 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "in_progress",
       "dependencies": [
         "T-20251113-soc-api-validation"
       ],
-      "blocked": true,
-      "blocked_by": [
-        {
-          "dep_id": "DEP-001",
-          "name": "Rutgers SOC API（courses.json / openSections）",
-          "type": "api",
-          "status": "unknown",
-          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
-          "note": "接口结构与速率限制需要先通过 T-20251113-soc-api-validation 实测后，才能确定 schema 设计所需字段。"
-        }
-      ],
-      "unblock_plan": "在 T-20251113-soc-api-validation 中确认字段/速率后，设计 schema 与索引并用小样本跑通迁移脚本，再推广到完整数据集。",
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "Rutgers SOC 字段矩阵与限流结果已就绪，迁移 CLI 落地后通过新增 SQL 脚本即可演进 schema。",
       "estimate_h": 8,
       "risk": "mid",
       "confidence": 0.65,
@@ -219,8 +210,10 @@
         "data-pipeline"
       ],
       "artifacts": [
-        "db/schema.sql",
+        "data/schema.sql",
         "scripts/migrate_db.ts",
+        "data/migrations/001_init_schema.sql",
+        "data/migrations/002_relax_section_index_scope.sql",
         "docs/db_schema.md"
       ],
       "citations": [
@@ -230,7 +223,7 @@
         "R-20251113-frontend-perf"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-17T05:05:47Z",
+      "updated_at": "2025-11-17T06:36:25Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-007",
@@ -289,13 +282,13 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "done",
           "dependencies": [
             "ST-20251113-act-007-01-entity-design"
           ],
           "blocked": false,
           "blocked_by": [],
-          "unblock_plan": "根据定稿模型编写 schema.sql，再封装 CLI 与版本记录，最后补充 README 片段。",
+          "unblock_plan": "迁移 CLI 已完成，后续 schema 变更通过新增 SQL 版本脚本演进。",
           "estimate_h": 3,
           "risk": "medium",
           "confidence": 0.68,
@@ -305,11 +298,14 @@
           ],
           "artifacts": [
             "scripts/migrate_db.ts",
-            "data/schema.sql"
+            "data/schema.sql",
+            "data/migrations/001_init_schema.sql",
+            "data/migrations/002_relax_section_index_scope.sql",
+            "README.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-17T06:36:25Z",
           "owner": "tbd",
           "tags": [
             "database",
