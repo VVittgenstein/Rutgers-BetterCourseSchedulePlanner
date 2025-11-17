@@ -67,3 +67,8 @@ P1 Badge Rewriting v001 migration breaks checksumed upgrades
 
 Line 105 adds a column-level UNIQUE constraint to sections.index_number, which changes the contents of the already-applied 001_init_schema.sql. The migration runner (scripts/migrate_db.ts lines 136-146) stores and validates SHA256 checksums for each applied version; with this change any database that previously applied v001 will see a checksum mismatch and abort before reaching the new v002, blocking upgrades on all existing deployments that have run the migration once. This needs to be handled via a new migration instead of modifying the original file.
 ---review-end---
+
+## Code Review - ST-20251113-act-007-02-migration-tooling - 2025-11-17T06:55:44Z
+---review-start---
+Codex Review: Didn't find any major issues. Keep it up!
+---review-end---
