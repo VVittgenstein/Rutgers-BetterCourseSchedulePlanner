@@ -454,7 +454,9 @@ function simulatePreviousSnapshot(
       firstCourse.sections.push(ghost);
       notes.push(`Added ghost section ${ghost.key} so new payload treats it as deleted.`);
       if (cloned.length > 1) {
-        const removedCourse = cloned.shift();
+        const removalIndex = cloned.length - 1;
+        const removedCourse = cloned[removalIndex];
+        cloned.splice(removalIndex, 1);
         if (removedCourse) {
           notes.push(`Dropped ${removedCourse.key} entirely to simulate course addition.`);
         }
