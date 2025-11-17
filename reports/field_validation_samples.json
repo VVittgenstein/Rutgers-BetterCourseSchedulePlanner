@@ -1,0 +1,800 @@
+[
+  {
+    "course_string": "01:198:440",
+    "subject": "198",
+    "course_number": "440",
+    "title_sqlite": "INTRO ARTIFIC INTELL",
+    "title_soc": "INTRO ARTIFIC INTELL",
+    "expanded_title_sqlite": "INTRODUCTION TO ARTIFICIAL INTELLIGENCE",
+    "expanded_title_soc": "INTRODUCTION TO ARTIFICIAL INTELLIGENCE                                         ",
+    "credits_display_sqlite": "4.0 credits",
+    "credits_description_soc": "4.0 credits",
+    "credits_value_soc": 4,
+    "credits_min_sqlite": 4.0,
+    "credits_max_sqlite": 4.0,
+    "prereq_plain_sqlite": "((01:198:205 INTRODUCTION TO DISCRETE STRUCTURES I or 14:332:202 DISCRETE MATH ECE or 14:332:312 DISCRETE MATHEMATICS ECE ) and (01:640:152 CALCULUS II FOR MATHEMATICAL AND PHYSICAL SCIENCES )) OR ((01:198:205 INTRODUCTION TO DISCRETE STRUCTURES I or 14:332:202 DISCRETE MATH ECE or 14:332:312 DISCRETE MATHEMATICS ECE ) and (01:640:192 HONORS CALCULUS II ))",
+    "prereq_html_soc": "((01:198:205 INTRODUCTION TO DISCRETE STRUCTURES I  or 14:332:202 DISCRETE MATH ECE  or 14:332:312 DISCRETE MATHEMATICS ECE ) and (01:640:152 CALCULUS II FOR MATHEMATICAL AND PHYSICAL SCIENCES )) <em> OR </em> ((01:198:205 INTRODUCTION TO DISCRETE STRUCTURES I  or 14:332:202 DISCRETE MATH ECE  or 14:332:312 DISCRETE MATHEMATICS ECE ) and (01:640:192 HONORS CALCULUS II ))",
+    "synopsis_sqlite": "http://www.cs.rutgers.edu/undergraduate/courses/",
+    "synopsis_soc": "http://www.cs.rutgers.edu/undergraduate/courses/",
+    "open_sections_sqlite": 0,
+    "open_sections_soc": 0,
+    "has_open_sqlite": false,
+    "has_open_soc": false,
+    "core_codes_sqlite": [],
+    "core_codes_soc": [],
+    "campus_locations_sqlite": [
+      "Busch"
+    ],
+    "campus_locations_soc": [
+      "Busch"
+    ],
+    "section_index": "06847",
+    "section_number": "01",
+    "section_open_sqlite": "CLOSED",
+    "section_open_soc": "CLOSED",
+    "section_instructors_sqlite": "BOULARIAS",
+    "section_instructors_soc": "BOULARIAS",
+    "section_delivery_sqlite": "in_person",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": null,
+    "section_subtitle_soc": "",
+    "meetings_sqlite": [
+      {
+        "meeting_day": "F",
+        "start_time": "0200",
+        "end_time": "0320",
+        "meeting_mode_desc": "LEC",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "111"
+      },
+      {
+        "meeting_day": "W",
+        "start_time": "0555",
+        "end_time": "0650",
+        "meeting_mode_desc": "RECIT",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "202"
+      },
+      {
+        "meeting_day": "W",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "111"
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "W",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "111"
+      },
+      {
+        "meeting_day": "F",
+        "start_time": "0200",
+        "end_time": "0320",
+        "meeting_mode_desc": "LEC",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "111"
+      },
+      {
+        "meeting_day": "W",
+        "start_time": "0555",
+        "end_time": "0650",
+        "meeting_mode_desc": "RECIT",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "202"
+      }
+    ]
+  },
+  {
+    "course_string": "16:198:560",
+    "subject": "198",
+    "course_number": "560",
+    "title_sqlite": "INTRO COMP ROBOTICS",
+    "title_soc": "INTRO COMP ROBOTICS",
+    "expanded_title_sqlite": "INTRODUCTION TO COMPUTATIONAL ROBOTICS",
+    "expanded_title_soc": "INTRODUCTION TO COMPUTATIONAL ROBOTICS                                          ",
+    "credits_display_sqlite": "3.0 credits",
+    "credits_description_soc": "3.0 credits",
+    "credits_value_soc": 3,
+    "credits_min_sqlite": 3.0,
+    "credits_max_sqlite": 3.0,
+    "prereq_plain_sqlite": null,
+    "prereq_html_soc": "",
+    "synopsis_sqlite": "http://www.cs.rutgers.edu/graduate/courses/",
+    "synopsis_soc": "http://www.cs.rutgers.edu/graduate/courses/",
+    "open_sections_sqlite": 1,
+    "open_sections_soc": 1,
+    "has_open_sqlite": true,
+    "has_open_soc": true,
+    "core_codes_sqlite": [],
+    "core_codes_soc": [],
+    "campus_locations_sqlite": [
+      "College Avenue"
+    ],
+    "campus_locations_soc": [
+      "College Avenue"
+    ],
+    "section_index": "13592",
+    "section_number": "01",
+    "section_open_sqlite": "OPEN",
+    "section_open_soc": "OPEN",
+    "section_instructors_sqlite": "BEKRIS, KOSTAS",
+    "section_instructors_soc": "BEKRIS, KOSTAS",
+    "section_delivery_sqlite": "in_person",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": null,
+    "section_subtitle_soc": "",
+    "meetings_sqlite": [
+      {
+        "meeting_day": "H",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "COLLEGE AVENUE",
+        "building": "HH",
+        "room": "A7"
+      },
+      {
+        "meeting_day": "M",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "COLLEGE AVENUE",
+        "building": "HH",
+        "room": "A7"
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "M",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "COLLEGE AVENUE",
+        "building": "HH",
+        "room": "A7"
+      },
+      {
+        "meeting_day": "H",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "COLLEGE AVENUE",
+        "building": "HH",
+        "room": "A7"
+      }
+    ]
+  },
+  {
+    "course_string": "16:198:844",
+    "subject": "198",
+    "course_number": "844",
+    "title_sqlite": "RESEARCH INTERNSHIP",
+    "title_soc": "RESEARCH INTERNSHIP",
+    "expanded_title_sqlite": null,
+    "expanded_title_soc": "",
+    "credits_display_sqlite": "0.0 credits",
+    "credits_description_soc": "0.0 credits",
+    "credits_value_soc": 0,
+    "credits_min_sqlite": 0.0,
+    "credits_max_sqlite": 0.0,
+    "prereq_plain_sqlite": null,
+    "prereq_html_soc": "",
+    "synopsis_sqlite": "http://www.cs.rutgers.edu/graduate/courses/",
+    "synopsis_soc": "http://www.cs.rutgers.edu/graduate/courses/",
+    "open_sections_sqlite": 1,
+    "open_sections_soc": 1,
+    "has_open_sqlite": true,
+    "has_open_soc": true,
+    "core_codes_sqlite": [],
+    "core_codes_soc": [],
+    "campus_locations_sqlite": [
+      "N/A"
+    ],
+    "campus_locations_soc": [
+      "N/A"
+    ],
+    "section_index": "13821",
+    "section_number": "01",
+    "section_open_sqlite": "OPEN",
+    "section_open_soc": "OPEN",
+    "section_instructors_sqlite": "GAO, JIE",
+    "section_instructors_soc": "GAO, JIE",
+    "section_delivery_sqlite": "in_person",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": null,
+    "section_subtitle_soc": "",
+    "meetings_sqlite": [
+      {
+        "meeting_day": null,
+        "start_time": null,
+        "end_time": null,
+        "meeting_mode_desc": "GRADUATE 800-LEVEL",
+        "campus": null,
+        "building": null,
+        "room": null
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "",
+        "start_time": "",
+        "end_time": "",
+        "meeting_mode_desc": "GRADUATE 800-LEVEL",
+        "campus": "",
+        "building": "",
+        "room": ""
+      }
+    ]
+  },
+  {
+    "course_string": "01:198:111",
+    "subject": "198",
+    "course_number": "111",
+    "title_sqlite": "INTRO COMPUTER SCI",
+    "title_soc": "INTRO COMPUTER SCI",
+    "expanded_title_sqlite": null,
+    "expanded_title_soc": "",
+    "credits_display_sqlite": "4.0 credits",
+    "credits_description_soc": "4.0 credits",
+    "credits_value_soc": 4,
+    "credits_min_sqlite": 4.0,
+    "credits_max_sqlite": 4.0,
+    "prereq_plain_sqlite": "Any Course EQUAL or GREATER Than: (01:640:112 PRECALCULUS PART II )",
+    "prereq_html_soc": "Any Course EQUAL or GREATER Than: (01:640:112 PRECALCULUS PART II )",
+    "synopsis_sqlite": "http://www.cs.rutgers.edu/undergraduate/courses/",
+    "synopsis_soc": "http://www.cs.rutgers.edu/undergraduate/courses/",
+    "open_sections_sqlite": 3,
+    "open_sections_soc": 3,
+    "has_open_sqlite": true,
+    "has_open_soc": true,
+    "core_codes_sqlite": [
+      "ITR",
+      "QQ",
+      "QR"
+    ],
+    "core_codes_soc": [
+      "ITR",
+      "QQ",
+      "QR"
+    ],
+    "campus_locations_sqlite": [
+      "Busch",
+      "College Avenue",
+      "Livingston"
+    ],
+    "campus_locations_soc": [
+      "Busch",
+      "College Avenue",
+      "Livingston"
+    ],
+    "section_index": "06570",
+    "section_number": "01",
+    "section_open_sqlite": "CLOSED",
+    "section_open_soc": "CLOSED",
+    "section_instructors_sqlite": "GOEL, APOORVA",
+    "section_instructors_soc": "GOEL, APOORVA",
+    "section_delivery_sqlite": "in_person",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": null,
+    "section_subtitle_soc": "",
+    "meetings_sqlite": [
+      {
+        "meeting_day": "M",
+        "start_time": "0200",
+        "end_time": "0320",
+        "meeting_mode_desc": "LEC",
+        "campus": "COLLEGE AVENUE",
+        "building": "AB",
+        "room": "2125"
+      },
+      {
+        "meeting_day": "T",
+        "start_time": "1035",
+        "end_time": "1130",
+        "meeting_mode_desc": "RECIT",
+        "campus": "BUSCH",
+        "building": "HLL",
+        "room": "252"
+      },
+      {
+        "meeting_day": "W",
+        "start_time": "0200",
+        "end_time": "0320",
+        "meeting_mode_desc": "LEC",
+        "campus": "COLLEGE AVENUE",
+        "building": "AB",
+        "room": "2125"
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "M",
+        "start_time": "0200",
+        "end_time": "0320",
+        "meeting_mode_desc": "LEC",
+        "campus": "COLLEGE AVENUE",
+        "building": "AB",
+        "room": "2125"
+      },
+      {
+        "meeting_day": "W",
+        "start_time": "0200",
+        "end_time": "0320",
+        "meeting_mode_desc": "LEC",
+        "campus": "COLLEGE AVENUE",
+        "building": "AB",
+        "room": "2125"
+      },
+      {
+        "meeting_day": "T",
+        "start_time": "1035",
+        "end_time": "1130",
+        "meeting_mode_desc": "RECIT",
+        "campus": "BUSCH",
+        "building": "HLL",
+        "room": "252"
+      }
+    ]
+  },
+  {
+    "course_string": "01:198:213",
+    "subject": "198",
+    "course_number": "213",
+    "title_sqlite": "SOFTWARE METHODOLOGY",
+    "title_soc": "SOFTWARE METHODOLOGY",
+    "expanded_title_sqlite": null,
+    "expanded_title_soc": "",
+    "credits_display_sqlite": "4.0 credits",
+    "credits_description_soc": "4.0 credits",
+    "credits_value_soc": 4,
+    "credits_min_sqlite": 4.0,
+    "credits_max_sqlite": 4.0,
+    "prereq_plain_sqlite": "(01:198:112 DATA STRUCTURES ) OR (14:332:351 PROGRM METHODOLOGYII )",
+    "prereq_html_soc": "(01:198:112 DATA STRUCTURES )<em> OR </em>(14:332:351 PROGRM METHODOLOGYII )",
+    "synopsis_sqlite": "http://www.cs.rutgers.edu/undergraduate/courses/",
+    "synopsis_soc": "http://www.cs.rutgers.edu/undergraduate/courses/",
+    "open_sections_sqlite": 1,
+    "open_sections_soc": 1,
+    "has_open_sqlite": true,
+    "has_open_soc": true,
+    "core_codes_sqlite": [],
+    "core_codes_soc": [],
+    "campus_locations_sqlite": [
+      "Livingston"
+    ],
+    "campus_locations_soc": [
+      "Livingston"
+    ],
+    "section_index": "06796",
+    "section_number": "01",
+    "section_open_sqlite": "OPEN",
+    "section_open_soc": "OPEN",
+    "section_instructors_sqlite": "VENUGOPAL, SESH",
+    "section_instructors_soc": "VENUGOPAL, SESH",
+    "section_delivery_sqlite": "in_person",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": null,
+    "section_subtitle_soc": "",
+    "meetings_sqlite": [
+      {
+        "meeting_day": "H",
+        "start_time": "0350",
+        "end_time": "0510",
+        "meeting_mode_desc": "LEC",
+        "campus": "LIVINGSTON",
+        "building": "TIL",
+        "room": "254"
+      },
+      {
+        "meeting_day": "H",
+        "start_time": "0745",
+        "end_time": "0840",
+        "meeting_mode_desc": "RECIT",
+        "campus": "LIVINGSTON",
+        "building": "TIL",
+        "room": "253"
+      },
+      {
+        "meeting_day": "T",
+        "start_time": "0350",
+        "end_time": "0510",
+        "meeting_mode_desc": "LEC",
+        "campus": "LIVINGSTON",
+        "building": "TIL",
+        "room": "254"
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "T",
+        "start_time": "0350",
+        "end_time": "0510",
+        "meeting_mode_desc": "LEC",
+        "campus": "LIVINGSTON",
+        "building": "TIL",
+        "room": "254"
+      },
+      {
+        "meeting_day": "H",
+        "start_time": "0350",
+        "end_time": "0510",
+        "meeting_mode_desc": "LEC",
+        "campus": "LIVINGSTON",
+        "building": "TIL",
+        "room": "254"
+      },
+      {
+        "meeting_day": "H",
+        "start_time": "0745",
+        "end_time": "0840",
+        "meeting_mode_desc": "RECIT",
+        "campus": "LIVINGSTON",
+        "building": "TIL",
+        "room": "253"
+      }
+    ]
+  },
+  {
+    "course_string": "16:198:702",
+    "subject": "198",
+    "course_number": "702",
+    "title_sqlite": "RESEARCH COMP SC",
+    "title_soc": "RESEARCH COMP SC",
+    "expanded_title_sqlite": null,
+    "expanded_title_soc": "",
+    "credits_display_sqlite": "Credits by arrangement",
+    "credits_description_soc": "Credits by arrangement",
+    "credits_value_soc": null,
+    "credits_min_sqlite": null,
+    "credits_max_sqlite": null,
+    "prereq_plain_sqlite": null,
+    "prereq_html_soc": "",
+    "synopsis_sqlite": "http://www.cs.rutgers.edu/graduate/courses/",
+    "synopsis_soc": "http://www.cs.rutgers.edu/graduate/courses/",
+    "open_sections_sqlite": 61,
+    "open_sections_soc": 61,
+    "has_open_sqlite": true,
+    "has_open_soc": true,
+    "core_codes_sqlite": [],
+    "core_codes_soc": [],
+    "campus_locations_sqlite": [
+      "Busch",
+      "N/A"
+    ],
+    "campus_locations_soc": [
+      "Busch",
+      "N/A"
+    ],
+    "section_index": "13708",
+    "section_number": "A1",
+    "section_open_sqlite": "OPEN",
+    "section_open_soc": "OPEN",
+    "section_instructors_sqlite": "ALLENDER, ERIC",
+    "section_instructors_soc": "ALLENDER, ERIC",
+    "section_delivery_sqlite": "in_person",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": null,
+    "section_subtitle_soc": "",
+    "meetings_sqlite": [
+      {
+        "meeting_day": null,
+        "start_time": null,
+        "end_time": null,
+        "meeting_mode_desc": "RSCH-MA",
+        "campus": null,
+        "building": null,
+        "room": null
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "",
+        "start_time": "",
+        "end_time": "",
+        "meeting_mode_desc": "RSCH-MA",
+        "campus": "",
+        "building": "",
+        "room": ""
+      }
+    ]
+  },
+  {
+    "course_string": "16:198:800",
+    "subject": "198",
+    "course_number": "800",
+    "title_sqlite": "MATRICULATION CONTD",
+    "title_soc": "MATRICULATION CONTD",
+    "expanded_title_sqlite": "MATRICULATION CONTINUED",
+    "expanded_title_soc": "MATRICULATION CONTINUED                                                         ",
+    "credits_display_sqlite": "0.0 credits",
+    "credits_description_soc": "0.0 credits",
+    "credits_value_soc": 0,
+    "credits_min_sqlite": 0.0,
+    "credits_max_sqlite": 0.0,
+    "prereq_plain_sqlite": null,
+    "prereq_html_soc": "",
+    "synopsis_sqlite": "http://www.cs.rutgers.edu/graduate/courses/",
+    "synopsis_soc": "http://www.cs.rutgers.edu/graduate/courses/",
+    "open_sections_sqlite": 1,
+    "open_sections_soc": 1,
+    "has_open_sqlite": true,
+    "has_open_soc": true,
+    "core_codes_sqlite": [],
+    "core_codes_soc": [],
+    "campus_locations_sqlite": [
+      "N/A"
+    ],
+    "campus_locations_soc": [
+      "N/A"
+    ],
+    "section_index": "13819",
+    "section_number": "01",
+    "section_open_sqlite": "OPEN",
+    "section_open_soc": "OPEN",
+    "section_instructors_sqlite": "GAO, JIE",
+    "section_instructors_soc": "GAO, JIE",
+    "section_delivery_sqlite": "in_person",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": null,
+    "section_subtitle_soc": "",
+    "meetings_sqlite": [
+      {
+        "meeting_day": null,
+        "start_time": null,
+        "end_time": null,
+        "meeting_mode_desc": "GRADUATE 800-LEVEL",
+        "campus": null,
+        "building": null,
+        "room": null
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "",
+        "start_time": "",
+        "end_time": "",
+        "meeting_mode_desc": "GRADUATE 800-LEVEL",
+        "campus": "",
+        "building": "",
+        "room": ""
+      }
+    ]
+  },
+  {
+    "course_string": "26:198:684",
+    "subject": "198",
+    "course_number": "684",
+    "title_sqlite": "SP TOPICS INFO SYSTM",
+    "title_soc": "SP TOPICS INFO SYSTM",
+    "expanded_title_sqlite": "SPECIAL TOPICS INFORMATION SYSTEMS",
+    "expanded_title_soc": "SPECIAL TOPICS INFORMATION SYSTEMS                                              ",
+    "credits_display_sqlite": "3.0 credits",
+    "credits_description_soc": "3.0 credits",
+    "credits_value_soc": 3,
+    "credits_min_sqlite": 3.0,
+    "credits_max_sqlite": 3.0,
+    "prereq_plain_sqlite": null,
+    "prereq_html_soc": "",
+    "synopsis_sqlite": null,
+    "synopsis_soc": "",
+    "open_sections_sqlite": 1,
+    "open_sections_soc": 1,
+    "has_open_sqlite": true,
+    "has_open_soc": true,
+    "core_codes_sqlite": [],
+    "core_codes_soc": [],
+    "campus_locations_sqlite": [
+      "O"
+    ],
+    "campus_locations_soc": [
+      "O"
+    ],
+    "section_index": "16666",
+    "section_number": "01",
+    "section_open_sqlite": "OPEN",
+    "section_open_soc": "OPEN",
+    "section_instructors_sqlite": "KATEHAKIS",
+    "section_instructors_soc": "KATEHAKIS",
+    "section_delivery_sqlite": "online",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": "REINFORCEMENT LEARNING",
+    "section_subtitle_soc": "REINFORCEMENT LEARNING                  ",
+    "meetings_sqlite": [
+      {
+        "meeting_day": "W",
+        "start_time": "1020",
+        "end_time": "0120",
+        "meeting_mode_desc": "ONLINE INSTRUCTION(INTERNET)",
+        "campus": "** INVALID **",
+        "building": null,
+        "room": null
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "W",
+        "start_time": "1020",
+        "end_time": "0120",
+        "meeting_mode_desc": "ONLINE INSTRUCTION(INTERNET)",
+        "campus": "** INVALID **",
+        "building": "",
+        "room": ""
+      }
+    ]
+  },
+  {
+    "course_string": "22:198:660",
+    "subject": "198",
+    "course_number": "660",
+    "title_sqlite": "BUS ANLYTICS PROGRAM",
+    "title_soc": "BUS ANLYTICS PROGRAM",
+    "expanded_title_sqlite": "BUSINESS ANALYTICS PROGRAMMING",
+    "expanded_title_soc": "BUSINESS ANALYTICS PROGRAMMING                                                  ",
+    "credits_display_sqlite": "3.0 credits",
+    "credits_description_soc": "3.0 credits",
+    "credits_value_soc": 3,
+    "credits_min_sqlite": 3.0,
+    "credits_max_sqlite": 3.0,
+    "prereq_plain_sqlite": "(22:960:641 TOPIC:ANALYTICS FOR BUSINESS INTELLIGENCE )",
+    "prereq_html_soc": "(22:960:641 TOPIC:ANALYTICS FOR BUSINESS            INTELLIGENCE )",
+    "synopsis_sqlite": null,
+    "synopsis_soc": "",
+    "open_sections_sqlite": 0,
+    "open_sections_soc": 0,
+    "has_open_sqlite": false,
+    "has_open_soc": false,
+    "core_codes_sqlite": [],
+    "core_codes_soc": [],
+    "campus_locations_sqlite": [
+      "Livingston",
+      "O"
+    ],
+    "campus_locations_soc": [
+      "Livingston",
+      "O"
+    ],
+    "section_index": "16629",
+    "section_number": "60",
+    "section_open_sqlite": "CLOSED",
+    "section_open_soc": "CLOSED",
+    "section_instructors_sqlite": "GILANI, WAJAHAT",
+    "section_instructors_soc": "GILANI, WAJAHAT",
+    "section_delivery_sqlite": "hybrid",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": "INTRO TO BUS ANALYTICS PROGRAMMING",
+    "section_subtitle_soc": "INTRO TO BUS ANALYTICS PROGRAMMING      ",
+    "meetings_sqlite": [
+      {
+        "meeting_day": null,
+        "start_time": null,
+        "end_time": null,
+        "meeting_mode_desc": "ONLINE INSTRUCTION(INTERNET)",
+        "campus": "** INVALID **",
+        "building": null,
+        "room": null
+      },
+      {
+        "meeting_day": "T",
+        "start_time": "0600",
+        "end_time": "0720",
+        "meeting_mode_desc": "LEC",
+        "campus": "LIVINGSTON",
+        "building": "BRR",
+        "room": "5105"
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "T",
+        "start_time": "0600",
+        "end_time": "0720",
+        "meeting_mode_desc": "LEC",
+        "campus": "LIVINGSTON",
+        "building": "BRR",
+        "room": "5105"
+      },
+      {
+        "meeting_day": "",
+        "start_time": "",
+        "end_time": "",
+        "meeting_mode_desc": "ONLINE INSTRUCTION(INTERNET)",
+        "campus": "** INVALID **",
+        "building": "",
+        "room": ""
+      }
+    ]
+  },
+  {
+    "course_string": "16:198:520",
+    "subject": "198",
+    "course_number": "520",
+    "title_sqlite": "INTRO TO ARTIF INTEL",
+    "title_soc": "INTRO TO ARTIF INTEL",
+    "expanded_title_sqlite": null,
+    "expanded_title_soc": "",
+    "credits_display_sqlite": "3.0 credits",
+    "credits_description_soc": "3.0 credits",
+    "credits_value_soc": 3,
+    "credits_min_sqlite": 3.0,
+    "credits_max_sqlite": 3.0,
+    "prereq_plain_sqlite": null,
+    "prereq_html_soc": "",
+    "synopsis_sqlite": "http://www.cs.rutgers.edu/graduate/courses/",
+    "synopsis_soc": "http://www.cs.rutgers.edu/graduate/courses/",
+    "open_sections_sqlite": 0,
+    "open_sections_soc": 0,
+    "has_open_sqlite": false,
+    "has_open_soc": false,
+    "core_codes_sqlite": [],
+    "core_codes_soc": [],
+    "campus_locations_sqlite": [
+      "Busch"
+    ],
+    "campus_locations_soc": [
+      "Busch"
+    ],
+    "section_index": "13580",
+    "section_number": "01",
+    "section_open_sqlite": "CLOSED",
+    "section_open_soc": "CLOSED",
+    "section_instructors_sqlite": "COWAN, CHARLES",
+    "section_instructors_soc": "COWAN, CHARLES",
+    "section_delivery_sqlite": "in_person",
+    "section_delivery_soc": null,
+    "section_subtitle_sqlite": null,
+    "section_subtitle_soc": "",
+    "meetings_sqlite": [
+      {
+        "meeting_day": "H",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "208"
+      },
+      {
+        "meeting_day": "M",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "208"
+      }
+    ],
+    "meetings_soc": [
+      {
+        "meeting_day": "M",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "208"
+      },
+      {
+        "meeting_day": "H",
+        "start_time": "1210",
+        "end_time": "0130",
+        "meeting_mode_desc": "LEC",
+        "campus": "BUSCH",
+        "building": "SEC",
+        "room": "208"
+      }
+    ]
+  }
+]
