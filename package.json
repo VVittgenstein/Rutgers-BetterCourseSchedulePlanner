@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "soc:probe": "tsx scripts/soc_probe.ts"
+    "soc:probe": "tsx scripts/soc_probe.ts",
+    "soc:field-matrix": "python3 scripts/soc_field_matrix.py"
   },
   "repository": {
     "type": "git",
