@@ -1,7 +1,12 @@
-import { randomUUID } from 'node:crypto';
-import { performance } from 'node:perf_hooks';
-
-type Endpoint = 'courses' | 'openSections';
+import {
+  decodeSemester,
+  ENDPOINTS,
+  performProbe,
+  type Endpoint,
+  type ProbeResult,
+  type SemesterParts,
+  SOCRequestError
+} from './soc_api_client.js';
 
 interface CLIOptions {
   term: string;
@@ -11,12 +16,6 @@ interface CLIOptions {
   endpoint: Endpoint;
   sampleSize: number;
   timeoutMs: number;
-}
-
-interface SemesterParts {
-  year: number;
-  termCode: number;
-  normalizedLabel: string;
 }
 
 interface CourseRecord {
@@ -41,34 +40,7 @@ interface OpenSectionsSummary {
   sample: string[];
 }
 
-interface ProbeResult {
-  requestId: string;
-  url: string;
-  statusCode: number;
-  statusText: string;
-  durationMs: number;
-  sizeBytes: number;
-  body: unknown;
-}
-
 class CLIError extends Error {}
-
-const BASE_URL = 'https://classes.rutgers.edu/soc/api';
-const ENDPOINTS: Endpoint[] = ['courses', 'openSections'];
-const TERM_ALIASES: Record<string, number> = {
-  W: 0,
-  WINTER: 0,
-  WI: 0,
-  S: 1,
-  SP: 1,
-  SPRING: 1,
-  SU: 7,
-  SUM: 7,
-  SUMMER: 7,
-  F: 9,
-  FA: 9,
-  FALL: 9
-};
 
 function showUsage(): void {
   const usage = `Rutgers SOC probe
@@ -171,172 +143,6 @@ function parseArgs(): CLIOptions {
   return opts as CLIOptions;
 }
 
-function decodeSemester(term: string): SemesterParts {
-  const stripped = term.replace(/[-_\s]/g, '').toUpperCase();
-  const fiveDigit = stripped.match(/^([0179])(\d{4})$/);
-  if (fiveDigit) {
-    const [, termCodeRaw, yearRaw] = fiveDigit;
-    return {
-      year: Number.parseInt(yearRaw, 10),
-      termCode: Number.parseInt(termCodeRaw, 10),
-      normalizedLabel: `${termCodeRaw}${yearRaw}`
-    };
-  }
-
-  const swapped = stripped.match(/^(\d{4})([0179])$/);
-  if (swapped) {
-    const [, yearRaw, termCodeRaw] = swapped;
-    return {
-      year: Number.parseInt(yearRaw, 10),
-      termCode: Number.parseInt(termCodeRaw, 10),
-      normalizedLabel: `${termCodeRaw}${yearRaw}`
-    };
-  }
-
-  const aliasMatch = stripped.match(/^([A-Z]+)(\d{4})$/);
-  if (aliasMatch) {
-    const [, alias, yearRaw] = aliasMatch;
-    const termCode = TERM_ALIASES[alias];
-    if (termCode === undefined) {
-      throw new CLIError(`Unrecognized term alias: ${alias}`);
-    }
-    return {
-      year: Number.parseInt(yearRaw, 10),
-      termCode,
-      normalizedLabel: `${termCode}${yearRaw}`
-    };
-  }
-
-  throw new CLIError(`Unable to parse term "${term}". Expected formats like 12024, 20249, or FA2024.`);
-}
-
-async function performProbe(options: CLIOptions, semester: SemesterParts): Promise<ProbeResult> {
-  const params = new URLSearchParams({
-    year: String(semester.year),
-    term: String(semester.termCode),
-    campus: options.campus
-  });
-  if (options.subject) {
-    params.set('subject', options.subject);
-  }
-  if (options.level) {
-    params.set('level', options.level);
-  }
-
-  const url = `${BASE_URL}/${options.endpoint}.json?${params.toString()}`;
-  const requestId = randomUUID();
-  const controller = new AbortController();
-  const timeoutHandle = setTimeout(() => controller.abort(), options.timeoutMs);
-  const started = performance.now();
-
-  try {
-    const response = await fetch(url, {
-      headers: {
-        'user-agent': 'BetterCourseScheduleProbe/1.0',
-        accept: 'application/json, text/plain'
-      },
-      signal: controller.signal
-    });
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const durationMs = performance.now() - started;
-    const sizeBytes = buffer.byteLength;
-
-    if (!response.ok) {
-      emitStructuredError({
-        requestId,
-        endpoint: options.endpoint,
-        url,
-        httpStatus: response.status,
-        statusText: response.statusText,
-        retryHint: deriveRetryHint(response.status),
-        errorType: 'HTTP',
-        detail: buffer.toString('utf-8').slice(0, 400)
-      });
-      throw new Error(`Request failed with status ${response.status}`);
-    }
-
-    let body: unknown;
-    try {
-      body = JSON.parse(buffer.toString('utf-8'));
-    } catch (error) {
-      const parseError = error as Error & { alreadyLogged?: boolean };
-      emitStructuredError({
-        requestId,
-        endpoint: options.endpoint,
-        url,
-        httpStatus: response.status,
-        statusText: response.statusText,
-        retryHint: 'Inspect response payload, JSON parse failed',
-        errorType: 'JSON_PARSE',
-        detail: parseError.message
-      });
-      parseError.alreadyLogged = true;
-      throw parseError;
-    }
-
-    return {
-      requestId,
-      url,
-      statusCode: response.status,
-      statusText: response.statusText,
-      durationMs,
-      sizeBytes,
-      body
-    };
-  } catch (error) {
-    const err = error as Error & { alreadyLogged?: boolean };
-    if (err.name === 'AbortError') {
-      emitStructuredError({
-        requestId,
-        endpoint: options.endpoint,
-        url,
-        retryHint: 'Request timed out. Increase --timeout or lower concurrency.',
-        errorType: 'TIMEOUT',
-        detail: 'AbortError triggered by timeout'
-      });
-    } else if (err.alreadyLogged) {
-      // Inner handler already emitted a structured error (e.g., JSON parse), so skip duplicate logging.
-    } else if (!(err instanceof Error && err.message.startsWith('Request failed'))) {
-      emitStructuredError({
-        requestId,
-        endpoint: options.endpoint,
-        url,
-        retryHint: 'Check network connectivity or VPN settings.',
-        errorType: 'NETWORK',
-        detail: err.message
-      });
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutHandle);
-  }
-}
-
-function deriveRetryHint(status: number): string {
-  if (status === 429) {
-    return 'Hit rate-limit (429). Pause for 60s and retry with fewer parallel calls.';
-  }
-  if (status === 503 || status === 504) {
-    return 'Server overloaded. Back off for 30s and retry.';
-  }
-  if (status >= 500) {
-    return 'Server error. Retry after a short delay.';
-  }
-  if (status >= 400) {
-    return 'Verify query parameters (term/campus) before retrying.';
-  }
-  return 'Retry details unavailable.';
-}
-
-function emitStructuredError(entry: Record<string, unknown>): void {
-  const payload = {
-    level: 'error',
-    timestamp: new Date().toISOString(),
-    ...entry
-  };
-  console.error(JSON.stringify(payload));
-}
 
 function summarizeCourses(body: unknown, subject: string | undefined, sampleSize: number): CourseSummary {
   if (!Array.isArray(body)) {
@@ -424,7 +230,12 @@ function printSuccess(result: ProbeResult, options: CLIOptions, summary: CourseS
 async function main(): Promise<void> {
   try {
     const options = parseArgs();
-    const semester = decodeSemester(options.term);
+    let semester: SemesterParts;
+    try {
+      semester = decodeSemester(options.term);
+    } catch (error) {
+      throw new CLIError((error as Error).message);
+    }
     const result = await performProbe(options, semester);
     if (options.endpoint === 'courses') {
       const summary = summarizeCourses(result.body, options.subject, options.sampleSize);
@@ -436,6 +247,9 @@ async function main(): Promise<void> {
   } catch (error) {
     if (error instanceof CLIError) {
       console.error(`Argument error: ${error.message}`);
+    } else if (error instanceof SOCRequestError) {
+      const hint = error.retryHint ? ` (${error.retryHint})` : '';
+      console.error(`Probe failed [${error.requestId}]: ${error.message}${hint}`);
     } else if (error instanceof Error) {
       console.error(`Probe failed: ${error.message}`);
     } else {

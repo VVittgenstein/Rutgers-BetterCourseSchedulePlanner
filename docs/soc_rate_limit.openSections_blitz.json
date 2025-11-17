@@ -1,0 +1,37 @@
+{
+  "generatedAt": "2025-11-17T01:50:22.117Z",
+  "label": "openSections blitz",
+  "term": "12024",
+  "campus": "NB",
+  "subject": null,
+  "level": null,
+  "iterationsPerScenario": 120,
+  "schedule": [
+    {
+      "concurrency": 20,
+      "intervalMs": 0
+    }
+  ],
+  "results": [
+    {
+      "endpoint": "openSections",
+      "concurrency": 20,
+      "intervalMs": 0,
+      "iterations": 120,
+      "estimatedRps": null,
+      "durationMs": 2397,
+      "avgLatencyMs": 322.31450916666665,
+      "p95LatencyMs": 1939.2951999999998,
+      "statusCounts": {
+        "2xx": 120,
+        "4xx": 0,
+        "5xx": 0,
+        "timeout": 0,
+        "network": 0,
+        "json": 0,
+        "other": 0
+      },
+      "errorSamples": []
+    }
+  ]
+}
