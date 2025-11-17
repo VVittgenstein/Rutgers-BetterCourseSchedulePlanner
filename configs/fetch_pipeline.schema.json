@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bettercoursescheduleplanner.local/configs/fetch_pipeline.schema.json",
+  "title": "SOC Fetch Pipeline Configuration",
+  "type": "object",
+  "required": [
+    "defaultMode",
+    "sqliteFile",
+    "stagingDir",
+    "logDir",
+    "concurrency",
+    "retryPolicy",
+    "targets"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "runLabel": { "type": "string" },
+    "defaultMode": { "$ref": "#/$defs/mode" },
+    "sqliteFile": { "$ref": "#/$defs/pathString" },
+    "stagingDir": { "$ref": "#/$defs/pathString" },
+    "logDir": { "$ref": "#/$defs/pathString" },
+    "rateLimitProfile": { "$ref": "#/$defs/pathString" },
+    "concurrency": {
+      "type": "object",
+      "required": [
+        "maxCourseWorkers",
+        "courseRequestIntervalMs",
+        "maxOpenSectionsWorkers",
+        "openSectionsIntervalMs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "maxCourseWorkers": { "$ref": "#/$defs/positiveInteger" },
+        "courseRequestIntervalMs": { "$ref": "#/$defs/nonNegativeInteger" },
+        "maxOpenSectionsWorkers": { "$ref": "#/$defs/positiveInteger" },
+        "openSectionsIntervalMs": { "$ref": "#/$defs/nonNegativeInteger" },
+        "maxParallelCampuses": { "$ref": "#/$defs/positiveInteger" },
+        "maxSubjectsPerCampus": { "$ref": "#/$defs/positiveInteger" }
+      }
+    },
+    "retryPolicy": {
+      "type": "object",
+      "required": ["maxAttempts", "backoffMs"],
+      "additionalProperties": false,
+      "properties": {
+        "maxAttempts": { "$ref": "#/$defs/positiveInteger" },
+        "backoffMs": { "$ref": "#/$defs/nonNegativeIntegerArray" },
+        "jitter": { "type": "number", "minimum": 0, "maximum": 1 },
+        "downgradedProfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxCourseWorkers": { "$ref": "#/$defs/positiveInteger" },
+            "courseRequestIntervalMs": { "$ref": "#/$defs/nonNegativeInteger" },
+            "maxOpenSectionsWorkers": { "$ref": "#/$defs/positiveInteger" },
+            "openSectionsIntervalMs": { "$ref": "#/$defs/nonNegativeInteger" }
+          }
+        },
+        "retryableStatus": { "$ref": "#/$defs/statusArray" }
+      }
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/target" }
+    },
+    "incremental": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resumeQueueFile": { "$ref": "#/$defs/pathString" },
+        "subjectRecencyMinutes": { "$ref": "#/$defs/nonNegativeInteger" },
+        "deferNightlyStartLocalTime": {
+          "type": "string",
+          "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+        },
+        "maxSubjectRetries": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "fullInit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prerunMigrations": { "type": "boolean" },
+        "truncateTables": { "$ref": "#/$defs/stringArray" },
+        "rebuildFts": { "type": "boolean" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "writeJson": { "$ref": "#/$defs/pathString" },
+        "writeText": { "$ref": "#/$defs/pathString" },
+        "emitMetrics": { "type": "boolean" }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dryRun": { "type": "boolean" },
+        "requireCleanWorktree": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "mode": {
+      "type": "string",
+      "enum": ["full-init", "incremental"]
+    },
+    "pathString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "nonNegativeIntegerArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/nonNegativeInteger" }
+    },
+    "statusArray": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 599
+      }
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "target": {
+      "type": "object",
+      "required": ["term", "campuses"],
+      "additionalProperties": false,
+      "properties": {
+        "term": { "type": "string", "minLength": 1 },
+        "mode": { "$ref": "#/$defs/mode" },
+        "subjectBatchSize": { "$ref": "#/$defs/positiveInteger" },
+        "subjectRecencyMinutes": { "$ref": "#/$defs/nonNegativeInteger" },
+        "campuses": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/campus" }
+        }
+      }
+    },
+    "campus": {
+      "type": "object",
+      "required": ["code"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "minLength": 2 },
+        "subjects": { "$ref": "#/$defs/stringArray" }
+      }
+    }
+  }
+}

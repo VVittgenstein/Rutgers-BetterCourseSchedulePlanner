@@ -4,6 +4,8 @@ _Last updated: 2025-11-17_
 
 `scripts/fetch_soc_data.ts` is the single runner for Rutgers SOC ingestion. It hides the raw SOC endpoints (`courses.json`, `openSections`) behind a declarative config file and wraps every write in SQLite transactions so UI/API consumers always read consistent rows. This note defines the CLI, configuration surface, batching strategy, and how the runner differentiates between a first-time initialization and day-2 incremental refreshes.
 
+> **Status**: `npm run data:fetch` currently validates configs and prints the execution plan only. The actual fetch/execution loop is implemented under `ST-20251113-act-001-02-ingest-impl`; once that lands the same CLI + config remain valid.
+
 ## CLI entry point
 ```bash
 npm run data:fetch -- \
@@ -30,7 +32,7 @@ npm run data:fetch -- \
 The CLI also exposes hidden debugging switches (`--dump-requests`, `--keep-staging`) which bubble up raw payloads to `data/staging/...` for post-mortems. They stay undocumented in `--help` but are covered here to ensure the config example makes sense.
 
 ## Configuration layout
-`configs/fetch_pipeline.example.json` shows the expected structure (excerpt below):
+`configs/fetch_pipeline.example.json` shows the expected structure (excerpt below). The config schema used by editors and CI lives at `configs/fetch_pipeline.schema.json`.
 
 ```json
 {
