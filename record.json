@@ -26,7 +26,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "in_progress",
+      "status": "done",
       "dependencies": [],
       "blocked": false,
       "blocked_by": [],
@@ -39,7 +39,10 @@
         "observability"
       ],
       "artifacts": [
-        "docs/soc_api_notes.md"
+        "docs/soc_api_notes.md",
+        "docs/soc_field_matrix.csv",
+        "docs/soc_rate_limit.md",
+        "docs/soc_rate_limit.latest.json"
       ],
       "citations": [
         "EVID-001",
@@ -48,7 +51,7 @@
         "Q-01"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-16T00:00:00Z",
+      "updated_at": "2025-11-17T01:56:11Z",
       "owner": "tbd",
       "tags": [
         "research",
@@ -85,7 +88,7 @@
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-16T00:00:00Z",
+          "updated_at": "2025-11-16T13:38:25Z",
           "owner": "tbd",
           "tags": [
             "soc-api",
@@ -120,11 +123,12 @@
           ],
           "artifacts": [
             "docs/soc_api_notes.md",
-            "docs/soc_field_matrix.csv"
+            "docs/soc_field_matrix.csv",
+            "scripts/soc_field_matrix.py"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-17T01:10:56Z",
+          "updated_at": "2025-11-17T01:35:08Z",
           "owner": "tbd",
           "tags": [
             "soc-api",
@@ -160,11 +164,17 @@
           ],
           "artifacts": [
             "docs/soc_rate_limit.md",
-            "docs/soc_api_notes.md"
+            "docs/soc_api_notes.md",
+            "scripts/soc_api_client.ts",
+            "scripts/soc_rate_limit.ts",
+            "docs/soc_rate_limit.latest.json",
+            "docs/soc_rate_limit.courses_stress.json",
+            "docs/soc_rate_limit.courses_stress2.json",
+            "docs/soc_rate_limit.openSections_blitz.json"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-17T00:00:00Z",
+          "updated_at": "2025-11-17T01:56:11Z",
           "owner": "tbd",
           "tags": [
             "soc-api",
@@ -2215,7 +2225,10 @@
     "系统统一使用 Rutgers SOC 公开接口（courses.json、openSections 等）作为课程与容量数据来源，不抓取需要登录的 WebReg 页面。",
     "架构采用“本地 SQLite 数据库 + 轻量 API 服务 + 前端 SPA + 本地后台通知”的组合，各部署实例独立运行数据库与通知进程，避免浏览器一次性加载几十 MB JSON。",
     "通知渠道 MVP 聚焦邮箱和 Discord，并通过显式退订/管理入口满足隐私与反垃圾邮件规范。",
-    "项目从 day-1 起按多语言架构设计，至少支持中英文 UI，并通过 i18n 资源文件管理文案以方便后续扩展其他语言。"
+    "项目从 day-1 起按多语言架构设计，至少支持中英文 UI，并通过 i18n 资源文件管理文案以方便后续扩展其他语言。",
+    "新增 `npm run soc:probe` CLI（scripts/soc_probe.ts 复用 scripts/soc_api_client.ts），统一封装 courses.json/openSections 请求，解析 term/campus/subject 参数并输出状态码、延迟、示例数据与结构化错误日志，运行方法与样例记录在 docs/soc_api_notes.md。",
+    "`scripts/soc_field_matrix.py` 在 2 个 term x 3 个 campus x 5 个 subject 覆盖的 42 组合上缓存 payload（共 13,322 门课程、32,249 个 section、45,884 条 meeting、23,863 条 open section index），生成 docs/soc_field_matrix.csv 并标注 FR-01/FR-02 字段覆盖，也确认 openSections 仅提供 index 字符串而缺失 capacity/waitlist/notes。",
+    "`npm run soc:rate-limit`（scripts/soc_rate_limit.ts）针对 NB 12024 term 跑通 baseline 场景（1x1200ms、3x600ms、6x300ms）和最高 32 worker/50ms gap 及 openSections 50 worker 无间隔的压力测试，所有调用返回 2xx；实测数据写入 docs/soc_rate_limit.md 与 docs/soc_rate_limit*.json，并给出抓取/轮询推荐频率及错误码动作。"
   ],
   "decisions": [
     {
