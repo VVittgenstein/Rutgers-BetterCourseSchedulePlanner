@@ -47,6 +47,7 @@ interface ScenarioResult {
   intervalMs: number;
   iterations: number;
   estimatedRps: number;
+  actualRps: number;
   durationMs: number;
   avgLatencyMs: number;
   p95LatencyMs: number;
@@ -339,6 +340,11 @@ async function runScenario(
   await Promise.all(workers);
   const runDuration = Date.now() - started;
 
+  const actualRps = Number(
+    (runDuration === 0 ? iterations : iterations / (runDuration / 1000)).toFixed(2)
+  );
+  const estimatedRps = scenario.intervalMs === 0 ? actualRps : estimateRps(scenario);
+
   const avgLatency = durations.length === 0 ? 0 : mean(durations);
   const p95Latency = durations.length === 0 ? 0 : percentile(durations, 0.95);
 
@@ -347,7 +353,8 @@ async function runScenario(
     concurrency: scenario.concurrency,
     intervalMs: scenario.intervalMs,
     iterations,
-    estimatedRps: estimateRps(scenario),
+    estimatedRps,
+    actualRps,
     durationMs: runDuration,
     avgLatencyMs: avgLatency,
     p95LatencyMs: p95Latency,
@@ -391,15 +398,13 @@ function incrementErrorCount(counts: StatusCounts, error: SOCRequestError): void
 }
 
 function estimateRps(scenario: ScenarioSpec): number {
-  if (scenario.intervalMs === 0) {
-    return Infinity;
-  }
-  return Number((scenario.concurrency * (1000 / scenario.intervalMs)).toFixed(2));
+  const interval = Math.max(scenario.intervalMs, 1);
+  return Number((scenario.concurrency * (1000 / interval)).toFixed(2));
 }
 
 function formatScenarioResult(result: ScenarioResult): void {
   console.log(
-    `Requests=${result.iterations} • Estimated RPS=${result.estimatedRps} • Run duration=${result.durationMs} ms`
+    `Requests=${result.iterations} • Estimated RPS=${result.estimatedRps} • Actual RPS=${result.actualRps} • Run duration=${result.durationMs} ms`
   );
   console.log(
     `Latency avg=${result.avgLatencyMs.toFixed(1)} ms • p95=${result.p95LatencyMs.toFixed(1)} ms`
