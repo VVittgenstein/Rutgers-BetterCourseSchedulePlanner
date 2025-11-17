@@ -1,0 +1,61 @@
+{
+  "generatedAt": "2025-11-17T01:49:48.090Z",
+  "label": "stress",
+  "term": "12024",
+  "campus": "NB",
+  "subject": null,
+  "level": null,
+  "iterationsPerScenario": 32,
+  "schedule": [
+    {
+      "concurrency": 8,
+      "intervalMs": 200
+    },
+    {
+      "concurrency": 12,
+      "intervalMs": 150
+    }
+  ],
+  "results": [
+    {
+      "endpoint": "courses",
+      "concurrency": 8,
+      "intervalMs": 200,
+      "iterations": 32,
+      "estimatedRps": 40,
+      "durationMs": 3450,
+      "avgLatencyMs": 470.33686249999994,
+      "p95LatencyMs": 865.1584,
+      "statusCounts": {
+        "2xx": 32,
+        "4xx": 0,
+        "5xx": 0,
+        "timeout": 0,
+        "network": 0,
+        "json": 0,
+        "other": 0
+      },
+      "errorSamples": []
+    },
+    {
+      "endpoint": "courses",
+      "concurrency": 12,
+      "intervalMs": 150,
+      "iterations": 32,
+      "estimatedRps": 80,
+      "durationMs": 3185,
+      "avgLatencyMs": 803.1615062499999,
+      "p95LatencyMs": 1105.4894999999997,
+      "statusCounts": {
+        "2xx": 32,
+        "4xx": 0,
+        "5xx": 0,
+        "timeout": 0,
+        "network": 0,
+        "json": 0,
+        "other": 0
+      },
+      "errorSamples": []
+    }
+  ]
+}

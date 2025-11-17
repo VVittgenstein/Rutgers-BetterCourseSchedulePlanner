@@ -1,0 +1,145 @@
+{
+  "generatedAt": "2025-11-17T01:49:22.610Z",
+  "label": "2025-11-16 NB baseline",
+  "term": "12024",
+  "campus": "NB",
+  "subject": "198",
+  "level": null,
+  "iterationsPerScenario": 20,
+  "schedule": [
+    {
+      "concurrency": 1,
+      "intervalMs": 1200
+    },
+    {
+      "concurrency": 3,
+      "intervalMs": 600
+    },
+    {
+      "concurrency": 6,
+      "intervalMs": 300
+    }
+  ],
+  "results": [
+    {
+      "endpoint": "courses",
+      "concurrency": 1,
+      "intervalMs": 1200,
+      "iterations": 20,
+      "estimatedRps": 0.83,
+      "durationMs": 28725,
+      "avgLatencyMs": 165.76988500000004,
+      "p95LatencyMs": 977.5397000000002,
+      "statusCounts": {
+        "2xx": 20,
+        "4xx": 0,
+        "5xx": 0,
+        "timeout": 0,
+        "network": 0,
+        "json": 0,
+        "other": 0
+      },
+      "errorSamples": []
+    },
+    {
+      "endpoint": "courses",
+      "concurrency": 3,
+      "intervalMs": 600,
+      "iterations": 20,
+      "estimatedRps": 5,
+      "durationMs": 5893,
+      "avgLatencyMs": 176.8565300000002,
+      "p95LatencyMs": 943.3733000000066,
+      "statusCounts": {
+        "2xx": 20,
+        "4xx": 0,
+        "5xx": 0,
+        "timeout": 0,
+        "network": 0,
+        "json": 0,
+        "other": 0
+      },
+      "errorSamples": []
+    },
+    {
+      "endpoint": "courses",
+      "concurrency": 6,
+      "intervalMs": 300,
+      "iterations": 20,
+      "estimatedRps": 20,
+      "durationMs": 2631,
+      "avgLatencyMs": 299.5815649999986,
+      "p95LatencyMs": 674.1684000000023,
+      "statusCounts": {
+        "2xx": 20,
+        "4xx": 0,
+        "5xx": 0,
+        "timeout": 0,
+        "network": 0,
+        "json": 0,
+        "other": 0
+      },
+      "errorSamples": []
+    },
+    {
+      "endpoint": "openSections",
+      "concurrency": 1,
+      "intervalMs": 1200,
+      "iterations": 20,
+      "estimatedRps": 0.83,
+      "durationMs": 25049,
+      "avgLatencyMs": 44.17242499999993,
+      "p95LatencyMs": 86.29209999999148,
+      "statusCounts": {
+        "2xx": 20,
+        "4xx": 0,
+        "5xx": 0,
+        "timeout": 0,
+        "network": 0,
+        "json": 0,
+        "other": 0
+      },
+      "errorSamples": []
+    },
+    {
+      "endpoint": "openSections",
+      "concurrency": 3,
+      "intervalMs": 600,
+      "iterations": 20,
+      "estimatedRps": 5,
+      "durationMs": 4540,
+      "avgLatencyMs": 41.12524000000121,
+      "p95LatencyMs": 79.82229999999981,
+      "statusCounts": {
+        "2xx": 20,
+        "4xx": 0,
+        "5xx": 0,
+        "timeout": 0,
+        "network": 0,
+        "json": 0,
+        "other": 0
+      },
+      "errorSamples": []
+    },
+    {
+      "endpoint": "openSections",
+      "concurrency": 6,
+      "intervalMs": 300,
+      "iterations": 20,
+      "estimatedRps": 20,
+      "durationMs": 1374,
+      "avgLatencyMs": 51.365934999998714,
+      "p95LatencyMs": 167.58559999999125,
+      "statusCounts": {
+        "2xx": 20,
+        "4xx": 0,
+        "5xx": 0,
+        "timeout": 0,
+        "network": 0,
+        "json": 0,
+        "other": 0
+      },
+      "errorSamples": []
+    }
+  ]
+}
