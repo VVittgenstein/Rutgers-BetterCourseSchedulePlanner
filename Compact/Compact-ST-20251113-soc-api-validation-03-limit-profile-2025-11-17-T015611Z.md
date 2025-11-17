@@ -45,3 +45,7 @@ now
 P2 Badge Prevent null estimatedRps for zero-interval scenarios
 
 When a scenario uses intervalMs of 0 (allowed by parseSchedule, used in the blitz example), estimateRps returns Infinity. JSON serialization turns Infinity into null, so saved rate-limit payloads misreport throughput (docs/soc_rate_limit.openSections_blitz.json shows estimatedRps: null). Use a finite calculation for zero-interval runs (e.g., based on duration) or avoid serializing Infinity so zero-interval profiles retain a meaningful RPS value.
+
+## Code Review - ST-20251113-soc-api-validation-03-limit-profile - 2025-11-17T02:11:00Z
+
+Codex Review: Didn't find any major issues. Already looking forward to the next dif
