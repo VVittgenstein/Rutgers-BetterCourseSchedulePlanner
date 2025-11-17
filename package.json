@@ -12,7 +12,8 @@
     "soc:probe": "tsx scripts/soc_probe.ts",
     "soc:field-matrix": "python3 scripts/soc_field_matrix.py",
     "soc:rate-limit": "tsx scripts/soc_rate_limit.ts",
-    "db:migrate": "tsx scripts/migrate_db.ts"
+    "db:migrate": "tsx scripts/migrate_db.ts",
+    "data:incremental-trial": "tsx scripts/incremental_trial.ts"
   },
   "repository": {
     "type": "git",
