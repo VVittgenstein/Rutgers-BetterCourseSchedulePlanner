@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS sections (
     campus_code TEXT NOT NULL,
     subject_code TEXT NOT NULL,
     section_number TEXT,
-    index_number TEXT NOT NULL,
+    index_number TEXT NOT NULL UNIQUE,
     open_status TEXT,
     is_open INTEGER DEFAULT 0,
     open_status_updated_at TEXT,
