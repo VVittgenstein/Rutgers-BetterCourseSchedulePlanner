@@ -1,8 +1,29 @@
 #!/usr/bin/env tsx
-import { readFile } from 'node:fs/promises';
+import Database from 'better-sqlite3';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
+
+import {
+  decodeSemester,
+  performProbe,
+  type SemesterParts,
+  SOCRequestError
+} from './soc_api_client.js';
+import {
+  normalizeCoursePayload,
+  type NormalizedCourse,
+  type NormalizedCourseMap,
+  type NormalizedSection,
+  type NormalizedMeeting
+} from './soc_normalizer.js';
+import { hashPayload } from './soc_normalizer.js';
 
 type PipelineMode = 'full-init' | 'incremental';
+
+type DB = Database.Database;
 
 interface CLIOptions {
   configPath?: string;
@@ -51,6 +72,76 @@ interface PlannedSlice {
   campus: string;
   mode: PipelineMode;
   subjects: string[];
+}
+
+interface SubjectStats {
+  subject: string;
+  coursesInserted: number;
+  coursesUpdated: number;
+  coursesDeleted: number;
+  sectionsInserted: number;
+  sectionsUpdated: number;
+  sectionsDeleted: number;
+}
+
+interface SliceSummary {
+  term: string;
+  campus: string;
+  mode: PipelineMode;
+  durationMs: number;
+  subjectsPlanned: number;
+  subjectsCompleted: number;
+  subjectStats: SubjectStats[];
+  openSections?: OpenSectionsStats;
+  errors: string[];
+}
+
+interface OpenSectionsStats {
+  indexesSeen: number;
+  markedOpen: number;
+  markedClosed: number;
+}
+
+interface RunSummary {
+  runLabel: string | null;
+  startedAt: string;
+  completedAt: string;
+  totals: SubjectStats & { slicesFailed: number };
+  sliceSummaries: SliceSummary[];
+}
+
+interface PreparedStatements {
+  selectCourses: Database.Statement;
+  insertCourse: Database.Statement;
+  updateCourse: Database.Statement;
+  deleteCourse: Database.Statement;
+  selectSections: Database.Statement;
+  insertSection: Database.Statement;
+  updateSection: Database.Statement;
+  deleteSection: Database.Statement;
+  insertStatusEvent: Database.Statement;
+  deleteMeetings: Database.Statement;
+  insertMeeting: Database.Statement;
+  upsertTerm: Database.Statement;
+  upsertCampus: Database.Statement;
+  upsertSubject: Database.Statement;
+  selectSectionStatus: Database.Statement;
+  updateSectionStatus: Database.Statement;
+  insertOpenSnapshot: Database.Statement;
+}
+
+interface PipelineContext {
+  db: DB;
+  config: PipelineConfig;
+  options: CLIOptions;
+  sqliteFile: string;
+  stagingDir: string;
+  logDir: string;
+  courseWorkerLimit: number;
+  openSectionsEnabled: boolean;
+  termCache: Map<string, SemesterParts>;
+  fullInitPrepared: boolean;
+  statements: PreparedStatements;
 }
 
 class CLIError extends Error {}
@@ -157,14 +248,14 @@ Options:
   --subjects <list>    Subject override. Use ALL to process every subject.
   --max-workers <n>    Caps worker pools for quick experiments.
   --resume <path>      Resume queue override.
-  --dry-run            Plan only. (Current behavior is plan-only regardless.)
+  --dry-run            Plan only.
   --help               Show this message.
 `);
 }
 
 async function loadPipelineConfig(configPath: string): Promise<PipelineConfig> {
   const resolved = path.resolve(configPath);
-  const contents = await readFile(resolved, 'utf8');
+  const contents = await fs.promises.readFile(resolved, 'utf8');
   let parsed: unknown;
   try {
     parsed = JSON.parse(contents);
@@ -258,12 +349,766 @@ function printPlan(plan: PlannedSlice[], config: PipelineConfig, options: CLIOpt
     );
   });
   console.log('');
-  console.log('NOTE: Execution engine not implemented yet (see ST-20251113-act-001-02-ingest-impl).');
-  if (options.dryRun) {
-    console.log('Dry-run requested: this command currently performs planning only.');
-  } else {
-    console.log('This stub currently performs planning only; no network or database work was attempted.');
+}
+
+async function stagePayload(
+  ctx: PipelineContext,
+  slice: PlannedSlice,
+  target: 'courses' | 'openSections',
+  subject: string,
+  body: unknown
+): Promise<void> {
+  const dir = path.join(ctx.stagingDir, slice.term, slice.campus);
+  await mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${target}-${subject}-${Date.now()}.json`);
+  await writeFile(file, JSON.stringify(body, null, 2), 'utf8');
+}
+
+function expandSubjects(subjects: string[], map: NormalizedCourseMap): string[] {
+  if (subjects.includes('ALL')) {
+    return Array.from(map.keys()).sort();
   }
+  return subjects.map((subject) => subject.toUpperCase());
+}
+
+function createStatements(db: DB): PreparedStatements {
+  return {
+    selectCourses: db.prepare(
+      'SELECT course_id, course_number, source_hash FROM courses WHERE term_id = ? AND campus_code = ? AND subject_code = ?',
+    ),
+    insertCourse: db.prepare(`
+      INSERT INTO courses (
+        term_id, campus_code, subject_code, course_number, course_string, title, expanded_title,
+        level, credits_min, credits_max, credits_display, core_json, has_core_attribute,
+        prereq_html, prereq_plain, synopsis_url, course_notes, unit_notes, subject_notes,
+        supplement_code, campus_locations_json, open_sections_count, has_open_sections,
+        tags, search_vector, source_hash, source_payload, created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+    `),
+    updateCourse: db.prepare(`
+      UPDATE courses SET
+        course_string = ?,
+        title = ?,
+        expanded_title = ?,
+        level = ?,
+        credits_min = ?,
+        credits_max = ?,
+        credits_display = ?,
+        core_json = ?,
+        has_core_attribute = ?,
+        prereq_html = ?,
+        prereq_plain = ?,
+        synopsis_url = ?,
+        course_notes = ?,
+        unit_notes = ?,
+        subject_notes = ?,
+        supplement_code = ?,
+        campus_locations_json = ?,
+        open_sections_count = ?,
+        has_open_sections = ?,
+        tags = ?,
+        search_vector = ?,
+        source_hash = ?,
+        source_payload = ?,
+        updated_at = ?
+      WHERE course_id = ?
+    `),
+    deleteCourse: db.prepare('DELETE FROM courses WHERE course_id = ?'),
+    selectSections: db.prepare(
+      'SELECT section_id, index_number, source_hash, open_status, is_open, open_status_updated_at FROM sections WHERE term_id = ? AND campus_code = ? AND subject_code = ?',
+    ),
+    insertSection: db.prepare(`
+      INSERT INTO sections (
+        course_id, term_id, campus_code, subject_code, section_number, index_number,
+        open_status, is_open, open_status_updated_at, instructors_text, section_notes,
+        comments_json, eligibility_text, open_to_text, majors_json, minors_json,
+        honor_programs_json, section_course_type, exam_code, exam_code_text,
+        special_permission_add_code, special_permission_add_desc,
+        special_permission_drop_code, special_permission_drop_desc, printed,
+        session_print_indicator, subtitle, meeting_mode_summary, delivery_method,
+        has_meetings, source_hash, source_payload, created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+    `),
+    updateSection: db.prepare(`
+      UPDATE sections SET
+        course_id = ?,
+        section_number = ?,
+        open_status = ?,
+        is_open = ?,
+        open_status_updated_at = ?,
+        instructors_text = ?,
+        section_notes = ?,
+        comments_json = ?,
+        eligibility_text = ?,
+        open_to_text = ?,
+        majors_json = ?,
+        minors_json = ?,
+        honor_programs_json = ?,
+        section_course_type = ?,
+        exam_code = ?,
+        exam_code_text = ?,
+        special_permission_add_code = ?,
+        special_permission_add_desc = ?,
+        special_permission_drop_code = ?,
+        special_permission_drop_desc = ?,
+        printed = ?,
+        session_print_indicator = ?,
+        subtitle = ?,
+        meeting_mode_summary = ?,
+        delivery_method = ?,
+        has_meetings = ?,
+        source_hash = ?,
+        source_payload = ?,
+        updated_at = ?
+      WHERE section_id = ?
+    `),
+    deleteSection: db.prepare('DELETE FROM sections WHERE section_id = ?'),
+    insertStatusEvent: db.prepare(`
+      INSERT INTO section_status_events (
+        section_id, previous_status, current_status, source, snapshot_term, snapshot_campus, snapshot_received_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `),
+    deleteMeetings: db.prepare('DELETE FROM section_meetings WHERE section_id = ?'),
+    insertMeeting: db.prepare(`
+      INSERT INTO section_meetings (
+        section_id, meeting_day, week_mask, start_time_label, end_time_label,
+        start_minutes, end_minutes, meeting_mode_code, meeting_mode_desc,
+        campus_abbrev, campus_location_code, campus_location_desc, building_code,
+        room_number, pm_code, ba_class_hours, online_only, hash
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+    `),
+    upsertTerm: db.prepare(`
+      INSERT INTO terms (term_id, year, term_code, display_name)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(term_id) DO UPDATE SET year = excluded.year, term_code = excluded.term_code, display_name = excluded.display_name
+    `),
+    upsertCampus: db.prepare(`
+      INSERT INTO campuses (campus_code, display_name)
+      VALUES (?, ?)
+      ON CONFLICT(campus_code) DO UPDATE SET display_name = excluded.display_name
+    `),
+    upsertSubject: db.prepare(`
+      INSERT INTO subjects (subject_code, school_code, school_description, subject_description, campus_code, active)
+      VALUES (?, ?, ?, ?, ?, 1)
+      ON CONFLICT(subject_code) DO UPDATE SET
+        school_code = COALESCE(excluded.school_code, subjects.school_code),
+        school_description = COALESCE(excluded.school_description, subjects.school_description),
+        subject_description = COALESCE(excluded.subject_description, subjects.subject_description),
+        campus_code = COALESCE(excluded.campus_code, subjects.campus_code),
+        active = 1
+    `),
+    selectSectionStatus: db.prepare(
+      'SELECT section_id, index_number, is_open, open_status FROM sections WHERE term_id = ? AND campus_code = ?',
+    ),
+    updateSectionStatus: db.prepare(
+      'UPDATE sections SET is_open = ?, open_status = ?, open_status_updated_at = ?, updated_at = ? WHERE section_id = ?',
+    ),
+    insertOpenSnapshot: db.prepare(
+      'INSERT INTO open_section_snapshots (term_id, campus_code, index_number, seen_open_at, source_hash) VALUES (?, ?, ?, ?, ?)',
+    ),
+  };
+}
+
+function toNullableNumber(value: number | null): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+function ensureCleanWorktree(): void {
+  try {
+    const output = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' });
+    if (output.trim().length > 0) {
+      throw new CLIError('Working tree is dirty. Commit or stash changes before running with requireCleanWorktree.');
+    }
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      return;
+    }
+    if (err instanceof CLIError) {
+      throw err;
+    }
+    throw new CLIError('Unable to verify git status.');
+  }
+}
+
+async function runPipeline(plan: PlannedSlice[], config: PipelineConfig, options: CLIOptions): Promise<void> {
+  const sqliteFile = path.resolve(config.sqliteFile ?? path.join('data', 'local.db'));
+  const stagingDir = path.resolve(config.stagingDir ?? path.join('data', 'staging'));
+  const logDir = path.resolve(config.logDir ?? path.join('logs', 'fetch_runs'));
+  await mkdir(path.dirname(sqliteFile), { recursive: true });
+  await mkdir(stagingDir, { recursive: true });
+  await mkdir(logDir, { recursive: true });
+
+  if ((config.safety as { requireCleanWorktree?: boolean } | undefined)?.requireCleanWorktree) {
+    ensureCleanWorktree();
+  }
+
+  const db = new Database(sqliteFile);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+
+  const concurrency = (config.concurrency ?? {}) as Record<string, unknown>;
+  const maxCourseWorkers = Number.parseInt(String(concurrency.maxCourseWorkers ?? 1), 10) || 1;
+  const maxOpenSectionsWorkers = Number.parseInt(String(concurrency.maxOpenSectionsWorkers ?? 0), 10) || 0;
+  const effectiveCourseWorkers = options.maxWorkers
+    ? Math.max(1, Math.min(maxCourseWorkers, options.maxWorkers))
+    : maxCourseWorkers;
+
+  const ctx: PipelineContext = {
+    db,
+    config,
+    options,
+    sqliteFile,
+    stagingDir,
+    logDir,
+    courseWorkerLimit: effectiveCourseWorkers,
+    openSectionsEnabled: maxOpenSectionsWorkers > 0,
+    termCache: new Map(),
+    fullInitPrepared: false,
+    statements: createStatements(db)
+  };
+
+  const startedAt = new Date().toISOString();
+  const summaries: SliceSummary[] = [];
+
+  try {
+    for (const slice of plan) {
+      const summary = await processSlice(ctx, slice);
+      summaries.push(summary);
+      if (summary.errors.length > 0) {
+        throw new Error(`Slice ${slice.term}/${slice.campus} failed: ${summary.errors.join('; ')}`);
+      }
+    }
+  } finally {
+    db.close();
+  }
+
+  const completedAt = new Date().toISOString();
+  const totals = aggregateTotals(summaries);
+  const runSummary: RunSummary = {
+    runLabel: config.runLabel ?? null,
+    startedAt,
+    completedAt,
+    totals,
+    sliceSummaries: summaries
+  };
+  await writeSummaryFiles(ctx, runSummary);
+  console.log('Ingestion completed.');
+}
+
+function aggregateTotals(summaries: SliceSummary[]): SubjectStats & { slicesFailed: number } {
+  const total: SubjectStats & { slicesFailed: number } = {
+    subject: 'TOTAL',
+    coursesInserted: 0,
+    coursesUpdated: 0,
+    coursesDeleted: 0,
+    sectionsInserted: 0,
+    sectionsUpdated: 0,
+    sectionsDeleted: 0,
+    slicesFailed: summaries.filter((slice) => slice.errors.length > 0).length
+  };
+  for (const slice of summaries) {
+    for (const stats of slice.subjectStats) {
+      total.coursesInserted += stats.coursesInserted;
+      total.coursesUpdated += stats.coursesUpdated;
+      total.coursesDeleted += stats.coursesDeleted;
+      total.sectionsInserted += stats.sectionsInserted;
+      total.sectionsUpdated += stats.sectionsUpdated;
+      total.sectionsDeleted += stats.sectionsDeleted;
+    }
+  }
+  return total;
+}
+
+async function writeSummaryFiles(ctx: PipelineContext, summary: RunSummary): Promise<void> {
+  const summaryConfig = (ctx.config.summary ?? {}) as { writeJson?: string; writeText?: string };
+  if (summaryConfig.writeJson) {
+    const file = path.resolve(summaryConfig.writeJson);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify(summary, null, 2), 'utf8');
+  }
+  if (summaryConfig.writeText) {
+    const file = path.resolve(summaryConfig.writeText);
+    await mkdir(path.dirname(file), { recursive: true });
+    const lines: string[] = [];
+    lines.push(`Run label: ${summary.runLabel ?? 'n/a'}`);
+    lines.push(`Started: ${summary.startedAt}`);
+    lines.push(`Completed: ${summary.completedAt}`);
+    lines.push(`Slices: ${summary.sliceSummaries.length}`);
+    lines.push(
+      `Courses Δ insert=${summary.totals.coursesInserted} update=${summary.totals.coursesUpdated} delete=${summary.totals.coursesDeleted}`,
+    );
+    lines.push(
+      `Sections Δ insert=${summary.totals.sectionsInserted} update=${summary.totals.sectionsUpdated} delete=${summary.totals.sectionsDeleted}`,
+    );
+    await writeFile(file, lines.join('\n'), 'utf8');
+  }
+}
+
+async function processSlice(ctx: PipelineContext, slice: PlannedSlice): Promise<SliceSummary> {
+  console.log(`\n== term=${slice.term} campus=${slice.campus} mode=${slice.mode} ==`);
+  if (slice.mode === 'full-init' && !ctx.fullInitPrepared) {
+    prepareFullInit(ctx);
+  }
+
+  const summary: SliceSummary = {
+    term: slice.term,
+    campus: slice.campus,
+    mode: slice.mode,
+    durationMs: 0,
+    subjectsPlanned: 0,
+    subjectsCompleted: 0,
+    subjectStats: [],
+    errors: []
+  };
+
+  const started = performance.now();
+  let semester = ctx.termCache.get(slice.term);
+  if (!semester) {
+    semester = decodeSemester(slice.term);
+    ctx.termCache.set(slice.term, semester);
+  }
+
+  let coursesResponse: unknown;
+  try {
+    const response = await performProbe({ campus: slice.campus, endpoint: 'courses' }, semester);
+    coursesResponse = response.body;
+    await stagePayload(ctx, slice, 'courses', 'all', response.body);
+  } catch (error) {
+    if (error instanceof SOCRequestError) {
+      summary.errors.push(`courses.json failed (${error.requestId}): ${error.message}`);
+    } else if (error instanceof Error) {
+      summary.errors.push(`courses.json failed: ${error.message}`);
+    } else {
+      summary.errors.push('courses.json failed due to unknown error');
+    }
+    summary.durationMs = performance.now() - started;
+    return summary;
+  }
+
+  const normalized = normalizeCoursePayload(coursesResponse);
+  const subjects = expandSubjects(slice.subjects, normalized);
+  summary.subjectsPlanned = subjects.length;
+
+  for (const subject of subjects) {
+    const courses = normalized.get(subject);
+    if (!courses || courses.length === 0) {
+      console.warn(`Subject ${subject} not present in payload for ${slice.term}/${slice.campus}.`);
+      continue;
+    }
+    try {
+      const stats = applySubjectBatch(ctx, slice, subject, courses);
+      summary.subjectStats.push(stats);
+      summary.subjectsCompleted += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      summary.errors.push(`Subject ${subject} failed: ${message}`);
+      break;
+    }
+  }
+
+  if (ctx.openSectionsEnabled && summary.errors.length === 0) {
+    try {
+      const response = await performProbe({ campus: slice.campus, endpoint: 'openSections' }, semester);
+      await stagePayload(ctx, slice, 'openSections', 'all', response.body);
+      const stats = applyOpenSectionsSnapshot(ctx, slice, response.body);
+      summary.openSections = stats;
+    } catch (error) {
+      if (error instanceof SOCRequestError) {
+        summary.errors.push(`openSections failed (${error.requestId}): ${error.message}`);
+      } else if (error instanceof Error) {
+        summary.errors.push(`openSections failed: ${error.message}`);
+      } else {
+        summary.errors.push('openSections failed due to unknown error');
+      }
+    }
+  }
+
+  summary.durationMs = performance.now() - started;
+  console.log(
+    `Finished ${slice.term}/${slice.campus} in ${summary.durationMs.toFixed(0)} ms • subjects=${summary.subjectsCompleted}/${summary.subjectsPlanned}`,
+  );
+  return summary;
+}
+
+function prepareFullInit(ctx: PipelineContext): void {
+  const fullInit = ctx.config.fullInit as { truncateTables?: string[] } | undefined;
+  const tables = fullInit?.truncateTables;
+  if (!tables || tables.length === 0) {
+    ctx.fullInitPrepared = true;
+    return;
+  }
+  const sanitized = tables.filter((table) => /^[a-zA-Z0-9_]+$/.test(table));
+  const tx = ctx.db.transaction(() => {
+    for (const table of sanitized) {
+      ctx.db.prepare(`DELETE FROM ${table}`).run();
+    }
+  });
+  tx();
+  console.log(`Full-init: truncated tables ${sanitized.join(', ')}`);
+  ctx.fullInitPrepared = true;
+}
+
+function applySubjectBatch(
+  ctx: PipelineContext,
+  slice: PlannedSlice,
+  subject: string,
+  courses: NormalizedCourse[]
+): SubjectStats {
+  const stats: SubjectStats = {
+    subject,
+    coursesInserted: 0,
+    coursesUpdated: 0,
+    coursesDeleted: 0,
+    sectionsInserted: 0,
+    sectionsUpdated: 0,
+    sectionsDeleted: 0
+  };
+  const now = new Date().toISOString();
+  const { statements: st } = ctx;
+
+  const tx = ctx.db.transaction(() => {
+    const existingCourses = new Map<string, { courseId: number; sourceHash: string }>(
+      st
+        .selectCourses
+        .all(slice.term, slice.campus, subject)
+        .map((row: { course_id: number; course_number: string; source_hash: string }) => [
+          row.course_number,
+          { courseId: row.course_id, sourceHash: row.source_hash }
+        ]),
+    );
+
+    const existingSections = new Map<
+      string,
+      { sectionId: number; sourceHash: string; openStatus: string; isOpen: number; openStatusUpdatedAt: string | null }
+    >(
+      st
+        .selectSections
+        .all(slice.term, slice.campus, subject)
+        .map(
+          (
+            row: {
+              section_id: number;
+              index_number: string;
+              source_hash: string;
+              open_status: string;
+              is_open: number;
+              open_status_updated_at: string | null;
+            },
+          ) => [
+            row.index_number,
+            {
+              sectionId: row.section_id,
+              sourceHash: row.source_hash,
+              openStatus: row.open_status,
+              isOpen: row.is_open,
+              openStatusUpdatedAt: row.open_status_updated_at
+            }
+          ],
+        ),
+    );
+
+    const courseIds = new Map<string, number>();
+    const changedSections: Array<{ sectionId: number; section: NormalizedSection; statusChanged: boolean; previousStatus: string }>
+      = [];
+
+    for (const course of courses) {
+      ensureReferenceRows(ctx, slice, course);
+      const row = existingCourses.get(course.record.courseNumber);
+      const payload = JSON.stringify(course.raw);
+      const coreJson = JSON.stringify((course.raw as Record<string, unknown>).coreCodes ?? course.record.coreCodes);
+      const campusLocationsJson = JSON.stringify(course.record.campusLocations);
+      const hasCore = course.record.coreCodes.length > 0 ? 1 : 0;
+      const tags = course.record.tags.join(',');
+      const creditsMin = toNullableNumber(course.record.creditsMin);
+      const creditsMax = toNullableNumber(course.record.creditsMax);
+      if (!row) {
+        const result = st.insertCourse.run(
+          slice.term,
+          slice.campus,
+          subject,
+          course.record.courseNumber,
+          course.record.courseString,
+          course.record.title,
+          course.record.expandedTitle,
+          course.record.level,
+          creditsMin,
+          creditsMax,
+          course.record.creditsDisplay,
+          coreJson,
+          hasCore,
+          course.record.prereqHtml,
+          course.record.prereqPlain,
+          course.record.synopsisUrl,
+          course.record.courseNotes,
+          course.record.unitNotes,
+          course.record.subjectNotes,
+          course.record.supplementCode,
+          campusLocationsJson,
+          course.record.openSectionsCount,
+          course.record.hasOpenSections ? 1 : 0,
+          tags,
+          course.record.searchVector,
+          course.hash,
+          payload,
+          now,
+          now,
+        );
+        const courseId = Number(result.lastInsertRowid);
+        courseIds.set(course.record.courseNumber, courseId);
+        stats.coursesInserted += 1;
+      } else if (row.sourceHash !== course.hash) {
+        st.updateCourse.run(
+          course.record.courseString,
+          course.record.title,
+          course.record.expandedTitle,
+          course.record.level,
+          creditsMin,
+          creditsMax,
+          course.record.creditsDisplay,
+          coreJson,
+          hasCore,
+          course.record.prereqHtml,
+          course.record.prereqPlain,
+          course.record.synopsisUrl,
+          course.record.courseNotes,
+          course.record.unitNotes,
+          course.record.subjectNotes,
+          course.record.supplementCode,
+          campusLocationsJson,
+          course.record.openSectionsCount,
+          course.record.hasOpenSections ? 1 : 0,
+          tags,
+          course.record.searchVector,
+          course.hash,
+          payload,
+          now,
+          row.courseId,
+        );
+        courseIds.set(course.record.courseNumber, row.courseId);
+        existingCourses.delete(course.record.courseNumber);
+        stats.coursesUpdated += 1;
+      } else {
+        courseIds.set(course.record.courseNumber, row.courseId);
+        existingCourses.delete(course.record.courseNumber);
+      }
+
+      const courseId = courseIds.get(course.record.courseNumber);
+      if (!courseId) continue;
+      for (const section of course.sections) {
+        const existing = existingSections.get(section.key);
+        const commentsJson = JSON.stringify(section.record.comments);
+        const majorsJson = JSON.stringify(section.record.majors);
+        const minorsJson = JSON.stringify(section.record.minors);
+        const honorProgramsJson = JSON.stringify(section.record.honorPrograms);
+        const payloadSection = JSON.stringify(section.raw);
+        const campusCode = section.record.campusCode ?? slice.campus;
+        if (!existing) {
+          const result = st.insertSection.run(
+            courseId,
+            slice.term,
+            slice.campus,
+            subject,
+            section.record.sectionNumber,
+            section.record.indexNumber,
+            section.record.openStatus,
+            section.record.isOpen ? 1 : 0,
+            now,
+            section.record.instructorsText,
+            section.record.sectionNotes,
+            commentsJson,
+            section.record.eligibilityText,
+            section.record.openToText,
+            majorsJson,
+            minorsJson,
+            honorProgramsJson,
+            section.record.sectionCourseType,
+            section.record.examCode,
+            section.record.examCodeText,
+            section.record.specialPermissionAddCode,
+            section.record.specialPermissionAddDesc,
+            section.record.specialPermissionDropCode,
+            section.record.specialPermissionDropDesc,
+            section.record.printed,
+            section.record.sessionPrintIndicator,
+            section.record.subtitle,
+            section.record.meetingModeSummary,
+            section.record.deliveryMethod,
+            section.record.hasMeetings ? 1 : 0,
+            section.hash,
+            payloadSection,
+            now,
+            now,
+          );
+          const sectionId = Number(result.lastInsertRowid);
+          changedSections.push({ sectionId, section, statusChanged: true, previousStatus: 'UNKNOWN' });
+          stats.sectionsInserted += 1;
+        } else if (existing.sourceHash !== section.hash) {
+          const statusChanged = existing.openStatus !== section.record.openStatus;
+          const openStatusTimestamp = statusChanged ? now : existing.openStatusUpdatedAt;
+          st.updateSection.run(
+            courseId,
+            section.record.sectionNumber,
+            section.record.openStatus,
+            section.record.isOpen ? 1 : 0,
+            openStatusTimestamp,
+            section.record.instructorsText,
+            section.record.sectionNotes,
+            commentsJson,
+            section.record.eligibilityText,
+            section.record.openToText,
+            majorsJson,
+            minorsJson,
+            honorProgramsJson,
+            section.record.sectionCourseType,
+            section.record.examCode,
+            section.record.examCodeText,
+            section.record.specialPermissionAddCode,
+            section.record.specialPermissionAddDesc,
+            section.record.specialPermissionDropCode,
+            section.record.specialPermissionDropDesc,
+            section.record.printed,
+            section.record.sessionPrintIndicator,
+            section.record.subtitle,
+            section.record.meetingModeSummary,
+            section.record.deliveryMethod,
+            section.record.hasMeetings ? 1 : 0,
+            section.hash,
+            payloadSection,
+            now,
+            existing.sectionId,
+          );
+          changedSections.push({
+            sectionId: existing.sectionId,
+            section,
+            statusChanged,
+            previousStatus: existing.openStatus,
+          });
+          existingSections.delete(section.key);
+          stats.sectionsUpdated += 1;
+          if (statusChanged) {
+            st.insertStatusEvent.run(
+              existing.sectionId,
+              existing.openStatus,
+              section.record.openStatus,
+              'courses.json',
+              slice.term,
+              slice.campus,
+              now,
+            );
+          }
+        } else {
+          existingSections.delete(section.key);
+        }
+      }
+    }
+
+    for (const leftover of existingCourses.values()) {
+      st.deleteCourse.run(leftover.courseId);
+      stats.coursesDeleted += 1;
+    }
+
+    for (const leftover of existingSections.values()) {
+      st.deleteSection.run(leftover.sectionId);
+      stats.sectionsDeleted += 1;
+    }
+
+    for (const changed of changedSections) {
+      st.deleteMeetings.run(changed.sectionId);
+      for (const meeting of changed.section.meetings) {
+        st.insertMeeting.run(
+          changed.sectionId,
+          meeting.meetingDay,
+          meeting.weekMask,
+          meeting.startTimeLabel,
+          meeting.endTimeLabel,
+          meeting.startMinutes,
+          meeting.endMinutes,
+          meeting.meetingModeCode,
+          meeting.meetingModeDesc,
+          meeting.campusAbbrev,
+          meeting.campusLocationCode,
+          meeting.campusLocationDesc,
+          meeting.buildingCode,
+          meeting.roomNumber,
+          meeting.pmCode,
+          meeting.baClassHours,
+          meeting.onlineOnly ? 1 : 0,
+          meeting.hash,
+        );
+      }
+    }
+  });
+
+  tx();
+  console.log(
+    `  subject ${subject}: Δcourses +${stats.coursesInserted}/~${stats.coursesUpdated}/-${stats.coursesDeleted} • Δsections +${stats.sectionsInserted}/~${stats.sectionsUpdated}/-${stats.sectionsDeleted}`,
+  );
+  return stats;
+}
+
+function ensureReferenceRows(ctx: PipelineContext, slice: PlannedSlice, course: NormalizedCourse): void {
+  const semester = ctx.termCache.get(slice.term) ?? decodeSemester(slice.term);
+  ctx.statements.upsertTerm.run(slice.term, semester.year, semester.termCode, slice.term);
+  ctx.statements.upsertCampus.run(slice.campus, slice.campus);
+  ctx.statements.upsertSubject.run(
+    course.record.subject,
+    course.record.schoolCode,
+    course.record.schoolDescription,
+    course.record.subjectDescription,
+    slice.campus,
+  );
+}
+
+function applyOpenSectionsSnapshot(ctx: PipelineContext, slice: PlannedSlice, body: unknown): OpenSectionsStats {
+  if (!Array.isArray(body)) {
+    throw new Error('openSections payload must be an array.');
+  }
+  const indexes = Array.from(new Set(body.map((value) => String(value)))).sort();
+  const now = new Date().toISOString();
+  const hash = hashPayload({ indexes, term: slice.term, campus: slice.campus });
+  const stats: OpenSectionsStats = {
+    indexesSeen: indexes.length,
+    markedOpen: 0,
+    markedClosed: 0
+  };
+
+  const { statements: st } = ctx;
+  const tx = ctx.db.transaction(() => {
+    const sections = st.selectSectionStatus.all(slice.term, slice.campus) as Array<{
+      section_id: number;
+      index_number: string;
+      is_open: number;
+      open_status: string;
+    }>;
+    const openSet = new Set(indexes);
+    for (const section of sections) {
+      const shouldOpen = openSet.has(section.index_number);
+      if (shouldOpen && section.is_open === 0) {
+        st.updateSectionStatus.run(1, 'OPEN', now, now, section.section_id);
+        st.insertStatusEvent.run(section.section_id, section.open_status, 'OPEN', 'openSections', slice.term, slice.campus, now);
+        stats.markedOpen += 1;
+      } else if (!shouldOpen && section.is_open === 1) {
+        st.updateSectionStatus.run(0, 'CLOSED', now, now, section.section_id);
+        st.insertStatusEvent.run(section.section_id, section.open_status, 'CLOSED', 'openSections', slice.term, slice.campus, now);
+        stats.markedClosed += 1;
+      }
+    }
+    for (const index of indexes) {
+      st.insertOpenSnapshot.run(slice.term, slice.campus, index, now, hash);
+    }
+  });
+  tx();
+  return stats;
 }
 
 async function main(): Promise<void> {
@@ -278,6 +1123,13 @@ async function main(): Promise<void> {
   const config = await loadPipelineConfig(options.configPath);
   const plan = buildPlan(config, options);
   printPlan(plan, config, options);
+
+  const safety = (config.safety ?? {}) as { dryRun?: boolean };
+  if (options.dryRun || safety.dryRun) {
+    console.log('Dry-run requested: no network or database work performed.');
+    return;
+  }
+  await runPipeline(plan, config, options);
 }
 
 void (async () => {
@@ -294,4 +1146,3 @@ void (async () => {
     }
   }
 })();
-
