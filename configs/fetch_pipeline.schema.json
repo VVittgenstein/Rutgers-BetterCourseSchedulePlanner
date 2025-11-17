@@ -33,7 +33,7 @@
       "properties": {
         "maxCourseWorkers": { "$ref": "#/$defs/positiveInteger" },
         "courseRequestIntervalMs": { "$ref": "#/$defs/nonNegativeInteger" },
-        "maxOpenSectionsWorkers": { "$ref": "#/$defs/positiveInteger" },
+        "maxOpenSectionsWorkers": { "$ref": "#/$defs/nonNegativeInteger" },
         "openSectionsIntervalMs": { "$ref": "#/$defs/nonNegativeInteger" },
         "maxParallelCampuses": { "$ref": "#/$defs/positiveInteger" },
         "maxSubjectsPerCampus": { "$ref": "#/$defs/positiveInteger" }
@@ -53,7 +53,7 @@
           "properties": {
             "maxCourseWorkers": { "$ref": "#/$defs/positiveInteger" },
             "courseRequestIntervalMs": { "$ref": "#/$defs/nonNegativeInteger" },
-            "maxOpenSectionsWorkers": { "$ref": "#/$defs/positiveInteger" },
+            "maxOpenSectionsWorkers": { "$ref": "#/$defs/nonNegativeInteger" },
             "openSectionsIntervalMs": { "$ref": "#/$defs/nonNegativeInteger" }
           }
         },
