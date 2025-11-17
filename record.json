@@ -223,7 +223,7 @@
         "R-20251113-frontend-perf"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-17T08:05:00Z",
+      "updated_at": "2025-11-17T08:40:34Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-007",
@@ -342,11 +342,13 @@
           "artifacts": [
             "docs/data_refresh_strategy.md",
             "notebooks/incremental_trial.md",
-            "scripts/incremental_trial.ts"
+            "scripts/incremental_trial.ts",
+            "Compact/Compact-ST-20251113-act-007-03-incremental-strategy-2025-11-17-T082525Z.md",
+            "Compact/Compact-ST-20251113-act-007-03-incremental-strategy-2025-11-17-T083615Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-17T08:05:00Z",
+          "updated_at": "2025-11-17T08:40:34Z",
           "owner": "tbd",
           "tags": [
             "database",

@@ -15,3 +15,9 @@
 ## 风险 / TODO
 - 与前版 Compact 相同：CLI 仍是内存模拟，尚未写回 SQLite；队列持久化、日志/指标、`openSections` 实际增量更新等依旧在文档层。
 - 若 SOC payload 结构变更仍需同步更新 `scripts/incremental_trial.ts` 中的标准化逻辑，以免 hash 抖动。
+
+## Code Review - ST-20251113-act-007-03-incremental-strategy - 2025-11-17T08:40:34Z
+
+---
+Codex Review: Didn't find any major issues. 🎉
+---
