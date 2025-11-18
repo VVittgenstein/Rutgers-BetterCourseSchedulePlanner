@@ -1,5 +1,7 @@
 import type { ChangeEvent } from 'react';
 import { useMemo, useState } from 'react';
+import type { TFunction } from 'i18next';
+import { useTranslation } from 'react-i18next';
 import type {
   CourseFilterState,
   DeliveryMethod,
@@ -54,17 +56,17 @@ export interface FilterPanelProps {
   loading?: boolean;
 }
 
-const MEETING_DAY_LABELS: Record<MeetingDay, string> = {
-  M: 'Mon',
-  T: 'Tue',
-  W: 'Wed',
-  TH: 'Thu',
-  F: 'Fri',
-  SA: 'Sat',
-  SU: 'Sun',
-};
-
 const MEETING_DAY_ORDER: MeetingDay[] = ['M', 'T', 'W', 'TH', 'F', 'SA', 'SU'];
+
+const MEETING_DAY_KEYS = {
+  M: 'common.days.short.mon',
+  T: 'common.days.short.tue',
+  W: 'common.days.short.wed',
+  TH: 'common.days.short.thu',
+  F: 'common.days.short.fri',
+  SA: 'common.days.short.sat',
+  SU: 'common.days.short.sun',
+} as const;
 
 const toggleValue = <T,>(list: T[], value: T): T[] =>
   list.includes(value) ? list.filter((entry) => entry !== value) : [...list, value];
@@ -93,6 +95,7 @@ export function FilterPanel({
   onReset,
   loading = false,
 }: FilterPanelProps) {
+  const { t } = useTranslation();
   const [subjectQuery, setSubjectQuery] = useState('');
 
   const subjectLookup = useMemo(() => buildLookup(dictionary.subjects), [dictionary.subjects]);
@@ -100,6 +103,7 @@ export function FilterPanel({
   const deliveryLookup = useMemo(() => buildLookup(dictionary.deliveries), [dictionary.deliveries]);
   const tagLookup = useMemo(() => buildLookup(dictionary.tags), [dictionary.tags]);
   const coreLookup = useMemo(() => buildLookup(dictionary.coreCodes), [dictionary.coreCodes]);
+  const meetingDayLabels = useMemo(() => createMeetingDayLabels(t), [t]);
 
   const emitState = (
     partial: Partial<CourseFilterState>,
@@ -141,6 +145,8 @@ export function FilterPanel({
     tagLookup,
     coreLookup,
     emitState,
+    meetingDayLabels,
+    t,
   });
 
   const handleMeetingDayToggle = (day: MeetingDay) => {
@@ -202,12 +208,12 @@ export function FilterPanel({
     <aside className="filter-panel">
       <header className="filter-panel__header">
         <div>
-          <p className="filter-panel__eyebrow">Filters</p>
-          <h2 className="filter-panel__title">Build your schedule</h2>
-          <p className="filter-panel__subtitle">Select a term and refine results with multi-select chips.</p>
+          <p className="filter-panel__eyebrow">{t('filters.header.eyebrow')}</p>
+          <h2 className="filter-panel__title">{t('filters.header.title')}</h2>
+          <p className="filter-panel__subtitle">{t('filters.header.subtitle')}</p>
         </div>
         <button type="button" className="filter-panel__reset" onClick={clearAll} disabled={loading}>
-          清空筛选
+          {t('filters.header.reset')}
         </button>
       </header>
 
@@ -221,18 +227,18 @@ export function FilterPanel({
 
       <section className="filter-panel__section">
         <div className="filter-panel__section-heading">
-          <h3>基础信息</h3>
-          {loading && <span className="filter-panel__badge">Loading…</span>}
+          <h3>{t('filters.sections.basic.title')}</h3>
+          {loading && <span className="filter-panel__badge">{t('filters.status.loadingBadge')}</span>}
         </div>
         <div className="filter-panel__grid">
           <label className="filter-panel__control">
-            <span>Term</span>
+            <span>{t('filters.sections.basic.term.label')}</span>
             <select
               value={state.term ?? ''}
               onChange={(event) => emitState({ term: event.target.value || undefined }, 'term')}
             >
               <option value="" disabled>
-                请选择学期
+                {t('filters.sections.basic.term.placeholder')}
               </option>
               {dictionary.terms.map((term) => (
                 <option key={term.value} value={term.value}>
@@ -243,12 +249,12 @@ export function FilterPanel({
           </label>
 
           <label className="filter-panel__control">
-            <span>Campus</span>
+            <span>{t('filters.sections.basic.campus.label')}</span>
             <select
               value={state.campus ?? ''}
               onChange={(event) => emitState({ campus: event.target.value || undefined }, 'campus')}
             >
-              <option value="">全部校区</option>
+              <option value="">{t('filters.sections.basic.campus.all')}</option>
               {dictionary.campuses.map((campus) => (
                 <option key={campus.value} value={campus.value}>
                   {campus.label}
@@ -259,17 +265,17 @@ export function FilterPanel({
         </div>
 
         <label className="filter-panel__control">
-          <span>Search keyword</span>
+          <span>{t('filters.sections.basic.keyword.label')}</span>
           <input
             type="text"
-            placeholder="课程名、编号或教师"
+            placeholder={t('filters.sections.basic.keyword.placeholder')}
             value={state.queryText}
             onChange={handleQueryChange}
           />
         </label>
 
         <div className="filter-panel__open-status">
-          <span>Show sections</span>
+          <span>{t('filters.sections.basic.openStatus.label')}</span>
           <div className="filter-panel__pill-group">
             <button
               type="button"
@@ -279,7 +285,7 @@ export function FilterPanel({
               )}
               onClick={() => handleOpenStatus('all')}
             >
-              全部
+              {t('filters.sections.basic.openStatus.all')}
             </button>
             <button
               type="button"
@@ -289,7 +295,7 @@ export function FilterPanel({
               )}
               onClick={() => handleOpenStatus('openOnly')}
             >
-              有空位
+              {t('filters.sections.basic.openStatus.openOnly')}
             </button>
             <button
               type="button"
@@ -299,7 +305,7 @@ export function FilterPanel({
               )}
               onClick={() => handleOpenStatus('hasWaitlist')}
             >
-              有候补
+              {t('filters.sections.basic.openStatus.waitlist')}
             </button>
           </div>
         </div>
@@ -307,17 +313,17 @@ export function FilterPanel({
 
       <section className="filter-panel__section">
         <div className="filter-panel__section-heading">
-          <h3>科目 Subject</h3>
+          <h3>{t('filters.sections.subjects.title')}</h3>
           <button type="button" className="filter-panel__clear-btn" onClick={() => emitState({ subjects: [] }, 'subjects')}>
-            清除
+            {t('filters.sections.subjects.clear')}
           </button>
         </div>
 
         <label className="filter-panel__control">
-          <span>Search subjects</span>
+          <span>{t('filters.sections.subjects.search.label')}</span>
           <input
             type="search"
-            placeholder="e.g. Computer Science"
+            placeholder={t('filters.sections.subjects.search.placeholder')}
             value={subjectQuery}
             onChange={(event) => setSubjectQuery(event.target.value)}
           />
@@ -337,16 +343,21 @@ export function FilterPanel({
             </label>
           ))}
           {filteredSubjects.length > trimmedSubjects.length && (
-            <span className="filter-panel__hint">已截断 {trimmedSubjects.length} / {filteredSubjects.length}，请继续搜索以缩小范围。</span>
+            <span className="filter-panel__hint">
+              {t('filters.sections.subjects.truncatedHint', {
+                current: trimmedSubjects.length,
+                total: filteredSubjects.length,
+              })}
+            </span>
           )}
         </div>
       </section>
 
       <section className="filter-panel__section">
         <div className="filter-panel__section-heading">
-          <h3>上课时间</h3>
+          <h3>{t('filters.sections.meeting.title')}</h3>
           <button type="button" className="filter-panel__clear-btn" onClick={clearMeeting}>
-            清除
+            {t('filters.sections.meeting.clear')}
           </button>
         </div>
 
@@ -361,14 +372,14 @@ export function FilterPanel({
               )}
               onClick={() => handleMeetingDayToggle(day)}
             >
-              {MEETING_DAY_LABELS[day]}
+              {meetingDayLabels[day]}
             </button>
           ))}
         </div>
 
         <div className="filter-panel__grid">
           <label className="filter-panel__control">
-            <span>开始时间</span>
+            <span>{t('filters.sections.meeting.start')}</span>
             <input
               type="time"
               value={minutesToTimeInput(state.meeting.startMinutes)}
@@ -376,7 +387,7 @@ export function FilterPanel({
             />
           </label>
           <label className="filter-panel__control">
-            <span>结束时间</span>
+            <span>{t('filters.sections.meeting.end')}</span>
             <input
               type="time"
               value={minutesToTimeInput(state.meeting.endMinutes)}
@@ -388,19 +399,19 @@ export function FilterPanel({
 
       <section className="filter-panel__section">
         <div className="filter-panel__section-heading">
-          <h3>授课方式 & 年级</h3>
+          <h3>{t('filters.sections.meta.title')}</h3>
           <button
             type="button"
             className="filter-panel__clear-btn"
             onClick={() => emitState({ delivery: [], level: [] }, 'meta')}
           >
-            清除
+            {t('filters.sections.meta.clear')}
           </button>
         </div>
 
         <div className="filter-panel__subgrid">
           <div>
-            <p className="filter-panel__label">Delivery</p>
+            <p className="filter-panel__label">{t('filters.sections.meta.delivery')}</p>
             <div className="filter-panel__checkboxes">
               {dictionary.deliveries.map((delivery) => (
                 <label key={delivery.value}>
@@ -415,7 +426,7 @@ export function FilterPanel({
             </div>
           </div>
           <div>
-            <p className="filter-panel__label">Level</p>
+            <p className="filter-panel__label">{t('filters.sections.meta.level')}</p>
             <div className="filter-panel__checkboxes">
               {dictionary.levels.map((level) => (
                 <label key={level.value}>
@@ -435,9 +446,9 @@ export function FilterPanel({
       {dictionary.tags.length > 0 && (
         <section className="filter-panel__section">
           <div className="filter-panel__section-heading">
-            <h3>快速标签</h3>
+            <h3>{t('filters.sections.tags.title')}</h3>
             <button type="button" className="filter-panel__clear-btn" onClick={() => emitState({ tags: [] }, 'tags')}>
-              清除
+              {t('filters.sections.tags.clear')}
             </button>
           </div>
 
@@ -469,6 +480,14 @@ type ChipDescriptor = {
   onRemove: () => void;
 };
 
+const createMeetingDayLabels = (t: TFunction): Record<MeetingDay, string> => {
+  const labels = {} as Record<MeetingDay, string>;
+  MEETING_DAY_ORDER.forEach((day) => {
+    labels[day] = t(MEETING_DAY_KEYS[day]);
+  });
+  return labels;
+};
+
 const buildFilterChips = ({
   state,
   subjectLookup,
@@ -477,6 +496,8 @@ const buildFilterChips = ({
   tagLookup,
   coreLookup,
   emitState,
+  meetingDayLabels,
+  t,
 }: {
   state: CourseFilterState;
   subjectLookup: Map<string, SubjectOption>;
@@ -485,12 +506,25 @@ const buildFilterChips = ({
   tagLookup: Map<string, FilterOption>;
   coreLookup: Map<string, FilterOption>;
   emitState: (partial: Partial<CourseFilterState>, dirtyKey?: string) => void;
+  meetingDayLabels: Record<MeetingDay, string>;
+  t: TFunction;
 }): ChipDescriptor[] => {
   const chips: ChipDescriptor[] = [];
+  const chipLabels = {
+    keyword: t('filters.chips.keyword'),
+    subject: t('filters.chips.subject'),
+    level: t('filters.chips.level'),
+    delivery: t('filters.chips.delivery'),
+    tag: t('filters.chips.tag'),
+    core: t('filters.chips.core'),
+    meeting: t('filters.chips.meeting'),
+    openOnly: t('filters.chips.openOnly'),
+    hasWaitlist: t('filters.chips.hasWaitlist'),
+  };
   if (state.queryText.trim()) {
     chips.push({
       id: 'query',
-      label: '关键词',
+      label: chipLabels.keyword,
       value: state.queryText.trim(),
       tone: 'info',
       onRemove: () => emitState({ queryText: '' }, 'queryText'),
@@ -501,7 +535,7 @@ const buildFilterChips = ({
     const option = subjectLookup.get(subject);
     chips.push({
       id: `subject:${subject}`,
-      label: option ? option.label : 'Subject',
+      label: option ? option.label : chipLabels.subject,
       value: subject,
       tone: 'default',
       onRemove: () =>
@@ -513,7 +547,7 @@ const buildFilterChips = ({
     const option = levelLookup.get(level);
     chips.push({
       id: `level:${level}`,
-      label: 'Level',
+      label: chipLabels.level,
       value: option ? option.label : level,
       tone: 'success',
       onRemove: () => emitState({ level: state.level.filter((entry) => entry !== level) }, 'level'),
@@ -524,7 +558,7 @@ const buildFilterChips = ({
     const option = deliveryLookup.get(delivery);
     chips.push({
       id: `delivery:${delivery}`,
-      label: 'Delivery',
+      label: chipLabels.delivery,
       value: option ? option.label : delivery,
       tone: 'info',
       onRemove: () =>
@@ -536,7 +570,7 @@ const buildFilterChips = ({
     const option = tagLookup.get(tag);
     chips.push({
       id: `tag:${tag}`,
-      label: 'Tag',
+      label: chipLabels.tag,
       value: option ? option.label : tag,
       tone: 'success',
       onRemove: () => emitState({ tags: state.tags.filter((entry) => entry !== tag) }, 'tags'),
@@ -547,7 +581,7 @@ const buildFilterChips = ({
     const option = coreLookup.get(core);
     chips.push({
       id: `core:${core}`,
-      label: option ? option.label : 'Core',
+      label: option ? option.label : chipLabels.core,
       value: core,
       tone: 'warning',
       onRemove: () =>
@@ -562,8 +596,8 @@ const buildFilterChips = ({
   ) {
     chips.push({
       id: 'meeting',
-      label: 'Meeting',
-      value: formatMeetingChip(state),
+      label: chipLabels.meeting,
+      value: formatMeetingChip(state, t, meetingDayLabels),
       tone: 'info',
       onRemove: () =>
         emitState({ meeting: { days: [], startMinutes: undefined, endMinutes: undefined } }, 'meeting'),
@@ -573,7 +607,7 @@ const buildFilterChips = ({
   if (state.openStatus === 'openOnly') {
     chips.push({
       id: 'openOnly',
-      label: '只看有空位',
+      label: chipLabels.openOnly,
       value: '',
       tone: 'success',
       onRemove: () => emitState({ openStatus: 'all' }, 'openStatus'),
@@ -583,7 +617,7 @@ const buildFilterChips = ({
   if (state.openStatus === 'hasWaitlist') {
     chips.push({
       id: 'hasWaitlist',
-      label: '有候补',
+      label: chipLabels.hasWaitlist,
       value: '',
       tone: 'success',
       onRemove: () => emitState({ openStatus: 'all' }, 'openStatus'),
@@ -599,21 +633,33 @@ const buildLookup = <T extends { value: string }>(list: T[]): Map<string, T> => 
   return map;
 };
 
-const formatMeetingChip = (state: CourseFilterState): string => {
+const formatMeetingChip = (
+  state: CourseFilterState,
+  t: TFunction,
+  meetingDayLabels: Record<MeetingDay, string>,
+): string => {
   const segments: string[] = [];
-  if (state.meeting.days.length) segments.push(state.meeting.days.join('/'));
+  if (state.meeting.days.length) {
+    segments.push(state.meeting.days.map((day) => meetingDayLabels[day]).join('/'));
+  }
   if (state.meeting.startMinutes !== undefined || state.meeting.endMinutes !== undefined) {
-    const start = state.meeting.startMinutes !== undefined ? minutesToHuman(state.meeting.startMinutes) : '开始';
-    const end = state.meeting.endMinutes !== undefined ? minutesToHuman(state.meeting.endMinutes) : '结束';
+    const start =
+      state.meeting.startMinutes !== undefined
+        ? minutesToHuman(state.meeting.startMinutes, t)
+        : t('filters.chips.timePlaceholder.start');
+    const end =
+      state.meeting.endMinutes !== undefined
+        ? minutesToHuman(state.meeting.endMinutes, t)
+        : t('filters.chips.timePlaceholder.end');
     segments.push(`${start}-${end}`);
   }
-  return segments.join(' · ') || 'Meeting filter';
+  return segments.join(' · ') || t('filters.chips.meetingFallback');
 };
 
-const minutesToHuman = (minutes: number): string => {
+const minutesToHuman = (minutes: number, t: TFunction): string => {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
-  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const suffix = hours >= 12 ? t('common.time.pm') : t('common.time.am');
   const normalizedHours = ((hours + 11) % 12) + 1;
   return `${normalizedHours}:${mins.toString().padStart(2, '0')} ${suffix}`;
 };

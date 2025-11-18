@@ -1,3 +1,7 @@
+import { useMemo } from 'react';
+import type { TFunction } from 'i18next';
+import { useTranslation } from 'react-i18next';
+
 import type { MeetingDay } from '../state/courseFilters';
 import './SchedulePreview.css';
 
@@ -26,15 +30,15 @@ export interface SchedulePreviewProps {
 }
 
 const DAY_ORDER: MeetingDay[] = ['M', 'T', 'W', 'TH', 'F', 'SA', 'SU'];
-const DAY_LABEL: Record<MeetingDay, string> = {
-  M: 'Mon',
-  T: 'Tue',
-  W: 'Wed',
-  TH: 'Thu',
-  F: 'Fri',
-  SA: 'Sat',
-  SU: 'Sun',
-};
+const DAY_KEYS = {
+  M: 'common.days.short.mon',
+  T: 'common.days.short.tue',
+  W: 'common.days.short.wed',
+  TH: 'common.days.short.thu',
+  F: 'common.days.short.fri',
+  SA: 'common.days.short.sat',
+  SU: 'common.days.short.sun',
+} as const;
 
 const FALLBACK_COLORS = ['#7c3aed', '#f97316', '#0ea5e9', '#10b981', '#ec4899', '#14b8a6', '#f59e0b'];
 
@@ -44,6 +48,8 @@ export function SchedulePreview({
   endHour = 22,
   showLegend = true,
 }: SchedulePreviewProps) {
+  const { t } = useTranslation();
+  const dayLabels = useMemo(() => createDayLabels(t), [t]);
   const activeDays = getActiveDays(sections) ?? DAY_ORDER.slice(0, 5);
   const hours = buildHourScale(startHour, endHour);
   const totalMinutes = (endHour - startHour) * 60;
@@ -53,10 +59,10 @@ export function SchedulePreview({
     <section className="schedule-preview">
       <div className="schedule-preview__header">
         <div>
-          <p className="schedule-preview__eyebrow">Preview · Weekly grid</p>
-          <h3>Schedule snapshot</h3>
+          <p className="schedule-preview__eyebrow">{t('schedule.header.eyebrow')}</p>
+          <h3>{t('schedule.header.title')}</h3>
         </div>
-        <span className="schedule-preview__count">{sections.length} sections</span>
+        <span className="schedule-preview__count">{t('schedule.header.count', { count: sections.length })}</span>
       </div>
 
       <div
@@ -66,13 +72,13 @@ export function SchedulePreview({
         <div className="schedule-preview__hours">
           {hours.map((hour) => (
             <span key={hour} className="schedule-preview__hour">
-              {formatHour(hour)}
+              {formatHour(hour, t)}
             </span>
           ))}
         </div>
         {activeDays.map((day) => (
           <div key={day} className="schedule-preview__day">
-            <header className="schedule-preview__day-header">{DAY_LABEL[day]}</header>
+            <header className="schedule-preview__day-header">{dayLabels[day]}</header>
             <div className="schedule-preview__day-body">
               {blocks
                 .filter((block) => block.meeting.day === day)
@@ -90,7 +96,7 @@ export function SchedulePreview({
                         {block.courseCode}-{block.sectionCode}
                       </p>
                       <p className="schedule-preview__block-title">{block.title}</p>
-                      <p className="schedule-preview__block-meta">{formatTimeRange(block.meeting)}</p>
+                      <p className="schedule-preview__block-meta">{formatTimeRange(block.meeting, t)}</p>
                       {block.location && <p className="schedule-preview__block-meta">{block.location}</p>}
                     </article>
                   );
@@ -171,6 +177,14 @@ const flattenMeetings = (sections: ScheduleSection[]): ScheduleBlock[] => {
   return blocks;
 };
 
+const createDayLabels = (t: TFunction): Record<MeetingDay, string> => {
+  const labels = {} as Record<MeetingDay, string>;
+  DAY_ORDER.forEach((day) => {
+    labels[day] = t(DAY_KEYS[day]);
+  });
+  return labels;
+};
+
 const positionBlock = (
   meeting: ScheduleMeeting,
   startHour: number,
@@ -192,20 +206,20 @@ const positionBlock = (
   return { top, height };
 };
 
-const formatTimeRange = (meeting: ScheduleMeeting): string => {
-  return `${formatMinutes(meeting.startMinutes)} – ${formatMinutes(meeting.endMinutes)}`;
+const formatTimeRange = (meeting: ScheduleMeeting, t: TFunction): string => {
+  return `${formatMinutes(meeting.startMinutes, t)} – ${formatMinutes(meeting.endMinutes, t)}`;
 };
 
-const formatMinutes = (minutes: number): string => {
+const formatMinutes = (minutes: number, t: TFunction): string => {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
-  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const suffix = hours >= 12 ? t('common.time.pm') : t('common.time.am');
   const normalized = ((hours + 11) % 12) + 1;
   return `${normalized}:${mins.toString().padStart(2, '0')} ${suffix}`;
 };
 
-const formatHour = (hour: number): string => {
-  const suffix = hour >= 12 ? 'PM' : 'AM';
+const formatHour = (hour: number, t: TFunction): string => {
+  const suffix = hour >= 12 ? t('common.time.pm') : t('common.time.am');
   const normalized = ((hour + 11) % 12) + 1;
   return `${normalized}${suffix}`;
 };

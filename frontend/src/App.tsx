@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { FilterPanel } from './components/FilterPanel';
 import type { CourseFilterState } from './state/courseFilters';
@@ -12,6 +13,7 @@ export function App() {
   const [filters, setFilters] = useState<CourseFilterState>(() => createInitialCourseFilterState());
   const dictionaryState = useFiltersDictionary();
   const dictionaryReady = Boolean(dictionaryState.dictionary);
+  const { t } = useTranslation();
 
   useEffect(() => {
     if (!dictionaryState.dictionary) return;
@@ -32,7 +34,7 @@ export function App() {
 
   const courseQuery = useCourseQuery(filters, { enabled: dictionaryReady });
   const readyForQuery = Boolean(filters.term && (filters.campus || filters.subjects.length));
-  const emptyMessage = readyForQuery ? '暂无匹配结果，请调整筛选条件。' : '请先选择学期与校区以加载课程列表。';
+  const emptyMessage = readyForQuery ? t('app.shell.empty.ready') : t('app.shell.empty.missingFilters');
 
   const handlePageChange = (page: number) => {
     setFilters((prev) => ({
@@ -54,21 +56,21 @@ export function App() {
               loading={dictionaryState.status === 'loading' && !dictionaryState.dictionary}
             />
           ) : (
-            <div className="course-app__filters-placeholder">正在加载筛选字典...</div>
+            <div className="course-app__filters-placeholder">{t('app.shell.loadingDictionary')}</div>
           )}
         </aside>
         <main className="course-app__results">
           {dictionaryState.error && (
             <div className="course-app__alert course-app__alert--warning">
-              Filters API 不可用，已切换到离线字典。{' '}
+              {t('app.shell.fallbackAlert')}{' '}
               <button type="button" onClick={dictionaryState.refetch}>
-                重试
+                {t('common.actions.retry')}
               </button>
             </div>
           )}
           {filters.openStatus === 'hasWaitlist' && (
             <div className="course-app__alert course-app__alert--info">
-              等候名单筛选尚未接入 API，当前结果仅供参考。
+              {t('app.shell.waitlistNotice')}
             </div>
           )}
           <CourseList

@@ -134,7 +134,7 @@
       "header": {
         "eyebrow": "Results",
         "loading": "Loading courses…",
-        "count": "{{count}} courses",
+        "count": "{{countLabel}} courses",
         "range": "Showing {{start}} - {{end}} · Page {{page}}",
         "refreshing": "Refreshing…"
       },
@@ -166,7 +166,12 @@
         "subject": "Subject"
       },
       "tags": {
-        "deliveryFallback": "Delivery TBD"
+        "deliveryFallback": "Delivery TBD",
+        "delivery": {
+          "in_person": "In person",
+          "online": "Online",
+          "hybrid": "Hybrid"
+        }
       },
       "details": {
         "prerequisites": "Prerequisites:",
@@ -329,7 +334,7 @@
       "header": {
         "eyebrow": "结果",
         "loading": "加载课程中…",
-        "count": "{{count}} 门课程",
+        "count": "{{countLabel}} 门课程",
         "range": "显示 {{start}} - {{end}} · 第 {{page}} 页",
         "refreshing": "刷新中…"
       },
@@ -361,7 +366,12 @@
         "subject": "科目"
       },
       "tags": {
-        "deliveryFallback": "授课方式待定"
+        "deliveryFallback": "授课方式待定",
+        "delivery": {
+          "in_person": "线下",
+          "online": "线上",
+          "hybrid": "混合"
+        }
       },
       "details": {
         "prerequisites": "先修课：",

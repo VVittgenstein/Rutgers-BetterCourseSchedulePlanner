@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+
 import { classNames } from '../utils/classNames';
 import './TagChip.css';
 
@@ -25,6 +27,7 @@ export function TagChip({
   onClick,
   onRemove,
 }: TagChipProps) {
+  const { t } = useTranslation();
   const Element = onClick ? 'button' : 'span';
 
   return (
@@ -47,7 +50,7 @@ export function TagChip({
       {onRemove && (
         <button
           type="button"
-          aria-label={`移除 ${label}`}
+          aria-label={t('tagChip.remove', { label })}
           className="tag-chip__remove"
           onClick={(event) => {
             event.preventDefault();
