@@ -16,7 +16,8 @@
     "data:incremental-trial": "tsx scripts/incremental_trial.ts",
     "data:fetch": "tsx scripts/fetch_soc_data.ts",
     "api:start": "tsx api/src/server.ts",
-    "api:dev": "tsx watch api/src/server.ts"
+    "api:dev": "tsx watch api/src/server.ts",
+    "i18n:check": "tsx scripts/i18n_missing_check.ts"
   },
   "repository": {
     "type": "git",

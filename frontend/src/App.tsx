@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { FilterPanel } from './components/FilterPanel';
+import { LanguageSwitcher } from './components/LanguageSwitcher';
 import type { CourseFilterState } from './state/courseFilters';
 import { createInitialCourseFilterState } from './state/courseFilters';
 import { useCourseQuery } from './hooks/useCourseQuery';
@@ -45,6 +46,9 @@ export function App() {
 
   return (
     <div className="course-app">
+      <div className="course-app__toolbar">
+        <LanguageSwitcher />
+      </div>
       <div className="course-app__container">
         <aside className="course-app__filters">
           {dictionaryState.dictionary ? (
