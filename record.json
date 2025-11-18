@@ -888,11 +888,13 @@
           ],
           "artifacts": [
             "frontend/src/hooks/useCourseQuery.ts",
-            "frontend/src/components/CourseList.tsx"
+            "frontend/src/components/CourseList.tsx",
+            "Compact/Compact-ST-20251113-act-002-03-api-integration-2025-11-18-T142029Z.md",
+            "Compact/Compact-ST-20251113-act-002-03-api-integration-2025-11-18-T143124Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-18T15:45:00Z",
+          "updated_at": "2025-11-18T15:51:47Z",
           "owner": "tbd",
           "tags": [
             "frontend",
