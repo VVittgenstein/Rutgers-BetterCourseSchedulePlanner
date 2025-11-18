@@ -1,0 +1,392 @@
+{
+  "en": {
+    "document": {
+      "title": "BCSP Filter Playground"
+    },
+    "common": {
+      "actions": {
+        "clear": "Clear",
+        "resetFilters": "Reset filters",
+        "retry": "Retry",
+        "prev": "Previous",
+        "next": "Next"
+      },
+      "status": {
+        "loading": "Loading…",
+        "refreshing": "Refreshing…"
+      },
+      "messages": {
+        "subjectsTruncated": "Showing {{current}} / {{total}} entries. Continue typing to narrow the list."
+      },
+      "days": {
+        "short": {
+          "mon": "Mon",
+          "tue": "Tue",
+          "wed": "Wed",
+          "thu": "Thu",
+          "fri": "Fri",
+          "sat": "Sat",
+          "sun": "Sun"
+        }
+      },
+      "time": {
+        "am": "AM",
+        "pm": "PM",
+        "range": {
+          "start": "Start",
+          "end": "End"
+        },
+        "relative": {
+          "justNow": "just now",
+          "minutes": "{{count}}m ago",
+          "hours": "{{count}}h ago",
+          "days": "{{count}}d ago"
+        }
+      }
+    },
+    "app": {
+      "shell": {
+        "loadingDictionary": "Loading filter dictionary…",
+        "fallbackAlert": "Filters API is unavailable, falling back to the offline dictionary.",
+        "waitlistNotice": "Waitlist filtering is not wired to the API yet. Results are for reference only.",
+        "empty": {
+          "ready": "No results matched your filters. Try adjusting them.",
+          "missingFilters": "Select a term and campus to load courses."
+        }
+      }
+    },
+    "filters": {
+      "header": {
+        "eyebrow": "Filters",
+        "title": "Build your schedule",
+        "subtitle": "Select a term and refine results with multi-select chips.",
+        "reset": "Reset filters"
+      },
+      "status": {
+        "loadingBadge": "Loading…"
+      },
+      "sections": {
+        "basic": {
+          "title": "Basic info",
+          "term": {
+            "label": "Term",
+            "placeholder": "Choose a term"
+          },
+          "campus": {
+            "label": "Campus",
+            "all": "All campuses"
+          },
+          "keyword": {
+            "label": "Search keyword",
+            "placeholder": "Course title, code, or instructor"
+          },
+          "openStatus": {
+            "label": "Show sections",
+            "all": "All",
+            "openOnly": "Open seats",
+            "waitlist": "Has waitlist"
+          }
+        },
+        "subjects": {
+          "title": "Subject",
+          "clear": "Clear",
+          "search": {
+            "label": "Search subjects",
+            "placeholder": "e.g. Computer Science"
+          },
+          "truncatedHint": "Showing {{current}} / {{total}} subjects. Continue typing to narrow the list."
+        },
+        "meeting": {
+          "title": "Meeting time",
+          "clear": "Clear",
+          "start": "Start time",
+          "end": "End time"
+        },
+        "meta": {
+          "title": "Delivery & Level",
+          "clear": "Clear",
+          "delivery": "Delivery",
+          "level": "Level"
+        },
+        "tags": {
+          "title": "Quick tags",
+          "clear": "Clear"
+        }
+      },
+      "chips": {
+        "keyword": "Keyword",
+        "subject": "Subject",
+        "level": "Level",
+        "delivery": "Delivery",
+        "tag": "Tag",
+        "core": "Core",
+        "meeting": "Meeting",
+        "meetingFallback": "Meeting filter",
+        "openOnly": "Open seats only",
+        "hasWaitlist": "Has waitlist",
+        "timePlaceholder": {
+          "start": "Start",
+          "end": "End"
+        }
+      }
+    },
+    "courseList": {
+      "header": {
+        "eyebrow": "Results",
+        "loading": "Loading courses…",
+        "count": "{{count}} courses",
+        "range": "Showing {{start}} - {{end}} · Page {{page}}",
+        "refreshing": "Refreshing…"
+      },
+      "empty": {
+        "default": "No courses match your filters. Try adjusting them."
+      },
+      "footer": {
+        "pagination": "{{pages}} pages · {{pageSize}} per page",
+        "none": "No pagination available",
+        "pageLabel": "Page {{page}} / {{pages}}"
+      },
+      "pagination": {
+        "prev": "Previous",
+        "next": "Next"
+      },
+      "error": {
+        "traceId": "Trace ID: {{id}}",
+        "retry": "Retry"
+      }
+    },
+    "courseCard": {
+      "badges": {
+        "open": "Open",
+        "levelFallback": "N/A"
+      },
+      "meta": {
+        "credits": "Credits",
+        "sections": "Sections",
+        "subject": "Subject"
+      },
+      "tags": {
+        "deliveryFallback": "Delivery TBD"
+      },
+      "details": {
+        "prerequisites": "Prerequisites:",
+        "updated": "Updated {{time}}",
+        "updatedRecent": "Updated recently",
+        "term": "Term {{term}}"
+      }
+    },
+    "schedule": {
+      "header": {
+        "eyebrow": "Preview · Weekly grid",
+        "title": "Schedule snapshot",
+        "count": "{{count}} sections"
+      }
+    },
+    "tagChip": {
+      "remove": "Remove {{label}}"
+    },
+    "errors": {
+      "runtime": {
+        "missingRoot": "Missing #root element"
+      },
+      "network": {
+        "requestFailed": "Request failed: {{status}}"
+      }
+    }
+  },
+  "zh": {
+    "document": {
+      "title": "BCSP 课程筛选实验场"
+    },
+    "common": {
+      "actions": {
+        "clear": "清除",
+        "resetFilters": "重置筛选",
+        "retry": "重试",
+        "prev": "上一页",
+        "next": "下一页"
+      },
+      "status": {
+        "loading": "加载中…",
+        "refreshing": "刷新中…"
+      },
+      "messages": {
+        "subjectsTruncated": "已截断 {{current}} / {{total}}，请继续搜索以缩小范围。"
+      },
+      "days": {
+        "short": {
+          "mon": "周一",
+          "tue": "周二",
+          "wed": "周三",
+          "thu": "周四",
+          "fri": "周五",
+          "sat": "周六",
+          "sun": "周日"
+        }
+      },
+      "time": {
+        "am": "上午",
+        "pm": "下午",
+        "range": {
+          "start": "开始",
+          "end": "结束"
+        },
+        "relative": {
+          "justNow": "刚刚",
+          "minutes": "{{count}} 分钟前",
+          "hours": "{{count}} 小时前",
+          "days": "{{count}} 天前"
+        }
+      }
+    },
+    "app": {
+      "shell": {
+        "loadingDictionary": "正在加载筛选字典...",
+        "fallbackAlert": "Filters API 不可用，已切换到离线字典。",
+        "waitlistNotice": "等候名单筛选尚未接入 API，当前结果仅供参考。",
+        "empty": {
+          "ready": "暂无匹配结果，请调整筛选条件。",
+          "missingFilters": "请先选择学期与校区以加载课程列表。"
+        }
+      }
+    },
+    "filters": {
+      "header": {
+        "eyebrow": "Filters",
+        "title": "Build your schedule",
+        "subtitle": "请选择学期并用多选标签细化结果。",
+        "reset": "清空筛选"
+      },
+      "status": {
+        "loadingBadge": "加载中…"
+      },
+      "sections": {
+        "basic": {
+          "title": "基础信息",
+          "term": {
+            "label": "Term",
+            "placeholder": "请选择学期"
+          },
+          "campus": {
+            "label": "Campus",
+            "all": "全部校区"
+          },
+          "keyword": {
+            "label": "Search keyword",
+            "placeholder": "课程名、编号或教师"
+          },
+          "openStatus": {
+            "label": "Show sections",
+            "all": "全部",
+            "openOnly": "有空位",
+            "waitlist": "有候补"
+          }
+        },
+        "subjects": {
+          "title": "科目 Subject",
+          "clear": "清除",
+          "search": {
+            "label": "Search subjects",
+            "placeholder": "例如：Computer Science"
+          },
+          "truncatedHint": "已截断 {{current}} / {{total}}，请继续搜索以缩小范围。"
+        },
+        "meeting": {
+          "title": "上课时间",
+          "clear": "清除",
+          "start": "开始时间",
+          "end": "结束时间"
+        },
+        "meta": {
+          "title": "授课方式 & 年级",
+          "clear": "清除",
+          "delivery": "Delivery",
+          "level": "Level"
+        },
+        "tags": {
+          "title": "快速标签",
+          "clear": "清除"
+        }
+      },
+      "chips": {
+        "keyword": "关键词",
+        "subject": "科目",
+        "level": "年级",
+        "delivery": "授课方式",
+        "tag": "标签",
+        "core": "核心课程",
+        "meeting": "上课时间",
+        "meetingFallback": "上课时间筛选",
+        "openOnly": "只看有空位",
+        "hasWaitlist": "有候补",
+        "timePlaceholder": {
+          "start": "开始",
+          "end": "结束"
+        }
+      }
+    },
+    "courseList": {
+      "header": {
+        "eyebrow": "结果",
+        "loading": "加载课程中…",
+        "count": "{{count}} 门课程",
+        "range": "显示 {{start}} - {{end}} · 第 {{page}} 页",
+        "refreshing": "刷新中…"
+      },
+      "empty": {
+        "default": "没有符合条件的课程，请尝试修改筛选条件。"
+      },
+      "footer": {
+        "pagination": "共 {{pages}} 页 · 每页 {{pageSize}} 条",
+        "none": "无可分页信息",
+        "pageLabel": "第 {{page}} / {{pages}} 页"
+      },
+      "pagination": {
+        "prev": "上一页",
+        "next": "下一页"
+      },
+      "error": {
+        "traceId": "Trace ID：{{id}}",
+        "retry": "重试"
+      }
+    },
+    "courseCard": {
+      "badges": {
+        "open": "有空位",
+        "levelFallback": "暂无"
+      },
+      "meta": {
+        "credits": "学分",
+        "sections": "班次",
+        "subject": "科目"
+      },
+      "tags": {
+        "deliveryFallback": "授课方式待定"
+      },
+      "details": {
+        "prerequisites": "先修课：",
+        "updated": "更新于 {{time}}",
+        "updatedRecent": "最近更新",
+        "term": "学期 {{term}}"
+      }
+    },
+    "schedule": {
+      "header": {
+        "eyebrow": "预览 · 每周视图",
+        "title": "课程概览",
+        "count": "{{count}} 个班次"
+      }
+    },
+    "tagChip": {
+      "remove": "移除 {{label}}"
+    },
+    "errors": {
+      "runtime": {
+        "missingRoot": "缺少 #root 根节点"
+      },
+      "network": {
+        "requestFailed": "请求失败：{{status}}"
+      }
+    }
+  }
+}
