@@ -1,6 +1,6 @@
 import Fastify, { type FastifyError } from 'fastify';
 import { ZodError } from 'zod';
-import { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { ZodTypeProvider, validatorCompiler, serializerCompiler } from 'fastify-type-provider-zod';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from './config.js';
@@ -19,7 +19,11 @@ export async function createServer() {
     logger: {
       level: config.logLevel,
     },
-  }).withTypeProvider<ZodTypeProvider>();
+  })
+    .withTypeProvider<ZodTypeProvider>();
+
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
 
   app.decorate('container', container);
 
@@ -47,6 +51,15 @@ export async function createServer() {
       error: {
         code: normalizedStatus >= 500 ? 'INTERNAL_ERROR' : 'BAD_REQUEST',
         message,
+      },
+    });
+  });
+
+  app.setNotFoundHandler((request, reply) => {
+    return reply.status(404).send({
+      error: {
+        code: 'NOT_FOUND',
+        message: `Route ${request.raw.url ?? request.url} not found`,
       },
     });
   });
