@@ -29,6 +29,13 @@
           "sun": "Sun"
         }
       },
+      "languageSwitcher": {
+        "label": "Language",
+        "languages": {
+          "en": "English",
+          "zh": "中文 (Chinese)"
+        }
+      },
       "time": {
         "am": "AM",
         "pm": "PM",
@@ -227,6 +234,13 @@
           "fri": "周五",
           "sat": "周六",
           "sun": "周日"
+        }
+      },
+      "languageSwitcher": {
+        "label": "界面语言",
+        "languages": {
+          "en": "英文",
+          "zh": "中文"
         }
       },
       "time": {

@@ -4,6 +4,12 @@
   background: linear-gradient(135deg, #eef2ff, #fdf2f8);
 }
 
+.course-app__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1.5rem;
+}
+
 .course-app__container {
   display: grid;
   grid-template-columns: minmax(320px, 360px) 1fr;
@@ -66,6 +72,11 @@
   .course-app {
     padding: 1rem;
   }
+
+  .course-app__toolbar {
+    justify-content: center;
+  }
+
   .course-app__container {
     grid-template-columns: 1fr;
   }
