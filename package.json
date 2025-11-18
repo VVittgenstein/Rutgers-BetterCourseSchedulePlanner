@@ -14,7 +14,9 @@
     "soc:rate-limit": "tsx scripts/soc_rate_limit.ts",
     "db:migrate": "tsx scripts/migrate_db.ts",
     "data:incremental-trial": "tsx scripts/incremental_trial.ts",
-    "data:fetch": "tsx scripts/fetch_soc_data.ts"
+    "data:fetch": "tsx scripts/fetch_soc_data.ts",
+    "api:start": "tsx api/src/server.ts",
+    "api:dev": "tsx watch api/src/server.ts"
   },
   "repository": {
     "type": "git",
@@ -28,11 +30,16 @@
   },
   "homepage": "https://github.com/VVittgenstein/BetterCourseSchedulePlanner#readme",
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "better-sqlite3": "^12.4.1"
+    "better-sqlite3": "^12.4.1",
+    "fastify": "^5.6.2",
+    "fastify-plugin": "^5.1.0",
+    "fastify-type-provider-zod": "^6.1.0",
+    "zod": "^4.1.12"
   }
 }
