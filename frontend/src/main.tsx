@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ComponentPlayground } from './dev/ComponentPlayground';
+import { App } from './App';
 import './index.css';
 
 const container = document.getElementById('root');
@@ -10,6 +10,6 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <ComponentPlayground />
+    <App />
   </StrictMode>,
 );
