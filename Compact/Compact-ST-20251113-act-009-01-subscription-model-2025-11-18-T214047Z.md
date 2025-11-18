@@ -5,6 +5,7 @@
 - 订阅偏好（notifyOn、maxNotifications、deliveryWindow、snoozeUntil、channelMetadata）及 `metadata` 中 client/discord 信息的默认值与扩展规则已明确。（docs/subscription_model.md:41-55）
 - 状态机（pending/active/paused/suppressed/unsubscribed）及 Mermaid 图定义了状态语义，所有状态变更、通知、错误需写入 `subscription_events`。（docs/subscription_model.md:86-116）
 - `POST /api/subscribe`/`POST /api/unsubscribe` 的请求/响应字段、幂等语义、错误码及示例 JSON 已固化；`sectionResolved` 与 `404 section_not_found` 的含义明确：合法 term/campus 但缺 section 时返回 `200 + sectionResolved=false`，仅 term/campus 无效时报 404。（docs/subscription_model.md:117-239）
+- 针对第一轮 code review 的“section 缺失是否 404”疑问，文档现已在 Behavior 与 Error codes 段落一致说明：缺 section 但 term/campus 合法时接受并回传 `sectionResolved=false`，仅非法 term/campus 才返回 404，消除了实现歧义。（docs/subscription_model.md:132-143, 191-195）
 - 安全/合规策略覆盖邮箱/Discord 校验、perContact/perSection/perIP 限速、重复订阅防护、quiet hours、审计日志与 PII 清理。（docs/subscription_model.md:241-253）
 - 针对 section 缺失场景新增幂等策略：文档要求 `(term_id, campus_code, index_number, contact_hash, contact_type)` 级别的部分唯一索引/哈希，并在 Behavior 中定义 `unresolvedKey`（含 contact 维度）以复用已有记录，确保多用户在数据缺口期仍能独立订阅。（docs/subscription_model.md:52-60, 133-143）
 
@@ -87,3 +88,23 @@ chatgpt-codex-connector bot
 P1 Badge Keep contact dimension in unresolved dedupe key
 
 In docs/subscription_model.md lines 136‑137 the subscribe flow now says unresolved sections are deduped via unresolvedKey = sha1(term|campus|index), which drops contact_hash/contact_type. During ingestion gaps, two different users subscribing to the same section would collide on that key and the second call would be treated as an existing row instead of creating their own subscription, contrary to the per-contact uniqueness described in the index list above (lines 56‑62). The unresolved dedupe must include the contact dimensions, otherwise legitimate subscribers are blocked whenever the section record is missing.
+
+## Code Review - ST-20251113-act-009-01-subscription-model - 2025-11-18T22:40:58Z
+docs/subscription_model.md
+Comment on lines 136 to +137
+
+
+**Behavior**
+- The API looks up the `sections` row by `(term, campus, sectionIndex)`. When found the row's `section_id` populates the subscription immediately. When missing (e.g., data lag or removed section) the API still accepts the request, stores the denormalized `term/campus/index` with `section_id = null`, and flags the response with `sectionResolved: false` so callers know the join is deferred. Only malformed `term`/`campus` combinations return `404 section_not_found`.
+- The API looks up the `sections` row by `(term, campus, sectionIndex)`. When found the row's `section_id` populates the subscription immediately. When missing (e.g., data lag or removed section) the API still accepts the request, stores the denormalized `term/campus/index` with `section_id = null`, derives an internal `unresolvedKey = sha1(term|campus|index|contact_hash|contact_type)` (or hashes the tuple `(term, campus, index, contact_hash, contact_type)`) for duplicate detection, and flags the response with `sectionResolved: false` so callers know the join is deferred. Only malformed `term`/`campus` combinations return `404 section_not_found`.
+
+
+@chatgpt-codex-connector
+chatgpt-codex-connector bot
+
+P1 Badge Keep contact dimension in unresolved dedupe key
+
+In docs/subscription_model.md lines 136‑137 the subscribe flow now says unresolved sections are deduped via unresolvedKey = sha1(term|campus|index|contact_hash|contact_type) which is consistent with the index list. No further action required.
+
+## Code Review - ST-20251113-act-009-01-subscription-model - 2025-11-18T22:41:36Z
+Codex Review: Didn't find any major issues. Can't wait for the next one!
