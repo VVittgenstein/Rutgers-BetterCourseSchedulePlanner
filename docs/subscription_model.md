@@ -132,7 +132,7 @@ Creates or reuses a subscription for the provided section/index.
 | `discord` | `{ guildId?: string; channelId?: string }` |  | Only used when `contactType` references Discord. |
 
 **Behavior**
-- The API finds the `sections` row by `(term, campus, sectionIndex)`. If missing it returns `404` with error code `section_not_found`.
+- The API looks up the `sections` row by `(term, campus, sectionIndex)`. When found the row's `section_id` populates the subscription immediately. When missing (e.g., data lag or removed section) the API still accepts the request, stores the denormalized `term/campus/index` with `section_id = null`, and flags the response with `sectionResolved: false` so callers know the join is deferred. Only malformed `term`/`campus` combinations return `404 section_not_found`.
 - `contact_hash` is computed server-side; the unique partial index guarantees idempotency. When a matching `pending/active` record exists the endpoint returns `200` with `existing: true` and never inserts a duplicate.
 - New rows start in `pending` unless `contactType=discord_channel` (server-to-server) in which case they skip verification and go straight to `active`.
 - Email + Discord DM requests trigger a verification message and append `verification_sent` events. The response includes `requiresVerification: true`.
@@ -148,6 +148,7 @@ Creates or reuses a subscription for the provided section/index.
 | `existing` | boolean | `true` when the request hit the unique constraint and returned the prior row. |
 | `unsubscribeToken` | string | Nullable when the contact type cannot be unsubscribed without auth (e.g., Discord channel webhooks). |
 | `term`, `campus`, `sectionIndex` | string | Echo back resolved routing data. |
+| `sectionResolved` | boolean | `false` when `section_id` could not be attached yet; clients may show a warning but no retry is needed. |
 | `preferences` | object | Effective preference set after merging defaults and payload overrides. |
 | `traceId` | string | Mirrors `X-Trace-Id` header. |
 
