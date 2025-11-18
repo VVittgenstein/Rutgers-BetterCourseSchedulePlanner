@@ -86,7 +86,9 @@ export async function registerCourseRoutes(app: FastifyInstance) {
     async (request) => {
       const query = request.query as CoursesQuery;
       const db = request.server.container.getDb();
+      const startedAt = process.hrtime.bigint();
       const { data, total } = executeCourseSearch(db, query);
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
       const meta = {
         page: query.page,
         pageSize: query.pageSize,
@@ -95,6 +97,19 @@ export async function registerCourseRoutes(app: FastifyInstance) {
         generatedAt: new Date().toISOString(),
         version: API_VERSION,
       };
+      request.log.info(
+        {
+          event: 'query.metrics',
+          target: 'courses',
+          durationMs,
+          totalMatching: total,
+          totalReturned: data.length,
+          page: query.page,
+          pageSize: query.pageSize,
+          filters: summarizeCourseFilters(query),
+        },
+        'courses query executed',
+      );
 
       return {
         meta,
@@ -102,4 +117,31 @@ export async function registerCourseRoutes(app: FastifyInstance) {
       };
     },
   );
+}
+
+function summarizeCourseFilters(query: CoursesQuery) {
+  return {
+    term: query.term,
+    campus: query.campus ?? [],
+    subject: query.subject ?? [],
+    level: query.level ?? [],
+    hasSearchQuery: Boolean(query.q),
+    courseNumber: query.courseNumber,
+    coreCode: query.coreCode ?? [],
+    credits:
+      query.creditsMin !== undefined || query.creditsMax !== undefined
+        ? { min: query.creditsMin, max: query.creditsMax }
+        : undefined,
+    delivery: query.delivery ?? [],
+    hasOpenSection: query.hasOpenSection,
+    meetingDays: query.meetingDays ?? [],
+    meetingWindow:
+      query.meetingStart !== undefined || query.meetingEnd !== undefined
+        ? { start: query.meetingStart, end: query.meetingEnd }
+        : undefined,
+    instructorProvided: query.instructor ? true : undefined,
+    requiresPermission: query.requiresPermission,
+    sort: query.sortBy ? { by: query.sortBy, direction: query.sortDir ?? 'asc' } : undefined,
+    include: query.include ?? [],
+  };
 }

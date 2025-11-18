@@ -84,6 +84,7 @@ export async function registerSectionRoutes(app: FastifyInstance) {
     },
     async (request) => {
       const query = request.query as SectionsQuery;
+      const startedAt = process.hrtime.bigint();
       const meta = {
         page: query.page,
         pageSize: query.pageSize,
@@ -92,6 +93,20 @@ export async function registerSectionRoutes(app: FastifyInstance) {
         generatedAt: new Date().toISOString(),
         version: API_VERSION,
       };
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      request.log.info(
+        {
+          event: 'query.metrics',
+          target: 'sections',
+          durationMs,
+          totalMatching: meta.total,
+          totalReturned: 0,
+          page: query.page,
+          pageSize: query.pageSize,
+          filters: summarizeSectionFilters(query),
+        },
+        'sections query executed',
+      );
 
       return {
         meta,
@@ -99,4 +114,31 @@ export async function registerSectionRoutes(app: FastifyInstance) {
       };
     },
   );
+}
+
+function summarizeSectionFilters(query: SectionsQuery) {
+  return {
+    term: query.term,
+    campus: query.campus ?? [],
+    subject: query.subject ?? [],
+    courseId: query.courseId,
+    courseString: query.courseString,
+    index: query.index,
+    sectionNumber: query.sectionNumber,
+    openStatus: query.openStatus ?? [],
+    isOpen: query.isOpen,
+    delivery: query.delivery ?? [],
+    meetingDay: query.meetingDay ?? [],
+    meetingWindow:
+      query.meetingStart !== undefined || query.meetingEnd !== undefined
+        ? { start: query.meetingStart, end: query.meetingEnd }
+        : undefined,
+    meetingCampus: query.meetingCampus ?? [],
+    instructorProvided: query.instructor ? true : undefined,
+    majors: query.majors ?? [],
+    permissionOnly: query.permissionOnly,
+    hasWaitlist: query.hasWaitlist,
+    updatedSince: query.updatedSince,
+    sort: query.sortBy ? { by: query.sortBy, direction: query.sortDir ?? 'asc' } : undefined,
+  };
 }

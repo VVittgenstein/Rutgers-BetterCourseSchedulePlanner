@@ -28,13 +28,16 @@ export async function createServer() {
   app.decorate('container', container);
 
   app.setErrorHandler((error: unknown, request, reply) => {
+    const traceId = String(request.id);
     if (error instanceof ZodError) {
       const details = error.issues.map((issue) => `${issue.path.join('.') || 'root'}: ${issue.message}`);
+      reply.header('x-trace-id', traceId);
       return reply.status(400).send({
         error: {
           code: 'VALIDATION_FAILED',
           message: 'One or more parameters are invalid',
           details,
+          traceId,
         },
       });
     }
@@ -47,19 +50,24 @@ export async function createServer() {
         ? fastifyError.message
         : 'Unexpected error';
     request.log.error({ err: fastifyError }, 'unhandled error');
+    reply.header('x-trace-id', traceId);
     return reply.status(normalizedStatus).send({
       error: {
         code: normalizedStatus >= 500 ? 'INTERNAL_ERROR' : 'BAD_REQUEST',
         message,
+        traceId,
       },
     });
   });
 
   app.setNotFoundHandler((request, reply) => {
+    const traceId = String(request.id);
+    reply.header('x-trace-id', traceId);
     return reply.status(404).send({
       error: {
         code: 'NOT_FOUND',
         message: `Route ${request.raw.url ?? request.url} not found`,
+        traceId,
       },
     });
   });

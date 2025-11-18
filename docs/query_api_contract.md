@@ -8,12 +8,13 @@ This document defines the HTTP contract for the lightweight API that powers the 
 - **Pagination envelope**: Every list endpoint returns `{ meta, data }`. `meta` contains `page`, `pageSize`, `total`, `hasNext`, `generatedAt`, and `version`.
 - **Filtering semantics**: Unless otherwise noted, filters are ANDed together. Multi-valued parameters (arrays) default to OR semantics within the same field.
 - **Time units**: Meeting start/end filters use minutes since midnight (local campus time) to stay consistent with `section_meetings.start_minutes`.
-- **Error shape**: Errors use `{ error: { code, message, details? } }` and HTTP status codes. Clients may rely on `details` being an array of strings for validation errors.
+- **Error shape**: Errors use `{ error: { code, message, traceId, details? } }`, the same `traceId` is echoed on the `X-Trace-Id` response header, and `details` stays an array of strings for validation errors so UI code can enumerate issues.
 
 ## Endpoints overview
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/health` | Liveness/readiness checks.
+| `GET` | `/api/health` | Liveness checks with dependency status.
+| `GET` | `/api/ready` | Strict readiness check (DB reachability + schema guardrails).
 | `GET` | `/api/courses` | Primary course browser. Supports multi-dimensional filters, pagination, and summary statistics about sections.
 | `GET` | `/api/sections` | Detail-level section query, frequently used by the “subscribe to open seats” panel.
 | `GET` | `/api/filters` | Returns curated filter dictionaries (terms, campuses, subjects, delivery methods, core codes, etc.).
@@ -21,10 +22,23 @@ This document defines the HTTP contract for the lightweight API that powers the 
 ## `GET /api/health`
 | Field | Type | Notes |
 | --- | --- | --- |
-| `status` | `"ok" \| "degraded"` | Derived from dependency checks (DB + config).
-| `dependencies` | `Record<string, "up" \| "down">` | e.g. `{ "sqlite": "up" }`.
+| `status` | `"ok" \| "degraded"` | `ok` only when SQLite is reachable and required tables are present; `degraded` otherwise.
+| `dependencies` | `Record<string, "up" \| "down">` | Includes `sqlite` (connection) and `schema` (ensures `courses`, `sections`, `course_core_attributes`, `course_search_fts`, `section_meetings`, `subjects` exist).
 | `version` | string | Semantic app version/commit.
 | `generatedAt` | ISO timestamp. |
+
+`/api/health` is safe for k8s/docker liveness probes. A degraded response still uses HTTP `200` so orchestrators can surface the dependency failure without restarting the pod/container immediately.
+
+## `GET /api/ready`
+| Field | Type | Notes |
+| --- | --- | --- |
+| `status` | `"ready" \| "not_ready"` | `ready` when DB connectivity and schema checks pass; otherwise `not_ready`.
+| `checks.sqlite.status` | `"up" \| "down"` | `down` when SQLite cannot be opened or `PRAGMA`/`SELECT 1` fails. `checks.sqlite.message` includes the raw error text to help operators debug file permissions and locks.
+| `checks.tables.status` | `"up" \| "down"` | `down` when any required table is missing. `checks.tables.missing` lists the missing tables.
+| `version` | string | Semantic app version/commit.
+| `generatedAt` | ISO timestamp. |
+
+`/api/ready` returns HTTP `200` for `"ready"` and `503` when not ready. Point readiness probes or load balancer health checks here so broken replicas stop receiving traffic.
 
 ## `GET /api/courses`
 The central list endpoint that powers the search page.
@@ -200,10 +214,29 @@ The error payload example:
   "error": {
     "code": "VALIDATION_FAILED",
     "message": "meetingStart must be <= meetingEnd",
-    "details": ["meetingStart=900", "meetingEnd=840"]
+    "details": ["meetingStart=900", "meetingEnd=840"],
+    "traceId": "req-123"
   }
 }
 ```
+The `X-Trace-Id` response header repeats the same identifier.
+
+## Operations & Observability
+### Environment & ports
+- `APP_HOST`/`APP_PORT` control the Fastify listener (defaults `0.0.0.0:3333`).
+- `SQLITE_FILE` points to the SQLite snapshot (defaults to `data/local.db`). The service refuses to start if the file is missing.
+- `LOG_LEVEL` defaults to `info`. Set `warn`/`error` for quiet cron deployments or `debug` when tracing filters locally.
+- `NODE_ENV` toggles general runtime behavior; keep `production` for deployments so Fastify disables extra logging noise.
+
+### Health probes
+- `/api/health` is the shallow probe (liveness). It always replies `200` but sets `status: "degraded"` and `dependencies.schema = "down"` when tables are missing.
+- `/api/ready` is strict readiness. It returns `503` when SQLite cannot be opened or when any of `courses`, `sections`, `course_core_attributes`, `course_search_fts`, `section_meetings`, or `subjects` is absent.
+- Both responses include `version` and `generatedAt` so dashboards can ensure all instances picked up the latest deploy.
+
+### Logging, tracing & rate limits
+- Every request is wrapped by the `requestLogging` plugin (request/response duration) plus a `query.metrics` log message that records filters, pagination, and record counts for `/api/courses`/`/api/sections`.
+- Error payloads always include `traceId` and mirror it via the `X-Trace-Id` header, enabling correlation with Fastify/Pino logs or upstream observability tools.
+- Rate limiting is not built-in; place the API behind a reverse proxy (nginx, Envoy, API gateway) or add Fastify's `@fastify/rate-limit` plugin to keep abusive scrapes from exhausting the local DB.
 
 ## Non-goals in this iteration
 - Authentication/authorization. Local deployments assume trusted usage; the design leaves room for future API keys.
