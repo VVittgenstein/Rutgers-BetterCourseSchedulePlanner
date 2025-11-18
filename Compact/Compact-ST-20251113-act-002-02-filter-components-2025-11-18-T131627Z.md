@@ -14,3 +14,47 @@ Subtask `ST-20251113-act-002-02-filter-components` – Compact (UTC 2025-11-18T1
 
 ## Testing
 - `frontend: npm run build`
+
+## Code Review - ST-20251113-act-002-02-filter-components - 2025-11-18T13:58:34Z
+请根据以下两条code review进行修改：
+
+#1
+frontend/src/dev/ComponentPlayground.tsx
+Comment on lines +29 to +33
+
+
+        const start = filters.meeting.startMinutes ?? 0;
+        const end = filters.meeting.endMinutes ?? 24 * 60;
+        const overlaps = section.meetings.some(
+          (meeting) => meeting.endMinutes > start && meeting.startMinutes < end,
+        );
+
+
+@chatgpt-codex-connector
+chatgpt-codex-connector bot
+
+P2 Badge Enforce meeting time bounds instead of simple overlap
+
+When a start/end window is set, sections are kept if they merely overlap that window (meeting.endMinutes > start && meeting.startMinutes < end). A class from 7:00–12:00 still appears when the filter is 9:00–11:00 even though the contract (docs/query_api_contract.md, lines 60–62) expects meetings to start after meetingStart and finish before meetingEnd. This misaligns the playground preview with the API semantics and shows users sections outside their requested time range.
+
+#2
+frontend/src/components/SchedulePreview.tsx
+Comment on lines +177 to +181
+
+
+  const windowStart = startHour * 60;
+  const clampStart = Math.max(meeting.startMinutes, windowStart);
+  const clampEnd = Math.min(meeting.endMinutes, windowStart + totalMinutes);
+  const top = ((clampStart - windowStart) / totalMinutes) * 100;
+  const height = ((clampEnd - clampStart) / totalMinutes) * 100;
+
+
+@chatgpt-codex-connector
+chatgpt-codex-connector bot
+
+P2 Badge Guard schedule blocks outside the displayed window
+
+Positioning clamps meeting times to the viewport without checking order, so meetings entirely before startHour or after endHour produce a negative height and top > 100%. Such blocks render inverted or overlap the grid instead of being skipped or clamped to zero when a consumer customizes the window (e.g., startHour=10 with an 8–9am meeting).
+
+## Code Review - ST-20251113-act-002-02-filter-components - 2025-11-18T13:59:12Z
+Codex Review: Didn't find any major issues. Breezy!
