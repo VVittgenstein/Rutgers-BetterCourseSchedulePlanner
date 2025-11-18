@@ -77,7 +77,9 @@ export function SchedulePreview({
               {blocks
                 .filter((block) => block.meeting.day === day)
                 .map((block) => {
-                  const { top, height } = positionBlock(block.meeting, startHour, totalMinutes);
+                  const position = positionBlock(block.meeting, startHour, totalMinutes);
+                  if (!position) return null;
+                  const { top, height } = position;
                   return (
                     <article
                       key={block.id}
@@ -173,10 +175,18 @@ const positionBlock = (
   meeting: ScheduleMeeting,
   startHour: number,
   totalMinutes: number,
-): { top: number; height: number } => {
+): { top: number; height: number } | null => {
   const windowStart = startHour * 60;
+  const windowEnd = windowStart + totalMinutes;
+
+  if (meeting.endMinutes <= windowStart || meeting.startMinutes >= windowEnd) {
+    return null;
+  }
+
   const clampStart = Math.max(meeting.startMinutes, windowStart);
-  const clampEnd = Math.min(meeting.endMinutes, windowStart + totalMinutes);
+  const clampEnd = Math.min(meeting.endMinutes, windowEnd);
+  if (clampEnd <= clampStart) return null;
+
   const top = ((clampStart - windowStart) / totalMinutes) * 100;
   const height = ((clampEnd - clampStart) / totalMinutes) * 100;
   return { top, height };
