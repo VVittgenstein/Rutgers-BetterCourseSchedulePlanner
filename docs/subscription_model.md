@@ -55,8 +55,10 @@ Other JSON siblings under `metadata`:
 
 ### Indexes and constraints
 - `idx_subscriptions_active_unique` (partial unique) on `(section_id, contact_hash, contact_type)` when `status IN ('pending','active')` blocks duplicate requests for the same section/channel pair.
+- `idx_subscriptions_unresolved_unique` (partial unique) on `(term_id, campus_code, index_number, contact_hash, contact_type)` where `section_id IS NULL AND status IN ('pending','active')` keeps unresolved subscriptions idempotent until the section row is backfilled.
 - `idx_subscriptions_active` on `(section_id, status)` is used by the notification worker to fetch candidates who still need alerts.
 - `contact_hash` is always derived by `sha1(lower(trim(contact_value)))`. Clients never set it directly.
+- When `section_id` is absent the API enforces uniqueness via the `(term_id, campus_code, index_number, contact_hash, contact_type)` tuple so retries reuse the existing unresolved row.
 - `section_id` can be resolved lazily: the API should fill it when a section exists and defer to `term_id + index_number` otherwise so we can still clean up when the section reappears.
 
 ## `subscription_events` table
@@ -132,7 +134,7 @@ Creates or reuses a subscription for the provided section/index.
 | `discord` | `{ guildId?: string; channelId?: string }` |  | Only used when `contactType` references Discord. |
 
 **Behavior**
-- The API looks up the `sections` row by `(term, campus, sectionIndex)`. When found the row's `section_id` populates the subscription immediately. When missing (e.g., data lag or removed section) the API still accepts the request, stores the denormalized `term/campus/index` with `section_id = null`, and flags the response with `sectionResolved: false` so callers know the join is deferred. Only malformed `term`/`campus` combinations return `404 section_not_found`.
+- The API looks up the `sections` row by `(term, campus, sectionIndex)`. When found the row's `section_id` populates the subscription immediately. When missing (e.g., data lag or removed section) the API still accepts the request, stores the denormalized `term/campus/index` with `section_id = null`, derives an internal `unresolvedKey = sha1(term|campus|index)` (or equivalent tuple) for duplicate detection, and flags the response with `sectionResolved: false` so callers know the join is deferred. Only malformed `term`/`campus` combinations return `404 section_not_found`.
 - `contact_hash` is computed server-side; the unique partial index guarantees idempotency. When a matching `pending/active` record exists the endpoint returns `200` with `existing: true` and never inserts a duplicate.
 - New rows start in `pending` unless `contactType=discord_channel` (server-to-server) in which case they skip verification and go straight to `active`.
 - Email + Discord DM requests trigger a verification message and append `verification_sent` events. The response includes `requiresVerification: true`.
