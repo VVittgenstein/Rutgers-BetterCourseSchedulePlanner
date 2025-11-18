@@ -79,9 +79,7 @@ type QueryParamValue = PrimitiveParam | PrimitiveParam[];
 /**
  * Translate the UI state into the REST-friendly query object used by `/api/courses`.
  */
-export const buildCourseQueryParams = (
-  state: CourseFilterState,
-): Record<string, QueryParamValue> => {
+export const buildCourseQueryParams = (state: CourseFilterState): Record<string, QueryParamValue> => {
   if (!state.term) {
     throw new Error('CourseFilterState.term is required before querying.');
   }
@@ -90,6 +88,7 @@ export const buildCourseQueryParams = (
     term: state.term,
     page: state.pagination.page,
     pageSize: state.pagination.pageSize,
+    include: ['sectionsSummary', 'subjects'],
   };
 
   if (state.campus) params.campus = state.campus;
@@ -97,16 +96,13 @@ export const buildCourseQueryParams = (
   if (state.queryText.trim()) params.q = state.queryText.trim();
   if (state.level.length) params.level = [...state.level];
   if (state.coreCodes.length) params.coreCode = [...state.coreCodes];
-  if (state.keywords.length) params.keyword = [...state.keywords];
-  if (state.tags.length) params.tag = [...state.tags];
   if (state.delivery.length) params.delivery = [...state.delivery];
-  if (state.instructors.length) params.instructor = [...state.instructors];
+  if (state.instructors.length) params.instructor = state.instructors[0];
 
   if (state.credits.min !== undefined) params.creditsMin = state.credits.min;
   if (state.credits.max !== undefined) params.creditsMax = state.credits.max;
 
   if (state.openStatus === 'openOnly') params.hasOpenSection = true;
-  if (state.openStatus === 'hasWaitlist') params.hasWaitlist = true;
 
   if (state.meeting.days.length) params.meetingDays = state.meeting.days.join('');
   if (state.meeting.startMinutes !== undefined) {
@@ -115,12 +111,30 @@ export const buildCourseQueryParams = (
   if (state.meeting.endMinutes !== undefined) {
     params.meetingEnd = state.meeting.endMinutes;
   }
-  if (state.sort.field !== 'relevance' || state.sort.dir !== 'desc') {
-    params.sort = `${state.sort.field}:${state.sort.dir}`;
+
+  const sortField = mapSortField(state.sort.field);
+  if (sortField) {
+    params.sortBy = sortField;
+    params.sortDir = state.sort.dir;
+  } else if (state.sort.dir !== 'desc') {
+    params.sortDir = state.sort.dir;
   }
 
   return params;
 };
+
+function mapSortField(field: CourseFilterSortField) {
+  switch (field) {
+    case 'courseNumber':
+      return 'courseNumber';
+    case 'title':
+      return 'title';
+    case 'updated':
+      return 'updatedAt';
+    default:
+      return null;
+  }
+}
 
 /**
  * Serializes filter state into the search params strategy defined in docs/ui_flow_course_list.md.

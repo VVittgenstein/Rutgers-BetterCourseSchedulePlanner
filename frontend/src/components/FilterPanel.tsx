@@ -101,12 +101,23 @@ export function FilterPanel({
   const tagLookup = useMemo(() => buildLookup(dictionary.tags), [dictionary.tags]);
   const coreLookup = useMemo(() => buildLookup(dictionary.coreCodes), [dictionary.coreCodes]);
 
-  const emitState = (partial: Partial<CourseFilterState>, dirtyKey?: string) => {
+  const emitState = (
+    partial: Partial<CourseFilterState>,
+    dirtyKey?: string,
+    options: { resetPage?: boolean } = { resetPage: true },
+  ) => {
     const dirty = new Set(state.dirtyFields);
     if (dirtyKey) dirty.add(dirtyKey);
+    const shouldResetPage = options.resetPage ?? true;
+    const nextPagination = partial.pagination
+      ? partial.pagination
+      : shouldResetPage
+        ? { ...state.pagination, page: 1 }
+        : { ...state.pagination };
     onStateChange({
       ...state,
       ...partial,
+      pagination: nextPagination,
       dirtyFields: dirty,
     });
   };
@@ -183,6 +194,7 @@ export function FilterPanel({
         pagination: { ...state.pagination, page: 1 },
       },
       'queryText',
+      { resetPage: false },
     );
   };
 
