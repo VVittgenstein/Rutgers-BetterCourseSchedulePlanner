@@ -17,8 +17,6 @@ export interface MeetingFilter {
   days: MeetingDay[];
   startMinutes?: number;
   endMinutes?: number;
-  campusCodes: string[];
-  locationKeywords: string[];
 }
 
 export interface CourseFilterState {
@@ -55,8 +53,6 @@ export const createInitialCourseFilterState = (): CourseFilterState => ({
   tags: [],
   meeting: {
     days: [],
-    campusCodes: [],
-    locationKeywords: [],
   },
   instructors: [],
   delivery: [],
@@ -72,7 +68,6 @@ const MULTI_VALUE_KEYS = new Set([
   'level',
   'coreCode',
   'delivery',
-  'meetingCampus',
   'tag',
   'keyword',
   'instructor',
@@ -120,13 +115,6 @@ export const buildCourseQueryParams = (
   if (state.meeting.endMinutes !== undefined) {
     params.meetingEnd = state.meeting.endMinutes;
   }
-  if (state.meeting.campusCodes.length) {
-    params.meetingCampus = [...state.meeting.campusCodes];
-  }
-  if (state.meeting.locationKeywords.length) {
-    params.meetingLocation = [...state.meeting.locationKeywords];
-  }
-
   if (state.sort.field !== 'relevance' || state.sort.dir !== 'desc') {
     params.sort = `${state.sort.field}:${state.sort.dir}`;
   }
@@ -164,11 +152,6 @@ export const serializeCourseFilters = (state: CourseFilterState): URLSearchParam
   if (state.meeting.endMinutes !== undefined) {
     params.set('meetingEnd', String(state.meeting.endMinutes));
   }
-  if (state.meeting.campusCodes.length) appendAll('meetingCampus', state.meeting.campusCodes);
-  if (state.meeting.locationKeywords.length) {
-    appendAll('meetingLocation', state.meeting.locationKeywords);
-  }
-
   if (state.pagination.page > 1) params.set('page', String(state.pagination.page));
   if (state.pagination.pageSize !== DEFAULT_PAGE_SIZE) {
     params.set('pageSize', String(state.pagination.pageSize));
@@ -200,8 +183,6 @@ export const parseCourseFiltersFromSearch = (
       days: [],
       startMinutes: undefined,
       endMinutes: undefined,
-      campusCodes: [],
-      locationKeywords: [],
     },
     instructors: [],
     delivery: [],
@@ -223,9 +204,6 @@ export const parseCourseFiltersFromSearch = (
           break;
         case 'delivery':
           state.delivery.push(value as DeliveryMethod);
-          break;
-        case 'meetingCampus':
-          state.meeting.campusCodes.push(value);
           break;
         case 'tag':
           state.tags.push(value);
@@ -264,9 +242,6 @@ export const parseCourseFiltersFromSearch = (
         break;
       case 'meetingEnd':
         state.meeting.endMinutes = Number(value);
-        break;
-      case 'meetingLocation':
-        state.meeting.locationKeywords.push(value);
         break;
       case 'hasOpenSection':
         if (value === 'true') state.openStatus = 'openOnly';

@@ -71,8 +71,6 @@ type MeetingFilter = {
   days: Array<'M' | 'T' | 'W' | 'TH' | 'F' | 'SA' | 'SU'>;
   startMinutes?: number;
   endMinutes?: number;
-  campusCodes: string[];      // section_meetings.campus_abbrev
-  locationKeywords: string[]; // fuzzy matches building/room
 };
 
 export type CourseFilterState = {
@@ -101,9 +99,11 @@ export type CourseFilterState = {
 - 除 `queryText` 外，所有数组参数使用多值编码：`subject=01:198&subject=01:640`。移动端复制链接保持人类可读。
 - `pagination.page` 总是同步；`pageSize` 仅在偏离默认 25 时写入。
 - `sort` 组合编码为 `sort=courseNumber:asc`。
-- `meeting`：`meetingDays=MWF`、`meetingStart=600`、`meetingEnd=900`；地点/校区使用 `meetingCampus=LIV&meetingCampus=BUS`.
+- `meeting`：`meetingDays=MWF`、`meetingStart=600`、`meetingEnd=900`。
 - `tags`（UI 快捷开关）写入 `tag=writing_intensive` 等 slug。
 - 通过 `URLSearchParams` 比较增量变化，只 pushState 当查询 key 发生变化（避免刷历史记录）。
+
+> 目前 `/api/courses` 仅支持 meeting day/time 过滤，会议校区/地点关键字将在 API 增强后再开启。
 
 ## 4. 核心组件清单与依赖
 
