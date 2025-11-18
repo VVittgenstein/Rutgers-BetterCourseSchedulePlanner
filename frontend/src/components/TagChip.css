@@ -1,0 +1,94 @@
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  padding: 0.2rem 0.65rem;
+  background: var(--chip-bg, rgba(255, 255, 255, 0.08));
+  color: var(--chip-fg, #1f2937);
+  line-height: 1.2;
+  cursor: default;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.tag-chip button {
+  cursor: pointer;
+}
+
+.tag-chip--interactive {
+  cursor: pointer;
+}
+
+.tag-chip--compact {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+}
+
+.tag-chip--default {
+  --chip-bg: #f3f4f6;
+  --chip-fg: #111827;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+.tag-chip--info {
+  --chip-bg: rgba(59, 130, 246, 0.12);
+  --chip-fg: #1d4ed8;
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.tag-chip--success {
+  --chip-bg: rgba(16, 185, 129, 0.15);
+  --chip-fg: #047857;
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.tag-chip--warning {
+  --chip-bg: rgba(245, 158, 11, 0.18);
+  --chip-fg: #92400e;
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.tag-chip--danger {
+  --chip-bg: rgba(248, 113, 113, 0.15);
+  --chip-fg: #b91c1c;
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.tag-chip--inactive {
+  opacity: 0.7;
+}
+
+.tag-chip__icon {
+  font-size: 0.9em;
+  line-height: 1;
+  display: inline-flex;
+}
+
+.tag-chip__text {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+}
+
+.tag-chip__value {
+  font-size: 0.75rem;
+  color: #4b5563;
+}
+
+.tag-chip__remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  margin-left: 0.25rem;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0.8;
+}
+
+.tag-chip__remove:hover {
+  opacity: 1;
+}
