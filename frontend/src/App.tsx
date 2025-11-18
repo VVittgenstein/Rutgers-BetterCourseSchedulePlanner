@@ -51,7 +51,7 @@ export function App() {
               dictionary={dictionaryState.dictionary}
               onStateChange={setFilters}
               onReset={setFilters}
-              loading={dictionaryState.status !== 'success'}
+              loading={dictionaryState.status === 'loading' && !dictionaryState.dictionary}
             />
           ) : (
             <div className="course-app__filters-placeholder">正在加载筛选字典...</div>
