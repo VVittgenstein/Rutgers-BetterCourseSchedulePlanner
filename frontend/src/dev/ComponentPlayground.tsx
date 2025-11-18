@@ -26,12 +26,16 @@ export function ComponentPlayground() {
       }
 
       if (filters.meeting.startMinutes !== undefined || filters.meeting.endMinutes !== undefined) {
-        const start = filters.meeting.startMinutes ?? 0;
-        const end = filters.meeting.endMinutes ?? 24 * 60;
-        const overlaps = section.meetings.some(
-          (meeting) => meeting.endMinutes > start && meeting.startMinutes < end,
-        );
-        if (!overlaps) return false;
+        const matchesWindow = section.meetings.some((meeting) => {
+          if (filters.meeting.startMinutes !== undefined && meeting.startMinutes < filters.meeting.startMinutes) {
+            return false;
+          }
+          if (filters.meeting.endMinutes !== undefined && meeting.endMinutes > filters.meeting.endMinutes) {
+            return false;
+          }
+          return true;
+        });
+        if (!matchesWindow) return false;
       }
 
       return true;
