@@ -1138,9 +1138,9 @@
             "描述 subscribe/unsubscribe API payload、响应与幂等语义，附示例。",
             "列出安全策略（速率限制、邮箱格式校验、重复订阅处理）。"
           ],
-          "lane": "next",
+          "lane": "done",
           "priority_suggested": "P1",
-          "status": "todo",
+          "status": "done",
           "dependencies": [
             "ST-20251113-act-007-01-entity-design"
           ],
@@ -1159,7 +1159,7 @@
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T22:42:58Z",
           "owner": "tbd",
           "tags": [
             "database",
