@@ -66,7 +66,7 @@ This note inventories every user-facing copy that currently exists in the Vite +
 | --- | --- | --- | --- |
 | `filters.sections.meeting.title` | Meeting time | 上课时间 | Section heading. |
 | `filters.sections.meeting.clear` | Clear | 清除 | Button that clears the entire meeting filter. |
-| `filters.sections.meeting.days.mon` – `...sun` | Mon / Tue / ... | 周一 / 周二 / ... | Labels for each weekday chip (reused via `common.days.short`). |
+| `common.days.short.mon` – `common.days.short.sun` | Mon / Tue / ... | 周一 / 周二 / ... | Shared weekday labels consumed by both the meeting-day chips and the schedule preview columns. |
 | `filters.sections.meeting.start` | Start time | 开始时间 | Label above the first `<input type="time">`. |
 | `filters.sections.meeting.end` | End time | 结束时间 | Label above the second `<input type="time">`. |
 
