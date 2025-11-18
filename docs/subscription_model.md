@@ -191,7 +191,7 @@ POST /api/subscribe
 **Error codes**
 - `400` `invalid_contact` &rarr; malformed email/Discord snowflake, unsupported locale, or missing fields.
 - `400` `rate_limited` &rarr; per-IP or per-contact throttle exceeded.
-- `404` `section_not_found` &rarr; `(term, campus, sectionIndex)` not present.
+- `404` `section_not_found` &rarr; the provided `term` or `campus` is unknown/disabled for this deployment. When the term/campus is valid but the specific `sectionIndex` is missing in the DB, the API still returns `200` with `sectionResolved: false`.
 - `409` `section_conflict` &rarr; the section exists in a different term/campus than the payload; the response includes the canonical term/campus to guide UI fixes.
 
 ### `POST /api/unsubscribe`
