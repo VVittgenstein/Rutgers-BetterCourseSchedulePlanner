@@ -10,6 +10,7 @@ import {
   sortDirectionSchema,
   stringOrArrayParam,
 } from './sharedSchemas.js';
+import { executeCourseSearch } from '../queries/course_search.js';
 
 const courseQuerySchema = paginationSchema(100, 20)
   .extend({
@@ -84,19 +85,20 @@ export async function registerCourseRoutes(app: FastifyInstance) {
     },
     async (request) => {
       const query = request.query as CoursesQuery;
+      const db = request.server.container.getDb();
+      const { data, total } = executeCourseSearch(db, query);
       const meta = {
         page: query.page,
         pageSize: query.pageSize,
-        total: 0,
-        hasNext: false,
+        total,
+        hasNext: query.page * query.pageSize < total,
         generatedAt: new Date().toISOString(),
         version: API_VERSION,
       };
 
-      // Persistence integration happens in ST-20251113-act-008-02-filter-engine.
       return {
         meta,
-        data: [],
+        data,
       };
     },
   );
