@@ -13,3 +13,6 @@
 
 ## 自测
 - `cd frontend && npm run build`（TS + Vite build）通过。
+
+## Code Review - ST-20251113-act-002-03-api-integration - 2025-11-18T14:50:43Z
+Codex Review: Didn't find any major issues. Breezy!

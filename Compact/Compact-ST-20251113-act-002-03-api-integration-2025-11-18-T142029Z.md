@@ -17,3 +17,27 @@
 
 ## 自测
 - `cd frontend && npm run build`（TS 编译 + 产线打包）通过。
+
+## Code Review - ST-20251113-act-002-03-api-integration - 2025-11-18T14:51:19Z
+
+frontend/src/App.tsx
+Comment on lines +50 to +54
+
+
+              state={filters}
+              dictionary={dictionaryState.dictionary}
+              onStateChange={setFilters}
+              onReset={setFilters}
+              loading={dictionaryState.status !== 'success'}
+
+
+@chatgpt-codex-connector
+chatgpt-codex-connector bot
+
+P2 Badge Fallback filters stuck in loading state after API error
+
+When the filters API fails, useFiltersDictionary still populates the fallback dictionary but sets status to 'error', yet App treats any non-success status as loading when rendering FilterPanel. This leaves the panel showing a loading badge and disables the reset button even though filter data is already available from the fallback, preventing users from clearing filters while on the offline dictionary path. Consider basing loading on the presence of dictionary or the usingFallback flag so the panel becomes usable once fallback data is loaded.
+
+## Code Review - ST-20251113-act-002-03-api-integration - 2025-11-18T14:51:47Z
+
+Codex Review: Didn't find any major issues. Breezy!
