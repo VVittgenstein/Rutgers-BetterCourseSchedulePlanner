@@ -144,45 +144,45 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
     filters.push(`c.credits_max IS NOT NULL AND c.credits_max <= ${binder.bind(query.creditsMax)}`);
   }
 
-  const deliveries = normalizeDeliveryList(query.delivery);
-  if (deliveries.length) {
-    filters.push(`
-      EXISTS (
-        SELECT 1
-        FROM sections s_delivery
-        WHERE s_delivery.course_id = c.course_id
-          AND ${buildInClause('s_delivery.delivery_method', deliveries, binder)}
-      )
-    `);
-  }
-
   if (typeof query.hasOpenSection === 'boolean') {
     filters.push(`c.has_open_sections = ${binder.bind(query.hasOpenSection ? 1 : 0)}`);
   }
 
+  const deliveries = normalizeDeliveryList(query.delivery);
   const meetingMask = buildMeetingMask(query.meetingDays);
   const meetingStart = typeof query.meetingStart === 'number' ? query.meetingStart : undefined;
   const meetingEnd = typeof query.meetingEnd === 'number' ? query.meetingEnd : undefined;
 
-  if (meetingMask !== undefined || meetingStart !== undefined || meetingEnd !== undefined) {
-    const meetingClauses: string[] = [];
-    if (meetingMask !== undefined) {
-      meetingClauses.push(`sm.week_mask IS NOT NULL AND (sm.week_mask & ${binder.bind(meetingMask)}) != 0`);
+  const meetingClauses: string[] = [];
+  if (meetingMask !== undefined) {
+    meetingClauses.push(`sm.week_mask IS NOT NULL AND (sm.week_mask & ${binder.bind(meetingMask)}) != 0`);
+  }
+  if (meetingStart !== undefined) {
+    meetingClauses.push(`sm.start_minutes IS NOT NULL AND sm.start_minutes >= ${binder.bind(meetingStart)}`);
+  }
+  if (meetingEnd !== undefined) {
+    meetingClauses.push(`sm.end_minutes IS NOT NULL AND sm.end_minutes <= ${binder.bind(meetingEnd)}`);
+  }
+
+  if (deliveries.length || meetingClauses.length) {
+    const conditions: string[] = [];
+    if (deliveries.length) {
+      conditions.push(`${buildInClause('s_filter.delivery_method', deliveries, binder)}`);
     }
-    if (meetingStart !== undefined) {
-      meetingClauses.push(`sm.start_minutes IS NOT NULL AND sm.start_minutes >= ${binder.bind(meetingStart)}`);
-    }
-    if (meetingEnd !== undefined) {
-      meetingClauses.push(`sm.end_minutes IS NOT NULL AND sm.end_minutes <= ${binder.bind(meetingEnd)}`);
+    if (meetingClauses.length) {
+      conditions.push(...meetingClauses);
     }
 
-    const meetingFilter = meetingClauses.length ? ` AND ${meetingClauses.join(' AND ')}` : '';
+    const joinMeetings = meetingClauses.length
+      ? 'JOIN section_meetings sm ON sm.section_id = s_filter.section_id'
+      : '';
+    const conditionSql = conditions.length ? ` AND ${conditions.join(' AND ')}` : '';
     filters.push(`
       EXISTS (
         SELECT 1
-        FROM sections s_meeting
-        JOIN section_meetings sm ON sm.section_id = s_meeting.section_id
-        WHERE s_meeting.course_id = c.course_id${meetingFilter}
+        FROM sections s_filter
+        ${joinMeetings}
+        WHERE s_filter.course_id = c.course_id${conditionSql}
       )
     `);
   }
