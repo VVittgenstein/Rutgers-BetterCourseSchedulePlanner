@@ -84,7 +84,8 @@
           ],
           "artifacts": [
             "scripts/soc_probe.ts",
-            "docs/soc_api_notes.md"
+            "docs/soc_api_notes.md",
+            "Compact/Compact-ST-20251113-soc-api-validation-01-probe-2025-11-16-T133825Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
@@ -124,7 +125,9 @@
           "artifacts": [
             "docs/soc_api_notes.md",
             "docs/soc_field_matrix.csv",
-            "scripts/soc_field_matrix.py"
+            "scripts/soc_field_matrix.py",
+            "Compact/Compact-ST-20251113-soc-api-validation-02-field-matrix-2025-11-17-T011405Z.md",
+            "Compact/Compact-ST-20251113-soc-api-validation-02-field-matrix-2025-11-17-T013508Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
@@ -170,7 +173,8 @@
             "docs/soc_rate_limit.latest.json",
             "docs/soc_rate_limit.courses_stress.json",
             "docs/soc_rate_limit.courses_stress2.json",
-            "docs/soc_rate_limit.openSections_blitz.json"
+            "docs/soc_rate_limit.openSections_blitz.json",
+            "Compact/Compact-ST-20251113-soc-api-validation-03-limit-profile-2025-11-17-T015611Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
@@ -259,7 +263,10 @@
             "docs"
           ],
           "artifacts": [
-            "docs/local_data_model.md"
+            "docs/local_data_model.md",
+            "Compact/Compact-ST-20251113-act-007-01-entity-design-2025-11-17-T040925Z.md",
+            "Compact/Compact-ST-20251113-act-007-01-entity-design-2025-11-17-T044754Z.md",
+            "Compact/Compact-ST-20251113-act-007-01-entity-design-2025-11-17-T050547Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
@@ -301,7 +308,11 @@
             "data/schema.sql",
             "data/migrations/001_init_schema.sql",
             "data/migrations/002_relax_section_index_scope.sql",
-            "README.md"
+            "README.md",
+            "Compact/Compact-ST-20251113-act-007-02-migration-tooling-2025-11-17-T053943Z.md",
+            "Compact/Compact-ST-20251113-act-007-02-migration-tooling-2025-11-17-T055927Z.md",
+            "Compact/Compact-ST-20251113-act-007-02-migration-tooling-2025-11-17-T062555Z.md",
+            "Compact/Compact-ST-20251113-act-007-02-migration-tooling-2025-11-17-T063625Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
@@ -441,11 +452,13 @@
           ],
           "artifacts": [
             "docs/fetch_pipeline.md",
-            "configs/fetch_pipeline.example.json"
+            "configs/fetch_pipeline.example.json",
+            "Compact/Compact-ST-20251113-act-001-01-pipeline-config-2025-11-17-T084726Z.md",
+            "Compact/Compact-ST-20251113-act-001-01-pipeline-config-2025-11-17-T091916Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-17T00:00:00Z",
+          "updated_at": "2025-11-17T09:19:16Z",
           "owner": "tbd",
           "tags": [
             "data-pipeline",
@@ -483,7 +496,8 @@
           "artifacts": [
             "scripts/fetch_soc_data.ts",
             "scripts/soc_normalizer.ts",
-            "logs/fetch_runs/*.log"
+            "logs/fetch_runs/*.log",
+            "Compact/Compact-ST-20251113-act-001-02-ingest-impl-2025-11-17-T101012Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
@@ -522,7 +536,8 @@
           ],
           "artifacts": [
             "docs/data_load_runbook.md",
-            "reports/field_validation.md"
+            "reports/field_validation.md",
+            "Compact/Compact-ST-20251113-act-001-03-data-verification-2025-11-17-T104201Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
@@ -664,6 +679,7 @@
           "artifacts": [
             "api/src/queries/course_search.ts",
             "api/tests/course_search.test.ts",
+            "Compact/Compact-ST-20251113-act-008-02-filter-engine-2025-11-18-T035146Z.md",
             "Compact/Compact-ST-20251113-act-008-02-filter-engine-2025-11-18-T040307Z.md"
           ],
           "citations": [],
@@ -848,7 +864,9 @@
             "frontend/src/components/SchedulePreview.tsx",
             "frontend/src/components/SchedulePreview.css",
             "frontend/src/dev/ComponentPlayground.tsx",
-            "frontend/src/dev/mockData.ts"
+            "frontend/src/dev/mockData.ts",
+            "Compact/Compact-ST-20251113-act-002-02-filter-components-2025-11-18-T130603Z.md",
+            "Compact/Compact-ST-20251113-act-002-02-filter-components-2025-11-18-T131627Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
@@ -1065,7 +1083,8 @@
           ],
           "artifacts": [
             "frontend/src/components/LanguageSwitcher.tsx",
-            "scripts/i18n_missing_check.ts"
+            "scripts/i18n_missing_check.ts",
+            "Compact/Compact-ST-20251113-act-005-03-language-toggle-2025-11-18-T192254Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
@@ -1155,7 +1174,8 @@
             "docs"
           ],
           "artifacts": [
-            "docs/subscription_model.md"
+            "docs/subscription_model.md",
+            "Compact/Compact-ST-20251113-act-009-01-subscription-model-2025-11-18-T214047Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
