@@ -18,3 +18,6 @@
 ## Testing
 - `npm run build`
 - `npm run i18n:check`
+
+## Code Review - ST-20251113-act-005-03-language-toggle - 2025-11-18T20:47:47Z
+Codex Review: Didn't find any major issues. Keep them coming!
