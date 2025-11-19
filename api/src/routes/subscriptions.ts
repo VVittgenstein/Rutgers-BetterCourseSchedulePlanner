@@ -89,8 +89,8 @@ const unsubscribePayloadSchema = z
     contactValue: z.string().trim().min(3).max(256).optional(),
     reason: z.string().trim().min(3).max(64).optional(),
   })
-  .refine((value) => Boolean(value.subscriptionId || value.unsubscribeToken), {
-    message: 'subscriptionId or unsubscribeToken is required',
+  .refine((value) => Boolean(value.unsubscribeToken || (value.subscriptionId && value.contactValue)), {
+    message: 'Provide unsubscribeToken or subscriptionId with matching contactValue',
     path: ['subscriptionId'],
   });
 
@@ -178,7 +178,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
       const traceId = String(request.id);
       reply.header('x-trace-id', traceId);
 
-      const clientIp = resolveClientIp(body.clientContext?.ip, request.ip, request.headers['x-forwarded-for']);
+      const clientIp = resolveClientIp(request.ip, request.headers['x-forwarded-for']);
       if (!allowIpAttempt(clientIp)) {
         return sendError(reply, 400, 'rate_limited', 'Too many subscribe attempts from this IP', traceId);
       }
@@ -387,15 +387,15 @@ function sha1(value: string) {
   return crypto.createHash('sha1').update(value.toLowerCase()).digest('hex');
 }
 
-function resolveClientIp(bodyIp: string | undefined, requestIp: string, forwarded?: string | string[]) {
-  if (bodyIp) {
-    return bodyIp;
-  }
-  if (typeof forwarded === 'string') {
+function resolveClientIp(requestIp: string, forwarded?: string | string[]) {
+  if (typeof forwarded === 'string' && forwarded.length) {
     const [first] = forwarded.split(',').map((token) => token.trim());
     if (first) {
       return first;
     }
+  }
+  if (Array.isArray(forwarded) && forwarded.length) {
+    return forwarded[0] ?? requestIp;
   }
   return requestIp;
 }
@@ -440,7 +440,7 @@ function buildClientContext(
   resolvedIp: string | undefined,
   userAgentHeader?: string,
 ) {
-  const ip = clientContext?.ip ?? resolvedIp;
+  const ip = resolvedIp ?? clientContext?.ip;
   const userAgent = clientContext?.userAgent ?? (typeof userAgentHeader === 'string' ? userAgentHeader : undefined);
   if (!ip && !userAgent) {
     return undefined;

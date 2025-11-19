@@ -236,6 +236,7 @@ test('unsubscribe transitions status and redacts contact value', async (t) => {
     url: '/api/unsubscribe',
     payload: {
       subscriptionId,
+      contactValue: 'unsubscribe@example.edu',
       reason: 'user_request',
     },
   });
@@ -257,6 +258,42 @@ test('unsubscribe transitions status and redacts contact value', async (t) => {
   assert.equal(event.event_type, 'unsubscribed');
   assert.ok(event.payload.includes('user_request'));
   db.close();
+});
+
+test('unsubscribe rejects id-only payloads without token or contact proof', async (t) => {
+  const fixture = createSubscriptionFixture();
+  const restoreEnv = overrideEnv('SQLITE_FILE', fixture.file);
+  const server = await createServer();
+  t.after(async () => {
+    await server.close();
+    restoreEnv();
+    fixture.cleanup();
+  });
+
+  const subscribe = await server.inject({
+    method: 'POST',
+    url: '/api/subscribe',
+    payload: {
+      term: '20251',
+      campus: 'NB',
+      sectionIndex: '12345',
+      contactType: 'email',
+      contactValue: 'tokenless@example.edu',
+    },
+  });
+  const { subscriptionId } = subscribe.json();
+
+  const response = await server.inject({
+    method: 'POST',
+    url: '/api/unsubscribe',
+    payload: {
+      subscriptionId,
+    },
+  });
+
+  assert.equal(response.statusCode, 400);
+  const body = response.json();
+  assert.equal(body.error.code, 'VALIDATION_FAILED');
 });
 
 test('invalid email contact is rejected with validation error', async (t) => {
