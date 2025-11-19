@@ -296,6 +296,51 @@ test('unsubscribe rejects id-only payloads without token or contact proof', asyn
   assert.equal(body.error.code, 'VALIDATION_FAILED');
 });
 
+test('unsubscribe prioritizes valid tokens over subscription ids', async (t) => {
+  const fixture = createSubscriptionFixture();
+  const restoreEnv = overrideEnv('SQLITE_FILE', fixture.file);
+  const server = await createServer();
+  t.after(async () => {
+    await server.close();
+    restoreEnv();
+    fixture.cleanup();
+  });
+
+  const subscribe = await server.inject({
+    method: 'POST',
+    url: '/api/subscribe',
+    payload: {
+      term: '20251',
+      campus: 'NB',
+      sectionIndex: '12345',
+      contactType: 'email',
+      contactValue: 'tokenflow@example.edu',
+    },
+  });
+  const { subscriptionId, unsubscribeToken } = subscribe.json();
+
+  const wrongToken = await server.inject({
+    method: 'POST',
+    url: '/api/unsubscribe',
+    payload: {
+      subscriptionId,
+      unsubscribeToken: 'ffffffffffffffffffffffffffffffff',
+    },
+  });
+  assert.equal(wrongToken.statusCode, 404);
+
+  const validToken = await server.inject({
+    method: 'POST',
+    url: '/api/unsubscribe',
+    payload: {
+      unsubscribeToken,
+    },
+  });
+  assert.equal(validToken.statusCode, 200);
+  const body = validToken.json();
+  assert.equal(body.status, 'unsubscribed');
+});
+
 test('invalid email contact is rejected with validation error', async (t) => {
   const fixture = createSubscriptionFixture();
   const restoreEnv = overrideEnv('SQLITE_FILE', fixture.file);
