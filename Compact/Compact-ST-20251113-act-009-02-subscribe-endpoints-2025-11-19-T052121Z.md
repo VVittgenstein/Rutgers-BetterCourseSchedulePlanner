@@ -31,3 +31,9 @@ P1 Badge Unsubscribe contact proof bypassed by dummy token
 
 The new refine rule treats any non-empty unsubscribeToken as sufficient, so a payload that includes subscriptionId and a random 16+ char token but omits contactValue still passes validation. The handler then calls findSubscriptionForUnsubscribe which prioritizes subscriptionId over the token (lines 672‑683), meaning the token is ignored and the contact hash check is skipped. An attacker who knows or guesses an ID can still cancel another user’s subscription without the secret token or matching contact by simply adding a placeholder token to the request.
 ---review-end---
+
+## Code Review - ST-20251113-act-009-02-subscribe-endpoints - 2025-11-19T052604Z
+
+---review-start---
+Codex Review: Didn't find any major issues. 🎉
+---review-end---
