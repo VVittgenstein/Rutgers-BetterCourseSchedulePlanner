@@ -670,18 +670,6 @@ function readPreferences(metadata: string | null): Preferences {
 }
 
 function findSubscriptionForUnsubscribe(db: any, body: UnsubscribePayload) {
-  if (body.subscriptionId) {
-    return db
-      .prepare(
-        `
-          SELECT *
-          FROM subscriptions
-          WHERE subscription_id = ?
-        `,
-      )
-      .get(body.subscriptionId) as SubscriptionRow | undefined;
-  }
-
   if (body.unsubscribeToken) {
     return db
       .prepare(
@@ -692,6 +680,18 @@ function findSubscriptionForUnsubscribe(db: any, body: UnsubscribePayload) {
         `,
       )
       .get(body.unsubscribeToken) as SubscriptionRow | undefined;
+  }
+
+  if (body.subscriptionId) {
+    return db
+      .prepare(
+        `
+          SELECT *
+          FROM subscriptions
+          WHERE subscription_id = ?
+        `,
+      )
+      .get(body.subscriptionId) as SubscriptionRow | undefined;
   }
 
   return undefined;
