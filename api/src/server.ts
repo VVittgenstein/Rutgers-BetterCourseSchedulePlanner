@@ -10,6 +10,7 @@ import { registerHealthRoutes } from './routes/health.js';
 import { registerCourseRoutes } from './routes/courses.js';
 import { registerSectionRoutes } from './routes/sections.js';
 import { registerFilterRoutes } from './routes/filters.js';
+import { registerSubscriptionRoutes } from './routes/subscriptions.js';
 
 export async function createServer() {
   const config = loadConfig();
@@ -82,6 +83,7 @@ export async function createServer() {
     await registerCourseRoutes(router);
     await registerSectionRoutes(router);
     await registerFilterRoutes(router);
+    await registerSubscriptionRoutes(router);
   }, { prefix: '/api' });
 
   return app;
