@@ -392,14 +392,23 @@ function buildInClause(column: string, values: string[], binder: SqlBinder) {
 }
 
 function normalizeStringList(
-  values: string[] | undefined,
+  values: string[] | string | undefined,
   transform: (value: string) => string | undefined,
 ): string[] {
-  if (!values || !values.length) {
+  if (!values) {
+    return [];
+  }
+  const asArray = Array.isArray(values)
+    ? values
+    : values
+        .split(',')
+        .map((token) => token.trim())
+        .filter(Boolean);
+  if (!asArray.length) {
     return [];
   }
   const dedup = new Set<string>();
-  for (const raw of values) {
+  for (const raw of asArray) {
     const transformed = transform(raw.trim());
     if (!transformed) {
       continue;
