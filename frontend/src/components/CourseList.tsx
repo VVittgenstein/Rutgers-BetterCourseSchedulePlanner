@@ -8,7 +8,8 @@ import type { ApiError } from '../api/client';
 import { SubscribeButton } from './SubscribeButton';
 import './CourseList.css';
 
-const ROW_HEIGHT = 230;
+// Increased to match the taller course card after adding the subscribe panel.
+const ROW_HEIGHT = 420;
 const VIRTUAL_THRESHOLD = 16;
 const MIN_ROWS = 4;
 const MAX_ROWS = 6;
