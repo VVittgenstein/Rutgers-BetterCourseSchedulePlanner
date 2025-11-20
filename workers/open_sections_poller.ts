@@ -745,7 +745,7 @@ function applySnapshot(
 
   return {
     opened: toOpen.length,
-    closed: skipClosures ? 0 : toClose.length,
+    closed: toClose.length,
     events,
     notifications,
   };
