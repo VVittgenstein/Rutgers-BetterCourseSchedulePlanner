@@ -122,6 +122,10 @@
   gap: 0.35rem;
 }
 
+.filter-panel__pill-group--wrap {
+  flex-wrap: wrap;
+}
+
 .filter-panel__pill {
   border: 1px solid rgba(99, 102, 241, 0.35);
   border-radius: 999px;
@@ -148,6 +152,15 @@
   display: flex;
   align-items: center;
   gap: 0.35rem;
+}
+
+.filter-panel__checkboxes--wrap {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.filter-panel__checkboxes--wrap label {
+  min-width: 46%;
 }
 
 .filter-panel__hint {

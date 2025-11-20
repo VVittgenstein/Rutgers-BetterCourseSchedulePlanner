@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 
 import type { CoursesQuery } from '../routes/courses.js';
 
-type CourseInclude = 'sectionsSummary' | 'subjects';
+type CourseInclude = 'sectionsSummary' | 'subjects' | 'sections';
 
 export interface CourseSearchSubject {
   code: string;
@@ -15,6 +15,29 @@ export interface CourseSectionsSummary {
   total: number;
   open: number;
   deliveryMethods: string[];
+}
+
+export interface CourseSectionMeeting {
+  day: string | null;
+  startMinutes: number | null;
+  endMinutes: number | null;
+  campus?: string | null;
+  building?: string | null;
+  room?: string | null;
+}
+
+export interface CourseSectionRow {
+  sectionId: number;
+  indexNumber: string;
+  sectionNumber: string | null;
+  openStatus: string | null;
+  isOpen: boolean;
+  deliveryMethod: string | null;
+  campusCode: string | null;
+  meetingCampus?: string | null;
+  instructorsText?: string | null;
+  meetingModeSummary?: string | null;
+  meetings: CourseSectionMeeting[];
 }
 
 export interface CourseSearchRow {
@@ -37,6 +60,7 @@ export interface CourseSearchRow {
   prerequisites: string | null;
   subject?: CourseSearchSubject;
   sectionsSummary?: CourseSectionsSummary;
+  sections?: CourseSectionRow[];
 }
 
 export interface CourseSearchResult {
@@ -45,7 +69,9 @@ export interface CourseSearchResult {
 }
 
 const VALID_DELIVERY = new Set(['in_person', 'online', 'hybrid']);
-const VALID_INCLUDES: CourseInclude[] = ['sectionsSummary', 'subjects'];
+const VALID_SECTION_STATUS = new Set(['OPEN', 'CLOSED', 'WAITLIST']);
+const VALID_INCLUDES: CourseInclude[] = ['sectionsSummary', 'subjects', 'sections'];
+const SECTION_PREVIEW_LIMIT = 12;
 
 const DAY_BITMASK: Record<string, number> = {
   M: 1,
@@ -110,6 +136,10 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
     filters.push(`c.course_number = ${binder.bind(query.courseNumber.trim())}`);
   }
 
+  const indexes = normalizeIndexList(query.index);
+  const sectionNumbers = normalizeSectionNumberList(query.sectionNumber);
+  const sectionStatuses = normalizeSectionStatus(query.sectionStatus);
+
   const ftsQuery = buildFtsQuery(query.q);
   if (ftsQuery) {
     filters.push(`
@@ -144,6 +174,14 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
     filters.push(`c.credits_max IS NOT NULL AND c.credits_max <= ${binder.bind(query.creditsMax)}`);
   }
 
+  if (typeof query.hasPrerequisite === 'boolean') {
+    if (query.hasPrerequisite) {
+      filters.push(`c.prereq_plain IS NOT NULL AND c.prereq_plain <> ''`);
+    } else {
+      filters.push(`(c.prereq_plain IS NULL OR c.prereq_plain = '')`);
+    }
+  }
+
   if (typeof query.hasOpenSection === 'boolean') {
     filters.push(`c.has_open_sections = ${binder.bind(query.hasOpenSection ? 1 : 0)}`);
   }
@@ -152,6 +190,9 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
   const meetingMask = buildMeetingMask(query.meetingDays);
   const meetingStart = typeof query.meetingStart === 'number' ? query.meetingStart : undefined;
   const meetingEnd = typeof query.meetingEnd === 'number' ? query.meetingEnd : undefined;
+  const meetingCampuses = normalizeStringList(query.meetingCampus, (value) => value.toUpperCase());
+  const buildings = normalizeStringList(query.building, (value) => value.toUpperCase());
+  const rooms = normalizeStringList(query.room, (value) => value.toUpperCase());
 
   const meetingClauses: string[] = [];
   if (meetingMask !== undefined) {
@@ -164,19 +205,61 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
     meetingClauses.push(`sm.end_minutes IS NOT NULL AND sm.end_minutes <= ${binder.bind(meetingEnd)}`);
   }
 
-  if (deliveries.length || meetingClauses.length) {
-    const conditions: string[] = [];
-    if (deliveries.length) {
-      conditions.push(`${buildInClause('s_filter.delivery_method', deliveries, binder)}`);
-    }
-    if (meetingClauses.length) {
-      conditions.push(...meetingClauses);
-    }
+  const meetingLocationClauses: string[] = [];
+  if (meetingCampuses.length) {
+    meetingLocationClauses.push(
+      buildInClause('upper(COALESCE(sm.campus_abbrev, sm.campus_location_code))', meetingCampuses, binder),
+    );
+  }
+  if (buildings.length) {
+    meetingLocationClauses.push(buildInClause('upper(sm.building_code)', buildings, binder));
+  }
+  if (rooms.length) {
+    meetingLocationClauses.push(buildInClause('upper(sm.room_number)', rooms, binder));
+  }
 
-    const joinMeetings = meetingClauses.length
-      ? 'JOIN section_meetings sm ON sm.section_id = s_filter.section_id'
-      : '';
-    const conditionSql = conditions.length ? ` AND ${conditions.join(' AND ')}` : '';
+  const sectionConditions: string[] = [];
+  if (deliveries.length) {
+    sectionConditions.push(buildInClause('s_filter.delivery_method', deliveries, binder));
+  }
+  if (indexes.length) {
+    sectionConditions.push(buildInClause('s_filter.index_number', indexes, binder));
+  }
+  if (sectionNumbers.length) {
+    sectionConditions.push(buildInClause('s_filter.section_number', sectionNumbers, binder));
+  }
+  if (sectionStatuses.length) {
+    sectionConditions.push(buildInClause('upper(s_filter.open_status)', sectionStatuses, binder));
+  }
+  if (query.instructor?.trim()) {
+    const instructorNeedle = query.instructor.trim().toLowerCase();
+    sectionConditions.push(
+      `s_filter.instructors_text IS NOT NULL AND s_filter.instructors_text <> '' AND instr(lower(s_filter.instructors_text), ${binder.bind(instructorNeedle)}) > 0`,
+    );
+  }
+  if (typeof query.requiresPermission === 'boolean') {
+    if (query.requiresPermission) {
+      sectionConditions.push(`
+        (
+          (s_filter.special_permission_add_code IS NOT NULL AND s_filter.special_permission_add_code <> '') OR
+          (s_filter.special_permission_drop_code IS NOT NULL AND s_filter.special_permission_drop_code <> '')
+        )
+      `);
+    } else {
+      sectionConditions.push(`
+        (
+          (s_filter.special_permission_add_code IS NULL OR s_filter.special_permission_add_code = '') AND
+          (s_filter.special_permission_drop_code IS NULL OR s_filter.special_permission_drop_code = '')
+        )
+      `);
+    }
+  }
+
+  const needsMeetingJoin = meetingClauses.length > 0 || meetingLocationClauses.length > 0;
+  if (sectionConditions.length || meetingClauses.length || meetingLocationClauses.length) {
+    const joined = [...sectionConditions, ...meetingClauses, ...meetingLocationClauses];
+    const joinMeetings = needsMeetingJoin ? 'LEFT JOIN section_meetings sm ON sm.section_id = s_filter.section_id' : '';
+    const conditionSql = joined.length ? ` AND ${joined.join(' AND ')}` : '';
     filters.push(`
       EXISTS (
         SELECT 1
@@ -185,48 +268,6 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
         WHERE s_filter.course_id = c.course_id${conditionSql}
       )
     `);
-  }
-
-  if (query.instructor?.trim()) {
-    const instructorNeedle = query.instructor.trim().toLowerCase();
-    filters.push(`
-      EXISTS (
-        SELECT 1
-        FROM sections s_instructor
-        WHERE s_instructor.course_id = c.course_id
-          AND s_instructor.instructors_text IS NOT NULL
-          AND s_instructor.instructors_text <> ''
-          AND instr(lower(s_instructor.instructors_text), ${binder.bind(instructorNeedle)}) > 0
-      )
-    `);
-  }
-
-  if (typeof query.requiresPermission === 'boolean') {
-    if (query.requiresPermission) {
-      filters.push(`
-        EXISTS (
-          SELECT 1
-          FROM sections s_perm
-          WHERE s_perm.course_id = c.course_id
-            AND (
-              (s_perm.special_permission_add_code IS NOT NULL AND s_perm.special_permission_add_code <> '') OR
-              (s_perm.special_permission_drop_code IS NOT NULL AND s_perm.special_permission_drop_code <> '')
-            )
-        )
-      `);
-    } else {
-      filters.push(`
-        EXISTS (
-          SELECT 1
-          FROM sections s_perm
-          WHERE s_perm.course_id = c.course_id
-            AND (
-              (s_perm.special_permission_add_code IS NULL OR s_perm.special_permission_add_code = '') AND
-              (s_perm.special_permission_drop_code IS NULL OR s_perm.special_permission_drop_code = '')
-            )
-        )
-      `);
-    }
   }
 
   const whereClause = filters.join(' AND ');
@@ -332,6 +373,11 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
     attachSectionsSummary(db, mappedRows);
   }
 
+  if (includeSet.has('sections')) {
+    const previewLimit = typeof query.sectionsLimit === 'number' ? query.sectionsLimit : SECTION_PREVIEW_LIMIT;
+    attachSectionsPreview(db, mappedRows, previewLimit);
+  }
+
   return { data: mappedRows, total };
 }
 
@@ -380,6 +426,27 @@ function normalizeDeliveryList(values: string[] | undefined) {
   return normalizeStringList(values, (value) => {
     const normalized = value.toLowerCase();
     return VALID_DELIVERY.has(normalized) ? normalized : undefined;
+  });
+}
+
+function normalizeIndexList(values: string[] | undefined) {
+  return normalizeStringList(values, (value) => {
+    const cleaned = value.replace(/\s+/g, '');
+    return cleaned ? cleaned.toUpperCase() : undefined;
+  });
+}
+
+function normalizeSectionNumberList(values: string[] | undefined) {
+  return normalizeStringList(values, (value) => {
+    const cleaned = value.replace(/\s+/g, '');
+    return cleaned ? cleaned.toUpperCase() : undefined;
+  });
+}
+
+function normalizeSectionStatus(values: string[] | undefined) {
+  return normalizeStringList(values, (value) => {
+    const normalized = value.toUpperCase();
+    return VALID_SECTION_STATUS.has(normalized) ? normalized : undefined;
   });
 }
 
@@ -499,5 +566,127 @@ function attachSectionsSummary(db: Database.Database, rows: CourseSearchRow[]) {
       open: summary?.openSections ?? 0,
       deliveryMethods: delivery,
     };
+  }
+}
+
+function attachSectionsPreview(db: Database.Database, rows: CourseSearchRow[], limitPerCourse: number) {
+  if (!rows.length) {
+    return;
+  }
+
+  const safeLimit = Math.max(1, Math.min(limitPerCourse || SECTION_PREVIEW_LIMIT, 50));
+  const courseIds = rows.map((row) => row.courseId);
+  const placeholders = courseIds.map((_, index) => `@course${index}`);
+  const params = Object.fromEntries(courseIds.map((id, index) => [`course${index}`, id]));
+
+  const rawSections = db
+    .prepare(`
+      SELECT
+        s.section_id AS sectionId,
+        s.course_id AS courseId,
+        s.index_number AS indexNumber,
+        s.section_number AS sectionNumber,
+        s.open_status AS openStatus,
+        s.is_open AS isOpen,
+        s.delivery_method AS deliveryMethod,
+        s.campus_code AS campusCode,
+        s.instructors_text AS instructorsText,
+        s.meeting_mode_summary AS meetingModeSummary
+      FROM sections s
+      WHERE s.course_id IN (${placeholders.join(', ')})
+      ORDER BY s.course_id ASC, s.is_open DESC, s.index_number ASC
+    `)
+    .all(params) as Array<{
+      sectionId: number;
+      courseId: number;
+      indexNumber: string;
+      sectionNumber: string | null;
+      openStatus: string | null;
+      isOpen: number | null;
+      deliveryMethod: string | null;
+      campusCode: string | null;
+      instructorsText: string | null;
+      meetingModeSummary: string | null;
+    }>;
+
+  const sectionsByCourse = new Map<number, CourseSectionRow[]>();
+  for (const section of rawSections) {
+    const list = sectionsByCourse.get(section.courseId) ?? [];
+    if (list.length >= safeLimit) {
+      sectionsByCourse.set(section.courseId, list);
+      continue;
+    }
+    list.push({
+      sectionId: section.sectionId,
+      indexNumber: section.indexNumber,
+      sectionNumber: section.sectionNumber,
+      openStatus: section.openStatus,
+      isOpen: section.isOpen === 1,
+      deliveryMethod: section.deliveryMethod,
+      campusCode: section.campusCode,
+      instructorsText: section.instructorsText ?? undefined,
+      meetingModeSummary: section.meetingModeSummary ?? undefined,
+      meetings: [],
+    });
+    sectionsByCourse.set(section.courseId, list);
+  }
+
+  const selectedSectionIds = Array.from(sectionsByCourse.values()).flatMap((list) => list.map((item) => item.sectionId));
+  if (selectedSectionIds.length) {
+    const meetingPlaceholders = selectedSectionIds.map((_, index) => `@section${index}`);
+    const meetingParams = Object.fromEntries(selectedSectionIds.map((id, index) => [`section${index}`, id]));
+    const meetingRows = db
+      .prepare(`
+        SELECT
+          sm.section_id AS sectionId,
+          sm.meeting_day AS meetingDay,
+          sm.start_minutes AS startMinutes,
+          sm.end_minutes AS endMinutes,
+          sm.campus_abbrev AS meetingCampus,
+          sm.campus_location_code AS meetingCampusCode,
+          sm.campus_location_desc AS meetingCampusDesc,
+          sm.building_code AS buildingCode,
+          sm.room_number AS roomNumber
+        FROM section_meetings sm
+        WHERE sm.section_id IN (${meetingPlaceholders.join(', ')})
+      `)
+      .all(meetingParams) as Array<{
+      sectionId: number;
+      meetingDay: string | null;
+      startMinutes: number | null;
+      endMinutes: number | null;
+      meetingCampus: string | null;
+      meetingCampusCode: string | null;
+      meetingCampusDesc: string | null;
+      buildingCode: string | null;
+      roomNumber: string | null;
+    }>;
+
+    const meetingMap = new Map<number, CourseSectionMeeting[]>();
+    for (const meeting of meetingRows) {
+      const list = meetingMap.get(meeting.sectionId) ?? [];
+      list.push({
+        day: meeting.meetingDay,
+        startMinutes: meeting.startMinutes,
+        endMinutes: meeting.endMinutes,
+        campus: meeting.meetingCampus ?? meeting.meetingCampusCode ?? meeting.meetingCampusDesc,
+        building: meeting.buildingCode,
+        room: meeting.roomNumber,
+      });
+      meetingMap.set(meeting.sectionId, list);
+    }
+
+    for (const [, sectionList] of sectionsByCourse) {
+      sectionList.forEach((section) => {
+        section.meetings = meetingMap.get(section.sectionId) ?? [];
+        if (!section.meetingCampus && section.meetings.length) {
+          section.meetingCampus = section.meetings.find((meeting) => meeting.campus)?.campus ?? null;
+        }
+      });
+    }
+  }
+
+  for (const row of rows) {
+    row.sections = sectionsByCourse.get(row.courseId) ?? [];
   }
 }

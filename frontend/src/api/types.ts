@@ -28,6 +28,7 @@ export interface CourseSearchRow {
   sectionsOpen: number;
   updatedAt: string | null;
   prerequisites: string | null;
+  sections?: CourseSectionRow[];
   subject?: {
     code: string;
     description: string | null;
@@ -39,6 +40,29 @@ export interface CourseSearchRow {
     open: number;
     deliveryMethods: string[];
   };
+}
+
+export interface CourseSectionMeeting {
+  meetingDay: string | null;
+  startMinutes: number | null;
+  endMinutes: number | null;
+  campus?: string | null;
+  building?: string | null;
+  room?: string | null;
+}
+
+export interface CourseSectionRow {
+  sectionId: number;
+  indexNumber: string;
+  sectionNumber: string | null;
+  openStatus: string | null;
+  isOpen: boolean;
+  deliveryMethod: string | null;
+  campusCode: string | null;
+  meetingCampus?: string | null;
+  instructorsText?: string | null;
+  meetingModeSummary?: string | null;
+  meetings: CourseSectionMeeting[];
 }
 
 export interface FiltersResponse {
@@ -72,4 +96,5 @@ export interface FiltersPayload {
   }>;
   levels: string[];
   deliveryMethods: string[];
+  instructors?: Array<{ id: string; name: string }>;
 }

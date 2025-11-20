@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { CourseFilterState } from '../state/courseFilters';
+import type { CourseFilterState, MeetingDay } from '../state/courseFilters';
 import { buildCourseQueryParams } from '../state/courseFilters';
 import { apiGet, type ApiError, type ApiQueryParamValue } from '../api/client';
-import type { CourseSearchResponse, CourseSearchRow } from '../api/types';
+import type { CourseSearchResponse, CourseSearchRow, CourseSectionRow } from '../api/types';
 
 export interface CourseResultItem {
   id: number;
@@ -30,6 +30,8 @@ export interface CourseResultItem {
   prerequisites?: string | null;
   subjectDescription?: string | null;
   schoolDescription?: string | null;
+  coreCodes: string[];
+  sectionPreviews: CourseSectionPreview[];
 }
 
 export interface CourseQueryMeta {
@@ -56,6 +58,26 @@ export interface UseCourseQueryOptions {
   enabled?: boolean;
   staleTimeMs?: number;
   debounceMs?: number;
+}
+
+export interface CourseSectionPreview {
+  id: number;
+  index: string;
+  sectionNumber: string | null;
+  openStatus: string | null;
+  isOpen: boolean;
+  deliveryMethod: string | null;
+  campusCode: string | null;
+  meetingCampus: string | null;
+  instructors: string[];
+  meetings: Array<{
+    day: MeetingDay;
+    startMinutes: number;
+    endMinutes: number;
+    campus?: string | null;
+    building?: string | null;
+    room?: string | null;
+  }>;
 }
 
 interface CacheEntry {
@@ -245,6 +267,8 @@ export function useCourseQuery(state: CourseFilterState, options?: UseCourseQuer
 }
 
 function transformCourseRow(row: CourseSearchRow): CourseResultItem {
+  const coreCodes = extractCoreCodes(row.coreAttributes);
+  const sectionPreviews = row.sections ? transformSections(row.sections) : [];
   return {
     id: row.courseId,
     code: row.courseString ?? `${row.subjectCode}:${row.courseNumber}`,
@@ -270,6 +294,8 @@ function transformCourseRow(row: CourseSearchRow): CourseResultItem {
     prerequisites: row.prerequisites,
     subjectDescription: row.subject?.description ?? null,
     schoolDescription: row.subject?.schoolDescription ?? null,
+    coreCodes,
+    sectionPreviews,
   };
 }
 
@@ -287,4 +313,86 @@ function createStableKey(params: Record<string, ApiQueryParamValue>) {
     }
   }
   return parts.join('&');
+}
+
+function extractCoreCodes(core: unknown): string[] {
+  if (!core) return [];
+
+  const codes = new Set<string>();
+  if (Array.isArray(core)) {
+    core.forEach((entry) => {
+      if (typeof entry === 'string') {
+        codes.add(entry.toUpperCase());
+      } else if (entry && typeof entry === 'object') {
+        const candidate =
+          (entry as Record<string, unknown>).coreCode ??
+          (entry as Record<string, unknown>).code ??
+          (entry as Record<string, unknown>).core_code;
+        if (typeof candidate === 'string' && candidate.trim()) {
+          codes.add(candidate.toUpperCase());
+        }
+      }
+    });
+  } else if (typeof core === 'object') {
+    Object.values(core as Record<string, unknown>).forEach((value) => {
+      if (typeof value === 'string' && value.trim()) {
+        codes.add(value.toUpperCase());
+      }
+    });
+  }
+
+  return Array.from(codes);
+}
+
+function transformSections(sections: CourseSectionRow[]): CourseSectionPreview[] {
+  return sections.map((section) => {
+    const meetings =
+      section.meetings?.map((meeting) => {
+        const day = normalizeMeetingDay(meeting.meetingDay);
+        const start = typeof meeting.startMinutes === 'number' ? meeting.startMinutes : null;
+        const end = typeof meeting.endMinutes === 'number' ? meeting.endMinutes : null;
+        if (!day || start === null || end === null) {
+          return null;
+        }
+
+        return {
+          day,
+          startMinutes: start,
+          endMinutes: end,
+          campus: meeting.campus ?? section.meetingCampus ?? null,
+          building: meeting.building ?? null,
+          room: meeting.room ?? null,
+        };
+      }) ?? [];
+
+    return {
+      id: section.sectionId,
+      index: section.indexNumber,
+      sectionNumber: section.sectionNumber,
+      openStatus: section.openStatus,
+      isOpen: section.isOpen,
+      deliveryMethod: section.deliveryMethod,
+      campusCode: section.campusCode,
+      meetingCampus: section.meetingCampus ?? null,
+      instructors: normalizeInstructors(section.instructorsText),
+      meetings: meetings.filter((entry): entry is CourseSectionPreview['meetings'][number] => Boolean(entry)),
+    };
+  });
+}
+
+function normalizeMeetingDay(raw: string | null | undefined): MeetingDay | null {
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  if (upper === 'TH' || upper === 'SA' || upper === 'SU') return upper as MeetingDay;
+  const char = upper[0];
+  if (char === 'M' || char === 'T' || char === 'W' || char === 'F') {
+    return char as MeetingDay;
+  }
+  return null;
+}
+
+function normalizeInstructors(raw?: string | null): string[] {
+  if (!raw) return [];
+  const parts = raw.split(/[,;/]+/).map((token) => token.trim()).filter(Boolean);
+  return Array.from(new Set(parts));
 }

@@ -167,6 +167,8 @@ function CourseRow({ course, t }: { course: CourseResultItem; t: TFunction }) {
     t(`courseCard.tags.delivery.${method}`, { defaultValue: method.toUpperCase() }),
   );
   const updatedLabel = formatRelativeTime(course.updatedAt, t);
+  const leadInstructor =
+    course.sectionPreviews.find((section) => section.instructors.length)?.instructors[0] ?? null;
 
   return (
     <article className="course-card">
@@ -190,6 +192,10 @@ function CourseRow({ course, t }: { course: CourseResultItem; t: TFunction }) {
         <MetaItem label={t('courseCard.meta.credits')} value={formatCredits(course.credits, t)} />
         <MetaItem label={t('courseCard.meta.sections')} value={`${course.sections.open}/${course.sections.total}`} />
         <MetaItem label={t('courseCard.meta.subject')} value={course.subjectDescription ?? course.subjectCode} />
+        <MetaItem
+          label={t('courseCard.meta.instructor')}
+          value={leadInstructor ?? t('courseCard.meta.instructorFallback')}
+        />
       </div>
 
       <div className="course-card__tags">
@@ -203,6 +209,16 @@ function CourseRow({ course, t }: { course: CourseResultItem; t: TFunction }) {
           <span className="course-card__tag course-card__tag--muted">{t('courseCard.tags.deliveryFallback')}</span>
         )}
       </div>
+
+      {course.coreCodes.length > 0 && (
+        <div className="course-card__tags">
+          {course.coreCodes.map((code) => (
+            <span key={`core-${code}`} className="course-card__tag course-card__tag--muted">
+              {t('courseCard.tags.core', { code })}
+            </span>
+          ))}
+        </div>
+      )}
 
       {course.prerequisites && (
         <p className="course-card__prereq">
