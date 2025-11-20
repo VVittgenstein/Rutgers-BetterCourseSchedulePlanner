@@ -10,5 +10,5 @@
     "resolveJsonModule": true,
     "outDir": "dist"
   },
-  "include": ["scripts/**/*.ts", "api/src/**/*.ts", "api/src/**/*.d.ts"]
+  "include": ["scripts/**/*.ts", "api/src/**/*.ts", "api/src/**/*.d.ts", "workers/**/*.ts"]
 }
