@@ -53,6 +53,11 @@ P1 Badge Prevent string instructor filters from degrading to char ORs
 If executeCourseSearch receives a string instructor filter (as in api/tests/course_search.test.ts where instructor: 'doe' is passed), the new normalizeStringList(query.instructor, …) treats the string as an iterable and splits it into characters. The generated SQL then ORs over single-letter needles ('d' OR 'o' OR 'e'), so any non-empty instructor text matches and the filter effectively disappears, breaking the instructor-focused test and any callers that still supply a scalar. Either normalize scalar input back to an array of full strings or keep supporting a string path to avoid this regression.
 ---review-end---
 
+## Code Review - T-20251113-act-002-frontend-filter-mvp - 2025-11-20T03:57:22Z
+---review-start---
+Codex Review: Didn't find any major issues. More of your lovely PRs please.
+---review-end---
+
 ## Code Review - T-20251113-act-002-frontend-filter-mvp - 2025-11-20T03:29:06Z
 ---review-start---
 api/src/queries/course_search.ts
