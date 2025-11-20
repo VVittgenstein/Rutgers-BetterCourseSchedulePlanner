@@ -20,3 +20,6 @@
 
 ## Validation
 - Tests: `npx tsx --test notifications/mail/tests/provider.test.ts` (pass).
+
+## Code Review - ST-20251113-act-011-02-provider-adapter - 2025-11-20T14:48:23Z
+Codex Review: Didn't find any major issues. Keep them coming!
