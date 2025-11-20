@@ -46,9 +46,11 @@ The cadence mirrors the `openSections` profile in `docs/soc_rate_limit.md` (safe
    - Index missing for ≥2 consecutive polls (or 3 minutes) → record `Closed` housekeeping event with `seat_delta=-1` to reset state but do not notify.
 2. **Deduplicate** – Skip creating a new `open_event` if the same `dedupe_key` exists in the last 5 minutes. This absorbs CDN jitter and prevents repeat sends until a real close is observed.
 3. **Fan-out** – Build `open_event_notifications` by joining `open_events.status_after=Open` with `subscriptions` where `status IN ('active','pending')` and `last_known_section_status <> 'Open'`. Respect per-subscription quiet hours (`deliveryWindow`), `maxNotifications`, and `snoozeUntil`. Populate `subscription_id` and carry `dedupe_key` forward for channel deduping.
-4. **Send** – Channel workers pick `fanout_status=pending`, mark a short-lived lock, send email/Discord, then: \
-   - On success → update `fanout_status=sent`, bump `subscriptions.last_known_section_status='Open'`, append a `subscription_events.notify_sent` row with the section status snapshot. \
-   - On failure → increment `fanout_attempts`, keep `pending` with exponential retry capped at 3 attempts; move to `skipped` if the subscription is no longer active.
+4. **Send** – Channel workers pick `fanout_status=pending`, mark a short-lived lock, call the channel sender once, then: \
+   - On success → increment `fanout_attempts` by 1, update `fanout_status=sent`, bump `subscriptions.last_known_section_status='Open'`, append a `subscription_events.notify_sent` row with the section status snapshot, clear the lock. \
+   - On retryable failure → increment `fanout_attempts` by 1, keep `pending`, update `last_attempt_at`, persist the error for backoff scheduling (see mail worker contract), clear the lock. \
+   - On terminal failure or ineligible subscription → increment `fanout_attempts` by 1, set `fanout_status=skipped/failed`, record the error, clear the lock. \
+   `fanout_attempts` counts outer queue tries (one per MailSender attempt) and drives retry schedules defined per worker contract.
 5. **Reset and archive** – When `Closed` is recorded (via heartbeat miss or course ingest), set `subscriptions.last_known_section_status='Closed'` so a future reopen triggers fresh events. Expire archived `open_events` and `open_event_notifications` after 30 days to keep the DB small while retaining traceability.
 
 ### Oscillation rules
