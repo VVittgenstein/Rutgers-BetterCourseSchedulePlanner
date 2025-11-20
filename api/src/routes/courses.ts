@@ -20,19 +20,27 @@ const courseQuerySchema = paginationSchema(100, 20)
     q: z.string().trim().min(2).optional(),
     level: stringOrArrayParam,
     courseNumber: z.string().trim().optional(),
+    index: stringOrArrayParam,
+    sectionNumber: stringOrArrayParam,
+    sectionStatus: enumArrayParam(['OPEN', 'CLOSED', 'WAITLIST']),
     coreCode: stringOrArrayParam,
     creditsMin: z.coerce.number().int().min(0).max(20).optional(),
     creditsMax: z.coerce.number().int().min(0).max(20).optional(),
     delivery: enumArrayParam(['in_person', 'online', 'hybrid']),
     hasOpenSection: optionalBooleanParam,
+    hasPrerequisite: optionalBooleanParam,
     meetingDays: stringOrArrayParam,
     meetingStart: optionalMinutesParam,
     meetingEnd: optionalMinutesParam,
     instructor: z.string().trim().optional(),
+    meetingCampus: stringOrArrayParam,
+    building: stringOrArrayParam,
+    room: stringOrArrayParam,
     requiresPermission: optionalBooleanParam,
     sortBy: z.enum(['subject', 'courseNumber', 'title', 'credits', 'sectionsOpen', 'updatedAt']).optional(),
     sortDir: sortDirectionSchema.optional(),
     include: stringOrArrayParam,
+    sectionsLimit: z.coerce.number().int().min(1).max(50).optional(),
   })
   .superRefine((value, ctx) => {
     if (!value.campus?.length && !value.subject?.length) {
@@ -127,6 +135,9 @@ function summarizeCourseFilters(query: CoursesQuery) {
     level: query.level ?? [],
     hasSearchQuery: Boolean(query.q),
     courseNumber: query.courseNumber,
+    index: query.index ?? [],
+    sectionNumber: query.sectionNumber ?? [],
+    sectionStatus: query.sectionStatus ?? [],
     coreCode: query.coreCode ?? [],
     credits:
       query.creditsMin !== undefined || query.creditsMax !== undefined
@@ -134,10 +145,16 @@ function summarizeCourseFilters(query: CoursesQuery) {
         : undefined,
     delivery: query.delivery ?? [],
     hasOpenSection: query.hasOpenSection,
+    hasPrerequisite: query.hasPrerequisite,
     meetingDays: query.meetingDays ?? [],
     meetingWindow:
       query.meetingStart !== undefined || query.meetingEnd !== undefined
         ? { start: query.meetingStart, end: query.meetingEnd }
+        : undefined,
+    meetingCampus: query.meetingCampus ?? [],
+    meetingLocation:
+      (query.building && query.building.length) || (query.room && query.room.length)
+        ? { building: query.building ?? [], room: query.room ?? [] }
         : undefined,
     instructorProvided: query.instructor ? true : undefined,
     requiresPermission: query.requiresPermission,

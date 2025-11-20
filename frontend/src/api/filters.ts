@@ -1,5 +1,6 @@
 import type { FiltersDictionary } from '../components/FilterPanel';
 import type { CourseFilterState, DeliveryMethod } from '../state/courseFilters';
+import { fallbackFiltersDictionary } from '../data/fallbackDictionary';
 import { apiGet } from './client';
 import type { FiltersResponse } from './types';
 
@@ -24,32 +25,61 @@ export async function fetchFiltersDictionary(signal?: AbortSignal): Promise<Filt
     coreCodes: [],
     levels: [],
     deliveryMethods: [],
+    instructors: [],
   };
 
+  const terms =
+    data.terms.length > 0
+      ? data.terms.map((term) => ({
+          label: term.display ?? term.id,
+          value: term.id,
+          description: term.active ? 'Active' : undefined,
+        }))
+      : fallbackFiltersDictionary.terms;
+
+  const campuses =
+    data.campuses.length > 0
+      ? data.campuses.map((campus) => ({
+          label: campus.display ?? campus.code,
+          value: campus.code,
+          description: campus.region,
+        }))
+      : fallbackFiltersDictionary.campuses;
+
+  const subjects =
+    data.subjects.length > 0
+      ? data.subjects.map((subject) => ({
+          label: subject.description ?? subject.code,
+          value: subject.code,
+          school: subject.school ?? subject.campus ?? undefined,
+        }))
+      : fallbackFiltersDictionary.subjects;
+
+  const instructors =
+    data.instructors && data.instructors.length > 0
+      ? data.instructors.map((teacher) => ({
+          label: teacher.name,
+          value: teacher.id,
+        }))
+      : fallbackFiltersDictionary.instructors;
+
+  const coreCodes =
+    data.coreCodes.length > 0
+      ? data.coreCodes.map((core) => ({
+          label: core.description ?? core.code,
+          value: core.code,
+        }))
+      : fallbackFiltersDictionary.coreCodes;
+
   return {
-    terms: data.terms.map((term) => ({
-      label: term.display ?? term.id,
-      value: term.id,
-      description: term.active ? 'Active' : undefined,
-    })),
-    campuses: data.campuses.map((campus) => ({
-      label: campus.display ?? campus.code,
-      value: campus.code,
-      description: campus.region,
-    })),
-    subjects: data.subjects.map((subject) => ({
-      label: subject.description ?? subject.code,
-      value: subject.code,
-      school: subject.school ?? subject.campus ?? undefined,
-    })),
+    terms,
+    campuses,
+    subjects,
     levels: normalizeLevels(data.levels),
     deliveries: normalizeDeliveryMethods(data.deliveryMethods),
-    tags: [],
-    coreCodes: data.coreCodes.map((core) => ({
-      label: core.description ?? core.code,
-      value: core.code,
-    })),
-    instructors: [],
+    tags: fallbackFiltersDictionary.tags,
+    coreCodes,
+    instructors,
   };
 }
 

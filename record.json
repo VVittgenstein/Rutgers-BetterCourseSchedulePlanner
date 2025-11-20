@@ -562,7 +562,7 @@
       ],
       "lane": "now",
       "priority_suggested": "P0",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251113-act-007-local-db-schema",
         "T-20251113-act-001-soc-json-scraper"
@@ -589,7 +589,7 @@
         "R-20251113-frontend-perf"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-18T04:49:21Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-008",

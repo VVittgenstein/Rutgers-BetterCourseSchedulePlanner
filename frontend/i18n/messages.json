@@ -109,6 +109,51 @@
           "start": "Start time",
           "end": "End time"
         },
+        "courseMeta": {
+          "title": "Course details",
+          "clear": "Clear course filters",
+          "courseNumber": "Course number / code",
+          "courseNumberPlaceholder": "e.g. 01:198:111",
+          "creditsMin": "Credits (min)",
+          "creditsMax": "Credits (max)"
+        },
+        "section": {
+          "title": "Sections & instructors",
+          "clear": "Reset section filters",
+          "index": "Index number",
+          "indexPlaceholder": "e.g. 12345",
+          "sectionNumber": "Section",
+          "sectionPlaceholder": "e.g. 01",
+          "instructorSearch": "Instructor",
+          "instructorPlaceholder": "Name or keyword",
+          "instructorTruncated": "Showing {{current}} / {{total}} instructors. Narrow your search to see more.",
+          "status": "Status",
+          "statusLabels": {
+            "open": "Open",
+            "waitlist": "Waitlist",
+            "closed": "Closed"
+          },
+          "requirements": "Requirements",
+          "prerequisite": {
+            "any": "Any prereq",
+            "has": "Has prereq",
+            "none": "No prereq"
+          },
+          "permission": {
+            "any": "Any permission",
+            "requires": "Needs permission",
+            "none": "No permission"
+          }
+        },
+        "location": {
+          "title": "Location",
+          "clear": "Clear location",
+          "campus": "Meeting campus / site",
+          "building": "Building",
+          "buildingPlaceholder": "e.g. HLL or ARC",
+          "room": "Room",
+          "roomPlaceholder": "Room number"
+        },
         "meta": {
           "title": "Delivery & Level",
           "clear": "Clear",
@@ -123,16 +168,29 @@
       "chips": {
         "keyword": "Keyword",
         "subject": "Subject",
-        "level": "Level",
-        "delivery": "Delivery",
-        "tag": "Tag",
-        "core": "Core",
-        "meeting": "Meeting",
-        "meetingFallback": "Meeting filter",
-        "openOnly": "Open seats only",
-        "hasWaitlist": "Has waitlist",
-        "timePlaceholder": {
-          "start": "Start",
+      "level": "Level",
+      "delivery": "Delivery",
+      "tag": "Tag",
+      "core": "Core",
+      "meeting": "Meeting",
+      "credits": "Credits",
+      "creditsMin": "Min {{value}}",
+      "creditsMax": "Max {{value}}",
+      "courseNumber": "Course #",
+      "sectionIndex": "Index",
+      "sectionNumber": "Section",
+      "status": "Status",
+      "instructor": "Instructor",
+      "prerequisite": "Prerequisite",
+      "permission": "Permission",
+      "meetingCampus": "Meeting campus",
+      "building": "Building",
+      "room": "Room",
+      "meetingFallback": "Meeting filter",
+      "openOnly": "Open seats only",
+      "hasWaitlist": "Has waitlist",
+      "timePlaceholder": {
+        "start": "Start",
           "end": "End"
         }
       }
@@ -160,6 +218,10 @@
       "error": {
         "traceId": "Trace ID: {{id}}",
         "retry": "Retry"
+      },
+      "view": {
+        "list": "List",
+        "calendar": "Calendar"
       }
     },
     "courseCard": {
@@ -170,10 +232,13 @@
       "meta": {
         "credits": "Credits",
         "sections": "Sections",
-        "subject": "Subject"
+        "subject": "Subject",
+        "instructor": "Instructor",
+        "instructorFallback": "TBD"
       },
       "tags": {
         "deliveryFallback": "Delivery TBD",
+        "core": "Core {{code}}",
         "delivery": {
           "in_person": "In person",
           "online": "Online",
@@ -316,6 +381,51 @@
           "start": "开始时间",
           "end": "结束时间"
         },
+        "courseMeta": {
+          "title": "课程信息",
+          "clear": "清空课程筛选",
+          "courseNumber": "课程编号/代码",
+          "courseNumberPlaceholder": "例如 01:198:111",
+          "creditsMin": "最小学分",
+          "creditsMax": "最大学分"
+        },
+        "section": {
+          "title": "班次与教师",
+          "clear": "重置班次筛选",
+          "index": "Index 号",
+          "indexPlaceholder": "如 12345",
+          "sectionNumber": "班次",
+          "sectionPlaceholder": "如 01",
+          "instructorSearch": "教师",
+          "instructorPlaceholder": "姓名或关键词",
+          "instructorTruncated": "已显示 {{current}} / {{total}} 位教师，请继续筛选。",
+          "status": "状态",
+          "statusLabels": {
+            "open": "开放",
+            "waitlist": "候补",
+            "closed": "关闭"
+          },
+          "requirements": "限制条件",
+          "prerequisite": {
+            "any": "不限先修",
+            "has": "需要先修",
+            "none": "无先修"
+          },
+          "permission": {
+            "any": "不限许可",
+            "requires": "需要许可码",
+            "none": "无需许可"
+          }
+        },
+        "location": {
+          "title": "上课地点",
+          "clear": "清空地点",
+          "campus": "授课校区/站点",
+          "building": "教学楼",
+          "buildingPlaceholder": "如 HLL 或 ARC",
+          "room": "教室",
+          "roomPlaceholder": "教室号"
+        },
         "meta": {
           "title": "授课方式 & 年级",
           "clear": "清除",
@@ -331,15 +441,28 @@
         "keyword": "关键词",
         "subject": "科目",
         "level": "年级",
-        "delivery": "授课方式",
-        "tag": "标签",
-        "core": "核心课程",
-        "meeting": "上课时间",
-        "meetingFallback": "上课时间筛选",
-        "openOnly": "只看有空位",
-        "hasWaitlist": "有候补",
-        "timePlaceholder": {
-          "start": "开始",
+      "delivery": "授课方式",
+      "tag": "标签",
+      "core": "核心课程",
+      "meeting": "上课时间",
+      "credits": "学分",
+      "creditsMin": "至少 {{value}} 学分",
+      "creditsMax": "至多 {{value}} 学分",
+      "courseNumber": "课程编号",
+      "sectionIndex": "Index",
+      "sectionNumber": "班次",
+      "status": "状态",
+      "instructor": "教师",
+      "prerequisite": "先修要求",
+      "permission": "许可",
+      "meetingCampus": "上课校区",
+      "building": "教学楼",
+      "room": "教室",
+      "meetingFallback": "上课时间筛选",
+      "openOnly": "只看有空位",
+      "hasWaitlist": "有候补",
+      "timePlaceholder": {
+        "start": "开始",
           "end": "结束"
         }
       }
@@ -367,6 +490,10 @@
       "error": {
         "traceId": "Trace ID：{{id}}",
         "retry": "重试"
+      },
+      "view": {
+        "list": "列表",
+        "calendar": "日历"
       }
     },
     "courseCard": {
@@ -377,10 +504,13 @@
       "meta": {
         "credits": "学分",
         "sections": "班次",
-        "subject": "科目"
+        "subject": "科目",
+        "instructor": "教师",
+        "instructorFallback": "待定"
       },
       "tags": {
         "deliveryFallback": "授课方式待定",
+        "core": "核心 {{code}}",
         "delivery": {
           "in_person": "线下",
           "online": "线上",
