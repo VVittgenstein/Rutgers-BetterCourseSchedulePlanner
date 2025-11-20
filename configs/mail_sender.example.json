@@ -1,0 +1,103 @@
+{
+  "provider": "sendgrid",
+  "defaultFrom": {
+    "email": "alerts@example.edu",
+    "name": "Rutgers Course Alerts"
+  },
+  "replyTo": {
+    "email": "support@example.edu",
+    "name": "Course Alerts Support"
+  },
+  "supportedLocales": ["en-US", "zh-CN"],
+  "templateRoot": "templates/email",
+  "templates": {
+    "open-seat": {
+      "subject": {
+        "en-US": "Seat opened for {{courseString}}",
+        "zh-CN": "课程 {{courseString}} 有空位"
+      },
+      "html": {
+        "en-US": "open-seat/en-US.html",
+        "zh-CN": "open-seat/zh-CN.html"
+      },
+      "text": {
+        "en-US": "open-seat/en-US.txt",
+        "zh-CN": "open-seat/zh-CN.txt"
+      },
+      "requiredVariables": [
+        "courseTitle",
+        "courseString",
+        "sectionNumber",
+        "indexNumber",
+        "meetingSummary",
+        "subscriptionId",
+        "unsubscribeUrl",
+        "manageUrl",
+        "locale"
+      ]
+    },
+    "verification": {
+      "subject": {
+        "en-US": "Confirm your course alert request",
+        "zh-CN": "请确认您的课程提醒订阅"
+      },
+      "html": {
+        "en-US": "verification/en-US.html",
+        "zh-CN": "verification/zh-CN.html"
+      },
+      "text": {
+        "en-US": "verification/en-US.txt",
+        "zh-CN": "verification/zh-CN.txt"
+      },
+      "requiredVariables": ["verificationUrl", "expirationMinutes", "contactValue"]
+    }
+  },
+  "rateLimit": {
+    "maxPerSecond": 5,
+    "burst": 10,
+    "bucketWidthSeconds": 60
+  },
+  "retryPolicy": {
+    "maxAttempts": 3,
+    "backoffMs": [0, 2000, 7000],
+    "jitter": 0.25,
+    "retryableErrors": [
+      "rate_limited",
+      "network_error",
+      "provider_error",
+      "unknown"
+    ]
+  },
+  "timeouts": {
+    "connectMs": 4000,
+    "sendMs": 10000,
+    "idleMs": 60000
+  },
+  "providers": {
+    "sendgrid": {
+      "apiKeyEnv": "SENDGRID_API_KEY",
+      "sandboxMode": true,
+      "categories": ["open-seat-alerts"],
+      "ipPool": null
+    },
+    "smtp": {
+      "host": "smtp.example.edu",
+      "port": 587,
+      "secure": false,
+      "username": "smtp-user",
+      "passwordEnv": "SMTP_PASSWORD",
+      "poolSize": 5,
+      "tls": {
+        "rejectUnauthorized": true
+      }
+    }
+  },
+  "logging": {
+    "redactPII": true,
+    "traceHeader": "X-Trace-Id"
+  },
+  "testHooks": {
+    "dryRun": false,
+    "overrideRecipient": null
+  }
+}
