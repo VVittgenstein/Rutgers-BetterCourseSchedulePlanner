@@ -1,0 +1,198 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+import { z } from 'zod';
+
+import type {
+  MailSenderConfig,
+  ResolvedMailSenderConfig,
+  ResolvedSMTPConfig,
+  ResolvedSendGridConfig,
+  SMTPConfig,
+  SendGridConfig,
+  TemplateDefinition,
+} from './types.js';
+
+const emailSchema = z.object({
+  email: z.string().email(),
+  name: z.string().min(1).optional(),
+});
+
+const templateSchema = z.object({
+  subject: z.record(z.string(), z.string()).optional(),
+  html: z.record(z.string(), z.string()),
+  text: z.record(z.string(), z.string()).optional(),
+  requiredVariables: z.array(z.string()),
+});
+
+const timeoutsSchema = z
+  .object({
+    connectMs: z.number().int().positive().default(4000),
+    sendMs: z.number().int().positive().default(10000),
+    idleMs: z.number().int().positive().default(60000),
+  })
+  .default({
+    connectMs: 4000,
+    sendMs: 10000,
+    idleMs: 60000,
+  });
+
+const smtpSchema = z.object({
+  host: z.string().min(1),
+  port: z.number().int().positive(),
+  secure: z.boolean(),
+  username: z.string().optional(),
+  passwordEnv: z.string().optional(),
+  poolSize: z.number().int().positive().optional(),
+  tls: z.object({ rejectUnauthorized: z.boolean().optional() }).optional(),
+});
+
+const sendgridSchema = z.object({
+  apiKeyEnv: z.string().min(1),
+  sandboxMode: z.boolean().default(false),
+  categories: z.array(z.string()).default([]),
+  ipPool: z.string().nullable().optional(),
+  apiBaseUrl: z.string().optional(),
+});
+
+const configSchema = z.object({
+  provider: z.enum(['sendgrid', 'smtp']),
+  defaultFrom: emailSchema,
+  replyTo: emailSchema.optional(),
+  supportedLocales: z.array(z.string()).min(1),
+  templateRoot: z.string(),
+  templates: z.record(z.string(), templateSchema),
+  timeouts: timeoutsSchema,
+  providers: z.object({
+    sendgrid: sendgridSchema.optional(),
+    smtp: smtpSchema.optional(),
+  }),
+  logging: z
+    .object({
+      redactPII: z.boolean().optional(),
+      traceHeader: z.string().optional(),
+    })
+    .default({}),
+  testHooks: z
+    .object({
+      dryRun: z.boolean().optional(),
+      overrideRecipient: z.string().email().nullable().optional(),
+    })
+    .default({}),
+});
+
+export async function loadMailSenderConfig(configPath: string, env: NodeJS.ProcessEnv = process.env): Promise<ResolvedMailSenderConfig> {
+  const absolutePath = path.resolve(configPath);
+  const raw = await fs.readFile(absolutePath, 'utf8');
+  const parsedJson = JSON.parse(raw) as unknown;
+  return resolveMailSenderConfig(parsedJson, env, path.dirname(absolutePath));
+}
+
+export function resolveMailSenderConfig(
+  rawConfig: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+  baseDir: string = process.cwd(),
+): ResolvedMailSenderConfig {
+  const parsed = configSchema.parse(rawConfig);
+  const logging = {
+    redactPII: parsed.logging.redactPII ?? true,
+    traceHeader: parsed.logging.traceHeader ?? 'X-Trace-Id',
+  };
+  const testHooks = {
+    dryRun: parsed.testHooks.dryRun ?? false,
+    overrideRecipient: parsed.testHooks.overrideRecipient ?? null,
+  };
+
+  validateTemplateLocales(parsed.templates, parsed.supportedLocales);
+  validateDefaultProvider(parsed.provider, parsed.providers);
+
+  const resolvedSendgrid = resolveSendgrid(parsed.providers.sendgrid, env);
+  const resolvedSmtp = resolveSmtp(parsed.providers.smtp, env);
+
+  const resolved: ResolvedMailSenderConfig = {
+    provider: parsed.provider,
+    defaultFrom: parsed.defaultFrom,
+    replyTo: parsed.replyTo,
+    supportedLocales: parsed.supportedLocales,
+    templateRoot: path.isAbsolute(parsed.templateRoot) ? parsed.templateRoot : path.resolve(baseDir, parsed.templateRoot),
+    templates: parsed.templates,
+    timeouts: parsed.timeouts,
+    providers: {
+      sendgrid: resolvedSendgrid,
+      smtp: resolvedSmtp,
+    },
+    logging,
+    testHooks,
+  };
+
+  return resolved;
+}
+
+function resolveSendgrid(config: SendGridConfig | undefined, env: NodeJS.ProcessEnv): ResolvedSendGridConfig | undefined {
+  if (!config) return undefined;
+  const apiKey = env[config.apiKeyEnv];
+  if (!apiKey) {
+    throw new Error(`Missing SendGrid API key env variable: ${config.apiKeyEnv}`);
+  }
+  const { apiKeyEnv, ...rest } = config;
+  return {
+    ...rest,
+    apiKey,
+  };
+}
+
+function resolveSmtp(config: SMTPConfig | undefined, env: NodeJS.ProcessEnv): ResolvedSMTPConfig | undefined {
+  if (!config) return undefined;
+  const { passwordEnv, ...rest } = config;
+  const password = passwordEnv ? env[passwordEnv] : undefined;
+
+  if (passwordEnv && rest.username && !password) {
+    throw new Error(`Missing SMTP password env variable: ${passwordEnv}`);
+  }
+
+  return {
+    ...rest,
+    password,
+  };
+}
+
+function validateDefaultProvider(provider: MailSenderConfig['provider'], providers: MailSenderConfig['providers']) {
+  if (provider === 'sendgrid' && !providers.sendgrid) {
+    throw new Error('SendGrid is configured as default provider but providers.sendgrid is missing');
+  }
+  if (provider === 'smtp' && !providers.smtp) {
+    throw new Error('SMTP is configured as default provider but providers.smtp is missing');
+  }
+}
+
+function validateTemplateLocales(templates: Record<string, TemplateDefinition>, supportedLocales: string[]) {
+  const unsupportedLocales: string[] = [];
+  const missingLocales: string[] = [];
+
+  for (const [templateId, tpl] of Object.entries(templates)) {
+    for (const locale of Object.keys(tpl.html)) {
+      if (!supportedLocales.includes(locale)) {
+        unsupportedLocales.push(`${templateId}:${locale}`);
+      }
+    }
+    for (const locale of supportedLocales) {
+      if (!tpl.html[locale]) {
+        missingLocales.push(`${templateId}:${locale}`);
+      }
+      if (tpl.text && !(locale in tpl.text)) {
+        missingLocales.push(`${templateId}:${locale}:text`);
+      }
+      if (tpl.subject && !(locale in tpl.subject)) {
+        missingLocales.push(`${templateId}:${locale}:subject`);
+      }
+    }
+  }
+
+  if (unsupportedLocales.length) {
+    throw new Error(`Template locales not listed in supportedLocales: ${unsupportedLocales.join(', ')}`);
+  }
+
+  if (missingLocales.length) {
+    throw new Error(`Templates missing required locales: ${missingLocales.join(', ')}`);
+  }
+}
