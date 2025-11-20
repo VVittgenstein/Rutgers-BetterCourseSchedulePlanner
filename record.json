@@ -770,7 +770,9 @@
         "src/pages/courses.tsx",
         "src/components/filters/*",
         "src/components/calendar-view/*",
-        "src/api/hooks/useCourses.ts"
+        "src/api/hooks/useCourses.ts",
+        "Compact/Compact-T-20251113-act-002-frontend-filter-mvp-2025-11-20-T023714Z.md",
+        "Compact/Compact-T-20251113-act-002-frontend-filter-mvp-2025-11-20-T030356Z.md"
       ],
       "citations": [
         "EVID-001",
@@ -780,7 +782,7 @@
         "D-20251113-arch-static-frontend-b"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-20T03:57:22Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-002",
