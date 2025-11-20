@@ -1492,7 +1492,7 @@
         "R-20251113-spam"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-20T13:31:50Z",
+      "updated_at": "2025-11-20T13:52:23Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-011",
@@ -1529,11 +1529,12 @@
           ],
           "artifacts": [
             "docs/mail_sender_contract.md",
-            "configs/mail_sender.example.json"
+            "configs/mail_sender.example.json",
+            "Compact/Compact-ST-20251113-act-011-01-mail-interface-2025-11-20-T134509Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-20T13:31:50Z",
+          "updated_at": "2025-11-20T13:52:23Z",
           "owner": "tbd",
           "tags": [
             "email",
