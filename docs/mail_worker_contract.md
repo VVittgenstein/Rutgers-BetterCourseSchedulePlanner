@@ -146,7 +146,7 @@ Notes:
 - `template.variables` is intentionally open for additive, locale-specific fields; the listed keys are the minimum required by v1 templates.
 
 ## Ack/Nack and retry semantics
-Authoritative rule: `fanout_attempts` increments exactly once per MailSender attempt (sent/retryable/failed). Any prior failure-only or pre-send increment semantics are superseded.
+Authoritative rule: `fanout_attempts` increments exactly once per MailSender attempt (sent/retryable/failed). Any prior failure-only or pre-send increment semantics (including earlier drafts or compacts) are superseded and should be ignored.
 - **Ack (sent)**: when `MailSender.send` (wrapped by `ReliableMailSender`) returns `status="sent"`, bump `fanout_attempts` by 1, set `fanout_status='sent'`, store the final attempt in `error` (`{provider, providerMessageId, status}`), clear `locked_by/locked_at`, and append `subscription_events.notify_sent` with the section status snapshot.
 - **Retryable nack**: when `status="retryable"` and `error.code` is retryable, bump `fanout_attempts` by 1, keep `fanout_status='pending'`, update `last_attempt_at`, store the last attempt (with `retryAfterSeconds` when present) in `error`, clear the lock. Outer worker schedules the next pick using `retryScheduleMs[fanout_attempts-1]` (after increment) capped by `lockTtlSeconds`.
 - **Terminal nack**: for `status="failed"` (invalid recipient, template missing locale/variable, unsubscribed row, non-email contact), bump `fanout_attempts` by 1, set `fanout_status='skipped'` for non-actionable rows or `fanout_status='failed'` when the channel should alert ops. Record `{code,message}` in `error` and clear the lock.
