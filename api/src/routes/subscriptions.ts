@@ -33,7 +33,7 @@ const preferencesInputSchema = z
         path: ['startMinutes'],
       }),
     snoozeUntil: z.string().datetime({ offset: true }).nullable().optional(),
-    channelMetadata: z.record(z.unknown()).optional(),
+    channelMetadata: z.record(z.string(), z.unknown()).optional(),
   })
   .optional();
 
@@ -45,7 +45,7 @@ const preferencesSchema = z.object({
     endMinutes: z.number().int(),
   }),
   snoozeUntil: z.string().nullable(),
-  channelMetadata: z.record(z.unknown()),
+  channelMetadata: z.record(z.string(), z.unknown()),
 });
 
 const subscribePayloadSchema = z.object({
