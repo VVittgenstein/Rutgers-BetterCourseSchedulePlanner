@@ -349,13 +349,15 @@ export function loadCheckpointState(pathname: string): CheckpointState {
   try {
     const raw = fs.readFileSync(pathname, 'utf-8');
     const parsed = JSON.parse(raw) as CheckpointFile;
-    if (parsed && parsed.version === 1 && parsed.campuses) {
+    const campuses = parsed?.campuses;
+    const validCampuses = campuses && typeof campuses === 'object' && !Array.isArray(campuses) ? campuses : null;
+    if (parsed && parsed.version === 1 && validCampuses) {
       return {
         path: pathname,
         data: {
           version: 1,
           updatedAt: parsed.updatedAt ?? new Date().toISOString(),
-          campuses: parsed.campuses,
+          campuses: validCampuses as Record<string, CampusCheckpoint>,
         },
       };
     }
