@@ -1399,7 +1399,7 @@
           ],
           "artifacts": [
             "workers/open_sections_poller.ts",
-            "data/migrations/002_open_events.sql",
+            "data/migrations/003_open_events.sql",
             "logs/poller/*.log"
           ],
           "citations": [],

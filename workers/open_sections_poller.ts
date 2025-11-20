@@ -673,9 +673,6 @@ function applySnapshot(
   }
   ctx.missCounters.set(campus, missSet);
 
-  // treat empty responses as soft outages to avoid false closes
-  const skipClosures = indexes.length === 0 && toOpen.length === 0;
-
   let events = 0;
   let notifications = 0;
 
@@ -710,39 +707,37 @@ function applySnapshot(
       notifications += eventOutcome.notifications;
     }
 
-    if (!skipClosures) {
-      for (const section of toClose) {
-        const previous = section.open_status ?? 'OPEN';
-        ctx.statements.updateSectionStatus.run(0, 'CLOSED', nowIso, nowIso, section.section_id);
-        ctx.statements.insertStatusEvent.run(
-          section.section_id,
-          previous,
-          'CLOSED',
-          'openSections',
-          ctx.options.term,
-          campus,
-          nowIso,
-        );
-        ctx.statements.deleteSnapshot.run(ctx.options.term, campus, section.index_number);
-        ctx.statements.resetSubscriptionsForIndex.run(
-          'CLOSED',
-          nowIso,
-          ctx.options.term,
-          campus,
-          section.index_number,
-        );
-        const eventOutcome = createEventAndFanout(ctx, {
-          section,
-          campus,
-          statusBefore: previous,
-          statusAfter: 'CLOSED',
-          seatDelta: -1,
-          eventAt: nowIso,
-          snapshotHash: sourceHash,
-        });
-        events += eventOutcome.events;
-        notifications += eventOutcome.notifications;
-      }
+    for (const section of toClose) {
+      const previous = section.open_status ?? 'OPEN';
+      ctx.statements.updateSectionStatus.run(0, 'CLOSED', nowIso, nowIso, section.section_id);
+      ctx.statements.insertStatusEvent.run(
+        section.section_id,
+        previous,
+        'CLOSED',
+        'openSections',
+        ctx.options.term,
+        campus,
+        nowIso,
+      );
+      ctx.statements.deleteSnapshot.run(ctx.options.term, campus, section.index_number);
+      ctx.statements.resetSubscriptionsForIndex.run(
+        'CLOSED',
+        nowIso,
+        ctx.options.term,
+        campus,
+        section.index_number,
+      );
+      const eventOutcome = createEventAndFanout(ctx, {
+        section,
+        campus,
+        statusBefore: previous,
+        statusAfter: 'CLOSED',
+        seatDelta: -1,
+        eventAt: nowIso,
+        snapshotHash: sourceHash,
+      });
+      events += eventOutcome.events;
+      notifications += eventOutcome.notifications;
     }
   });
 
