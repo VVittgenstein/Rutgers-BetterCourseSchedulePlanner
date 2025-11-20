@@ -250,6 +250,46 @@
         "updated": "Updated {{time}}",
         "updatedRecent": "Updated recently",
         "term": "Term {{term}}"
+      },
+      "subscribe": {
+        "title": "Vacancy alerts",
+        "helper": "No login needed—pick a section and tell us where to ping you.",
+        "sectionLabel": "Section/index",
+        "sectionPlaceholder": "e.g. 12345",
+        "sectionStatus": {
+          "open": "Open",
+          "waitlist": "Waitlist",
+          "closed": "Closed"
+        },
+        "contactLabel": "Contact",
+        "contactTypes": {
+          "email": "Email",
+          "discord": "Discord ID"
+        },
+        "contactPlaceholder": {
+          "email": "you@example.edu",
+          "discord": "Discord user snowflake"
+        },
+        "contactHint": "We store this locally and send one verification first.",
+        "tokenLabel": "Unsubscribe token",
+        "tokenPlaceholder": "Paste the token from your email/DM",
+        "actions": {
+          "subscribe": "Subscribe",
+          "unsubscribe": "Unsubscribe"
+        },
+        "status": {
+          "existing": "You already have an active request for this section.",
+          "created": "Request saved.",
+          "requiresVerification": "Check your inbox/DM to verify.",
+          "unresolved": "Section not resolved yet; we will attach it when data syncs.",
+          "unsubscribed": "Subscription canceled (previous: {{previous}})."
+        },
+        "errors": {
+          "missingSection": "Choose a section index.",
+          "missingContact": "Enter an email or Discord ID.",
+          "missingToken": "Provide the unsubscribe token or re-use the recent subscription id."
+        },
+        "traceId": "Trace {{id}}"
       }
     },
     "schedule": {
@@ -522,6 +562,46 @@
         "updated": "更新于 {{time}}",
         "updatedRecent": "最近更新",
         "term": "学期 {{term}}"
+      },
+      "subscribe": {
+        "title": "空位提醒订阅",
+        "helper": "免登录，选定 section 并留下联系方式。",
+        "sectionLabel": "课号 / Index",
+        "sectionPlaceholder": "如 12345",
+        "sectionStatus": {
+          "open": "有空位",
+          "waitlist": "候补",
+          "closed": "已满"
+        },
+        "contactLabel": "联系方式",
+        "contactTypes": {
+          "email": "邮箱",
+          "discord": "Discord ID"
+        },
+        "contactPlaceholder": {
+          "email": "you@example.edu",
+          "discord": "Discord 用户数字 ID"
+        },
+        "contactHint": "仅本地保存，并先发送一次验证信息。",
+        "tokenLabel": "退订令牌",
+        "tokenPlaceholder": "粘贴邮件/DM 中的 token",
+        "actions": {
+          "subscribe": "提交订阅",
+          "unsubscribe": "退订"
+        },
+        "status": {
+          "existing": "已存在该 section 的订阅。",
+          "created": "请求已保存。",
+          "requiresVerification": "请查收邮箱/DM 完成验证。",
+          "unresolved": "暂未匹配到 section，记录会在同步后关联。",
+          "unsubscribed": "退订成功（之前状态：{{previous}}）。"
+        },
+        "errors": {
+          "missingSection": "请填写或选择课号/Index。",
+          "missingContact": "请输入邮箱或 Discord ID。",
+          "missingToken": "请提供退订 token，或使用刚刚生成的订阅 ID。"
+        },
+        "traceId": "追踪 {{id}}"
       }
     },
     "schedule": {

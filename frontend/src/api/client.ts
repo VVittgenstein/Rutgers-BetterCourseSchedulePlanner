@@ -27,14 +27,7 @@ export async function apiGet<TResponse>(
   params?: Record<string, ApiQueryParamValue>,
   signal?: AbortSignal,
 ): Promise<TResponse> {
-  const url = new URL(trimSlash(API_BASE_URL) + ensureLeadingSlash(path), window.location.origin);
-  if (params) {
-    const query = new URLSearchParams();
-    for (const [key, rawValue] of Object.entries(params)) {
-      appendQueryValue(query, key, rawValue);
-    }
-    url.search = query.toString();
-  }
+  const url = buildUrl(path, params);
 
   const response = await fetch(url.toString(), {
     method: 'GET',
@@ -45,6 +38,41 @@ export async function apiGet<TResponse>(
     credentials: 'same-origin',
   });
 
+  return handleResponse<TResponse>(response);
+}
+
+export async function apiPost<TResponse>(
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<TResponse> {
+  const url = buildUrl(path);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    signal,
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    credentials: 'same-origin',
+    body: body ? JSON.stringify(body) : '{}',
+  });
+  return handleResponse<TResponse>(response);
+}
+
+function buildUrl(path: string, params?: Record<string, ApiQueryParamValue>) {
+  const url = new URL(trimSlash(API_BASE_URL) + ensureLeadingSlash(path), window.location.origin);
+  if (params) {
+    const query = new URLSearchParams();
+    for (const [key, rawValue] of Object.entries(params)) {
+      appendQueryValue(query, key, rawValue);
+    }
+    url.search = query.toString();
+  }
+  return url;
+}
+
+async function handleResponse<TResponse>(response: Response): Promise<TResponse> {
   if (!response.ok) {
     const payload = (await parseErrorPayload(response)) as ApiErrorPayload | undefined;
     const error: ApiError = Object.assign(new Error(payload?.error?.message ?? `Request failed: ${response.status}`), {
@@ -55,7 +83,6 @@ export async function apiGet<TResponse>(
     });
     throw error;
   }
-
   return (await response.json()) as TResponse;
 }
 

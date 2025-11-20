@@ -98,3 +98,61 @@ export interface FiltersPayload {
   deliveryMethods: string[];
   instructors?: Array<{ id: string; name: string }>;
 }
+
+export type SubscriptionContactType = 'email' | 'discord_user' | 'discord_channel';
+
+export type SubscriptionPreferencesInput = Partial<{
+  notifyOn: Array<'open' | 'waitlist'>;
+  maxNotifications: number;
+  deliveryWindow: { startMinutes: number; endMinutes: number };
+  snoozeUntil: string | null;
+  channelMetadata: Record<string, unknown>;
+}>;
+
+export interface SubscriptionPreferences {
+  notifyOn: Array<'open' | 'waitlist'>;
+  maxNotifications: number;
+  deliveryWindow: { startMinutes: number; endMinutes: number };
+  snoozeUntil: string | null;
+  channelMetadata: Record<string, unknown>;
+}
+
+export interface SubscribeRequestPayload {
+  term: string;
+  campus: string;
+  sectionIndex: string;
+  contactType: SubscriptionContactType;
+  contactValue: string;
+  locale?: string;
+  preferences?: SubscriptionPreferencesInput;
+  clientContext?: { ip?: string; userAgent?: string };
+  discord?: { guildId?: string; channelId?: string };
+}
+
+export interface SubscribeResponsePayload {
+  subscriptionId: number;
+  status: string;
+  requiresVerification: boolean;
+  existing: boolean;
+  unsubscribeToken: string | null;
+  term: string;
+  campus: string;
+  sectionIndex: string;
+  sectionResolved: boolean;
+  preferences: SubscriptionPreferences;
+  traceId: string;
+}
+
+export interface UnsubscribeRequestPayload {
+  subscriptionId?: number;
+  unsubscribeToken?: string;
+  contactValue?: string;
+  reason?: string;
+}
+
+export interface UnsubscribeResponsePayload {
+  subscriptionId: number;
+  status: 'unsubscribed';
+  previousStatus: string;
+  traceId: string;
+}

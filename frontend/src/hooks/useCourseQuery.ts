@@ -346,24 +346,24 @@ function extractCoreCodes(core: unknown): string[] {
 
 function transformSections(sections: CourseSectionRow[]): CourseSectionPreview[] {
   return sections.map((section) => {
-    const meetings =
-      section.meetings?.map((meeting) => {
-        const day = normalizeMeetingDay(meeting.meetingDay);
-        const start = typeof meeting.startMinutes === 'number' ? meeting.startMinutes : null;
-        const end = typeof meeting.endMinutes === 'number' ? meeting.endMinutes : null;
-        if (!day || start === null || end === null) {
-          return null;
-        }
+    const meetings: CourseSectionPreview['meetings'] = [];
+    (section.meetings ?? []).forEach((meeting) => {
+      const day = normalizeMeetingDay(meeting.meetingDay);
+      const start = typeof meeting.startMinutes === 'number' ? meeting.startMinutes : null;
+      const end = typeof meeting.endMinutes === 'number' ? meeting.endMinutes : null;
+      if (!day || start === null || end === null) {
+        return;
+      }
 
-        return {
-          day,
-          startMinutes: start,
-          endMinutes: end,
-          campus: meeting.campus ?? section.meetingCampus ?? null,
-          building: meeting.building ?? null,
-          room: meeting.room ?? null,
-        };
-      }) ?? [];
+      meetings.push({
+        day,
+        startMinutes: start,
+        endMinutes: end,
+        campus: meeting.campus ?? section.meetingCampus ?? undefined,
+        building: meeting.building ?? undefined,
+        room: meeting.room ?? undefined,
+      });
+    });
 
     return {
       id: section.sectionId,
@@ -375,7 +375,7 @@ function transformSections(sections: CourseSectionRow[]): CourseSectionPreview[]
       campusCode: section.campusCode,
       meetingCampus: section.meetingCampus ?? null,
       instructors: normalizeInstructors(section.instructorsText),
-      meetings: meetings.filter((entry): entry is CourseSectionPreview['meetings'][number] => Boolean(entry)),
+      meetings,
     };
   });
 }
