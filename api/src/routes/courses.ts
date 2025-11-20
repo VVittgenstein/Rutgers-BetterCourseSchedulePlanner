@@ -32,7 +32,7 @@ const courseQuerySchema = paginationSchema(100, 20)
     meetingDays: stringOrArrayParam,
     meetingStart: optionalMinutesParam,
     meetingEnd: optionalMinutesParam,
-    instructor: z.string().trim().optional(),
+    instructor: stringOrArrayParam,
     meetingCampus: stringOrArrayParam,
     building: stringOrArrayParam,
     room: stringOrArrayParam,
@@ -151,12 +151,12 @@ function summarizeCourseFilters(query: CoursesQuery) {
       query.meetingStart !== undefined || query.meetingEnd !== undefined
         ? { start: query.meetingStart, end: query.meetingEnd }
         : undefined,
+    instructorCount: Array.isArray(query.instructor) ? query.instructor.length : query.instructor ? 1 : 0,
     meetingCampus: query.meetingCampus ?? [],
     meetingLocation:
       (query.building && query.building.length) || (query.room && query.room.length)
         ? { building: query.building ?? [], room: query.room ?? [] }
         : undefined,
-    instructorProvided: query.instructor ? true : undefined,
     requiresPermission: query.requiresPermission,
     sort: query.sortBy ? { by: query.sortBy, direction: query.sortDir ?? 'asc' } : undefined,
     include: query.include ?? [],

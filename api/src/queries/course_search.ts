@@ -231,11 +231,13 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
   if (sectionStatuses.length) {
     sectionConditions.push(buildInClause('upper(s_filter.open_status)', sectionStatuses, binder));
   }
-  if (query.instructor?.trim()) {
-    const instructorNeedle = query.instructor.trim().toLowerCase();
-    sectionConditions.push(
-      `s_filter.instructors_text IS NOT NULL AND s_filter.instructors_text <> '' AND instr(lower(s_filter.instructors_text), ${binder.bind(instructorNeedle)}) > 0`,
+  const instructors = normalizeStringList(query.instructor, (value) => value.toLowerCase());
+  if (instructors.length) {
+    const instructorClauses = instructors.map(
+      (needle) =>
+        `(s_filter.instructors_text IS NOT NULL AND s_filter.instructors_text <> '' AND instr(lower(s_filter.instructors_text), ${binder.bind(needle)}) > 0)`,
     );
+    sectionConditions.push(instructorClauses.length === 1 ? instructorClauses[0] : `(${instructorClauses.join(' OR ')})`);
   }
   if (typeof query.requiresPermission === 'boolean') {
     if (query.requiresPermission) {
