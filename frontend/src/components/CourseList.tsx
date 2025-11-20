@@ -5,12 +5,13 @@ import { FixedSizeList as VirtualList } from 'react-window';
 
 import type { CourseQueryMeta, CourseResultItem } from '../hooks/useCourseQuery';
 import type { ApiError } from '../api/client';
+import { SubscribeButton } from './SubscribeButton';
 import './CourseList.css';
 
-const ROW_HEIGHT = 168;
+const ROW_HEIGHT = 230;
 const VIRTUAL_THRESHOLD = 16;
 const MIN_ROWS = 4;
-const MAX_ROWS = 8;
+const MAX_ROWS = 6;
 
 export interface CourseListProps {
   items: CourseResultItem[];
@@ -225,6 +226,14 @@ function CourseRow({ course, t }: { course: CourseResultItem; t: TFunction }) {
           <strong>{t('courseCard.details.prerequisites')}</strong> {course.prerequisites}
         </p>
       )}
+
+      <SubscribeButton
+        term={course.termId}
+        campus={course.campusCode}
+        sections={course.sectionPreviews}
+        courseTitle={course.title}
+        courseCode={course.code}
+      />
 
       <footer className="course-card__footer">
         <span>

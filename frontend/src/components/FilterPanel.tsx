@@ -664,7 +664,7 @@ export function FilterPanel({
                     checked={state.sectionStatuses.includes(status)}
                     onChange={() => handleSectionStatusToggle(status)}
                   />
-                  <span>{t(`filters.sections.section.statusLabels.${status.toLowerCase()}`)}</span>
+                  <span>{t(`filters.sections.section.statusLabels.${status.toLowerCase()}` as any)}</span>
                 </label>
               ))}
             </div>
@@ -1007,7 +1007,7 @@ const buildFilterChips = ({
     chips.push({
       id: `status:${status}`,
       label: chipLabels.status,
-      value: t(`filters.sections.section.statusLabels.${status.toLowerCase()}`),
+      value: t(`filters.sections.section.statusLabels.${status.toLowerCase()}` as any),
       tone: 'info',
       onRemove: () =>
         emitState(
@@ -1073,7 +1073,7 @@ const buildFilterChips = ({
     chips.push({
       id: 'permission',
       label: chipLabels.permission,
-      value: t(`filters.sections.section.permission.${state.permission}`),
+      value: t(`filters.sections.section.permission.${state.permission}` as any),
       tone: 'warning',
       onRemove: () => emitState({ permission: 'any' }, 'permission'),
     });
