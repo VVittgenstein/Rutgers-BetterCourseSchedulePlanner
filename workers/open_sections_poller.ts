@@ -361,6 +361,9 @@ export function loadCheckpointState(pathname: string): CheckpointState {
         },
       };
     }
+    console.warn(
+      `Checkpoint file ${pathname} is missing expected campuses map; discarding corrupted state and starting fresh.`,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
     console.warn(`Failed to read checkpoint file ${pathname}. Starting fresh. Reason: ${message}`);
