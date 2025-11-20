@@ -123,7 +123,7 @@ export const buildCourseQueryParams = (state: CourseFilterState): Record<string,
   if (state.sectionNumber.trim()) params.sectionNumber = state.sectionNumber.trim();
   if (state.coreCodes.length) params.coreCode = [...state.coreCodes];
   if (state.delivery.length) params.delivery = [...state.delivery];
-  if (state.instructors.length) params.instructor = state.instructors[0];
+  if (state.instructors.length) params.instructor = [...state.instructors];
 
   if (state.credits.min !== undefined) params.creditsMin = state.credits.min;
   if (state.credits.max !== undefined) params.creditsMax = state.credits.max;
