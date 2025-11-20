@@ -1,9 +1,11 @@
 #!/usr/bin/env tsx
 import Database from 'better-sqlite3';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
 
 import { decodeSemester, performProbe, type SemesterParts, SOCRequestError } from '../scripts/soc_api_client.js';
 import { hashPayload } from '../scripts/soc_normalizer.js';
@@ -21,7 +23,7 @@ type Preferences = {
   channelMetadata: Record<string, unknown>;
 };
 
-type PollerOptions = {
+export type PollerOptions = {
   term: string;
   campuses: string[];
   intervalMs: number;
@@ -33,6 +35,7 @@ type PollerOptions = {
   metricsPort: number | null;
   missThreshold: number;
   runOnce: boolean;
+  checkpointFile: string;
 };
 
 type SectionRow = {
@@ -55,7 +58,7 @@ type SubscriptionRow = {
   contact_value: string | null;
 };
 
-type Metrics = {
+export type Metrics = {
   pollsTotal: number;
   pollsFailed: number;
   eventsEmitted: number;
@@ -87,11 +90,15 @@ type Statements = {
   resetSubscriptionsForIndex: Database.Statement;
 };
 
-type PollOutcome = {
+export type PollOutcome = {
   opened: number;
   closed: number;
   events: number;
   notifications: number;
+  openCount: number;
+  snapshotHash: string;
+  polledAt: string;
+  misses: Map<string, number>;
 };
 
 const ACTIVE_STATUSES: SubscriptionStatus[] = ['pending', 'active'];
@@ -105,6 +112,36 @@ const defaultPreferences: Preferences = {
   },
   snoozeUntil: null,
   channelMetadata: {},
+};
+
+type CampusCheckpoint = {
+  term: string;
+  campus: string;
+  lastPollAt: string;
+  lastSnapshotHash: string | null;
+  openIndexes: number;
+  misses: Record<string, number>;
+};
+
+type CheckpointFile = {
+  version: 1;
+  updatedAt: string;
+  campuses: Record<string, CampusCheckpoint>;
+};
+
+export type CheckpointState = {
+  path: string;
+  data: CheckpointFile;
+};
+
+export type PollerContext = {
+  options: PollerOptions;
+  term: SemesterParts;
+  db: Database.Database;
+  statements: Statements;
+  missCounters: Map<string, Map<string, number>>;
+  metrics: Metrics;
+  checkpoint: CheckpointState;
 };
 
 class Semaphore {
@@ -155,6 +192,7 @@ function parseArgs(argv: string[]): PollerOptions {
     metricsPort: null,
     missThreshold: 2,
     runOnce: false,
+    checkpointFile: path.resolve('scripts', 'poller_checkpoint.json'),
   };
 
   const options = { ...defaults };
@@ -244,6 +282,11 @@ function parseArgs(argv: string[]): PollerOptions {
       case 'once':
         options.runOnce = true;
         break;
+      case 'checkpoint':
+        if (!next) throw new Error('Missing value for --checkpoint');
+        options.checkpointFile = path.resolve(next);
+        i += 1;
+        break;
       case 'help':
         showUsage();
         process.exit(0);
@@ -272,6 +315,7 @@ Flags:
   --chunk <n>            Subscription page size for fan-out (default: 200)
   --metrics-port <port>  Expose Prometheus metrics on /metrics
   --miss-threshold <n>   Consecutive misses before marking Closed (default: 2)
+  --checkpoint <path>    Where to persist per-campus poll checkpoints
   --once                 Run a single poll per campus then exit
   --help                 Show this message
 `);
@@ -284,7 +328,88 @@ function parseList(value: string): string[] {
     .filter((item) => item.length > 0);
 }
 
-function createStatements(db: Database.Database): Statements {
+function emptyCheckpoint(pathname: string): CheckpointState {
+  return {
+    path: pathname,
+    data: {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      campuses: {},
+    },
+  };
+}
+
+export function loadCheckpointState(pathname: string): CheckpointState {
+  if (!pathname) {
+    return emptyCheckpoint('');
+  }
+  if (!fs.existsSync(pathname)) {
+    return emptyCheckpoint(pathname);
+  }
+  try {
+    const raw = fs.readFileSync(pathname, 'utf-8');
+    const parsed = JSON.parse(raw) as CheckpointFile;
+    if (parsed && parsed.version === 1 && parsed.campuses) {
+      return {
+        path: pathname,
+        data: {
+          version: 1,
+          updatedAt: parsed.updatedAt ?? new Date().toISOString(),
+          campuses: parsed.campuses,
+        },
+      };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    console.warn(`Failed to read checkpoint file ${pathname}. Starting fresh. Reason: ${message}`);
+  }
+  return emptyCheckpoint(pathname);
+}
+
+export function hydrateMissCountersFromCheckpoint(ctx: PollerContext, campus: string): void {
+  const entry = ctx.checkpoint.data.campuses[campus];
+  if (!entry) return;
+  if (entry.term !== ctx.options.term) return;
+  const misses = new Map<string, number>();
+  for (const [index, value] of Object.entries(entry.misses ?? {})) {
+    const count = Number(value);
+    if (Number.isFinite(count) && count > 0) {
+      misses.set(index, count);
+    }
+  }
+  if (misses.size > 0) {
+    ctx.missCounters.set(campus, misses);
+  }
+  const campusMetrics = ctx.metrics.campus[campus];
+  if (campusMetrics) {
+    campusMetrics.lastOpenCount = entry.openIndexes ?? 0;
+  }
+  const hash = entry.lastSnapshotHash ?? 'none';
+  const restoredMisses = misses.size;
+  console.log(`[${campus}] restored checkpoint at ${entry.lastPollAt} (hash=${hash}, misses=${restoredMisses})`);
+}
+
+export function persistCheckpoint(ctx: PollerContext, campus: string, outcome: PollOutcome): void {
+  const entry: CampusCheckpoint = {
+    term: ctx.options.term,
+    campus,
+    lastPollAt: outcome.polledAt,
+    lastSnapshotHash: outcome.snapshotHash,
+    openIndexes: outcome.openCount,
+    misses: Object.fromEntries(outcome.misses),
+  };
+  ctx.checkpoint.data.campuses[campus] = entry;
+  ctx.checkpoint.data.updatedAt = new Date().toISOString();
+  try {
+    fs.mkdirSync(path.dirname(ctx.checkpoint.path), { recursive: true });
+    fs.writeFileSync(ctx.checkpoint.path, JSON.stringify(ctx.checkpoint.data, null, 2));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    console.error(`Failed to write checkpoint to ${ctx.checkpoint.path}: ${message}`);
+  }
+}
+
+export function createStatements(db: Database.Database): Statements {
   return {
     selectSections: db.prepare(
       `
@@ -513,6 +638,7 @@ async function main() {
   db.pragma('foreign_keys = ON');
   const statements = createStatements(db);
   const semaphore = new Semaphore(options.concurrency);
+  const checkpoint = loadCheckpointState(options.checkpointFile);
 
   const missCounters = new Map<string, Map<string, number>>();
   const shutdownSignals = ['SIGINT', 'SIGTERM'] as const;
@@ -530,17 +656,22 @@ async function main() {
 
   const server = options.metricsPort ? startMetricsServer(options.metricsPort, metrics) : null;
 
-  const context = {
+  const context: PollerContext = {
     options,
     term,
     db,
     statements,
     missCounters,
     metrics,
+    checkpoint,
   };
 
+  for (const campus of options.campuses) {
+    hydrateMissCountersFromCheckpoint(context, campus);
+  }
+
   console.log(
-    `Starting openSections poller for term=${options.term} campuses=${options.campuses.join(',')} interval=${options.intervalMs}ms (jitter=${options.jitter}) sqlite=${options.sqliteFile}`,
+    `Starting openSections poller for term=${options.term} campuses=${options.campuses.join(',')} interval=${options.intervalMs}ms (jitter=${options.jitter}) sqlite=${options.sqliteFile} checkpoint=${options.checkpointFile}`,
   );
 
   await Promise.all(
@@ -557,18 +688,7 @@ async function main() {
   db.close();
 }
 
-async function pollLoop(
-  ctx: {
-    options: PollerOptions;
-    term: SemesterParts;
-    db: Database.Database;
-    statements: Statements;
-    missCounters: Map<string, Map<string, number>>;
-    metrics: Metrics;
-  },
-  campus: string,
-  semaphore: Semaphore,
-): Promise<void> {
+async function pollLoop(ctx: PollerContext, campus: string, semaphore: Semaphore): Promise<void> {
   do {
     if (ctx.options.runOnce && ctx.metrics.campus[campus].pollsTotal > 0) {
       break;
@@ -584,17 +704,7 @@ async function pollLoop(
   } while (true);
 }
 
-async function pollOnce(
-  ctx: {
-    options: PollerOptions;
-    term: SemesterParts;
-    db: Database.Database;
-    statements: Statements;
-    missCounters: Map<string, Map<string, number>>;
-    metrics: Metrics;
-  },
-  campus: string,
-): Promise<void> {
+async function pollOnce(ctx: PollerContext, campus: string): Promise<void> {
   const started = performance.now();
   ctx.metrics.pollsTotal += 1;
   ctx.metrics.campus[campus].pollsTotal += 1;
@@ -603,6 +713,7 @@ async function pollOnce(
     const response = await performProbe({ campus, endpoint: 'openSections', timeoutMs: ctx.options.timeoutMs }, ctx.term);
     const indexes = normalizeOpenIndexes(response.body);
     const outcome = applySnapshot(ctx, campus, indexes);
+    persistCheckpoint(ctx, campus, outcome);
     const durationMs = performance.now() - started;
     const campusEntry = ctx.metrics.campus[campus];
     ctx.metrics.eventsEmitted += outcome.events;
@@ -610,7 +721,7 @@ async function pollOnce(
     campusEntry.eventsTotal += outcome.events;
     campusEntry.notificationsTotal += outcome.notifications;
     campusEntry.lastDurationMs = durationMs;
-    campusEntry.lastOpenCount = indexes.length;
+    campusEntry.lastOpenCount = outcome.openCount;
     console.log(
       `[${campus}] openSections=${indexes.length} opened=${outcome.opened} closed=${outcome.closed} events=${outcome.events} notifications=${outcome.notifications} durationMs=${durationMs.toFixed(
         0,
@@ -633,17 +744,7 @@ async function pollOnce(
   }
 }
 
-function applySnapshot(
-  ctx: {
-    options: PollerOptions;
-    db: Database.Database;
-    statements: Statements;
-    missCounters: Map<string, Map<string, number>>;
-  },
-  campus: string,
-  indexes: string[],
-): PollOutcome {
-  const now = new Date();
+export function applySnapshot(ctx: PollerContext, campus: string, indexes: string[], now: Date = new Date()): PollOutcome {
   const nowIso = now.toISOString();
   const sourceHash = hashPayload({ term: ctx.options.term, campus, indexes });
   const seen = new Set(indexes);
@@ -748,6 +849,10 @@ function applySnapshot(
     closed: toClose.length,
     events,
     notifications,
+    openCount: indexes.length,
+    snapshotHash: sourceHash,
+    polledAt: nowIso,
+    misses: missSet,
   };
 }
 
@@ -863,7 +968,11 @@ function enqueueNotifications(
   return created;
 }
 
-void main().catch((error) => {
-  console.error('Poller failed to start:', error);
-  process.exit(1);
-});
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  void main().catch((error) => {
+    console.error('Poller failed to start:', error);
+    process.exit(1);
+  });
+}
