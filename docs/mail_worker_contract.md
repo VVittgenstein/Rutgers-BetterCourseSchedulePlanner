@@ -5,7 +5,7 @@ Defines the contract between the `open_events` fan-out producer and the email wo
 ## Queue surface (SQLite)
 - **Source**: `open_event_notifications` rows created by `workers/open_sections_poller.ts` when a section flips `Closed/Wait → Open`.
 - **Fields used by the worker**: `notification_id`, `open_event_id`, `subscription_id`, `dedupe_key`, `fanout_status (pending|sent|skipped|failed|expired)`, `fanout_attempts`, `last_attempt_at`, `locked_by`, `locked_at`, `error` (JSON text).
-- **Locking**: consumer selects `fanout_status='pending'` with `locked_at IS NULL OR locked_at < now() - lockTtl` (default lock TTL 120s), sets `locked_by` to the worker id and `locked_at=now()`, and bumps `fanout_attempts` before calling `MailSender`.
+- **Locking**: consumer selects `fanout_status='pending'` with `locked_at IS NULL OR locked_at < now() - lockTtl` (default lock TTL 120s), sets `locked_by` to the worker id and `locked_at=now()`. `fanout_attempts` is incremented exactly once per completed MailSender attempt when persisting the result (sent/retryable/failed), never during lock acquisition.
 - **Idempotency**: uniqueness on `(open_event_id, subscription_id)` plus `dedupe_key` copied from `open_events` ensures at most one email per event+subscription per 5m dedupe window. `MailMessage.dedupeKey` must reuse the same value for provider-level dedupe.
 
 ## Message payload shape (handed to the email worker)
@@ -146,9 +146,9 @@ Notes:
 - `template.variables` is intentionally open for additive, locale-specific fields; the listed keys are the minimum required by v1 templates.
 
 ## Ack/Nack and retry semantics
-- **Ack (sent)**: when `MailSender.send` (wrapped by `ReliableMailSender`) returns `status="sent"`, set `fanout_status='sent'`, store the final attempt in `error` (`{provider, providerMessageId, status}`), clear `locked_by/locked_at`, and append `subscription_events.notify_sent` with the section status snapshot.
-- **Retryable nack**: when `status="retryable"` and `error.code` is retryable, keep `fanout_status='pending'`, increment `fanout_attempts`, update `last_attempt_at`, store the last attempt (with `retryAfterSeconds` when present) in `error`, clear the lock. Outer worker schedules the next pick using `retryScheduleMs[attempt-1]` capped by `lockTtlSeconds`.
-- **Terminal nack**: for `status="failed"` (invalid recipient, template missing locale/variable, unsubscribed row, non-email contact), set `fanout_status='skipped'` for non-actionable rows or `fanout_status='failed'` when the channel should alert ops. Record `{code,message}` in `error` and clear the lock.
+- **Ack (sent)**: when `MailSender.send` (wrapped by `ReliableMailSender`) returns `status="sent"`, bump `fanout_attempts` by 1, set `fanout_status='sent'`, store the final attempt in `error` (`{provider, providerMessageId, status}`), clear `locked_by/locked_at`, and append `subscription_events.notify_sent` with the section status snapshot.
+- **Retryable nack**: when `status="retryable"` and `error.code` is retryable, bump `fanout_attempts` by 1, keep `fanout_status='pending'`, update `last_attempt_at`, store the last attempt (with `retryAfterSeconds` when present) in `error`, clear the lock. Outer worker schedules the next pick using `retryScheduleMs[fanout_attempts-1]` (after increment) capped by `lockTtlSeconds`.
+- **Terminal nack**: for `status="failed"` (invalid recipient, template missing locale/variable, unsubscribed row, non-email contact), bump `fanout_attempts` by 1, set `fanout_status='skipped'` for non-actionable rows or `fanout_status='failed'` when the channel should alert ops. Record `{code,message}` in `error` and clear the lock.
 - **Dead-letter**: when `fanout_attempts >= deliveryPolicy.maxAttempts`, move the row to `fanout_status='failed'` regardless of the MailSender result and preserve the last attempt in `error`. Operators can requeue by resetting `fanout_status='pending'`, `fanout_attempts=0`, and `error=NULL`.
 - **Lock expiry**: if a worker crashes mid-attempt, another worker may take over after `lockTtlSeconds`; duplicate sends are prevented by `dedupe_key` and provider-level `dedupeKey`.
 
@@ -158,7 +158,7 @@ Notes:
   - `templateId='open-seat'`, `templateVersion` from the job payload, `variables` from `template.variables`, `unsubscribeUrl`/`manageUrl` from `links`.
   - `dedupeKey` from `open_event_notifications.dedupe_key`; `traceId` from `open_events.trace_id`.
   - `metadata` carries `{ subscriptionId, openEventId, term: event.termId, campus: event.campusCode }`.
-- `SendResult` must not be thrown; structured outcomes determine the ack/nack path above. Provider retries are handled inside `ReliableMailSender`; `fanout_attempts` only tracks outer queue tries.
+- `SendResult` must not be thrown; structured outcomes determine the ack/nack path above. Provider retries are handled inside `ReliableMailSender`; `fanout_attempts` only tracks outer queue tries (incremented once per MailSender attempt).
 
 ## Versioning
 - `version` uses `MAJOR.MINOR`. Minor releases are additive (new optional fields only); bump the major when removing/renaming fields or changing semantics. Producers must emit the lowest supported major until all workers are upgraded.
