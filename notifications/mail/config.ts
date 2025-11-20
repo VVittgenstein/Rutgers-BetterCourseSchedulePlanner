@@ -8,6 +8,8 @@ import type {
   ResolvedMailSenderConfig,
   ResolvedSMTPConfig,
   ResolvedSendGridConfig,
+  RetryPolicyConfig,
+  RateLimitConfig,
   SMTPConfig,
   SendGridConfig,
   TemplateDefinition,
@@ -55,6 +57,43 @@ const sendgridSchema = z.object({
   apiBaseUrl: z.string().optional(),
 });
 
+const rateLimitSchema = z
+  .object({
+    maxPerSecond: z.number().positive().default(5),
+    burst: z.number().positive().default(10),
+    bucketWidthSeconds: z.number().positive().default(60),
+  })
+  .transform<RateLimitConfig>((value) => {
+    const burst = Math.max(value.burst, value.maxPerSecond);
+    return { ...value, burst };
+  });
+
+const retryPolicySchema = z
+  .object({
+    maxAttempts: z.number().int().min(1).default(3),
+    backoffMs: z.array(z.number().int().nonnegative()).default([0, 2000, 7000]),
+    jitter: z.number().min(0).max(1).default(0.25),
+    retryableErrors: z
+      .array(
+        z.enum([
+          'validation_error',
+          'template_missing_locale',
+          'template_variable_missing',
+          'invalid_recipient',
+          'rate_limited',
+          'unauthorized',
+          'network_error',
+          'provider_error',
+          'unknown',
+        ]),
+      )
+      .default(['rate_limited', 'network_error', 'provider_error', 'unknown']),
+  })
+  .transform<RetryPolicyConfig>((value) => ({
+    ...value,
+    jitter: Number.isFinite(value.jitter) ? value.jitter : 0,
+  }));
+
 const configSchema = z.object({
   provider: z.enum(['sendgrid', 'smtp']),
   defaultFrom: emailSchema,
@@ -63,6 +102,17 @@ const configSchema = z.object({
   templateRoot: z.string(),
   templates: z.record(z.string(), templateSchema),
   timeouts: timeoutsSchema,
+  rateLimit: rateLimitSchema.default({
+    maxPerSecond: 5,
+    burst: 10,
+    bucketWidthSeconds: 60,
+  }),
+  retryPolicy: retryPolicySchema.default({
+    maxAttempts: 3,
+    backoffMs: [0, 2000, 7000],
+    jitter: 0.25,
+    retryableErrors: ['rate_limited', 'network_error', 'provider_error', 'unknown'],
+  }),
   providers: z.object({
     sendgrid: sendgridSchema.optional(),
     smtp: smtpSchema.optional(),
@@ -116,6 +166,8 @@ export function resolveMailSenderConfig(
     supportedLocales: parsed.supportedLocales,
     templateRoot: path.isAbsolute(parsed.templateRoot) ? parsed.templateRoot : path.resolve(baseDir, parsed.templateRoot),
     templates: parsed.templates,
+    rateLimit: parsed.rateLimit,
+    retryPolicy: parsed.retryPolicy,
     timeouts: parsed.timeouts,
     providers: {
       sendgrid: resolvedSendgrid,
