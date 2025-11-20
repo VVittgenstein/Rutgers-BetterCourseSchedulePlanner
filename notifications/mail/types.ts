@@ -72,6 +72,19 @@ export type TemplateDefinition = {
   requiredVariables: string[];
 };
 
+export type RateLimitConfig = {
+  maxPerSecond: number;
+  burst: number;
+  bucketWidthSeconds: number;
+};
+
+export type RetryPolicyConfig = {
+  maxAttempts: number;
+  backoffMs: number[];
+  jitter: number;
+  retryableErrors: SendErrorCode[];
+};
+
 export type MailSenderConfig = {
   provider: ProviderType;
   defaultFrom: { email: string; name?: string };
@@ -79,6 +92,8 @@ export type MailSenderConfig = {
   supportedLocales: string[];
   templateRoot: string;
   templates: Record<string, TemplateDefinition>;
+  rateLimit?: RateLimitConfig;
+  retryPolicy?: RetryPolicyConfig;
   timeouts: {
     connectMs: number;
     sendMs: number;
@@ -124,11 +139,28 @@ export type ResolvedSMTPConfig = Omit<SMTPConfig, 'passwordEnv'> & {
   password?: string;
 };
 
-export type ResolvedMailSenderConfig = Omit<MailSenderConfig, 'providers'> & {
+export type ResolvedMailSenderConfig = Omit<MailSenderConfig, 'providers' | 'rateLimit' | 'retryPolicy'> & {
+  rateLimit: RateLimitConfig;
+  retryPolicy: RetryPolicyConfig;
   providers: {
     sendgrid?: ResolvedSendGridConfig;
     smtp?: ResolvedSMTPConfig;
   };
+};
+
+export type MailSendAttempt = {
+  attempt: number;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  waitMs?: number;
+  nextDelayMs?: number;
+  result: SendResult;
+};
+
+export type SendWithRetryResult = {
+  finalResult: SendResult;
+  attempts: MailSendAttempt[];
 };
 
 export type RenderedContent = {
