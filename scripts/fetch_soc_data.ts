@@ -522,6 +522,36 @@ function toNullableNumber(value: number | null): number | null {
   return null;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function probeWithRetry(
+  options: Parameters<typeof performProbe>[0],
+  semester: SemesterParts,
+  attempts = 3,
+  baseBackoffMs = 2000
+): Promise<ReturnType<typeof performProbe>> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await performProbe(options, semester);
+    } catch (error) {
+      lastError = error;
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      if (attempt < attempts) {
+        const backoffMs = baseBackoffMs * attempt;
+        console.warn(`Probe ${options.endpoint} attempt ${attempt}/${attempts} failed (${reason}); retrying in ${backoffMs}ms...`);
+        await sleep(backoffMs);
+      }
+    }
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error(`Probe ${options.endpoint} failed after ${attempts} attempts`);
+}
+
 function ensureCleanWorktree(): void {
   try {
     const output = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' });
@@ -680,7 +710,7 @@ async function processSlice(ctx: PipelineContext, slice: PlannedSlice): Promise<
 
   let coursesResponse: unknown;
   try {
-    const response = await performProbe({ campus: slice.campus, endpoint: 'courses' }, semester);
+    const response = await probeWithRetry({ campus: slice.campus, endpoint: 'courses' }, semester);
     coursesResponse = response.body;
     await stagePayload(ctx, slice, 'courses', 'all', response.body);
   } catch (error) {
@@ -718,7 +748,7 @@ async function processSlice(ctx: PipelineContext, slice: PlannedSlice): Promise<
 
   if (ctx.openSectionsEnabled && summary.errors.length === 0) {
     try {
-      const response = await performProbe({ campus: slice.campus, endpoint: 'openSections' }, semester);
+      const response = await probeWithRetry({ campus: slice.campus, endpoint: 'openSections' }, semester, 3, 3000);
       await stagePayload(ctx, slice, 'openSections', 'all', response.body);
       const stats = applyOpenSectionsSnapshot(ctx, slice, response.body);
       summary.openSections = stats;
@@ -817,11 +847,20 @@ function applySubjectBatch(
         ),
     );
 
+    const seenCourseNumbers = new Set<string>();
     const courseIds = new Map<string, number>();
     const changedSections: Array<{ sectionId: number; section: NormalizedSection; statusChanged: boolean; previousStatus: string }>
       = [];
 
     for (const course of courses) {
+      const courseNumber = course.record.courseNumber;
+      if (seenCourseNumbers.has(courseNumber)) {
+        console.warn(
+          `Duplicate course ${slice.term}/${slice.campus} subject=${subject} course=${courseNumber} in courses.json; skipping duplicate entry.`,
+        );
+        continue;
+      }
+      seenCourseNumbers.add(courseNumber);
       ensureReferenceRows(ctx, slice, course);
       const row = existingCourses.get(course.record.courseNumber);
       const payload = JSON.stringify(course.raw);
