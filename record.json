@@ -2062,7 +2062,7 @@
         "R-20251113-oss-governance"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-22T02:05:00Z",
+      "updated_at": "2025-11-21T14:33:51Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-006",
@@ -2100,11 +2100,12 @@
             "deployment"
           ],
           "artifacts": [
-            "docs/deployment_playbook.md"
+            "docs/deployment_playbook.md",
+            "Compact/Compact-ST-20251113-act-006-01-deploy-playbook-2025-11-21-T134648Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-22T02:05:00Z",
+          "updated_at": "2025-11-21T14:33:51Z",
           "owner": "tbd",
           "tags": [
             "deployment",
