@@ -2025,7 +2025,7 @@
       "summary": "围绕“本地数据库 + 轻量 API 服务 + 前端 UI + 后台通知进程”的架构，整理本地部署步骤与环境要求，编写 README 与辅助脚本，使普通用户在个人电脑或服务器上无需修改代码即可初始化数据库、运行 API/前端/通知服务并完成配置。",
       "acceptance_draft": [
         "README 提供针对至少两种主流桌面操作系统（例如 Windows 与 macOS 或 Linux）的本地部署步骤，包含：安装 Node.js/bun、SQLite 或嵌入式数据库依赖、项目初始化、环境变量与密钥配置、如何执行数据库初始化/增量更新脚本，以及如何同时启动前端、API 服务与本地通知进程。",
-        "仓库包含可直接使用的本地辅助脚本（例如 scripts/setup_local_env.sh 和 scripts/run_local.sh），在一台全新环境的个人电脑上，用户 clone 仓库后运行脚本即可完成依赖安装校验、数据库初始化、服务启动与通知模块验证。"
+        "仓库包含可直接使用的本地辅助脚本（例如 scripts/setup_local_env.sh 和 scripts/run_stack.sh），在一台全新环境的个人电脑上，用户 clone 仓库后运行脚本即可完成依赖安装校验、数据库初始化、服务启动与通知模块验证。"
       ],
       "lane": "next",
       "priority_suggested": "P1",
@@ -2053,7 +2053,7 @@
         "README.md",
         ".env.example",
         "scripts/setup_local_env.sh",
-        "scripts/run_local.sh"
+        "scripts/run_stack.sh"
       ],
       "citations": [
         "EVID-001",
@@ -2062,7 +2062,7 @@
         "R-20251113-oss-governance"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-21T14:33:51Z",
+      "updated_at": "2025-11-21T14:42:00Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-006",
@@ -2125,7 +2125,7 @@
           ],
           "lane": "next",
           "priority_suggested": "P1",
-          "status": "todo",
+          "status": "done",
           "dependencies": [
             "ST-20251113-act-006-01-deploy-playbook",
             "ST-20251113-act-001-03-data-verification"
@@ -2142,11 +2142,12 @@
           ],
           "artifacts": [
             "scripts/setup_local_env.sh",
-            "scripts/run_stack.sh"
+            "scripts/run_stack.sh",
+            "Compact/Compact-ST-20251113-act-006-02-automation-scripts-2025-11-21-T144200Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T14:42:00Z",
           "owner": "tbd",
           "tags": [
             "deployment",

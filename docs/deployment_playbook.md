@@ -4,6 +4,14 @@ _Last updated: 2025-11-22_
 
 Bring a clean laptop/VM from git clone to a running stack (SQLite + data fetch + API + React UI + mail/Discord notifications). Defaults assume localhost, SQLite at `data/local.db`, API on `:3333`, and Vite dev server on `:5174`.
 
+## Automation shortcuts
+- Bootstrap deps + DB + initial fetch:  
+  `./scripts/setup_local_env.sh --terms 12024 --campuses NB`  
+  Creates `configs/*.local.json` if missing, runs `npm install` (root + frontend), applies migrations to `data/local.db`, then triggers a full-init fetch (use `--skip-fetch` to defer).
+- Start local stack with logs under `logs/run_stack/`:  
+  `./scripts/run_stack.sh --term 12024 --campuses NB`  
+  Starts API + frontend + openSections poller by default; add `--with-mail` (requires `SENDGRID_API_KEY` + mail config) and `--with-discord --allow-channel <id>` (requires `DISCORD_BOT_TOKEN` + bot config) to include dispatchers.
+
 ## Pre-flight checklist
 | Item | Notes |
 | --- | --- |
