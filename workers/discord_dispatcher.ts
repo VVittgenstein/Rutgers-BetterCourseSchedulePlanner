@@ -3,27 +3,20 @@ import Database from 'better-sqlite3';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadMailSenderConfig } from '../notifications/mail/config.js';
-import { ReliableMailSender } from '../notifications/mail/retry_policy.js';
-import { SendGridMailSender } from '../notifications/mail/providers/sendgrid.js';
-import type { MailMessage, ResolvedMailSenderConfig, SendErrorCode } from '../notifications/mail/types.js';
+import { buildDiscordSend, type CourseRow, type DiscordFanoutJob, type DiscordAdapterOptions, type MeetingRow, type SectionRow } from '../notifications/discord/adapter.js';
+import { DiscordBot, loadDiscordBotConfig, type DiscordSendErrorCode, type ResolvedDiscordBotConfig } from '../notifications/discord/bot.js';
 
-type DeliveryPolicy = {
-  maxAttempts: number;
-  retryScheduleMs: number[];
-};
-
-export type MailDispatcherOptions = {
+type DiscordDispatcherOptions = {
   sqliteFile: string;
-  mailConfigPath: string;
+  botConfigPath: string;
   batchSize: number;
   workerId: string;
   lockTtlSeconds: number;
-  delivery: DeliveryPolicy;
-  appBaseUrl: string;
-  defaultLocale: string;
   idleDelayMs: number;
   runOnce: boolean;
+  appBaseUrl: string;
+  defaultLocale: string;
+  allowedChannelIds: string[];
 };
 
 type NotificationRow = {
@@ -41,6 +34,7 @@ type NotificationRow = {
   event_index_number: string;
   event_status_after: string | null;
   event_status_before: string | null;
+  event_seat_delta: number | null;
   event_at: string;
   event_trace_id: string | null;
   event_payload: string | null;
@@ -58,86 +52,33 @@ type NotificationRow = {
   last_known_section_status: string | null;
 };
 
-type SectionRow = {
-  section_id: number;
-  course_id: number;
-  term_id: string;
-  campus_code: string;
-  subject_code: string;
-  section_number: string | null;
-  index_number: string;
-  open_status: string | null;
-  open_status_updated_at: string | null;
-  meeting_mode_summary: string | null;
-};
-
-type CourseRow = {
-  course_id: number;
-  subject_code: string;
-  course_number: string;
-  course_string: string | null;
-  title: string;
-};
-
-type MeetingRow = {
-  section_id: number;
-  meeting_day: string | null;
-  start_minutes: number | null;
-  end_minutes: number | null;
-  campus_abbrev: string | null;
-  campus_location_code: string | null;
-  campus_location_desc: string | null;
-  building_code: string | null;
-  room_number: string | null;
-};
-
-type MailJob = {
+type DiscordJob = DiscordFanoutJob & {
   notificationId: number;
   fanoutAttempts: number;
-  dedupeKey: string;
-  event: {
-    openEventId: number;
-    sectionId: number | null;
-    termId: string;
-    campusCode: string;
-    indexNumber: string;
-    statusAfter: string | null;
-    statusBefore: string | null;
-    eventAt: string;
-    traceId: string | null;
-  };
-  subscription: {
-    subscriptionId: number;
-    status: string;
-    contactType: string;
-    contactValue: string | null;
-    locale: string | null;
-    unsubscribeToken: string | null;
-    metadata: string | null;
-    sectionId: number | null;
-    termId: string | null;
-    campusCode: string | null;
-    indexNumber: string | null;
-    lastKnownStatus: string | null;
-  };
-  payload: Record<string, unknown>;
   section?: SectionRow;
   course?: CourseRow;
   meetings: MeetingRow[];
 };
 
-type SendExecutor = Pick<ReliableMailSender, 'send'>;
+type SendExecutor = Pick<DiscordBot, 'send'>;
 
-export class MailDispatcher {
+export class DiscordDispatcher {
+  private readonly adapterOpts: DiscordAdapterOptions;
   private readonly now: () => Date;
 
   constructor(
     private readonly db: Database.Database,
-    private readonly sender: SendExecutor,
-    private readonly config: ResolvedMailSenderConfig,
-    private readonly options: Omit<MailDispatcherOptions, 'sqliteFile' | 'mailConfigPath'>,
+    private readonly bot: SendExecutor,
+    private readonly config: ResolvedDiscordBotConfig,
+    private readonly options: Omit<DiscordDispatcherOptions, 'sqliteFile' | 'botConfigPath'>,
     now: () => Date = () => new Date(),
   ) {
+    this.adapterOpts = {
+      config: this.config,
+      appBaseUrl: this.options.appBaseUrl,
+      defaultLocale: this.options.defaultLocale,
+      allowedChannelIds: this.options.allowedChannelIds,
+    };
     this.now = now;
   }
 
@@ -158,17 +99,17 @@ export class MailDispatcher {
     }
   }
 
-  private claimBatch(): MailJob[] {
+  private claimBatch(): DiscordJob[] {
     const expiry = new Date(this.now().getTime() - this.options.lockTtlSeconds * 1000).toISOString();
     const candidateStmt = this.db.prepare(
       `
-      SELECT notification_id
+      SELECT n.notification_id
       FROM open_event_notifications n
       JOIN subscriptions s ON n.subscription_id = s.subscription_id
       WHERE n.fanout_status = 'pending'
-        AND s.contact_type = 'email'
+        AND s.contact_type IN ('discord_user', 'discord_channel')
         AND (n.locked_at IS NULL OR n.locked_at < ?)
-      ORDER BY notification_id
+      ORDER BY n.notification_id
       LIMIT ?
     `,
     );
@@ -182,7 +123,7 @@ export class MailDispatcher {
         AND fanout_status = 'pending'
         AND (locked_at IS NULL OR locked_at < ?)
         AND EXISTS (
-          SELECT 1 FROM subscriptions s WHERE s.subscription_id = open_event_notifications.subscription_id AND s.contact_type = 'email'
+          SELECT 1 FROM subscriptions s WHERE s.subscription_id = open_event_notifications.subscription_id AND s.contact_type IN ('discord_user', 'discord_channel')
         )
     `,
     );
@@ -197,7 +138,7 @@ export class MailDispatcher {
     return this.loadJobs(locked);
   }
 
-  private loadJobs(ids: number[]): MailJob[] {
+  private loadJobs(ids: number[]): DiscordJob[] {
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => '?').join(', ');
     const rows = this.db
@@ -217,6 +158,7 @@ export class MailDispatcher {
           e.index_number AS event_index_number,
           e.status_after AS event_status_after,
           e.status_before AS event_status_before,
+          e.seat_delta AS event_seat_delta,
           e.event_at,
           e.trace_id AS event_trace_id,
           e.payload AS event_payload,
@@ -261,14 +203,15 @@ export class MailDispatcher {
         dedupeKey: row.dedupe_key,
         event: {
           openEventId: row.open_event_id,
-          sectionId: row.event_section_id,
           termId: row.event_term_id,
           campusCode: row.event_campus_code,
           indexNumber: row.event_index_number,
           statusAfter: row.event_status_after,
           statusBefore: row.event_status_before,
+          seatDelta: row.event_seat_delta,
           eventAt: row.event_at,
           traceId: row.event_trace_id,
+          payload: safeParseJson(row.event_payload),
         },
         subscription: {
           subscriptionId: row.subscription_id,
@@ -276,15 +219,14 @@ export class MailDispatcher {
           contactType: row.contact_type,
           contactValue: row.contact_value,
           locale: row.subscription_locale,
-          unsubscribeToken: row.unsubscribe_token,
           metadata: row.subscription_metadata,
+          unsubscribeToken: row.unsubscribe_token,
           sectionId: row.subscription_section_id,
           termId: row.subscription_term_id,
           campusCode: row.subscription_campus_code,
           indexNumber: row.subscription_index_number,
           lastKnownStatus: row.last_known_section_status,
         },
-        payload: safeParseJson(row.event_payload),
         section,
         course,
         meetings,
@@ -350,7 +292,7 @@ export class MailDispatcher {
     return map;
   }
 
-  private async handleJob(job: MailJob): Promise<void> {
+  private async handleJob(job: DiscordJob): Promise<void> {
     const eligibility = this.validate(job);
     if (!eligibility.ok) {
       this.persistOutcome(job, {
@@ -362,8 +304,18 @@ export class MailDispatcher {
       return;
     }
 
-    const message = this.buildMessage(job);
-    const sendResult = await this.sender.send(message, { rateLimitKey: 'mail-open-seat' });
+    const built = buildDiscordSend(job, this.adapterOpts);
+    if (!built.ok) {
+      this.persistOutcome(job, {
+        fanoutStatus: 'skipped',
+        attempts: job.fanoutAttempts + 1,
+        error: { code: built.code, message: built.message },
+        subscriptionEvent: { type: 'notify_failed', error: built.code },
+      });
+      return;
+    }
+
+    const sendResult = await this.bot.send(built.request);
     const attempts = job.fanoutAttempts + 1;
     const final = sendResult.finalResult;
     const serializedError = JSON.stringify({ finalResult: final, attempts: sendResult.attempts });
@@ -373,26 +325,26 @@ export class MailDispatcher {
         fanoutStatus: 'sent',
         attempts,
         error: serializedError,
-        subscriptionEvent: { type: 'notify_sent', providerMessageId: final.providerMessageId },
+        subscriptionEvent: { type: 'notify_sent', providerMessageId: final.messageId },
         updateLastNotified: true,
       });
       return;
     }
 
     if (final.status === 'retryable') {
-      const reachedMax = attempts >= this.options.delivery.maxAttempts;
+      const maxAttempts = this.config.rateLimit.maxAttempts;
+      const exhausted = attempts >= maxAttempts;
       const delayMs = Math.max(
         final.retryAfterSeconds ? Math.round(final.retryAfterSeconds * 1000) : 0,
-        this.options.delivery.retryScheduleMs[Math.min(attempts - 1, this.options.delivery.retryScheduleMs.length - 1)] ??
-          0,
+        this.config.rateLimit.backoffMs[Math.min(attempts - 1, this.config.rateLimit.backoffMs.length - 1)] ?? 0,
       );
-      const lockedAt = reachedMax ? null : this.computeRetryLock(delayMs);
+      const lockedAt = exhausted ? null : this.computeRetryLock(delayMs);
       this.persistOutcome(job, {
-        fanoutStatus: reachedMax ? 'failed' : 'pending',
+        fanoutStatus: exhausted ? 'failed' : 'pending',
         attempts,
         error: serializedError,
         lockedAt,
-        subscriptionEvent: reachedMax ? { type: 'notify_failed', error: final.error?.code ?? 'retry_exhausted' } : null,
+        subscriptionEvent: exhausted ? { type: 'notify_failed', error: final.error?.code ?? 'retry_exhausted' } : null,
       });
       return;
     }
@@ -406,12 +358,10 @@ export class MailDispatcher {
     });
   }
 
-  private validate(job: MailJob): { ok: true } | { ok: false; code: SendErrorCode | 'ineligible'; message: string } {
-    if (job.subscription.contactType !== 'email') {
-      return { ok: false, code: 'ineligible', message: 'contact type is not email' };
-    }
-    if (!job.subscription.contactValue) {
-      return { ok: false, code: 'invalid_recipient', message: 'missing contact value' };
+  private validate(job: DiscordJob): { ok: true } | { ok: false; code: DiscordSendErrorCode | 'ineligible'; message: string } {
+    const contactType = job.subscription.contactType;
+    if (contactType !== 'discord_user' && contactType !== 'discord_channel') {
+      return { ok: false, code: 'ineligible', message: 'contact type is not discord' };
     }
     if (!['pending', 'active'].includes(job.subscription.status)) {
       return { ok: false, code: 'ineligible', message: `subscription status=${job.subscription.status}` };
@@ -422,54 +372,8 @@ export class MailDispatcher {
     return { ok: true };
   }
 
-  private buildMessage(job: MailJob): MailMessage {
-    const locale = chooseLocale(job.subscription.locale, this.config.supportedLocales, this.options.defaultLocale);
-    const links = buildLinks(this.options.appBaseUrl, job.subscription.subscriptionId, job.subscription.unsubscribeToken);
-    const courseTitle =
-      job.course?.title ?? (typeof job.payload.courseTitle === 'string' ? job.payload.courseTitle : 'Course update');
-    const courseString = deriveCourseString(job, courseTitle);
-    const sectionNumber =
-      job.section?.section_number ??
-      (typeof job.payload.sectionNumber === 'string' ? job.payload.sectionNumber : job.subscription.indexNumber) ??
-      'TBD';
-    const meetingSummary = buildMeetingSummary(job.meetings);
-
-    return {
-      to: { email: job.subscription.contactValue ?? '' },
-      locale,
-      templateId: 'open-seat',
-      templateVersion: 'v1',
-      variables: {
-        courseTitle,
-        courseString,
-        sectionIndex: job.event.indexNumber,
-        sectionNumber,
-        meetingSummary,
-        campus: job.event.campusCode,
-        eventDetectedAt: job.event.eventAt,
-        manageUrl: links.manageUrl,
-        unsubscribeUrl: links.unsubscribeUrl ?? '',
-      },
-      manageUrl: links.manageUrl,
-      unsubscribeUrl: links.unsubscribeUrl,
-      dedupeKey: job.dedupeKey,
-      traceId: job.event.traceId ?? undefined,
-      metadata: {
-        subscriptionId: job.subscription.subscriptionId,
-        openEventId: job.event.openEventId,
-        term: job.event.termId,
-        campus: job.event.campusCode,
-      },
-    };
-  }
-
-  private isSkippable(code: SendErrorCode | undefined): boolean {
-    return (
-      code === 'invalid_recipient' ||
-      code === 'validation_error' ||
-      code === 'template_missing_locale' ||
-      code === 'template_variable_missing'
-    );
+  private isSkippable(code: DiscordSendErrorCode | undefined): boolean {
+    return code === 'validation_error' || code === 'unauthorized' || code === 'not_found';
   }
 
   private computeRetryLock(delayMs: number): string {
@@ -480,7 +384,7 @@ export class MailDispatcher {
   }
 
   private persistOutcome(
-    job: MailJob,
+    job: DiscordJob,
     input: {
       fanoutStatus: 'pending' | 'sent' | 'failed' | 'skipped';
       attempts: number;
@@ -544,59 +448,6 @@ export class MailDispatcher {
   }
 }
 
-function chooseLocale(preferred: string | null, supported: string[], fallback: string): string {
-  if (preferred && supported.includes(preferred)) return preferred;
-  if (supported.includes(fallback)) return fallback;
-  return supported[0];
-}
-
-function buildLinks(base: string, subscriptionId: number, unsubscribeToken: string | null) {
-  const normalized = base.replace(/\/+$/, '');
-  const manageUrl = `${normalized}/subscriptions/${subscriptionId}`;
-  const unsubscribeUrl = unsubscribeToken
-    ? `${normalized}/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`
-    : undefined;
-  return { manageUrl, unsubscribeUrl };
-}
-
-function buildMeetingSummary(meetings: MeetingRow[]): string {
-  if (!meetings.length) return 'TBA';
-  return meetings
-    .map((meeting) => {
-      const day = meeting.meeting_day ?? 'TBA';
-      const time =
-        meeting.start_minutes !== null && meeting.start_minutes !== undefined && meeting.end_minutes !== null
-          ? `${formatMinutes(meeting.start_minutes)}-${formatMinutes(meeting.end_minutes)}`
-          : null;
-      const locationParts: string[] = [];
-      if (meeting.campus_abbrev) locationParts.push(meeting.campus_abbrev);
-      else if (meeting.campus_location_code) locationParts.push(meeting.campus_location_code);
-      else if (meeting.campus_location_desc) locationParts.push(meeting.campus_location_desc);
-      if (meeting.building_code) locationParts.push(meeting.building_code);
-      if (meeting.room_number) locationParts.push(meeting.room_number);
-      const location = locationParts.length ? locationParts.join(' ') : null;
-      return [day, time, location].filter(Boolean).join(' ');
-    })
-    .join('; ');
-}
-
-function formatMinutes(value: number): string {
-  const hours = Math.floor(value / 60);
-  const minutes = value % 60;
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-}
-
-function deriveCourseString(job: MailJob, courseTitle: string): string {
-  if (job.course?.course_string) return job.course.course_string;
-  if (typeof job.payload.courseString === 'string') return job.payload.courseString;
-  if (job.course) return `${job.course.subject_code}:${job.course.course_number}`;
-  if (job.section) return `${job.section.subject_code}:${job.section.index_number}`;
-  if (typeof job.payload.subject === 'string' && typeof job.payload.index === 'string') {
-    return `${job.payload.subject}:${job.payload.index}`;
-  }
-  return courseTitle;
-}
-
 function safeParseJson(text: string | null): Record<string, unknown> {
   if (!text) return {};
   try {
@@ -611,18 +462,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function parseArgs(argv: string[]): MailDispatcherOptions {
-  const defaults: MailDispatcherOptions = {
+function parseArgs(argv: string[]): DiscordDispatcherOptions {
+  const defaults: DiscordDispatcherOptions = {
     sqliteFile: path.resolve('data', 'local.db'),
-    mailConfigPath: path.resolve('configs', 'mail_sender.example.json'),
+    botConfigPath: path.resolve('configs', 'discord_bot.example.json'),
     batchSize: 25,
-    workerId: `mail-worker-${Math.random().toString(16).slice(2, 8)}`,
+    workerId: `discord-worker-${Math.random().toString(16).slice(2, 8)}`,
     lockTtlSeconds: 120,
-    delivery: { maxAttempts: 3, retryScheduleMs: [0, 2000, 7000] },
-    appBaseUrl: 'http://localhost:3000',
-    defaultLocale: 'en-US',
     idleDelayMs: 2000,
     runOnce: false,
+    appBaseUrl: 'http://localhost:3000',
+    defaultLocale: 'en-US',
+    allowedChannelIds: [],
   };
 
   const opts = { ...defaults };
@@ -635,9 +486,9 @@ function parseArgs(argv: string[]): MailDispatcherOptions {
         opts.sqliteFile = path.resolve(next);
         i += 1;
         break;
-      case '--mail-config':
-        if (!next) throw new Error('Missing value for --mail-config');
-        opts.mailConfigPath = path.resolve(next);
+      case '--bot-config':
+        if (!next) throw new Error('Missing value for --bot-config');
+        opts.botConfigPath = path.resolve(next);
         i += 1;
         break;
       case '--batch':
@@ -655,11 +506,6 @@ function parseArgs(argv: string[]): MailDispatcherOptions {
         opts.lockTtlSeconds = parseInt(next, 10);
         i += 1;
         break;
-      case '--max-attempts':
-        if (!next) throw new Error('Missing value for --max-attempts');
-        opts.delivery.maxAttempts = parseInt(next, 10);
-        i += 1;
-        break;
       case '--app-base-url':
         if (!next) throw new Error('Missing value for --app-base-url');
         opts.appBaseUrl = next;
@@ -668,6 +514,11 @@ function parseArgs(argv: string[]): MailDispatcherOptions {
       case '--default-locale':
         if (!next) throw new Error('Missing value for --default-locale');
         opts.defaultLocale = next;
+        i += 1;
+        break;
+      case '--allow-channel':
+        if (!next) throw new Error('Missing value for --allow-channel');
+        opts.allowedChannelIds.push(next);
         i += 1;
         break;
       case '--idle-delay':
@@ -686,34 +537,30 @@ function parseArgs(argv: string[]): MailDispatcherOptions {
   return opts;
 }
 
-async function createSender(config: ResolvedMailSenderConfig): Promise<ReliableMailSender> {
-  switch (config.provider) {
-    case 'sendgrid':
-      return new ReliableMailSender(new SendGridMailSender(config), config);
-    default:
-      throw new Error(`Unsupported mail provider: ${config.provider}`);
-  }
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const cfg = await loadMailSenderConfig(options.mailConfigPath);
-  const sender = await createSender(cfg);
+  const cfg = await loadDiscordBotConfig(options.botConfigPath);
+  const bot = new DiscordBot(cfg);
   const db = new Database(options.sqliteFile);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
   try {
-    const dispatcher = new MailDispatcher(db, sender, cfg, {
-      batchSize: options.batchSize,
-      workerId: options.workerId,
-      lockTtlSeconds: options.lockTtlSeconds,
-      delivery: options.delivery,
-      appBaseUrl: options.appBaseUrl,
-      defaultLocale: options.defaultLocale,
-      idleDelayMs: options.idleDelayMs,
-      runOnce: options.runOnce,
-    });
+    const dispatcher = new DiscordDispatcher(
+      db,
+      bot,
+      cfg,
+      {
+        batchSize: options.batchSize,
+        workerId: options.workerId,
+        lockTtlSeconds: options.lockTtlSeconds,
+        idleDelayMs: options.idleDelayMs,
+        runOnce: options.runOnce,
+        appBaseUrl: options.appBaseUrl,
+        defaultLocale: options.defaultLocale,
+        allowedChannelIds: options.allowedChannelIds,
+      },
+    );
     await dispatcher.runForever();
   } finally {
     db.close();
@@ -723,7 +570,7 @@ async function main() {
 const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);
 if (isDirectRun) {
   void main().catch((error) => {
-    console.error('mail_dispatcher failed:', error);
+    console.error('discord_dispatcher failed:', error);
     process.exit(1);
   });
 }
