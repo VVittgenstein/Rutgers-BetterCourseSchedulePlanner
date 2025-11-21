@@ -17,6 +17,7 @@
     "data:fetch": "tsx scripts/fetch_soc_data.ts",
     "api:start": "tsx api/src/server.ts",
     "api:dev": "tsx watch api/src/server.ts",
+    "discord:test-send": "tsx scripts/discord_send_test.ts",
     "i18n:check": "tsx scripts/i18n_missing_check.ts"
   },
   "repository": {
