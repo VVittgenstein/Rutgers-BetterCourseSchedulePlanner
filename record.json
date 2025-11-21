@@ -1723,18 +1723,18 @@
             "notification-service",
             "docs"
           ],
-      "artifacts": [
-        "docs/mail_worker_contract.md",
-        "Compact/Compact-ST-20251113-act-003-01-worker-contract-2025-11-20-T171316Z.md"
-      ],
-      "citations": [],
-      "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-20T17:13:16Z",
-      "owner": "tbd",
-      "tags": [
-        "notification",
-        "docs"
-      ]
+          "artifacts": [
+            "docs/mail_worker_contract.md",
+            "Compact/Compact-ST-20251113-act-003-01-worker-contract-2025-11-20-T171316Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-20T17:13:16Z",
+          "owner": "tbd",
+          "tags": [
+            "notification",
+            "docs"
+          ]
         },
         "ST-20251113-act-003-02-worker-implementation": {
           "seed_id": null,
