@@ -41,3 +41,7 @@ chatgpt-codex-connector bot
 P1 Badge Respect bot retry count when deciding exhaustion
 
 When DiscordBot.send already consumes its internal retry budget (e.g., repeated 429s), final.status is still 'retryable' with final.attempt equal to config.rateLimit.maxAttempts, but the dispatcher treats it as the first attempt because attempts is derived only from fanout_attempts and is compared to maxAttempts. This requeues the row as pending even though the bot has already hit the retry cap, so a single notification can trigger multiple worker passes of maxAttempts API calls (up to 9 with the defaults), overshooting the configured retry limits and hammering Discord unnecessarily. Exhaustion should be based on the bot’s attempt count (e.g., final.attempt or sendResult.attempts.length) rather than just the fanout_attempts counter.
+
+## Code Review - ST-20251113-act-004-03-event-integration - 2025-11-21T13:27:05Z
+
+Codex Review: Didn't find any major issues. Bravo.
