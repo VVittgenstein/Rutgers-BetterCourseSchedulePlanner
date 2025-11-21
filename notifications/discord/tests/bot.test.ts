@@ -90,3 +90,21 @@ test('opens DM channel when userId provided', async () => {
   assert.ok(calls[0].endsWith('/users/@me/channels'));
   assert.ok(calls[1].endsWith('/channels/dm-777/messages'));
 });
+
+test('dedupeKey prevents concurrent duplicate sends', async () => {
+  let callCount = 0;
+  const fetchStub: typeof fetch = async (url, init) => {
+    callCount += 1;
+    return new Response(JSON.stringify({ id: 'msg-dup' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const bot = createBot({}, fetchStub);
+  const request: DiscordSendRequest = { target: { channelId: 'chan-default' }, message: { content: 'hello' }, dedupeKey: 'evt-1' };
+
+  const [r1, r2] = await Promise.all([bot.send(request), bot.send(request)]);
+
+  assert.equal(callCount, 1);
+  assert.equal(r1.finalResult.messageId, 'msg-dup');
+  assert.equal(r2.finalResult.messageId, 'msg-dup');
+  assert.equal(r1.finalResult.status, 'sent');
+  assert.equal(r2.finalResult.status, 'sent');
+});

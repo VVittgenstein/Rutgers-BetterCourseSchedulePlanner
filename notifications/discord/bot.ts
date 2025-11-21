@@ -278,7 +278,29 @@ export class DiscordBot {
     });
   }
 
+  private readonly inflight = new Map<string, Promise<DiscordSendWithRetryResult>>();
+
   async send(request: DiscordSendRequest): Promise<DiscordSendWithRetryResult> {
+    const dedupeKey = request.dedupeKey;
+    if (dedupeKey) {
+      const existing = this.inflight.get(dedupeKey);
+      if (existing) return existing;
+    }
+
+    const promise = this.sendWithRetry(request).finally(() => {
+      if (dedupeKey) {
+        this.inflight.delete(dedupeKey);
+      }
+    });
+
+    if (dedupeKey) {
+      this.inflight.set(dedupeKey, promise);
+    }
+
+    return promise;
+  }
+
+  private async sendWithRetry(request: DiscordSendRequest): Promise<DiscordSendWithRetryResult> {
     const attempts: DiscordSendAttempt[] = [];
     const effectiveTarget = this.applyTestHooks(request.target);
     const channelResolution = await this.resolveChannel(effectiveTarget, request.traceId);
