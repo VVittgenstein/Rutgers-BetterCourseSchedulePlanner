@@ -1958,11 +1958,13 @@
             "notifications/discord/bot.ts",
             "notifications/discord/tests/bot.test.ts",
             "scripts/discord_send_test.ts",
-            "Compact/Compact-ST-20251113-act-004-02-bot-sending-2025-11-21-T110000Z.md"
+            "Compact/Compact-ST-20251113-act-004-02-bot-sending-2025-11-21-T105707Z.md",
+            "Compact/Compact-ST-20251113-act-004-02-bot-sending-2025-11-21-T110000Z.md",
+            "Compact/Compact-ST-20251113-act-004-02-bot-sending-2025-11-21-T112050Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-21T11:00:00Z",
+          "updated_at": "2025-11-21T11:37:53Z",
           "owner": "tbd",
           "tags": [
             "discord",
