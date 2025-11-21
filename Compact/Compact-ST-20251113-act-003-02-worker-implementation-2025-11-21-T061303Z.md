@@ -9,3 +9,6 @@
   - sent path asserts mail payload contents (locale, manage/unsubscribe links, meeting summary) and DB transitions to `sent` with `notify_sent` event.
   - retryable path asserts `fanout_status` remains `pending`, attempts=1, lock encodes retry delay, and no subscription event emitted.
 - Known limits/risks: only SendGrid provider is wired in `createSender`; lock/backoff encoding relies on `locked_at` math (may need alignment with scheduler); app base URL must be configured correctly for unsubscribe/manage links; meeting summary is coarse and may omit richer metadata; no supervisord/runbook or metrics hooks yet beyond underlying MailSender.
+
+## Code Review - ST-20251113-act-003-02-worker-implementation - 2025-11-21T06:25:48Z
+Codex Review: Didn't find any major issues. Hooray!
