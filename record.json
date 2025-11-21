@@ -2029,7 +2029,7 @@
       ],
       "lane": "next",
       "priority_suggested": "P1",
-      "status": "todo",
+      "status": "done",
       "dependencies": [
         "T-20251113-act-001-soc-json-scraper",
         "T-20251113-act-002-frontend-filter-mvp",
@@ -2062,7 +2062,7 @@
         "R-20251113-oss-governance"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-21T17:32:00Z",
+      "updated_at": "2025-11-21T19:48:20Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-006",
@@ -2187,7 +2187,7 @@
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-21T17:32:00Z",
+          "updated_at": "2025-11-21T19:48:20Z",
           "owner": "tbd",
           "tags": [
             "deployment",
