@@ -2062,7 +2062,7 @@
         "R-20251113-oss-governance"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-21T14:42:00Z",
+      "updated_at": "2025-11-21T16:17:13Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-006",
@@ -2147,7 +2147,7 @@
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-21T14:42:00Z",
+          "updated_at": "2025-11-21T16:17:13Z",
           "owner": "tbd",
           "tags": [
             "deployment",
