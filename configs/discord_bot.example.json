@@ -1,0 +1,45 @@
+{
+  "applicationId": "123456789012345678",
+  "botTokenEnv": "DISCORD_BOT_TOKEN",
+  "publicKeyEnv": "DISCORD_PUBLIC_KEY",
+  "defaultMode": "channel",
+  "defaultGuildId": "234567890123456789",
+  "defaultChannelId": "345678901234567890",
+  "inviteUrl": "https://discord.gg/your-server",
+  "dm": {
+    "enabled": true,
+    "requireGuildIds": ["234567890123456789"],
+    "verificationCommand": "/alerts dm-verify",
+    "verificationTimeoutSeconds": 900,
+    "fallbackChannelId": "345678901234567890"
+  },
+  "mentions": {
+    "roleId": null,
+    "allowEveryone": false
+  },
+  "rateLimit": {
+    "globalPerSecond": 20,
+    "perChannelBurst": 5,
+    "perChannelResetMs": 5000,
+    "maxAttempts": 3,
+    "backoffMs": [0, 2000, 7000],
+    "jitter": 0.3
+  },
+  "messageTemplate": {
+    "prefix": ":mega:",
+    "statusLine": "{{statusAfter}} (Δ{{seatDelta}}) for {{courseTitle}} {{indexNumber}} @ {{campusCode}}",
+    "meetingLine": "{{meetingSummary}}",
+    "socUrlTemplate": "https://sis.rutgers.edu/soc/#keyword={{indexNumber}}&semester={{termId}}",
+    "manageUrlTemplate": "{{manageUrl}}",
+    "footer": "Switch to email or DM via the website or slash command."
+  },
+  "logging": {
+    "redactSnowflakes": true,
+    "traceField": "traceId"
+  },
+  "testHooks": {
+    "dryRun": true,
+    "overrideChannelId": null,
+    "overrideUserId": null
+  }
+}
