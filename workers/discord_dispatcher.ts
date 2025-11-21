@@ -316,8 +316,9 @@ export class DiscordDispatcher {
     }
 
     const sendResult = await this.bot.send(built.request);
-    const attempts = job.fanoutAttempts + 1;
     const final = sendResult.finalResult;
+    const providerAttempts = Math.max(final.attempt ?? sendResult.attempts.length ?? 1, 1);
+    const attempts = job.fanoutAttempts + providerAttempts;
     const serializedError = JSON.stringify({ finalResult: final, attempts: sendResult.attempts });
 
     if (final.status === 'sent') {
