@@ -142,3 +142,7 @@ vite.config.ts.timestamp-*
 data/*.db
 data/*.sqlite
 data/migrations.log
+data/staging/
+
+# Local configs generated from examples
+configs/*.local.json

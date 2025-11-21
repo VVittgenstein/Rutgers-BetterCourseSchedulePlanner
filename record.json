@@ -2062,7 +2062,7 @@
         "R-20251113-oss-governance"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-21T16:17:13Z",
+      "updated_at": "2025-11-21T17:32:00Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-006",
@@ -2166,7 +2166,7 @@
           ],
           "lane": "next",
           "priority_suggested": "P1",
-          "status": "todo",
+          "status": "done",
           "dependencies": [
             "ST-20251113-act-006-02-automation-scripts"
           ],
@@ -2187,7 +2187,7 @@
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T17:32:00Z",
           "owner": "tbd",
           "tags": [
             "deployment",
