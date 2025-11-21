@@ -20,3 +20,6 @@
 - 手册中的命令依赖真实凭据（SendGrid/SMTP、Discord），未验证在全新环境中的实际可行性。
 - 强制触发订阅通知使用直接修改 SQLite 并在 poller `--once` 下跑一次，需注意恢复真实状态（手册建议重新跑 incremental fetch）；可能与现有 checkpoint 状态冲突。
 - Vite/API 端口及代理假设可能与现有环境差异，需按实际调整。***
+
+## Code Review - ST-20251113-act-006-01-deploy-playbook - 2025-11-21T14:33:51Z
+Codex Review: Didn't find any major issues. 👍
