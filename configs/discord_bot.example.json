@@ -5,7 +5,7 @@
   "defaultMode": "channel",
   "defaultGuildId": "234567890123456789",
   "defaultChannelId": "345678901234567890",
-  "inviteUrl": "https://discord.gg/your-server",
+  "inviteUrl": "https://discord.com/api/oauth2/authorize?client_id=123456789012345678&permissions=19456&scope=bot%20applications.commands",
   "dm": {
     "enabled": true,
     "requireGuildIds": ["234567890123456789"],
