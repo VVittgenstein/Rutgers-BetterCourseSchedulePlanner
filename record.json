@@ -1687,7 +1687,7 @@
         "R-20251113-spam"
       ],
       "created_at": "2025-11-13T00:00:00Z",
-      "updated_at": "2025-11-21T06:35:21Z",
+      "updated_at": "2025-11-21T08:50:24Z",
       "owner": "tbd",
       "tags": [
         "seed:ACT-003",
@@ -1808,11 +1808,13 @@
           "artifacts": [
             "scripts/mail_e2e_sim.ts",
             "reports/mail_worker_latency.md",
-            "docs/notify_runbook.md"
+            "docs/notify_runbook.md",
+            "Compact/Compact-ST-20251113-act-003-03-end-to-end-validation-2025-11-21-T073814Z.md",
+            "Compact/Compact-ST-20251113-act-003-03-end-to-end-validation-2025-11-21-T082428Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-21T06:35:21Z",
+          "updated_at": "2025-11-21T08:50:24Z",
           "owner": "tbd",
           "tags": [
             "notification",
