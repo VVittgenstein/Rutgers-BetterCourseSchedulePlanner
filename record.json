@@ -1748,7 +1748,7 @@
           ],
           "lane": "next",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "done",
           "dependencies": [
             "ST-20251113-act-003-01-worker-contract",
             "ST-20251113-act-011-02-provider-adapter"
@@ -1765,11 +1765,12 @@
           ],
           "artifacts": [
             "workers/mail_dispatcher.ts",
-            "workers/tests/mail_dispatcher.test.ts"
+            "workers/tests/mail_dispatcher.test.ts",
+            "Compact/Compact-ST-20251113-act-003-02-worker-implementation-2025-11-21-T061303Z.md"
           ],
           "citations": [],
           "created_at": "2025-11-13T00:00:00Z",
-          "updated_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T06:25:48Z",
           "owner": "tbd",
           "tags": [
             "notification",
