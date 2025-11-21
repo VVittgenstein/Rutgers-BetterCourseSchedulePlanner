@@ -11,8 +11,8 @@
 
 ## How to run locally
 - **Poller (openSections):**
-  - `tsx workers/open_sections_poller.ts --term 12025 --campuses NB --interval 20000 --jitter 0.2 --checkpoint data/poller_checkpoint.json --metrics-port 9309`
-  - Interval ≤20s keeps worst-case mail latency under 60s; jitter avoids thundering herd.
+  - `tsx workers/open_sections_poller.ts --term 12025 --campuses NB --interval 20 --checkpoint data/poller_checkpoint.json --metrics-port 9309`
+  - `--interval` is in seconds (use `--interval-ms` for ms). Default jitter is 0.3 and baked in; interval ≤20s keeps worst-case mail latency under 60s while jitter avoids thundering herd.
 - **Mail dispatcher:**
   - `tsx workers/mail_dispatcher.ts --sqlite data/local.db --mail-config configs/mail_sender.example.json --batch 50 --idle-delay 2000 --lock-ttl 120`
   - For smoke tests, add `--once`; for long-running, keep WAL enabled (default in script) and monitor log output.
