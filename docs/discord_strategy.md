@@ -23,7 +23,7 @@ Defines how the Discord channel is used for seat-open alerts, what the default m
   - `defaultMode="channel"` plus `defaultGuildId/defaultChannelId` for the broadcast feed.
   - `dm.requireGuildIds` and `dm.verificationCommand` to gate DM delivery to users who opted in from allowed guilds; `dm.fallbackChannelId` is used when DMs are blocked.
   - `rateLimit` bucket hints (global/per-channel) and retry/backoff knobs; `testHooks` lets you force dry-run or override targets during smoke tests.
-- Invite link template: `https://discord.com/api/oauth2/authorize?client_id=<applicationId>&permissions=3072&scope=bot%20applications.commands` (3072 = Send Messages + Embed Links). Rotate tokens if suspected leakage.
+- Invite link template: `https://discord.com/api/oauth2/authorize?client_id=<applicationId>&permissions=19456&scope=bot%20applications.commands` (`19456 = VIEW_CHANNEL + SEND_MESSAGES + EMBED_LINKS`). Rotate tokens if suspected leakage.
 
 ## Message format and rate limiting
 - **Copy template (markdown):**
