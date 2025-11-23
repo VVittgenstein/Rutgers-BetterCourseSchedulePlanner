@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 
 import { subscribe } from '../api/subscriptions';
 import type { ApiError } from '../api/client';
-import type { SubscriptionContactType } from '../api/types';
 import { classNames } from '../utils/classNames';
 import './SubscriptionCenter.css';
 
@@ -21,25 +20,23 @@ interface SubscriptionCenterProps {
   campus?: string;
 }
 
-const loadContact = (): { contactType: SubscriptionContactType; contactValue: string } => {
-  if (typeof window === 'undefined') return { contactType: 'email', contactValue: '' };
+const loadContact = (): { contactValue: string } => {
+  if (typeof window === 'undefined') return { contactValue: '' };
   try {
     const raw = window.localStorage.getItem(CONTACT_STORAGE_KEY);
-    if (!raw) return { contactType: 'email', contactValue: '' };
-    const parsed = JSON.parse(raw) as { contactType?: SubscriptionContactType; contactValue?: string };
+    if (!raw) return { contactValue: '' };
+    const parsed = JSON.parse(raw) as { contactValue?: string };
     return {
-      contactType: parsed.contactType ?? 'email',
       contactValue: parsed.contactValue ?? '',
     };
   } catch {
-    return { contactType: 'email', contactValue: '' };
+    return { contactValue: '' };
   }
 };
 
 export function SubscriptionCenter({ term, campus }: SubscriptionCenterProps) {
   const { t, i18n } = useTranslation();
   const [sectionIndex, setSectionIndex] = useState('');
-  const [contactType, setContactType] = useState<SubscriptionContactType>(() => loadContact().contactType);
   const [contactValue, setContactValue] = useState<string>(() => loadContact().contactValue);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
@@ -47,17 +44,14 @@ export function SubscriptionCenter({ term, campus }: SubscriptionCenterProps) {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      window.localStorage.setItem(CONTACT_STORAGE_KEY, JSON.stringify({ contactType, contactValue }));
+      window.localStorage.setItem(CONTACT_STORAGE_KEY, JSON.stringify({ contactValue }));
     } catch {
       // Best effort only.
     }
-  }, [contactType, contactValue]);
+  }, [contactValue]);
 
   const missingContext = !term || !campus;
-  const contactPlaceholder =
-    contactType === 'email'
-      ? t('courseCard.subscribe.contactPlaceholder.email')
-      : t('courseCard.subscribe.contactPlaceholder.discord');
+  const contactPlaceholder = t('courseCard.subscribe.contactPlaceholder.email');
 
   const handleSubscribe = async () => {
     setFeedback(null);
@@ -84,7 +78,7 @@ export function SubscriptionCenter({ term, campus }: SubscriptionCenterProps) {
           term: term!,
           campus: campus!,
           sectionIndex: trimmedIndex,
-          contactType,
+          contactType: 'email',
           contactValue: trimmedContact,
           locale: i18n.language,
         },
@@ -133,30 +127,8 @@ export function SubscriptionCenter({ term, campus }: SubscriptionCenterProps) {
       <div className="subscription-center__field">
         <span>{t('subscriptionCenter.contactLabel')}</span>
         <div className="subscription-center__contact">
-          <div className="subscription-center__contact-types">
-            <button
-              type="button"
-              className={classNames(
-                'subscription-center__pill',
-                contactType === 'email' && 'subscription-center__pill--active',
-              )}
-              onClick={() => setContactType('email')}
-            >
-              {t('courseCard.subscribe.contactTypes.email')}
-            </button>
-            <button
-              type="button"
-              className={classNames(
-                'subscription-center__pill',
-                contactType === 'discord_user' && 'subscription-center__pill--active',
-              )}
-              onClick={() => setContactType('discord_user')}
-            >
-              {t('courseCard.subscribe.contactTypes.discord')}
-            </button>
-          </div>
           <input
-            type={contactType === 'email' ? 'email' : 'text'}
+            type="email"
             value={contactValue}
             onChange={(event) => setContactValue(event.target.value)}
             placeholder={contactPlaceholder}

@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import type { ApiError } from '../api/client';
 import { subscribe, unsubscribe } from '../api/subscriptions';
 import type {
-  SubscriptionContactType,
   SubscribeResponsePayload,
   UnsubscribeResponsePayload,
 } from '../api/types';
@@ -32,26 +31,24 @@ interface SubscribeButtonProps {
   courseCode: string;
 }
 
-const defaultContact = (): { contactType: SubscriptionContactType; contactValue: string; token?: string } => {
-  if (typeof window === 'undefined') return { contactType: 'email', contactValue: '' };
+const defaultContact = (): { contactValue: string; token?: string } => {
+  if (typeof window === 'undefined') return { contactValue: '' };
   try {
     const raw = window.localStorage.getItem(CONTACT_STORAGE_KEY);
-    if (!raw) return { contactType: 'email', contactValue: '' };
-    const parsed = JSON.parse(raw) as { contactType?: SubscriptionContactType; contactValue?: string; token?: string };
+    if (!raw) return { contactValue: '' };
+    const parsed = JSON.parse(raw) as { contactValue?: string; token?: string };
     return {
-      contactType: parsed.contactType ?? 'email',
       contactValue: parsed.contactValue ?? '',
       token: parsed.token,
     };
   } catch {
-    return { contactType: 'email', contactValue: '' };
+    return { contactValue: '' };
   }
 };
 
 export function SubscribeButton({ term, campus, sections, courseTitle, courseCode }: SubscribeButtonProps) {
   const { t, i18n } = useTranslation();
   const [sectionIndex, setSectionIndex] = useState<string>(() => sections[0]?.index ?? '');
-  const [contactType, setContactType] = useState<SubscriptionContactType>(() => defaultContact().contactType);
   const [contactValue, setContactValue] = useState<string>(() => defaultContact().contactValue ?? '');
   const [unsubscribeToken, setUnsubscribeToken] = useState<string>(() => defaultContact().token ?? '');
   const [recentSubscriptionId, setRecentSubscriptionId] = useState<number | null>(null);
@@ -64,12 +61,12 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
     try {
       window.localStorage.setItem(
         CONTACT_STORAGE_KEY,
-        JSON.stringify({ contactType, contactValue, token: unsubscribeToken || undefined }),
+        JSON.stringify({ contactValue, token: unsubscribeToken || undefined }),
       );
     } catch {
       // Best-effort persistence; ignore storage errors.
     }
-  }, [contactType, contactValue, unsubscribeToken]);
+  }, [contactValue, unsubscribeToken]);
 
   useEffect(() => {
     const defaultSection = sections[0]?.index;
@@ -127,7 +124,7 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
           term,
           campus,
           sectionIndex: trimmedIndex,
-          contactType,
+          contactType: 'email',
           contactValue: trimmedContact,
           locale: i18n.language,
           clientContext:
@@ -227,10 +224,7 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
     });
   };
 
-  const placeholder =
-    contactType === 'email'
-      ? t('courseCard.subscribe.contactPlaceholder.email')
-      : t('courseCard.subscribe.contactPlaceholder.discord');
+  const placeholder = t('courseCard.subscribe.contactPlaceholder.email');
 
   const panelLabel = `${t('courseCard.subscribe.title')} · ${courseCode} ${courseTitle}`;
   const useScrollableList = sectionOptions.length > 12;
@@ -298,28 +292,6 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
       <div className="subscribe-panel__field">
         <span className="subscribe-panel__label">{t('courseCard.subscribe.contactLabel')}</span>
         <div className="subscribe-panel__contact">
-          <div className="subscribe-panel__contact-types" role="group" aria-label={t('courseCard.subscribe.contactLabel')}>
-            <button
-              type="button"
-              className={classNames(
-                'subscribe-panel__pill',
-                contactType === 'email' && 'subscribe-panel__pill--active',
-              )}
-              onClick={() => setContactType('email')}
-            >
-              {t('courseCard.subscribe.contactTypes.email')}
-            </button>
-            <button
-              type="button"
-              className={classNames(
-                'subscribe-panel__pill',
-                contactType === 'discord_user' && 'subscribe-panel__pill--active',
-              )}
-              onClick={() => setContactType('discord_user')}
-            >
-              {t('courseCard.subscribe.contactTypes.discord')}
-            </button>
-          </div>
           <input
             className="subscribe-panel__input"
             value={contactValue}

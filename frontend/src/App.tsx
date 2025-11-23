@@ -10,6 +10,7 @@ import { useFiltersDictionary } from './hooks/useFiltersDictionary';
 import { CourseList } from './components/CourseList';
 import { DataFetchCard } from './components/DataFetchCard';
 import { SubscriptionCenter } from './components/SubscriptionCenter';
+import { SubscriptionManager } from './components/SubscriptionManager';
 import './App.css';
 
 export function App() {
@@ -116,6 +117,9 @@ export function App() {
             emptyState={emptyMessage}
           />
         </main>
+      </div>
+      <div className="course-app__manager">
+        <SubscriptionManager />
       </div>
     </div>
   );

@@ -35,7 +35,7 @@ test('subscribe persists new row, resolves section, and logs an event', async (t
   assert.equal(response.statusCode, 201);
   const body = response.json();
   assert.equal(body.sectionResolved, true);
-  assert.equal(body.requiresVerification, true);
+  assert.equal(body.requiresVerification, false);
   assert.equal(body.existing, false);
   assert.equal(body.preferences.maxNotifications, 4);
   assert.match(body.unsubscribeToken, /^[a-f0-9]{32}$/);
@@ -47,7 +47,7 @@ test('subscribe persists new row, resolves section, and logs an event', async (t
     section_id: number;
   };
   assert.equal(row.contact_value, 'student@example.edu');
-  assert.equal(row.status, 'pending');
+  assert.equal(row.status, 'active');
   assert.equal(row.section_id, 1);
 
   const event = db
@@ -97,12 +97,48 @@ test('duplicate subscribe requests reuse the existing record', async (t) => {
   const secondBody = second.json();
   assert.equal(secondBody.subscriptionId, firstBody.subscriptionId);
   assert.equal(secondBody.existing, true);
-  assert.equal(secondBody.requiresVerification, true);
+  assert.equal(secondBody.requiresVerification, false);
 
   const db = new Database(fixture.file);
   const rows = db.prepare('SELECT COUNT(*) as count FROM subscriptions').get() as { count: number };
   assert.equal(rows.count, 1);
   db.close();
+});
+
+test('list active subscriptions returns active rows', async (t) => {
+  const fixture = createSubscriptionFixture();
+  const restoreEnv = overrideEnv('SQLITE_FILE', fixture.file);
+  const server = await createServer();
+  t.after(async () => {
+    await server.close();
+    restoreEnv();
+    fixture.cleanup();
+  });
+
+  const create = await server.inject({
+    method: 'POST',
+    url: '/api/subscribe',
+    payload: {
+      term: '20251',
+      campus: 'NB',
+      sectionIndex: '12345',
+      contactType: 'email',
+      contactValue: 'list@example.edu',
+    },
+  });
+  assert.equal(create.statusCode, 201);
+  const created = create.json();
+
+  const response = await server.inject({
+    method: 'GET',
+    url: '/api/subscriptions',
+  });
+
+  assert.equal(response.statusCode, 200);
+  const body = response.json() as { subscriptions: Array<{ subscriptionId: number; status: string }> };
+  const match = body.subscriptions.find((entry) => entry.subscriptionId === created.subscriptionId);
+  assert.ok(match);
+  assert.equal(match?.status, 'active');
 });
 
 test('contact limit prevents more than three active subscriptions per contact', async (t) => {
@@ -243,7 +279,7 @@ test('unsubscribe transitions status and redacts contact value', async (t) => {
   assert.equal(response.statusCode, 200);
   const body = response.json();
   assert.equal(body.status, 'unsubscribed');
-  assert.equal(body.previousStatus, 'pending');
+  assert.equal(body.previousStatus, 'active');
 
   const db = new Database(fixture.file);
   const row = db.prepare('SELECT status, contact_value FROM subscriptions WHERE subscription_id = ?').get(subscriptionId) as {
@@ -377,11 +413,18 @@ function createSubscriptionFixture() {
   db.exec(`
     CREATE TABLE terms (term_id TEXT PRIMARY KEY);
     CREATE TABLE campuses (campus_code TEXT PRIMARY KEY);
+    CREATE TABLE courses (
+      course_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT
+    );
     CREATE TABLE sections (
       section_id INTEGER PRIMARY KEY AUTOINCREMENT,
       term_id TEXT NOT NULL,
       campus_code TEXT NOT NULL,
-      index_number TEXT NOT NULL
+      index_number TEXT NOT NULL,
+      section_number TEXT,
+      subject_code TEXT,
+      course_id INTEGER
     );
     CREATE TABLE subscriptions (
       subscription_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -413,12 +456,11 @@ function createSubscriptionFixture() {
   db.prepare('INSERT INTO terms (term_id) VALUES (?)').run('20251');
   db.prepare('INSERT INTO campuses (campus_code) VALUES (?)').run('NB');
   db.prepare('INSERT INTO campuses (campus_code) VALUES (?)').run('NK');
-  db.prepare('INSERT INTO sections (section_id, term_id, campus_code, index_number) VALUES (?, ?, ?, ?)').run(
-    1,
-    '20251',
-    'NB',
-    '12345',
-  );
+  db
+    .prepare(
+      'INSERT INTO sections (section_id, term_id, campus_code, index_number, section_number, subject_code, course_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    )
+    .run(1, '20251', 'NB', '12345', null, null, null);
   db.close();
 
   return {
@@ -437,8 +479,10 @@ function seedSection(
 ) {
   const db = new Database(file);
   db
-    .prepare('INSERT INTO sections (section_id, term_id, campus_code, index_number) VALUES (?, ?, ?, ?)')
-    .run(opts.sectionId, '20251', opts.campus ?? 'NB', opts.index);
+    .prepare(
+      'INSERT INTO sections (section_id, term_id, campus_code, index_number, section_number, subject_code, course_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    )
+    .run(opts.sectionId, '20251', opts.campus ?? 'NB', opts.index, null, null, null);
   db.close();
 }
 

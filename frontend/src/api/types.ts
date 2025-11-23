@@ -132,7 +132,7 @@ export interface FetchStatusResponse {
   };
 }
 
-export type SubscriptionContactType = 'email' | 'discord_user' | 'discord_channel';
+export type SubscriptionContactType = 'email';
 
 export type SubscriptionPreferencesInput = Partial<{
   notifyOn: Array<'open' | 'waitlist'>;
@@ -159,7 +159,6 @@ export interface SubscribeRequestPayload {
   locale?: string;
   preferences?: SubscriptionPreferencesInput;
   clientContext?: { ip?: string; userAgent?: string };
-  discord?: { guildId?: string; channelId?: string };
 }
 
 export interface SubscribeResponsePayload {
@@ -187,5 +186,23 @@ export interface UnsubscribeResponsePayload {
   subscriptionId: number;
   status: 'unsubscribed';
   previousStatus: string;
+  traceId: string;
+}
+
+export interface ActiveSubscription {
+  subscriptionId: number;
+  term: string;
+  campus: string;
+  sectionIndex: string;
+  status: 'active';
+  contactValue: string;
+  createdAt: string | null;
+  sectionNumber: string | null;
+  subjectCode: string | null;
+  courseTitle: string | null;
+}
+
+export interface ActiveSubscriptionsResponse {
+  subscriptions: ActiveSubscription[];
   traceId: string;
 }

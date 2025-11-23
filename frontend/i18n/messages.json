@@ -265,16 +265,14 @@
         },
         "contactLabel": "Contact",
         "contactTypes": {
-          "email": "Email",
-          "discord": "Discord ID"
+          "email": "Email"
         },
         "contactPlaceholder": {
-          "email": "you@example.edu",
-          "discord": "Discord user snowflake"
+          "email": "you@example.edu"
         },
-        "contactHint": "We store this locally and send one verification first.",
+        "contactHint": "We store this locally.",
         "tokenLabel": "Unsubscribe token",
-        "tokenPlaceholder": "Paste the token from your email/DM",
+        "tokenPlaceholder": "Paste the token from your email.",
         "actions": {
           "subscribe": "Subscribe",
           "unsubscribe": "Unsubscribe"
@@ -288,7 +286,7 @@
         },
         "errors": {
           "missingSection": "Choose a section index.",
-          "missingContact": "Enter an email or Discord ID.",
+          "missingContact": "Enter an email address.",
           "missingToken": "Provide the unsubscribe token or re-use the recent subscription id."
         },
         "traceId": "Trace {{id}}"
@@ -305,7 +303,7 @@
       "errors": {
         "missingContext": "Select term and campus first.",
         "missingSection": "Enter a section index.",
-        "missingContact": "Add an email or Discord ID."
+        "missingContact": "Add an email address."
       },
       "status": {
         "created": "Subscription saved.",
@@ -313,6 +311,17 @@
       },
       "missingCampus": "Campus?",
       "missingTerm": "Term?"
+    },
+    "subscriptionManager": {
+      "title": "Active subscriptions",
+      "subtitle": "Courses currently being monitored.",
+      "refresh": "Refresh",
+      "empty": "No active subscriptions yet.",
+      "remove": "Cancel subscription",
+      "removing": "Canceling…",
+      "error": "Failed to load subscriptions: {{message}}",
+      "meta": "{{campus}} · {{term}}",
+      "fallbackTitle": "Untitled course"
     },
     "schedule": {
       "header": {
@@ -599,16 +608,14 @@
         },
         "contactLabel": "联系方式",
         "contactTypes": {
-          "email": "邮箱",
-          "discord": "Discord ID"
+          "email": "邮箱"
         },
         "contactPlaceholder": {
-          "email": "you@example.edu",
-          "discord": "Discord 用户数字 ID"
+          "email": "you@example.edu"
         },
-        "contactHint": "仅本地保存，并先发送一次验证信息。",
+        "contactHint": "仅本地保存。",
         "tokenLabel": "退订令牌",
-        "tokenPlaceholder": "粘贴邮件/DM 中的 token",
+        "tokenPlaceholder": "粘贴邮件中的 token",
         "actions": {
           "subscribe": "提交订阅",
           "unsubscribe": "退订"
@@ -622,7 +629,7 @@
         },
         "errors": {
           "missingSection": "请填写或选择课号/Index。",
-          "missingContact": "请输入邮箱或 Discord ID。",
+          "missingContact": "请输入邮箱。",
           "missingToken": "请提供退订 token，或使用刚刚生成的订阅 ID。"
         },
         "traceId": "追踪 {{id}}"
@@ -639,7 +646,7 @@
       "errors": {
         "missingContext": "请先选择学期和校区。",
         "missingSection": "请输入节次索引。",
-        "missingContact": "填写邮箱或 Discord ID。"
+        "missingContact": "填写邮箱。"
       },
       "status": {
         "created": "订阅已保存。",
@@ -647,6 +654,17 @@
       },
       "missingCampus": "未选校区",
       "missingTerm": "未选学期"
+    },
+    "subscriptionManager": {
+      "title": "当前监控的课程",
+      "subtitle": "列出所有 Active 订阅。",
+      "refresh": "刷新",
+      "empty": "暂无订阅。",
+      "remove": "取消订阅",
+      "removing": "正在取消…",
+      "error": "获取订阅失败：{{message}}",
+      "meta": "{{campus}} · {{term}}",
+      "fallbackTitle": "未命名课程"
     },
     "schedule": {
       "header": {

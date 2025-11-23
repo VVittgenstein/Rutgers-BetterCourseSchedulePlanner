@@ -1,5 +1,6 @@
-import { apiPost } from './client';
+import { apiGet, apiPost } from './client';
 import type {
+  ActiveSubscriptionsResponse,
   SubscribeRequestPayload,
   SubscribeResponsePayload,
   UnsubscribeRequestPayload,
@@ -11,3 +12,6 @@ export const subscribe = (payload: SubscribeRequestPayload, signal?: AbortSignal
 
 export const unsubscribe = (payload: UnsubscribeRequestPayload, signal?: AbortSignal) =>
   apiPost<UnsubscribeResponsePayload>('/unsubscribe', payload, signal);
+
+export const listActiveSubscriptions = (signal?: AbortSignal) =>
+  apiGet<ActiveSubscriptionsResponse>('/subscriptions', undefined, signal);

@@ -76,6 +76,10 @@
   border: 1px solid #c7d2fe;
 }
 
+.course-app__manager {
+  margin-top: 1.25rem;
+}
+
 @media (max-width: 960px) {
   .course-app {
     padding: 1rem;

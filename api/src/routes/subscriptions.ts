@@ -6,7 +6,6 @@ import { API_VERSION } from './sharedSchemas.js';
 
 const EMAIL_REGEX =
   /^(?:[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+|"[^"]+")@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9-]+)+$/;
-const DISCORD_SNOWFLAKE = /^[0-9]{17,19}$/;
 const DEFAULT_LOCALE = 'en-US';
 const CONTACT_ACTIVE_LIMIT = 3;
 const SECTION_ACTIVE_LIMIT = 50;
@@ -15,7 +14,7 @@ const IP_MAX_ATTEMPTS = 10;
 
 const ACTIVE_STATUSES = ['pending', 'active'] as const;
 
-type ContactType = 'email' | 'discord_user' | 'discord_channel';
+type ContactType = 'email';
 type SubscriptionStatus = 'pending' | 'active' | 'paused' | 'suppressed' | 'unsubscribed';
 
 const preferencesInputSchema = z
@@ -60,7 +59,7 @@ const subscribePayloadSchema = z.object({
     .string()
     .trim()
     .regex(/^\d{5}$/),
-  contactType: z.enum(['email', 'discord_user', 'discord_channel']),
+  contactType: z.enum(['email']),
   contactValue: z.string().trim().min(3).max(256),
   locale: z
     .string()
@@ -72,12 +71,6 @@ const subscribePayloadSchema = z.object({
     .object({
       ip: z.string().trim().min(3).max(64).optional(),
       userAgent: z.string().trim().min(3).max(512).optional(),
-    })
-    .optional(),
-  discord: z
-    .object({
-      guildId: z.string().trim().min(1).max(32).optional(),
-      channelId: z.string().trim().min(1).max(32).optional(),
     })
     .optional(),
 });
@@ -121,6 +114,24 @@ const unsubscribeResponseSchema = z.object({
   subscriptionId: z.number().int(),
   status: z.literal('unsubscribed'),
   previousStatus: z.string(),
+  traceId: z.string(),
+});
+
+const activeSubscriptionSchema = z.object({
+  subscriptionId: z.number().int(),
+  term: z.string(),
+  campus: z.string(),
+  sectionIndex: z.string(),
+  status: z.literal('active'),
+  contactValue: z.string(),
+  createdAt: z.string().nullable(),
+  sectionNumber: z.string().nullable(),
+  subjectCode: z.string().nullable(),
+  courseTitle: z.string().nullable(),
+});
+
+const listActiveSubscriptionsResponseSchema = z.object({
+  subscriptions: z.array(activeSubscriptionSchema),
   traceId: z.string(),
 });
 
@@ -242,12 +253,11 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
       }
 
       const now = new Date().toISOString();
-      const status: SubscriptionStatus = body.contactType === 'discord_channel' ? 'active' : 'pending';
+      const status: SubscriptionStatus = 'active';
       const preferences = mergePreferences(body.preferences);
-      const unsubscribeToken = body.contactType === 'discord_channel' ? null : crypto.randomBytes(16).toString('hex');
+      const unsubscribeToken = crypto.randomBytes(16).toString('hex');
       const metadata = buildMetadata(preferences, {
         client: buildClientContext(body.clientContext, clientIp, request.headers['user-agent']),
-        discord: body.contactType.startsWith('discord') ? body.discord : undefined,
       });
 
       const subscriptionId = createSubscription(db, {
@@ -335,6 +345,70 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
       return reply.status(200).send(response);
     },
   );
+
+  app.get(
+    '/subscriptions',
+    {
+      schema: {
+        response: {
+          200: listActiveSubscriptionsResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const traceId = String(request.id);
+      reply.header('x-trace-id', traceId);
+      const db = request.server.container.getDb();
+      const rows = db
+        .prepare(
+          `
+          SELECT
+            s.subscription_id,
+            s.term_id,
+            s.campus_code,
+            s.index_number,
+            s.status,
+            s.contact_value,
+            s.created_at,
+            sec.section_number,
+            sec.subject_code,
+            c.title AS course_title
+          FROM subscriptions s
+          LEFT JOIN sections sec ON s.section_id = sec.section_id
+          LEFT JOIN courses c ON sec.course_id = c.course_id
+          WHERE s.status = 'active'
+          ORDER BY s.subscription_id DESC
+        `,
+        )
+        .all() as Array<{
+          subscription_id: number;
+          term_id: string;
+          campus_code: string;
+          index_number: string;
+          status: string;
+          contact_value: string;
+          created_at: string | null;
+          section_number: string | null;
+          subject_code: string | null;
+          course_title: string | null;
+        }>;
+
+      const subscriptions = rows.map((row) => ({
+        subscriptionId: row.subscription_id,
+        term: row.term_id,
+        campus: row.campus_code,
+        sectionIndex: row.index_number,
+        status: 'active' as const,
+        contactValue: row.contact_value,
+        createdAt: row.created_at ?? null,
+        sectionNumber: row.section_number ?? null,
+        subjectCode: row.subject_code ?? null,
+        courseTitle: row.course_title ?? null,
+      }));
+
+      return reply.status(200).send({ subscriptions, traceId });
+    },
+  );
 }
 
 function sendError(
@@ -367,16 +441,6 @@ function normalizeContact(contactType: ContactType, rawValue: string) {
     return {
       value: normalized,
       hash: sha1(normalized),
-    };
-  }
-
-  if (contactType === 'discord_user' || contactType === 'discord_channel') {
-    if (!DISCORD_SNOWFLAKE.test(trimmed)) {
-      return null;
-    }
-    return {
-      value: trimmed,
-      hash: sha1(trimmed),
     };
   }
 
@@ -455,7 +519,6 @@ function buildMetadata(
   preferences: Preferences,
   extras: {
     client?: { ip?: string; userAgent?: string };
-    discord?: SubscribePayload['discord'];
   },
 ) {
   const metadata: Record<string, unknown> = {
@@ -463,9 +526,6 @@ function buildMetadata(
   };
   if (extras.client) {
     metadata.client = extras.client;
-  }
-  if (extras.discord) {
-    metadata.discord = extras.discord;
   }
   return JSON.stringify(metadata);
 }
@@ -642,7 +702,7 @@ function formatSubscriptionResponse(row: SubscriptionRow, traceId: string, exist
   return {
     subscriptionId: row.subscription_id,
     status: row.status,
-    requiresVerification: row.contact_type !== 'discord_channel' && row.status === 'pending',
+    requiresVerification: row.status === 'pending',
     existing,
     unsubscribeToken: row.unsubscribe_token ?? null,
     term: row.term_id,
