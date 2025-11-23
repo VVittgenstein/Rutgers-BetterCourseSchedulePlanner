@@ -14,7 +14,6 @@ START_API=1
 START_FRONTEND=1
 START_POLLER=1
 INCLUDE_MAIL=0
-INCLUDE_DISCORD=0
 POLLER_ONCE=0
 API_PORT="${API_PORT:-3333}"
 FRONTEND_PORT="${FRONTEND_PORT:-5174}"
@@ -22,16 +21,13 @@ API_ORIGIN=""
 APP_BASE_URL=""
 MAIL_CONFIG="${MAIL_CONFIG:-$ROOT_DIR/configs/mail_sender.local.json}"
 MAIL_BATCH=25
-DISCORD_CONFIG="${DISCORD_CONFIG:-$ROOT_DIR/configs/discord_bot.local.json}"
-DISCORD_BATCH=25
-ALLOWED_CHANNELS=()
 
 declare -A PID_NAME=()
 PID_LIST=()
 
 usage() {
   cat <<'EOF'
-Run the local stack (API + frontend + poller, with optional mail/Discord dispatchers).
+Run the local stack (API + frontend + poller, with optional mail dispatcher).
 
 Usage: scripts/run_stack.sh [options]
 
@@ -52,10 +48,6 @@ Options:
   --with-mail                Start mail dispatcher (requires SENDGRID_API_KEY and mail config)
   --mail-config <path>       Mail config path (default: configs/mail_sender.local.json)
   --mail-batch <n>           Mail dispatcher batch size (default: 25)
-  --with-discord             Start Discord dispatcher (requires DISCORD_BOT_TOKEN and bot config)
-  --discord-config <path>    Discord config path (default: configs/discord_bot.local.json)
-  --discord-batch <n>        Discord dispatcher batch size (default: 25)
-  --allow-channel <id>       Allowed Discord channel ID (can repeat)
   --app-base-url <url>       Base URL for links (default: http://localhost:<frontend-port>)
   --help                     Show this help
 EOF
@@ -143,22 +135,6 @@ parse_args() {
         MAIL_BATCH="$2"
         shift 2
         ;;
-      --with-discord)
-        INCLUDE_DISCORD=1
-        shift
-        ;;
-      --discord-config)
-        DISCORD_CONFIG="$2"
-        shift 2
-        ;;
-      --discord-batch)
-        DISCORD_BATCH="$2"
-        shift 2
-        ;;
-      --allow-channel)
-        ALLOWED_CHANNELS+=("$2")
-        shift 2
-        ;;
       --app-base-url)
         APP_BASE_URL="$2"
         shift 2
@@ -240,14 +216,6 @@ start_mail_dispatcher() {
   start_component "mail_dispatcher" bash -c "cd \"$ROOT_DIR\" && npx tsx workers/mail_dispatcher.ts --sqlite \"$DB_PATH\" --mail-config \"$MAIL_CONFIG\" --batch $MAIL_BATCH --app-base-url \"$APP_BASE_URL\""
 }
 
-start_discord_dispatcher() {
-  local channel_flags=()
-  for chan in "${ALLOWED_CHANNELS[@]}"; do
-    channel_flags+=(--allow-channel "$chan")
-  done
-  start_component "discord_dispatcher" bash -c "cd \"$ROOT_DIR\" && npx tsx workers/discord_dispatcher.ts --sqlite \"$DB_PATH\" --bot-config \"$DISCORD_CONFIG\" --batch $DISCORD_BATCH --app-base-url \"$APP_BASE_URL\" ${channel_flags[*]}"
-}
-
 parse_args "$@"
 
 require_cmd node
@@ -255,7 +223,6 @@ require_cmd npm
 
 DB_PATH="$(abs_path "$DB_PATH")"
 MAIL_CONFIG="$(abs_path "$MAIL_CONFIG")"
-DISCORD_CONFIG="$(abs_path "$DISCORD_CONFIG")"
 POLL_CHECKPOINT="$(abs_path "$POLL_CHECKPOINT")"
 
 if [ -z "$API_ORIGIN" ]; then
@@ -266,7 +233,7 @@ if [ -z "$APP_BASE_URL" ]; then
   APP_BASE_URL="http://localhost:$FRONTEND_PORT"
 fi
 
-if [ "$START_POLLER" -eq 1 ] || [ "$INCLUDE_MAIL" -eq 1 ] || [ "$INCLUDE_DISCORD" -eq 1 ] || [ "$START_API" -eq 1 ]; then
+if [ "$START_POLLER" -eq 1 ] || [ "$INCLUDE_MAIL" -eq 1 ] || [ "$START_API" -eq 1 ]; then
   if [ ! -f "$DB_PATH" ]; then
     echo "SQLite database not found at $DB_PATH. Run scripts/setup_local_env.sh first." >&2
     exit 1
@@ -300,20 +267,6 @@ if [ "$INCLUDE_MAIL" -eq 1 ]; then
     exit 1
   fi
   start_mail_dispatcher
-fi
-
-if [ "$INCLUDE_DISCORD" -eq 1 ]; then
-  if [ -z "${DISCORD_BOT_TOKEN:-}" ]; then
-    echo "DISCORD_BOT_TOKEN is required to start Discord dispatcher." >&2
-    cleanup
-    exit 1
-  fi
-  if [ ! -f "$DISCORD_CONFIG" ]; then
-    echo "Discord config not found at $DISCORD_CONFIG" >&2
-    cleanup
-    exit 1
-  fi
-  start_discord_dispatcher
 fi
 
 if [ "${#PID_LIST[@]}" -eq 0 ]; then

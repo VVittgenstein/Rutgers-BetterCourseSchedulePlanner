@@ -7,7 +7,6 @@ DEFAULT_DB_PATH="$ROOT_DIR/data/local.db"
 DB_PATH="$DEFAULT_DB_PATH"
 FETCH_CONFIG="$ROOT_DIR/configs/fetch_pipeline.local.json"
 MAIL_CONFIG="$ROOT_DIR/configs/mail_sender.local.json"
-DISCORD_CONFIG="$ROOT_DIR/configs/discord_bot.local.json"
 TERMS="12024"
 CAMPUSES="NB"
 SUBJECTS=""
@@ -228,7 +227,6 @@ require_cmd npm
 
 FETCH_CONFIG="$(abs_path "$FETCH_CONFIG")"
 MAIL_CONFIG="$(abs_path "$MAIL_CONFIG")"
-DISCORD_CONFIG="$(abs_path "$DISCORD_CONFIG")"
 
 if [ -f "$FETCH_CONFIG" ]; then
   config_db="$(node -e "const fs=require('fs');const path=require('path');const p=process.argv[1];try{const data=JSON.parse(fs.readFileSync(p,'utf8'));if(data.sqliteFile){console.log(path.resolve(path.dirname(p), data.sqliteFile));}}catch(e){process.exit(0);} " "$FETCH_CONFIG")"
@@ -254,7 +252,6 @@ if [ -f "$FETCH_CONFIG" ] && [ "$DB_OVERRIDDEN" -eq 1 ]; then
 fi
 
 copy_if_missing "$MAIL_CONFIG" "$ROOT_DIR/configs/mail_sender.example.json"
-copy_if_missing "$DISCORD_CONFIG" "$ROOT_DIR/configs/discord_bot.example.json"
 create_env_helpers
 
 log "Installing root dependencies..."
