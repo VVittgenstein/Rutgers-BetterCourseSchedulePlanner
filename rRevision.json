@@ -119,7 +119,7 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "in_review",
+          "status": "done",
           "dependencies": [],
           "blocked": false,
           "blocked_by": [],

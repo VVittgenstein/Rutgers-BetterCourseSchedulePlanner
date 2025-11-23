@@ -13,3 +13,6 @@ Risks / TODO
 
 Self-test
 - npm run data:backfill-core (success; row counts above).
+
+## Code Review - ST-20251122-filter-rewrite-03-data-pipeline-dicts - 2025-11-23T11:20:44Z
+Codex Review: Didn't find any major issues. You're on a roll.
