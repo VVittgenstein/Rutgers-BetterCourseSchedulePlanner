@@ -92,6 +92,10 @@ function buildRuntimeConfig(options: StartFetchJobOptions, job: FetchJob) {
     runLabel: (baseConfig.runLabel as string) ?? 'webui',
     defaultMode: (baseConfig.defaultMode as FetchMode | undefined) ?? options.mode,
     sqliteFile,
+    safety: {
+      ...(baseConfig.safety as Record<string, unknown> | undefined),
+      requireCleanWorktree: false, // allow webui fetches on dirty worktrees
+    },
     targets: [
       {
         term: options.term,

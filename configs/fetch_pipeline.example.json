@@ -16,7 +16,12 @@
   },
   "retryPolicy": {
     "maxAttempts": 4,
-    "backoffMs": [0, 3000, 7000, 15000],
+    "backoffMs": [
+      0,
+      3000,
+      7000,
+      15000
+    ],
     "jitter": 0.3,
     "downgradedProfile": {
       "maxCourseWorkers": 1,
@@ -24,7 +29,14 @@
       "maxOpenSectionsWorkers": 5,
       "openSectionsIntervalMs": 500
     },
-    "retryableStatus": [408, 429, 500, 502, 503, 504]
+    "retryableStatus": [
+      408,
+      429,
+      500,
+      502,
+      503,
+      504
+    ]
   },
   "targets": [
     {
@@ -33,11 +45,15 @@
       "campuses": [
         {
           "code": "NB",
-          "subjects": ["ALL"]
+          "subjects": [
+            "ALL"
+          ]
         },
         {
           "code": "NK",
-          "subjects": ["ALL"]
+          "subjects": [
+            "ALL"
+          ]
         }
       ]
     },
@@ -47,7 +63,12 @@
       "campuses": [
         {
           "code": "NB",
-          "subjects": ["198", "640", "750", "960"]
+          "subjects": [
+            "198",
+            "640",
+            "750",
+            "960"
+          ]
         }
       ],
       "subjectBatchSize": 6,
@@ -79,6 +100,6 @@
   },
   "safety": {
     "dryRun": false,
-    "requireCleanWorktree": true
+    "requireCleanWorktree": false
   }
 }

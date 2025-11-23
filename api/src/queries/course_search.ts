@@ -162,7 +162,7 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
         SELECT 1
         FROM course_core_attributes cca
         WHERE cca.course_id = c.course_id
-          AND ${buildInClause('cca.core_code', coreCodes, binder)}
+          AND ${buildInClause('upper(cca.core_code)', coreCodes, binder)}
       )
     `);
   }
