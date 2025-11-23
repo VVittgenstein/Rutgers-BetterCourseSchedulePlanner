@@ -106,6 +106,19 @@ Unique per `term+campus+subject+course_number`.
 - Unique index on `(term_id, campus_code, subject_code, course_number)`.
 - `subject_code` must exist in `subjects`.
 
+#### `course_campus_locations`
+Denormalized tags to support filtering by College Ave/Busch/Livingston等地点。
+
+| Column | Type | Source / Transform | Notes |
+| --- | --- | --- | --- |
+| `course_id` (FK) | INTEGER | references `courses.course_id` | Cascade delete with course. |
+| `term_id` | TEXT | Derived from parent course | Denormalized for querying. |
+| `campus_code` | TEXT | Derived from parent course | Denormalized for querying. |
+| `location_code` | TEXT | `course.campusLocations[].code` uppercased | Primary filter value (`1/2/3/4/5/Z/S/O/NA…`). |
+| `location_desc` | TEXT | `course.campusLocations[].description` | Display label fallback. |
+| **PK** | (`course_id`, `location_code`) |  | Prevent duplicates. |
+| Index | (`term_id`, `campus_code`, `location_code`) |  | Speeds `/api/courses?campusLocation=` |
+
 #### `course_core_attributes`
 Stores each element of `course.coreCodes` for filtering (e.g. `WCr`, `CCO`).
 

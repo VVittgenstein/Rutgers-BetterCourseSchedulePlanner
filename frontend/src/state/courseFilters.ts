@@ -25,6 +25,7 @@ export interface MeetingFilter {
 export interface CourseFilterState {
   term?: string;
   campus?: string;
+  campusLocations: string[];
   subjects: string[];
   queryText: string;
   level: Array<'UG' | 'GR' | 'N/A'>;
@@ -46,6 +47,7 @@ export const DEFAULT_PAGE_SIZE = 25;
 export const createInitialCourseFilterState = (): CourseFilterState => ({
   term: undefined,
   campus: undefined,
+  campusLocations: [],
   subjects: [],
   queryText: '',
   level: [],
@@ -70,6 +72,7 @@ const MULTI_VALUE_KEYS = new Set([
   'coreCode',
   'examCode',
   'delivery',
+  'campusLocation',
 ]);
 
 type PrimitiveParam = string | number | boolean;
@@ -92,6 +95,7 @@ export const buildCourseQueryParams = (state: CourseFilterState): Record<string,
   };
 
   if (state.campus) params.campus = state.campus;
+  if (state.campusLocations.length) params.campusLocation = [...state.campusLocations];
   if (state.subjects.length) params.subject = [...state.subjects];
   if (state.queryText.trim()) params.q = state.queryText.trim();
   if (state.level.length) params.level = [...state.level];
@@ -152,6 +156,7 @@ export const serializeCourseFilters = (state: CourseFilterState): URLSearchParam
 
   if (state.term) params.set('term', state.term);
   if (state.campus) params.set('campus', state.campus);
+  if (state.campusLocations.length) appendAll('campusLocation', state.campusLocations);
   if (state.subjects.length) appendAll('subject', state.subjects);
   if (state.queryText.trim()) params.set('q', state.queryText.trim());
   if (state.level.length) appendAll('level', state.level);
@@ -193,6 +198,7 @@ export const parseCourseFiltersFromSearch = (
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
   const state: CourseFilterState = {
     ...baseState,
+    campusLocations: [],
     subjects: [],
     level: [],
     coreCodes: [],
@@ -226,6 +232,9 @@ export const parseCourseFiltersFromSearch = (
         case 'delivery':
           state.delivery.push(value as DeliveryMethod);
           break;
+        case 'campusLocation':
+          state.campusLocations.push(value);
+          break;
     }
     return;
   }
@@ -236,6 +245,9 @@ export const parseCourseFiltersFromSearch = (
       break;
     case 'campus':
       state.campus = value;
+      break;
+    case 'campusLocation':
+      state.campusLocations.push(value);
       break;
     case 'q':
       state.queryText = value;

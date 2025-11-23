@@ -10,6 +10,17 @@ export const fallbackFiltersDictionary: FiltersDictionary = {
     { label: 'Newark', value: 'NWK' },
     { label: 'Camden', value: 'CAM' },
   ],
+  campusLocations: [
+    { label: 'College Avenue', value: '1' },
+    { label: 'Busch', value: '2' },
+    { label: 'Livingston', value: '3' },
+    { label: 'Cook/Douglass', value: '4' },
+    { label: 'Downtown New Brunswick', value: '5' },
+    { label: 'Off campus', value: 'Z' },
+    { label: 'Study Abroad', value: 'S' },
+    { label: 'O', value: 'O' },
+    { label: 'N/A', value: 'NA' },
+  ],
   subjects: [
     { label: 'Computer Science', value: '01:198', school: 'SAS' },
     { label: 'Mathematics', value: '01:640', school: 'SAS' },

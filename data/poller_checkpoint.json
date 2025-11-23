@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "updatedAt": "2025-11-23T11:05:10.483Z",
+  "updatedAt": "2025-11-23T15:43:23.277Z",
   "campuses": {
     "NB": {
       "term": "12024",
       "campus": "NB",
-      "lastPollAt": "2025-11-23T11:05:00.652Z",
+      "lastPollAt": "2025-11-23T15:43:23.196Z",
       "lastSnapshotHash": "2d9f081fa1bec6ac4b254436aae921f16af5b02f",
       "openIndexes": 8494,
       "misses": {}
@@ -13,7 +13,7 @@
     "NK": {
       "term": "12024",
       "campus": "NK",
-      "lastPollAt": "2025-11-23T11:05:10.475Z",
+      "lastPollAt": "2025-11-23T15:43:10.316Z",
       "lastSnapshotHash": "a373f6a757df76218e885a1fd8d9e88a202565cf",
       "openIndexes": 1825,
       "misses": {}

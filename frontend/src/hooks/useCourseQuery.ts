@@ -90,7 +90,7 @@ const DEFAULT_STALE_TIME = 45_000;
 const DEFAULT_DEBOUNCE = 200;
 
 export function useCourseQuery(state: CourseFilterState, options?: UseCourseQueryOptions): UseCourseQueryResult {
-  const canQuery = Boolean(state.term && (state.campus || state.subjects.length));
+  const canQuery = Boolean(state.term && state.campus);
   const enabled = options?.enabled ?? true;
   const staleTime = options?.staleTimeMs ?? DEFAULT_STALE_TIME;
   const debounceMs = options?.debounceMs ?? DEFAULT_DEBOUNCE;

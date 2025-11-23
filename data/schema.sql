@@ -79,6 +79,24 @@ CREATE INDEX IF NOT EXISTS idx_courses_term_subject
 CREATE INDEX IF NOT EXISTS idx_courses_search_vector
     ON courses(term_id, campus_code, search_vector);
 
+CREATE TABLE IF NOT EXISTS course_campus_locations (
+    course_id INTEGER NOT NULL,
+    term_id TEXT NOT NULL,
+    campus_code TEXT NOT NULL,
+    location_code TEXT NOT NULL,
+    location_desc TEXT,
+    PRIMARY KEY (course_id, location_code),
+    FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
+    FOREIGN KEY (term_id) REFERENCES terms(term_id),
+    FOREIGN KEY (campus_code) REFERENCES campuses(campus_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_course_campus_locations_lookup
+    ON course_campus_locations(term_id, campus_code, location_code);
+
+CREATE INDEX IF NOT EXISTS idx_course_campus_locations_code
+    ON course_campus_locations(location_code);
+
 CREATE TABLE IF NOT EXISTS course_core_attributes (
     course_id INTEGER NOT NULL,
     term_id TEXT NOT NULL,

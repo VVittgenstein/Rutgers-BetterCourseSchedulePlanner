@@ -1,0 +1,82 @@
+{
+  "$schema": "./fetch_pipeline.schema.json",
+  "runLabel": "initial-load-12024",
+  "defaultMode": "incremental",
+  "sqliteFile": "Z:\\Project\\BetterCourseSchedulePlanner\\data\\courses.sqlite",
+  "stagingDir": "data/staging",
+  "logDir": "logs/fetch_runs",
+  "rateLimitProfile": "docs/soc_rate_limit.latest.json",
+  "concurrency": {
+    "maxCourseWorkers": 3,
+    "courseRequestIntervalMs": 600,
+    "maxOpenSectionsWorkers": 10,
+    "openSectionsIntervalMs": 250,
+    "maxParallelCampuses": 2,
+    "maxSubjectsPerCampus": 4
+  },
+  "retryPolicy": {
+    "maxAttempts": 4,
+    "backoffMs": [
+      0,
+      3000,
+      7000,
+      15000
+    ],
+    "jitter": 0.3,
+    "downgradedProfile": {
+      "maxCourseWorkers": 1,
+      "courseRequestIntervalMs": 1200,
+      "maxOpenSectionsWorkers": 5,
+      "openSectionsIntervalMs": 500
+    },
+    "retryableStatus": [
+      408,
+      429,
+      500,
+      502,
+      503,
+      504
+    ]
+  },
+  "targets": [
+    {
+      "term": "92025",
+      "mode": "full-init",
+      "campuses": [
+        {
+          "code": "NB",
+          "subjects": [
+            "ALL"
+          ]
+        }
+      ]
+    }
+  ],
+  "incremental": {
+    "resumeQueueFile": "data/refresh_queue.json",
+    "subjectRecencyMinutes": 60,
+    "deferNightlyStartLocalTime": "02:00",
+    "maxSubjectRetries": 3
+  },
+  "fullInit": {
+    "prerunMigrations": true,
+    "truncateTables": [
+      "courses",
+      "sections",
+      "section_meetings",
+      "section_instructors",
+      "section_populations",
+      "section_crosslistings"
+    ],
+    "rebuildFts": true
+  },
+  "summary": {
+    "writeJson": "logs/fetch_runs/summary_latest.json",
+    "writeText": "logs/fetch_runs/summary_latest.log",
+    "emitMetrics": true
+  },
+  "safety": {
+    "dryRun": false,
+    "requireCleanWorktree": false
+  }
+}

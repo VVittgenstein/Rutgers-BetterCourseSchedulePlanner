@@ -40,6 +40,7 @@ export interface DeliveryOption {
 export interface FiltersDictionary {
   terms: FilterOption[];
   campuses: FilterOption[];
+  campusLocations: FilterOption[];
   subjects: SubjectOption[];
   levels: LevelOption[];
   deliveries: DeliveryOption[];
@@ -98,6 +99,7 @@ export function FilterPanel({
   const [subjectQuery, setSubjectQuery] = useState('');
 
   const subjectLookup = useMemo(() => buildLookup(dictionary.subjects), [dictionary.subjects]);
+  const campusLocationLookup = useMemo(() => buildLookup(dictionary.campusLocations), [dictionary.campusLocations]);
   const levelLookup = useMemo(() => buildLookup(dictionary.levels), [dictionary.levels]);
   const deliveryLookup = useMemo(() => buildLookup(dictionary.deliveries), [dictionary.deliveries]);
   const coreLookup = useMemo(() => buildLookup(dictionary.coreCodes), [dictionary.coreCodes]);
@@ -139,6 +141,7 @@ export function FilterPanel({
   const chips = buildFilterChips({
     state,
     subjectLookup,
+    campusLocationLookup,
     levelLookup,
     deliveryLookup,
     coreLookup,
@@ -242,44 +245,6 @@ export function FilterPanel({
       )}
 
       <section className="filter-panel__section">
-        <div className="filter-panel__section-heading">
-          <h3>{t('filters.sections.basic.title')}</h3>
-          {loading && <span className="filter-panel__badge">{t('filters.status.loadingBadge')}</span>}
-        </div>
-        <div className="filter-panel__grid">
-          <label className="filter-panel__control">
-            <span>{t('filters.sections.basic.term.label')}</span>
-            <select
-              value={state.term ?? ''}
-              onChange={(event) => emitState({ term: event.target.value || undefined }, 'term')}
-            >
-              <option value="" disabled>
-                {t('filters.sections.basic.term.placeholder')}
-              </option>
-              {dictionary.terms.map((term) => (
-                <option key={term.value} value={term.value}>
-                  {term.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="filter-panel__control">
-            <span>{t('filters.sections.basic.campus.label')}</span>
-            <select
-              value={state.campus ?? ''}
-              onChange={(event) => emitState({ campus: event.target.value || undefined }, 'campus')}
-            >
-              <option value="">{t('filters.sections.basic.campus.all')}</option>
-              {dictionary.campuses.map((campus) => (
-                <option key={campus.value} value={campus.value}>
-                  {campus.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
         <label className="filter-panel__control">
           <span>{t('filters.sections.basic.keyword.label')}</span>
           <input
@@ -358,6 +323,41 @@ export function FilterPanel({
           )}
         </div>
       </section>
+
+      {dictionary.campusLocations.length > 0 && (
+        <section className="filter-panel__section">
+          <div className="filter-panel__section-heading">
+            <h3>{t('filters.sections.campusLocations.title')}</h3>
+            <button
+              type="button"
+              className="filter-panel__clear-btn"
+              onClick={() => emitState({ campusLocations: [] }, 'campusLocations')}
+            >
+              {t('filters.sections.campusLocations.clear')}
+            </button>
+          </div>
+
+          <div className="filter-panel__checkboxes filter-panel__checkboxes--wrap">
+            {dictionary.campusLocations.map((location) => (
+              <label key={location.value}>
+                <input
+                  type="checkbox"
+                  checked={state.campusLocations.includes(location.value)}
+                  onChange={() =>
+                    emitState(
+                      { campusLocations: toggleValue(state.campusLocations, location.value) },
+                      'campusLocations',
+                    )
+                  }
+                />
+                <span>
+                  {location.label} {location.description ? <small>{location.description}</small> : null}
+                </span>
+              </label>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="filter-panel__section">
         <div className="filter-panel__section-heading">
@@ -580,6 +580,7 @@ const createMeetingDayLabels = (t: TFunction): Record<MeetingDay, string> => {
 const buildFilterChips = ({
   state,
   subjectLookup,
+  campusLocationLookup,
   levelLookup,
   deliveryLookup,
   coreLookup,
@@ -590,6 +591,7 @@ const buildFilterChips = ({
 }: {
   state: CourseFilterState;
   subjectLookup: Map<string, SubjectOption>;
+  campusLocationLookup: Map<string, FilterOption>;
   levelLookup: Map<string, LevelOption>;
   deliveryLookup: Map<string, DeliveryOption>;
   coreLookup: Map<string, FilterOption>;
@@ -602,6 +604,7 @@ const buildFilterChips = ({
   const chipLabels = {
     keyword: t('filters.chips.keyword'),
     subject: t('filters.chips.subject'),
+    campusLocation: t('filters.chips.campusLocation'),
     level: t('filters.chips.level'),
     delivery: t('filters.chips.delivery'),
     core: t('filters.chips.core'),
@@ -630,6 +633,23 @@ const buildFilterChips = ({
       value: subject,
       tone: 'default',
       onRemove: () => emitState({ subjects: state.subjects.filter((entry) => entry !== subject) }, 'subjects'),
+    });
+  });
+
+  state.campusLocations.forEach((location) => {
+    const option = campusLocationLookup.get(location);
+    chips.push({
+      id: `campusLocation:${location}`,
+      label: chipLabels.campusLocation,
+      value: option ? option.label : location,
+      tone: 'default',
+      onRemove: () =>
+        emitState(
+          {
+            campusLocations: state.campusLocations.filter((entry) => entry !== location),
+          },
+          'campusLocations',
+        ),
     });
   });
 

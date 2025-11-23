@@ -18,7 +18,6 @@ This note inventories every user-facing copy that currently exists in the Vite +
 | --- | --- | --- | --- |
 | `app.shell.loadingDictionary` | Loading filter dictionary… | 正在加载筛选字典... | Placeholder shown while the dictionary fetch is pending. |
 | `app.shell.fallbackAlert` | Filters API is unavailable, falling back to the offline dictionary. | Filters API 不可用，已切换到离线字典。 | Warning banner rendered when the remote dictionary API fails. |
-| `app.shell.waitlistNotice` | Waitlist filtering is not wired to the API yet. Results are for reference only. | 等候名单筛选尚未接入 API，当前结果仅供参考。 | Informational banner when the user chooses “has waitlist.” |
 | `app.shell.empty.ready` | No results matched your filters. Try adjusting them. | 暂无匹配结果，请调整筛选条件。 | Empty-state message once the user has picked enough filters to run a query. |
 | `app.shell.empty.missingFilters` | Select a term and campus to load courses. | 请先选择学期与校区以加载课程列表。 | Empty-state message before the initial term/campus selection. |
 
@@ -44,11 +43,10 @@ This note inventories every user-facing copy that currently exists in the Vite +
 | `filters.sections.basic.campus.label` | Campus | Campus | Label for campus `<select>`. |
 | `filters.sections.basic.campus.all` | All campuses | 全部校区 | First option in the campus dropdown. |
 | `filters.sections.basic.keyword.label` | Search keyword | Search keyword | Label for free-text search. |
-| `filters.sections.basic.keyword.placeholder` | Course title, code, or instructor | 课程名、编号或教师 | Input placeholder. |
+| `filters.sections.basic.keyword.placeholder` | Course title or code | 课程名或编号 | Input placeholder. |
 | `filters.sections.basic.openStatus.label` | Show sections | Show sections | Label for the open-status pill toggle. |
 | `filters.sections.basic.openStatus.all` | All | 全部 | Pill copy for “all sections.” |
 | `filters.sections.basic.openStatus.openOnly` | Open seats | 有空位 | Pill copy for “only show open seats.” |
-| `filters.sections.basic.openStatus.waitlist` | Has waitlist | 有候补 | Pill copy for the waitlist variant. |
 
 #### Subject picker
 
@@ -66,11 +64,26 @@ This note inventories every user-facing copy that currently exists in the Vite +
 | --- | --- | --- | --- |
 | `filters.sections.meeting.title` | Meeting time | 上课时间 | Section heading. |
 | `filters.sections.meeting.clear` | Clear | 清除 | Button that clears the entire meeting filter. |
+| `filters.sections.meeting.subsetHint` | Only sections whose meetings are all within the selected days and times will appear. | 仅显示所有 meeting 都落在所选星期与时间范围内的节次。 | Helper copy that explains the subset matching logic. |
 | `common.days.short.mon` – `common.days.short.sun` | Mon / Tue / ... | 周一 / 周二 / ... | Shared weekday labels consumed by both the meeting-day chips and the schedule preview columns. |
 | `filters.sections.meeting.start` | Start time | 开始时间 | Label above the first `<input type="time">`. |
 | `filters.sections.meeting.end` | End time | 结束时间 | Label above the second `<input type="time">`. |
 
-#### Delivery, level, quick tags
+#### Course attributes & prerequisites
+
+| Key | English default | zh-CN default | Usage |
+| --- | --- | --- | --- |
+| `filters.sections.courseMeta.title` | Course attributes | 课程属性 | Section heading for credits/core/exam. |
+| `filters.sections.courseMeta.clear` | Clear course filters | 清空课程筛选 | Button clearing credits/core/exam/prereq. |
+| `filters.sections.courseMeta.creditsMin` | Credits (min) | 最小学分 | Numeric input label. |
+| `filters.sections.courseMeta.creditsMax` | Credits (max) | 最大学分 | Numeric input label. |
+| `filters.sections.courseMeta.core` | Core codes | 核心代码 | Checkbox group label. |
+| `filters.sections.courseMeta.exam` | Exam codes | 考试代码 | Checkbox group label. |
+| `filters.sections.section.prerequisite.any` | Any prereq | 不限先修 | Pill copy for default prereq state. |
+| `filters.sections.section.prerequisite.has` | Has prereq | 需要先修 | Pill copy when filtering for prerequisites. |
+| `filters.sections.section.prerequisite.none` | No prereq | 无先修 | Pill copy when excluding prerequisites. |
+
+#### Delivery & level
 
 | Key | English default | zh-CN default | Usage |
 | --- | --- | --- | --- |
@@ -78,8 +91,6 @@ This note inventories every user-facing copy that currently exists in the Vite +
 | `filters.sections.meta.clear` | Clear | 清除 | Button clearing both delivery + level selections. |
 | `filters.sections.meta.delivery` | Delivery | Delivery | Label above the delivery checkbox group. |
 | `filters.sections.meta.level` | Level | Level | Label above the level checkbox group. |
-| `filters.sections.tags.title` | Quick tags | 快速标签 | Section heading for the TagChip presets. |
-| `filters.sections.tags.clear` | Clear | 清除 | Button clearing all tag presets. |
 
 #### Active-filter chips + meeting fallback labels
 
@@ -89,12 +100,15 @@ This note inventories every user-facing copy that currently exists in the Vite +
 | `filters.chips.subject` | Subject | 科目 | Chip label for each selected subject. |
 | `filters.chips.level` | Level | 年级 | Chip label for the level filter. |
 | `filters.chips.delivery` | Delivery | 授课方式 | Chip label for delivery methods. |
-| `filters.chips.tag` | Tag | 标签 | Chip label for quick tags. |
 | `filters.chips.core` | Core | 核心课程 | Chip label for core codes. |
+| `filters.chips.exam` | Exam | 考试代码 | Chip label for exam codes. |
 | `filters.chips.meeting` | Meeting | 上课时间 | Chip label when any meeting constraint is active. |
+| `filters.chips.credits` | Credits | 学分 | Generic chip label for credit ranges. |
+| `filters.chips.creditsMin` | Min {{value}} | 至少 {{value}} 学分 | Fallback when only `creditsMin` is set. |
+| `filters.chips.creditsMax` | Max {{value}} | 至多 {{value}} 学分 | Fallback when only `creditsMax` is set. |
+| `filters.chips.prerequisite` | Prerequisite | 先修要求 | Chip label for prereq pills. |
 | `filters.chips.meetingFallback` | Meeting filter | 上课时间筛选 | Text shown when the chip needs a fallback label. |
 | `filters.chips.openOnly` | Open seats only | 只看有空位 | Chip label mirroring the open-only pill. |
-| `filters.chips.hasWaitlist` | Has waitlist | 有候补 | Chip label mirroring the waitlist pill. |
 | `filters.chips.timePlaceholder.start` | Start | 开始 | Placeholder text injected into meeting chips when no explicit value is set. |
 | `filters.chips.timePlaceholder.end` | End | 结束 | Same for the end time. |
 

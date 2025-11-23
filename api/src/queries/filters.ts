@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 export interface FiltersDictionaryResult {
   terms: Array<{ id: string; display: string; active?: boolean }>;
   campuses: Array<{ code: string; display: string; region?: string | null }>;
+  campusLocations: Array<{ code: string; description: string; campus?: string | null }>;
   subjects: Array<{ code: string; description: string; school?: string | null; campus?: string | null }>;
   coreCodes: Array<{ code: string; description?: string | null }>;
   levels: string[];
@@ -69,6 +70,30 @@ export function fetchFiltersDictionary(db: Database.Database): FiltersDictionary
     display: row.display ?? row.code,
     region: row.region ?? null,
   }));
+
+  const campusLocations = dedupe(
+    safeAll(
+      () =>
+        db
+          .prepare(
+            `
+            SELECT location_code AS code, COALESCE(location_desc, location_code) AS description, campus_code AS campus
+            FROM course_campus_locations
+            WHERE location_code IS NOT NULL AND location_code <> ''
+            GROUP BY code, description, campus
+            ORDER BY description COLLATE NOCASE ASC, code ASC
+          `,
+          )
+          .all() as Array<{ code: string | null; description: string | null; campus?: string | null }>,
+    )
+      .map((row) => ({
+        code: (row.code ?? '').toUpperCase(),
+        description: row.description ?? row.code ?? '',
+        campus: row.campus ?? null,
+      }))
+      .filter((row) => row.code.length > 0),
+    (row) => `${row.code}|${row.campus ?? ''}`,
+  );
 
   const subjects = safeAll(
     () =>
@@ -177,6 +202,7 @@ export function fetchFiltersDictionary(db: Database.Database): FiltersDictionary
   const populated = {
     terms: terms.length ? terms : fallbackTerms(),
     campuses: campuses.length ? campuses : fallbackCampuses(),
+    campusLocations: campusLocations.length ? campusLocations : fallbackCampusLocations(),
     subjects: subjects.length ? subjects : fallbackSubjects(),
     coreCodes,
     levels: levels.length ? levels : ['UG', 'GR'],
@@ -261,6 +287,20 @@ function fallbackCampuses(): FiltersDictionaryResult['campuses'] {
     { code: 'NB', display: 'New Brunswick', region: 'Central' },
     { code: 'NWK', display: 'Newark', region: 'North' },
     { code: 'CAM', display: 'Camden', region: 'South' },
+  ];
+}
+
+function fallbackCampusLocations(): FiltersDictionaryResult['campusLocations'] {
+  return [
+    { code: '1', description: 'College Avenue', campus: 'NB' },
+    { code: '2', description: 'Busch', campus: 'NB' },
+    { code: '3', description: 'Livingston', campus: 'NB' },
+    { code: '4', description: 'Cook/Douglass', campus: 'NB' },
+    { code: '5', description: 'Downtown New Brunswick', campus: 'NB' },
+    { code: 'Z', description: 'Off campus', campus: 'NB' },
+    { code: 'S', description: 'Study Abroad', campus: 'NB' },
+    { code: 'O', description: 'O', campus: 'NB' },
+    { code: 'NA', description: 'N/A', campus: 'NB' },
   ];
 }
 
