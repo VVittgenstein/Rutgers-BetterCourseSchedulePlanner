@@ -69,7 +69,6 @@ export interface CourseSearchResult {
 }
 
 const VALID_DELIVERY = new Set(['in_person', 'online', 'hybrid']);
-const VALID_SECTION_STATUS = new Set(['OPEN', 'CLOSED', 'WAITLIST']);
 const VALID_INCLUDES: CourseInclude[] = ['sectionsSummary', 'subjects', 'sections'];
 const SECTION_PREVIEW_LIMIT = 200;
 
@@ -82,6 +81,7 @@ const DAY_BITMASK: Record<string, number> = {
   SA: 32,
   SU: 64,
 };
+const DAY_MASK_ALL = Object.values(DAY_BITMASK).reduce((mask, value) => mask | value, 0);
 
 const SORT_COLUMNS = {
   subject: 'c.subject_code',
@@ -114,17 +114,11 @@ class SqlBinder {
 
 interface SectionFilterInput {
   deliveries: string[];
-  indexes: string[];
-  sectionNumbers: string[];
-  sectionStatuses: string[];
-  instructors: string[];
-  requiresPermission?: boolean;
+  examCodes: string[];
   meetingMask?: number;
   meetingStart?: number;
   meetingEnd?: number;
   meetingCampuses: string[];
-  buildings: string[];
-  rooms: string[];
 }
 
 export function executeCourseSearch(db: Database.Database, query: CoursesQuery): CourseSearchResult {
@@ -146,14 +140,6 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
   if (levels.length) {
     filters.push(buildInClause('c.level', levels, binder));
   }
-
-  if (query.courseNumber?.trim()) {
-    filters.push(`c.course_number = ${binder.bind(query.courseNumber.trim())}`);
-  }
-
-  const indexes = normalizeIndexList(query.index);
-  const sectionNumbers = normalizeSectionNumberList(query.sectionNumber);
-  const sectionStatuses = normalizeSectionStatus(query.sectionStatus);
 
   const ftsQuery = buildFtsQuery(query.q);
   if (ftsQuery) {
@@ -202,16 +188,17 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
   }
 
   const deliveries = normalizeDeliveryList(query.delivery);
+  const examCodes = normalizeExamCodeList(query.examCode);
   const meetingMask = buildMeetingMask(query.meetingDays);
   const meetingStart = typeof query.meetingStart === 'number' ? query.meetingStart : undefined;
   const meetingEnd = typeof query.meetingEnd === 'number' ? query.meetingEnd : undefined;
   const meetingCampuses = normalizeStringList(query.meetingCampus, (value) => value.toUpperCase());
-  const buildings = normalizeStringList(query.building, (value) => value.toUpperCase());
-  const rooms = normalizeStringList(query.room, (value) => value.toUpperCase());
+  const outsideDayMask = typeof meetingMask === 'number' ? DAY_MASK_ALL & ~meetingMask : undefined;
 
   const meetingClauses: string[] = [];
   if (meetingMask !== undefined) {
-    meetingClauses.push(`sm.week_mask IS NOT NULL AND (sm.week_mask & ${binder.bind(meetingMask)}) != 0`);
+    meetingClauses.push(`sm.week_mask IS NOT NULL AND sm.week_mask > 0`);
+    meetingClauses.push(`(sm.week_mask & ${binder.bind(outsideDayMask ?? 0)}) = 0`);
   }
   if (meetingStart !== undefined) {
     meetingClauses.push(`sm.start_minutes IS NOT NULL AND sm.start_minutes >= ${binder.bind(meetingStart)}`);
@@ -226,65 +213,34 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
       buildInClause('upper(COALESCE(sm.campus_abbrev, sm.campus_location_code))', meetingCampuses, binder),
     );
   }
-  if (buildings.length) {
-    meetingLocationClauses.push(buildInClause('upper(sm.building_code)', buildings, binder));
-  }
-  if (rooms.length) {
-    meetingLocationClauses.push(buildInClause('upper(sm.room_number)', rooms, binder));
-  }
 
   const sectionConditions: string[] = [];
   if (deliveries.length) {
     sectionConditions.push(buildInClause('s_filter.delivery_method', deliveries, binder));
   }
-  if (indexes.length) {
-    sectionConditions.push(buildInClause('s_filter.index_number', indexes, binder));
+  if (examCodes.length) {
+    sectionConditions.push(buildInClause('upper(s_filter.exam_code)', examCodes, binder));
   }
-  if (sectionNumbers.length) {
-    sectionConditions.push(buildInClause('s_filter.section_number', sectionNumbers, binder));
-  }
-  if (sectionStatuses.length) {
-    sectionConditions.push(buildInClause('upper(s_filter.open_status)', sectionStatuses, binder));
-  }
-  const instructors = normalizeStringList(query.instructor, (value) => value.toLowerCase());
-  if (instructors.length) {
-    const instructorClauses = instructors.map(
-      (needle) =>
-        `(s_filter.instructors_text IS NOT NULL AND s_filter.instructors_text <> '' AND instr(lower(s_filter.instructors_text), ${binder.bind(needle)}) > 0)`,
-    );
-    sectionConditions.push(instructorClauses.length === 1 ? instructorClauses[0] : `(${instructorClauses.join(' OR ')})`);
-  }
-  if (typeof query.requiresPermission === 'boolean') {
-    if (query.requiresPermission) {
-      sectionConditions.push(`
-        (
-          (s_filter.special_permission_add_code IS NOT NULL AND s_filter.special_permission_add_code <> '') OR
-          (s_filter.special_permission_drop_code IS NOT NULL AND s_filter.special_permission_drop_code <> '')
-        )
-      `);
-    } else {
-      sectionConditions.push(`
-        (
-          (s_filter.special_permission_add_code IS NULL OR s_filter.special_permission_add_code = '') AND
-          (s_filter.special_permission_drop_code IS NULL OR s_filter.special_permission_drop_code = '')
-        )
-      `);
-    }
+  if (outsideDayMask !== undefined) {
+    sectionConditions.push(`
+      NOT EXISTS (
+        SELECT 1
+        FROM section_meetings sm_all
+        WHERE sm_all.section_id = s_filter.section_id
+          AND sm_all.week_mask IS NOT NULL
+          AND sm_all.week_mask > 0
+          AND (sm_all.week_mask & ${binder.bind(outsideDayMask)}) != 0
+      )
+    `);
   }
 
   const sectionFilter: SectionFilterInput = {
     deliveries,
-    indexes,
-    sectionNumbers,
-    sectionStatuses,
-    instructors,
-    requiresPermission: typeof query.requiresPermission === 'boolean' ? query.requiresPermission : undefined,
+    examCodes,
     meetingMask,
     meetingStart,
     meetingEnd,
     meetingCampuses,
-    buildings,
-    rooms,
   };
 
   const needsMeetingJoin = meetingClauses.length > 0 || meetingLocationClauses.length > 0;
@@ -470,6 +426,13 @@ function normalizeDeliveryList(values: string[] | undefined) {
   });
 }
 
+function normalizeExamCodeList(values: string[] | undefined) {
+  return normalizeStringList(values, (value) => {
+    const cleaned = value.replace(/[^a-zA-Z]/g, '').toUpperCase();
+    return cleaned ? cleaned : undefined;
+  });
+}
+
 function normalizeLevelFilters(values: string[] | string | undefined): string[] {
   if (!values) {
     return [];
@@ -502,27 +465,6 @@ function normalizeLevelFilters(values: string[] | string | undefined): string[] 
   }
 
   return Array.from(dedup);
-}
-
-function normalizeIndexList(values: string[] | undefined) {
-  return normalizeStringList(values, (value) => {
-    const cleaned = value.replace(/\s+/g, '');
-    return cleaned ? cleaned.toUpperCase() : undefined;
-  });
-}
-
-function normalizeSectionNumberList(values: string[] | undefined) {
-  return normalizeStringList(values, (value) => {
-    const cleaned = value.replace(/\s+/g, '');
-    return cleaned ? cleaned.toUpperCase() : undefined;
-  });
-}
-
-function normalizeSectionStatus(values: string[] | undefined) {
-  return normalizeStringList(values, (value) => {
-    const normalized = value.toUpperCase();
-    return VALID_SECTION_STATUS.has(normalized) ? normalized : undefined;
-  });
 }
 
 function buildFtsQuery(input: string | undefined) {
@@ -665,44 +607,29 @@ function attachSectionsPreview(
   if (filter?.deliveries?.length) {
     filterClauses.push(buildInClause('s.delivery_method', filter.deliveries, binder));
   }
-  if (filter?.indexes?.length) {
-    filterClauses.push(buildInClause('s.index_number', filter.indexes, binder));
+  if (filter?.examCodes?.length) {
+    filterClauses.push(buildInClause('upper(s.exam_code)', filter.examCodes, binder));
   }
-  if (filter?.sectionNumbers?.length) {
-    filterClauses.push(buildInClause('s.section_number', filter.sectionNumbers, binder));
-  }
-  if (filter?.sectionStatuses?.length) {
-    filterClauses.push(buildInClause('upper(s.open_status)', filter.sectionStatuses, binder));
-  }
-  if (filter?.instructors?.length) {
-    const instructorClauses = filter.instructors.map(
-      (needle) =>
-        `(s.instructors_text IS NOT NULL AND s.instructors_text <> '' AND instr(lower(s.instructors_text), ${binder.bind(needle)}) > 0)`,
-    );
-    filterClauses.push(instructorClauses.length === 1 ? instructorClauses[0] : `(${instructorClauses.join(' OR ')})`);
-  }
-  if (filter?.requiresPermission !== undefined) {
-    if (filter.requiresPermission) {
-      filterClauses.push(`
-        (
-          (s.special_permission_add_code IS NOT NULL AND s.special_permission_add_code <> '') OR
-          (s.special_permission_drop_code IS NOT NULL AND s.special_permission_drop_code <> '')
-        )
-      `);
-    } else {
-      filterClauses.push(`
-        (
-          (s.special_permission_add_code IS NULL OR s.special_permission_add_code = '') AND
-          (s.special_permission_drop_code IS NULL OR s.special_permission_drop_code = '')
-        )
-      `);
-    }
+
+  const outsideDayMask = typeof filter?.meetingMask === 'number' ? DAY_MASK_ALL & ~filter.meetingMask : undefined;
+  if (outsideDayMask !== undefined) {
+    filterClauses.push(`
+      NOT EXISTS (
+        SELECT 1
+        FROM section_meetings sm_all
+        WHERE sm_all.section_id = s.section_id
+          AND sm_all.week_mask IS NOT NULL
+          AND sm_all.week_mask > 0
+          AND (sm_all.week_mask & ${binder.bind(outsideDayMask)}) != 0
+      )
+    `);
   }
 
   const meetingClauses: string[] = [];
   const meetingLocationClauses: string[] = [];
   if (filter?.meetingMask !== undefined) {
-    meetingClauses.push(`sm.week_mask IS NOT NULL AND (sm.week_mask & ${binder.bind(filter.meetingMask)}) != 0`);
+    meetingClauses.push(`sm.week_mask IS NOT NULL AND sm.week_mask > 0`);
+    meetingClauses.push(`(sm.week_mask & ${binder.bind(outsideDayMask ?? 0)}) = 0`);
   }
   if (filter?.meetingStart !== undefined) {
     meetingClauses.push(`sm.start_minutes IS NOT NULL AND sm.start_minutes >= ${binder.bind(filter.meetingStart)}`);
@@ -714,12 +641,6 @@ function attachSectionsPreview(
     meetingLocationClauses.push(
       buildInClause('upper(COALESCE(sm.campus_abbrev, sm.campus_location_code))', filter.meetingCampuses, binder),
     );
-  }
-  if (filter?.buildings?.length) {
-    meetingLocationClauses.push(buildInClause('upper(sm.building_code)', filter.buildings, binder));
-  }
-  if (filter?.rooms?.length) {
-    meetingLocationClauses.push(buildInClause('upper(sm.room_number)', filter.rooms, binder));
   }
 
   if (meetingClauses.length || meetingLocationClauses.length) {

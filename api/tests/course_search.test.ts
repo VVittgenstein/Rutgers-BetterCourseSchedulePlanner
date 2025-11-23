@@ -29,32 +29,40 @@ test('filters by core code and open status', () => {
   db.close();
 });
 
-test('applies delivery and meeting filters together', () => {
+test('meetingDays uses subset matching with delivery/time window', () => {
   const { db, courses } = seedFixtures();
-  const query = buildQuery({
-    delivery: ['online'],
-    meetingDays: ['TH'],
-    meetingStart: 780,
-    meetingEnd: 900,
-  });
+  const noMondayOnly = executeCourseSearch(db, buildQuery({ meetingDays: ['M'] }));
+  assert.equal(noMondayOnly.total, 0);
 
-  const result = executeCourseSearch(db, query);
-  assert.equal(result.total, 1);
-  assert.equal(result.data[0]?.courseId, courses.systems);
+  const thursdayMatch = executeCourseSearch(
+    db,
+    buildQuery({
+      delivery: ['online'],
+      meetingDays: ['TH'],
+      meetingStart: 780,
+      meetingEnd: 900,
+    }),
+  );
+
+  assert.equal(thursdayMatch.total, 1);
+  assert.equal(thursdayMatch.data[0]?.courseId, courses.systems);
   db.close();
 });
 
-test('matches instructors across sections and campuses', () => {
+test('filters by exam code and returns matching sections', () => {
   const { db, courses } = seedFixtures();
   const query = buildQuery({
-    campus: ['NB', 'NW'],
-    subject: ['198', '640'],
-    instructor: 'doe',
+    examCode: ['A'],
+    include: ['sections'],
   });
 
   const result = executeCourseSearch(db, query);
   assert.equal(result.total, 1);
-  assert.equal(result.data[0]?.courseId, courses.algorithms);
+  const course = result.data[0];
+  assert.ok(course);
+  assert.equal(course.courseId, courses.intro);
+  assert.equal(course.sections?.length, 1);
+  assert.equal(course.sections?.[0]?.indexNumber, '10001');
   db.close();
 });
 
@@ -103,23 +111,6 @@ test('includes optional summaries and subject metadata', () => {
   db.close();
 });
 
-test('requiresPermission flag toggles courses accordingly', () => {
-  const { db, courses } = seedFixtures();
-  const withoutPermission = executeCourseSearch(
-    db,
-    buildQuery({ requiresPermission: false }),
-  );
-  assert.ok(withoutPermission.data.every((row) => row.courseId !== courses.systems));
-
-  const permissionOnly = executeCourseSearch(
-    db,
-    buildQuery({ requiresPermission: true }),
-  );
-  assert.equal(permissionOnly.total, 1);
-  assert.equal(permissionOnly.data[0]?.courseId, courses.systems);
-  db.close();
-});
-
 function buildQuery(overrides: Partial<CoursesQuery> = {}): CoursesQuery {
   return {
     term: '20241',
@@ -154,6 +145,7 @@ function seedFixtures() {
     isOpen: 1,
     deliveryMethod: 'in_person',
     instructorsText: 'Jamie Lin',
+    examCode: 'A',
   });
   insertMeeting(db, introSectionOpen, ['M', 'W'], 600, 690);
   const introSectionClosed = insertSection(db, {
@@ -162,6 +154,7 @@ function seedFixtures() {
     isOpen: 0,
     deliveryMethod: 'hybrid',
     instructorsText: 'Jamie Lin',
+    examCode: 'B',
   });
   insertMeeting(db, introSectionClosed, ['F'], 900, 1000);
 
@@ -181,6 +174,7 @@ function seedFixtures() {
     isOpen: 0,
     deliveryMethod: 'online',
     instructorsText: 'Ann Smith',
+    examCode: 'C',
     specialPermissionAdd: 'SP',
   });
   insertMeeting(db, systemsSection, ['TH'], 800, 900);
@@ -202,6 +196,7 @@ function seedFixtures() {
     isOpen: 1,
     deliveryMethod: 'in_person',
     instructorsText: 'Brian Doe',
+    examCode: 'D',
   });
   insertMeeting(db, algorithmsSection, ['T'], 540, 600);
 
@@ -253,9 +248,13 @@ function setupDb() {
       subject_code TEXT NOT NULL,
       section_number TEXT,
       index_number TEXT,
+      open_status TEXT,
       delivery_method TEXT,
       is_open INTEGER DEFAULT 0,
       instructors_text TEXT,
+      meeting_mode_summary TEXT,
+      exam_code TEXT,
+      exam_code_text TEXT,
       special_permission_add_code TEXT,
       special_permission_drop_code TEXT
     );
@@ -265,7 +264,13 @@ function setupDb() {
       section_id INTEGER NOT NULL,
       week_mask INTEGER,
       start_minutes INTEGER,
-      end_minutes INTEGER
+      end_minutes INTEGER,
+      meeting_day TEXT,
+      campus_abbrev TEXT,
+      campus_location_code TEXT,
+      campus_location_desc TEXT,
+      building_code TEXT,
+      room_number TEXT
     );
 
     CREATE VIRTUAL TABLE course_search_fts USING fts5(term_id, campus_code, course_id, section_id, document);
@@ -360,9 +365,11 @@ function insertSection(
     subjectCode = '198',
     sectionNumber = '01',
     indexNumber = '10000',
+    openStatus = null,
     deliveryMethod = 'in_person',
     isOpen = 0,
     instructorsText = 'TBA',
+    examCode = null,
     specialPermissionAdd = null,
     specialPermissionDrop = null,
   }: {
@@ -372,9 +379,11 @@ function insertSection(
     subjectCode?: string;
     sectionNumber?: string;
     indexNumber?: string;
+    openStatus?: string | null;
     deliveryMethod?: string;
     isOpen?: number;
     instructorsText?: string;
+    examCode?: string | null;
     specialPermissionAdd?: string | null;
     specialPermissionDrop?: string | null;
   },
@@ -383,8 +392,8 @@ function insertSection(
     .prepare(
       `INSERT INTO sections (
         course_id, term_id, campus_code, subject_code, section_number, index_number,
-        delivery_method, is_open, instructors_text, special_permission_add_code, special_permission_drop_code
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        open_status, delivery_method, is_open, instructors_text, exam_code, special_permission_add_code, special_permission_drop_code
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
     .run(
@@ -394,9 +403,11 @@ function insertSection(
       subjectCode,
       sectionNumber,
       indexNumber,
+      openStatus ?? (isOpen ? 'OPEN' : 'CLOSED'),
       deliveryMethod,
       isOpen,
       instructorsText,
+      examCode,
       specialPermissionAdd,
       specialPermissionDrop,
     );
@@ -411,12 +422,10 @@ function insertMeeting(
   end: number,
 ) {
   const mask = days.reduce((value, day) => value | DAY_MASK[day], 0);
-  db.prepare('INSERT INTO section_meetings(section_id, week_mask, start_minutes, end_minutes) VALUES (?, ?, ?, ?)').run(
-    sectionId,
-    mask,
-    start,
-    end,
-  );
+  const meetingDay = days.join('');
+  db.prepare(
+    'INSERT INTO section_meetings(section_id, week_mask, start_minutes, end_minutes, meeting_day, campus_abbrev, campus_location_code, campus_location_desc, building_code, room_number) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)',
+  ).run(sectionId, mask, start, end, meetingDay);
 }
 
 function seedFtsRow(

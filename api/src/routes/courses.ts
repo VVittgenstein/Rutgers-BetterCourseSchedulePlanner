@@ -19,11 +19,8 @@ const courseQuerySchema = paginationSchema(100, 20)
     subject: stringOrArrayParam,
     q: z.string().trim().min(2).optional(),
     level: stringOrArrayParam,
-    courseNumber: z.string().trim().optional(),
-    index: stringOrArrayParam,
-    sectionNumber: stringOrArrayParam,
-    sectionStatus: enumArrayParam(['OPEN', 'CLOSED', 'WAITLIST']),
     coreCode: stringOrArrayParam,
+    examCode: stringOrArrayParam,
     creditsMin: z.coerce.number().int().min(0).max(20).optional(),
     creditsMax: z.coerce.number().int().min(0).max(20).optional(),
     delivery: enumArrayParam(['in_person', 'online', 'hybrid']),
@@ -32,11 +29,7 @@ const courseQuerySchema = paginationSchema(100, 20)
     meetingDays: stringOrArrayParam,
     meetingStart: optionalMinutesParam,
     meetingEnd: optionalMinutesParam,
-    instructor: stringOrArrayParam,
     meetingCampus: stringOrArrayParam,
-    building: stringOrArrayParam,
-    room: stringOrArrayParam,
-    requiresPermission: optionalBooleanParam,
     sortBy: z.enum(['subject', 'courseNumber', 'title', 'credits', 'sectionsOpen', 'updatedAt']).optional(),
     sortDir: sortDirectionSchema.optional(),
     include: stringOrArrayParam,
@@ -134,11 +127,8 @@ function summarizeCourseFilters(query: CoursesQuery) {
     subject: query.subject ?? [],
     level: query.level ?? [],
     hasSearchQuery: Boolean(query.q),
-    courseNumber: query.courseNumber,
-    index: query.index ?? [],
-    sectionNumber: query.sectionNumber ?? [],
-    sectionStatus: query.sectionStatus ?? [],
     coreCode: query.coreCode ?? [],
+    examCode: query.examCode ?? [],
     credits:
       query.creditsMin !== undefined || query.creditsMax !== undefined
         ? { min: query.creditsMin, max: query.creditsMax }
@@ -151,13 +141,7 @@ function summarizeCourseFilters(query: CoursesQuery) {
       query.meetingStart !== undefined || query.meetingEnd !== undefined
         ? { start: query.meetingStart, end: query.meetingEnd }
         : undefined,
-    instructorCount: Array.isArray(query.instructor) ? query.instructor.length : query.instructor ? 1 : 0,
     meetingCampus: query.meetingCampus ?? [],
-    meetingLocation:
-      (query.building && query.building.length) || (query.room && query.room.length)
-        ? { building: query.building ?? [], room: query.room ?? [] }
-        : undefined,
-    requiresPermission: query.requiresPermission,
     sort: query.sortBy ? { by: query.sortBy, direction: query.sortDir ?? 'asc' } : undefined,
     include: query.include ?? [],
   };
