@@ -91,7 +91,7 @@
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "in_review",
           "dependencies": [],
           "blocked": false,
           "blocked_by": [],
@@ -103,7 +103,9 @@
             "api-query",
             "tests"
           ],
-          "artifacts": []
+          "artifacts": [
+            "Compact/Compact-ST-20251122-filter-rewrite-02-api-schema-query-2025-11-23-T082002Z.md"
+          ]
         },
         "ST-20251122-filter-rewrite-03-data-pipeline-dicts": {
           "seed_id": null,

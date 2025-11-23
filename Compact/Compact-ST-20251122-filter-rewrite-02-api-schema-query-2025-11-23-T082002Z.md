@@ -14,3 +14,6 @@ Interface/behavior shifts
 Risks / TODO
 - Tests not executed: `node` executable absent; rerun `npx tsx api/tests/course_search.test.ts` after installing Node.
 - Recommend manual verification with real data for meetingDays subset and examCode filtering once runtime is available.
+
+## Code Review - ST-20251122-filter-rewrite-02-api-schema-query - 2025-11-23T08:42:26Z
+Codex Review: Didn't find any major issues. Swish!
