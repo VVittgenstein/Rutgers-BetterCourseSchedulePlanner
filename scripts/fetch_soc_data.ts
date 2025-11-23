@@ -115,6 +115,8 @@ interface PreparedStatements {
   insertCourse: Database.Statement;
   updateCourse: Database.Statement;
   deleteCourse: Database.Statement;
+  deleteCourseCampusLocations: Database.Statement;
+  insertCourseCampusLocation: Database.Statement;
   deleteCourseCoreAttributes: Database.Statement;
   insertCourseCoreAttribute: Database.Statement;
   selectSections: Database.Statement;
@@ -448,6 +450,11 @@ function createStatements(db: DB): PreparedStatements {
       WHERE course_id = ?
     `),
     deleteCourse: db.prepare('DELETE FROM courses WHERE course_id = ?'),
+    deleteCourseCampusLocations: db.prepare('DELETE FROM course_campus_locations WHERE course_id = ?'),
+    insertCourseCampusLocation: db.prepare(`
+      INSERT INTO course_campus_locations (course_id, term_id, campus_code, location_code, location_desc)
+      VALUES (?, ?, ?, ?, ?)
+    `),
     deleteCourseCoreAttributes: db.prepare('DELETE FROM course_core_attributes WHERE course_id = ?'),
     insertCourseCoreAttribute: db.prepare(`
       INSERT INTO course_core_attributes (course_id, term_id, core_code, reference_id, effective_term, metadata)
@@ -1092,6 +1099,7 @@ function applySubjectBatch(
 
       const courseId = courseIds.get(course.record.courseNumber);
       if (!courseId) continue;
+      syncCourseCampusLocations(ctx, slice, courseId, course);
       syncCourseCoreAttributes(ctx, slice, courseId, coreAttributes);
       for (const section of course.sections) {
         const existing = existingSections.get(section.key);
@@ -1261,6 +1269,56 @@ function syncCourseCoreAttributes(
       attribute.effectiveTerm,
       attribute.metadata,
     );
+  }
+}
+
+function syncCourseCampusLocations(ctx: PipelineContext, slice: PlannedSlice, courseId: number, course: NormalizedCourse) {
+  ctx.statements.deleteCourseCampusLocations.run(courseId);
+
+  const rawLocations = Array.isArray((course.raw as Record<string, unknown>)?.campusLocations)
+    ? ((course.raw as Record<string, unknown>).campusLocations as unknown[])
+    : [];
+
+  const pairs: Array<{ code: string; desc: string | null }> = [];
+  const toText = (value: unknown): string => {
+    if (typeof value === 'string' || typeof value === 'number') {
+      return String(value).trim();
+    }
+    return '';
+  };
+
+  if (rawLocations.length) {
+    for (const entry of rawLocations) {
+      if (!entry || typeof entry !== 'object') {
+        const code = toText(entry);
+        if (code) {
+          pairs.push({ code: code.toUpperCase(), desc: code });
+        }
+        continue;
+      }
+      const code = toText((entry as Record<string, unknown>).code ?? entry);
+      const desc = toText((entry as Record<string, unknown>).description ?? entry);
+      if (!code && !desc) continue;
+      pairs.push({ code: code ? code.toUpperCase() : desc.toUpperCase(), desc: desc || code });
+    }
+  } else {
+    const max = Math.max(course.record.campusLocationCodes.length, course.record.campusLocations.length);
+    for (let i = 0; i < max; i += 1) {
+      const code = course.record.campusLocationCodes[i];
+      const desc = course.record.campusLocations[i];
+      if (!code && !desc) continue;
+      pairs.push({ code: (code ?? desc).toUpperCase(), desc: desc ?? code ?? null });
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const pair of pairs) {
+    const normalizedCode = pair.code.trim();
+    if (!normalizedCode) continue;
+    const key = `${normalizedCode}|${pair.desc ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ctx.statements.insertCourseCampusLocation.run(courseId, slice.term, slice.campus, normalizedCode, pair.desc ?? null);
   }
 }
 

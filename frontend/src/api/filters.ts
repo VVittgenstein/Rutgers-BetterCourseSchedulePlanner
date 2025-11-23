@@ -21,6 +21,7 @@ export async function fetchFiltersDictionary(signal?: AbortSignal): Promise<Filt
   const data = payload.data ?? {
     terms: [],
     campuses: [],
+    campusLocations: [],
     subjects: [],
     coreCodes: [],
     levels: [],
@@ -45,6 +46,15 @@ export async function fetchFiltersDictionary(signal?: AbortSignal): Promise<Filt
           description: campus.region,
         }))
       : fallbackFiltersDictionary.campuses;
+
+  const campusLocations =
+    data.campusLocations && data.campusLocations.length > 0
+      ? data.campusLocations.map((location) => ({
+          label: location.description ?? location.code,
+          value: location.code,
+          description: location.campus ?? undefined,
+        }))
+      : fallbackFiltersDictionary.campusLocations;
 
   const subjects =
     data.subjects.length > 0
@@ -74,6 +84,7 @@ export async function fetchFiltersDictionary(signal?: AbortSignal): Promise<Filt
   return {
     terms,
     campuses,
+    campusLocations,
     subjects,
     levels: normalizeLevels(data.levels),
     deliveries: normalizeDeliveryMethods(data.deliveryMethods),

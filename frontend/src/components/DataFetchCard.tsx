@@ -15,6 +15,7 @@ interface DataFetchCardProps {
   defaultCampus?: string;
   campusOptions?: CampusOption[];
   onApplySelection?: (term: string, campus: string) => void;
+  onSelectionChange?: (term: string, campus: string) => void;
   onDictionaryRefresh?: () => void;
 }
 
@@ -25,6 +26,7 @@ export function DataFetchCard({
   defaultCampus,
   campusOptions,
   onApplySelection,
+  onSelectionChange,
   onDictionaryRefresh,
 }: DataFetchCardProps) {
   const { t } = useTranslation();
@@ -38,9 +40,9 @@ export function DataFetchCard({
   const [campus, setCampus] = useState((defaultCampus ?? campusOptions?.[0]?.value ?? 'NB').toUpperCase());
   const [job, setJob] = useState<FetchJob | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [statusNote, setStatusNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const lastCompletedRef = useRef<string | null>(null);
+  const lastSelectionRef = useRef<{ term: string; campus: string } | null>(null);
 
   const suggestedCampuses = useMemo(() => {
     const seen = new Set<string>();
@@ -65,15 +67,28 @@ export function DataFetchCard({
 
   useEffect(() => {
     if (!defaultCampus) return;
-    setCampus(defaultCampus.toUpperCase());
+    const next = defaultCampus.toUpperCase();
+    setCampus((prev) => (prev === next ? prev : next));
   }, [defaultCampus]);
 
   useEffect(() => {
     if (!defaultTerm) return;
     const parsed = parseTermId(defaultTerm);
-    if (parsed.year) setYear(parsed.year);
-    if (parsed.season) setSeason(parsed.season);
+    setYear((prev) => (parsed.year && parsed.year !== prev ? parsed.year : prev));
+    setSeason((prev) => (parsed.season && parsed.season !== prev ? parsed.season : prev));
   }, [defaultTerm]);
+
+  const emitSelection = useCallback(
+    (nextTerm: string, nextCampus: string) => {
+      const normalizedCampus = nextCampus.trim().toUpperCase();
+      if (!nextTerm || !normalizedCampus) return;
+      const last = lastSelectionRef.current;
+      if (last && last.term === nextTerm && last.campus === normalizedCampus) return;
+      lastSelectionRef.current = { term: nextTerm, campus: normalizedCampus };
+      onSelectionChange?.(nextTerm, normalizedCampus);
+    },
+    [onSelectionChange],
+  );
 
   const refreshStatus = useCallback(() => {
     fetchJobStatus()
@@ -102,7 +117,6 @@ export function DataFetchCard({
     if (lastCompletedRef.current === job.id) return;
     lastCompletedRef.current = job.id;
     if (job.status === 'success') {
-      setStatusNote(t('fetcher.status.success', { term: job.term, campus: job.campus }));
       onDictionaryRefresh?.();
       onApplySelection?.(job.term, job.campus);
     } else if (job.status === 'error') {
@@ -113,12 +127,10 @@ export function DataFetchCard({
   const handleStart = async () => {
     setIsSubmitting(true);
     setError(null);
-    setStatusNote(null);
     const campusCode = campus.trim().toUpperCase();
     try {
       const response = await startFetchJob({ year, season, campus: campusCode });
       setJob(response.data.job);
-      setStatusNote(t('fetcher.status.started', { term: termPreview, campus: campusCode }));
     } catch (err) {
       const message = err instanceof Error ? err.message : t('fetcher.status.errorFallback');
       setError(message);
@@ -143,30 +155,32 @@ export function DataFetchCard({
   const canSubmit = Boolean(campus.trim()) && !isSubmitting && !isRunning;
 
   return (
-    <section className="fetch-card">
-      <div className="fetch-card__header">
-        <div>
-          <p className="fetch-card__eyebrow">{t('filters.header.eyebrow')}</p>
-          <h2 className="fetch-card__title">{t('fetcher.title')}</h2>
-          <p className="fetch-card__subtitle">{t('fetcher.description')}</p>
-        </div>
-        <div className="fetch-card__badge">{t('fetcher.fields.termPreview', { term: termPreview })}</div>
-      </div>
-
-      <div className="fetch-card__grid">
+    <section className="fetch-card" aria-label={t('fetcher.title')}>
+      <div className="fetch-card__toolbar">
         <label className="fetch-card__control">
-          <span>{t('fetcher.fields.year')}</span>
+          <span className="fetch-card__label">{t('fetcher.fields.year')}</span>
           <input
             type="number"
             min={2015}
             max={2100}
             value={year}
-            onChange={(event) => setYear(Number(event.target.value) || now.getFullYear())}
+            onChange={(event) => {
+              const nextYear = Number(event.target.value) || now.getFullYear();
+              setYear(nextYear);
+              emitSelection(buildTermId(nextYear, season), campus);
+            }}
           />
         </label>
         <label className="fetch-card__control">
-          <span>{t('fetcher.fields.season')}</span>
-          <select value={season} onChange={(event) => setSeason(event.target.value as TermSeason)}>
+          <span className="fetch-card__label">{t('fetcher.fields.season')}</span>
+          <select
+            value={season}
+            onChange={(event) => {
+              const nextSeason = event.target.value as TermSeason;
+              setSeason(nextSeason);
+              emitSelection(buildTermId(year, nextSeason), campus);
+            }}
+          >
             <option value="spring">{t(`fetcher.seasons.${seasonLabelKey('spring')}`)}</option>
             <option value="summer">{t(`fetcher.seasons.${seasonLabelKey('summer')}`)}</option>
             <option value="fall">{t(`fetcher.seasons.${seasonLabelKey('fall')}`)}</option>
@@ -174,11 +188,15 @@ export function DataFetchCard({
           </select>
         </label>
         <label className="fetch-card__control">
-          <span>{t('fetcher.fields.campus')}</span>
+          <span className="fetch-card__label">{t('fetcher.fields.campus')}</span>
           <input
             list="fetch-campuses"
             value={campus}
-            onChange={(event) => setCampus(event.target.value.toUpperCase())}
+            onChange={(event) => {
+              const nextCampus = event.target.value.toUpperCase();
+              setCampus(nextCampus);
+              emitSelection(termPreview, nextCampus);
+            }}
             placeholder="NB"
           />
           <datalist id="fetch-campuses">
@@ -189,34 +207,35 @@ export function DataFetchCard({
             ))}
           </datalist>
         </label>
-      </div>
-
-      <p className="fetch-card__hint">{t('fetcher.hints.apply')}</p>
-
-      <div className="fetch-card__actions">
-        <button
-          type="button"
-          className={classNames('fetch-card__btn', (isSubmitting || isRunning) && 'fetch-card__btn--ghost')}
-          onClick={handleStart}
-          disabled={!canSubmit}
-        >
-          {isSubmitting || isRunning ? t('fetcher.actions.running') : t('fetcher.actions.start')}
-        </button>
-        <div
-          className={classNames(
-            'fetch-card__status',
-            job?.status === 'running' && 'fetch-card__status--running',
-            job?.status === 'success' && 'fetch-card__status--success',
-            job?.status === 'error' && 'fetch-card__status--error',
-          )}
-        >
-          <span>{statusLabel}</span>
-          {job?.logFile && <span className="fetch-card__log">{t('fetcher.hints.log', { path: job.logFile })}</span>}
+        <div className="fetch-card__term" aria-live="polite">
+          {t('fetcher.fields.termPreview', { term: termPreview })}
+        </div>
+        <div className="fetch-card__actions">
+          <button
+            type="button"
+            className={classNames('fetch-card__btn', (isSubmitting || isRunning) && 'fetch-card__btn--ghost')}
+            onClick={handleStart}
+            disabled={!canSubmit}
+          >
+            {isSubmitting || isRunning ? t('fetcher.actions.running') : t('fetcher.actions.start')}
+          </button>
+          <div
+            className={classNames(
+              'fetch-card__status',
+              job?.status === 'running' && 'fetch-card__status--running',
+              job?.status === 'success' && 'fetch-card__status--success',
+              job?.status === 'error' && 'fetch-card__status--error',
+            )}
+            aria-live="polite"
+          >
+            <span className="fetch-card__status-text">{statusLabel}</span>
+            {job?.logFile && (
+              <span className="fetch-card__log">{t('fetcher.hints.log', { path: job.logFile })}</span>
+            )}
+            {error && <span className="fetch-card__status-error">{error}</span>}
+          </div>
         </div>
       </div>
-
-      {statusNote && <div className="fetch-card__note">{statusNote}</div>}
-      {error && <div className="fetch-card__error">{error}</div>}
     </section>
   );
 }

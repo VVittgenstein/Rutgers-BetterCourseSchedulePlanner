@@ -84,6 +84,11 @@ export interface FiltersPayload {
     display: string;
     region?: string;
   }>;
+  campusLocations?: Array<{
+    code: string;
+    description: string;
+    campus?: string | null;
+  }>;
   subjects: Array<{
     code: string;
     description: string;

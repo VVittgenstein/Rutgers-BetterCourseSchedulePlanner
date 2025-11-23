@@ -7,6 +7,7 @@ This document defines the HTTP contract for the lightweight API that powers the 
 - **Versioning**: A single `v1` namespace. We express this by prefixing every route with `/api` and embedding `version` in the response body.
 - **Pagination envelope**: Every list endpoint returns `{ meta, data }`. `meta` contains `page`, `pageSize`, `total`, `hasNext`, `generatedAt`, and `version`.
 - **Filtering semantics**: Unless otherwise noted, filters are ANDed together. Multi-valued parameters (arrays) default to OR semantics within the same field.
+- **Meeting-day semantics**: When meeting-day filters are provided, sections with meetings outside the requested day set are excluded (subset, not intersection).
 - **Time units**: Meeting start/end filters use minutes since midnight (local campus time) to stay consistent with `section_meetings.start_minutes`.
 - **Error shape**: Errors use `{ error: { code, message, traceId, details? } }`, the same `traceId` is echoed on the `X-Trace-Id` response header, and `details` stays an array of strings for validation errors so UI code can enumerate issues.
 
@@ -46,31 +47,35 @@ The central list endpoint that powers the search page.
 ### Query parameters
 | Parameter | Type | Example | Behavior |
 | --- | --- | --- | --- |
-| `term` (required) | `string` | `20241` | Matches `courses.term_id`.
-| `campus` | `string` | `NB` | Matches `courses.campus_code`. Multiple values allowed: `campus=NB&campus=NW`.
-| `subject` | `string` | `198` | Restricts to one or many subject codes. Accepts `school:subject` as `01:198` and normalizes.
-| `q` | `string` | `"data structures"` | Full-text search against `title`, `expanded_title`, `prereq_plain`.
-| `level` | `string` | `UG` | Accepts `UG`, `GR`, `N/A`. Multiple values OR-ed.
-| `courseNumber` | `string` | `111` | Exact match.
-| `coreCode` | `string` | `WC` | OR filter on `course_core_attributes.core_code`.
-| `creditsMin` | integer | `3` | Numeric comparison on `credits_min`.
-| `creditsMax` | integer | `4` | Numeric comparison on `credits_max`.
-| `delivery` | enum | `online` | Derived from `sections.delivery_method`. Accepts `in_person`, `online`, `hybrid`.
-| `hasOpenSection` | boolean | `true` | True if any section for the course currently has `is_open = 1`.
-| `meetingDays` | string | `MWF` | Intersects with aggregated meeting `week_mask`. Accepts comma-separated `M,T,W,TH,F,SA,SU`.
-| `meetingStart` | integer | `600` | Minutes after midnight. Courses qualify when any meeting starts at/after this value.
-| `meetingEnd` | integer | `900` | Minutes after midnight. Courses qualify when any meeting ends before this value.
-| `instructor` | string | `HABBAL` | Case-insensitive substring match over concatenated instructors for all sections under the course.
-| `requiresPermission` | boolean | `false` | Filters out courses where every section requires special permission.
-| `sortBy` | enum | `subject` | Allowed: `subject`, `courseNumber`, `title`, `credits`, `sectionsOpen`, `updatedAt`.
-| `sortDir` | enum | `asc` | `asc`/`desc`. Defaults depend on field (see below).
-| `page` | integer | `1` | 1-indexed page number. Default `1`.
-| `pageSize` | integer | `20` | Max `50`. Default `20`.
-| `include` | string | `sectionsSummary` | Comma list of optional expansions. Currently supports `sectionsSummary` (joins `sections` table for aggregated info) and `subjects` (subject metadata).
+| `term` (required) | `string` | `20241` | Matches `courses.term_id`. |
+| `campus` | `string` | `NB` | Matches `courses.campus_code`. Multiple values allowed via comma or repeated params. |
+| `campusLocation` | `string` | `1` | Filters by campus location tags (e.g., College Avenue `1`, Busch `2`, Livingston `3`). Multiple values allowed. |
+| `subject` | `string` | `01:198` | Restricts to one or many subject codes. Accepts `school:subject` as `01:198` and normalizes to the subject code. |
+| `q` | `string` | `"data structures"` | Full-text search against `title`, `expanded_title`, `prereq_plain`. Requires 2+ trimmed characters. |
+| `level` | `string` | `UG` | Accepts `UG`, `GR`, `N/A`. Multiple values OR-ed. |
+| `coreCode` | `string` | `WC` | OR filter on `course_core_attributes.core_code` (case-insensitive). |
+| `examCode` | `string` | `B` | Filters sections by `sections.exam_code`. Accepts SOC exam codes `A,B,C,D,F,G,I,J,M,O,Q,S,T,U`. |
+| `creditsMin` | integer | `3` | Numeric comparison on `credits_min`. |
+| `creditsMax` | integer | `4` | Numeric comparison on `credits_max`. |
+| `delivery` | enum | `online` | Derived from `sections.delivery_method`. Accepts `in_person`, `online`, `hybrid`. Multiple values allowed. |
+| `hasOpenSection` | boolean | `true` | True if any section for the course currently has `is_open = 1`. |
+| `hasPrerequisite` | boolean | `false` | When `true`, keep courses with prereq text; when `false`, keep courses without prereq text. |
+| `meetingDays` | string | `MWF` | Subset filter on `section_meetings.week_mask`; sections with meetings on other days are excluded. Accepts concatenated or comma-separated `M,T,W,TH,F,SA,SU`. |
+| `meetingStart` | integer | `600` | Minutes after midnight. Sections qualify when at least one meeting starts at/after this value. |
+| `meetingEnd` | integer | `900` | Minutes after midnight. Sections qualify when at least one meeting ends at/before this value. |
+| `meetingCampus` | string | `LIV` | Optional filter against meeting campus abbreviations or location codes. |
+| `sortBy` | enum | `sectionsOpen` | Allowed: `subject`, `courseNumber`, `title`, `credits`, `sectionsOpen`, `updatedAt`. |
+| `sortDir` | enum | `desc` | `asc`/`desc`. Defaults depend on field (see below). |
+| `page` | integer | `1` | 1-indexed page number. Default `1`. |
+| `pageSize` | integer | `25` | Max `100`. Default `20`. |
+| `include` | string | `sectionsSummary` | Comma list of optional expansions: `sectionsSummary`, `subjects`, `sections`. |
+| `sectionsLimit` | integer | `200` | Caps preview rows per course when `include=sections` (1–300). |
 
 Validation rules:
 - `term` and at least one of `campus` or `subject` must be present to cap result sets.
+- `creditsMin` must not exceed `creditsMax` when both are provided.
 - `meetingStart`/`meetingEnd` must be between `0` and `1440` and `meetingStart <= meetingEnd`.
+- Meeting-day filters use subset logic: any section with meetings outside the provided day set is excluded.
 - `pageSize` is capped at `100` for server safety.
 - Default ordering uses `(subject asc, courseNumber asc, title asc)`. Aggregation-centric sorts such as `sectionsOpen` or `updatedAt` default to `desc` when explicitly requested.
 
@@ -79,7 +84,7 @@ Validation rules:
 {
   "meta": {
     "page": 1,
-    "pageSize": 20,
+    "pageSize": 25,
     "total": 158,
     "hasNext": true,
     "generatedAt": "2025-11-13T12:00:00Z",
@@ -88,40 +93,57 @@ Validation rules:
   "data": [
     {
       "courseId": 12345,
-      "term": "20241",
-      "campus": "NB",
-      "subject": {
-        "code": "198",
-        "school": "01",
-        "description": "COMPUTER SCIENCE"
-      },
+      "termId": "20241",
+      "campusCode": "NB",
+      "subjectCode": "198",
       "courseNumber": "111",
       "courseString": "01:198:111",
       "title": "INTRODUCTION TO COMPUTER SCIENCE",
       "expandedTitle": null,
       "level": "UG",
-      "credits": {
-        "min": 4,
-        "max": 4,
-        "display": "4"
-      },
+      "creditsMin": 4,
+      "creditsMax": 4,
+      "creditsDisplay": "4",
       "coreAttributes": ["QQ", "WC"],
-      "hasCoreAttribute": true,
-      "synopsisUrl": "https://synopsis.example",
-      "prerequisites": {
-        "html": "<p>None</p>",
-        "plain": "None"
+      "hasOpenSections": true,
+      "sectionsOpen": 3,
+      "prerequisites": "None",
+      "updatedAt": "2025-11-11T21:33:02Z",
+      "subject": {
+        "code": "198",
+        "description": "COMPUTER SCIENCE",
+        "schoolCode": "01",
+        "schoolDescription": "SAS"
       },
-      "sections": {
+      "sectionsSummary": {
         "total": 8,
         "open": 3,
-        "closed": 5,
-        "waitlist": 0,
-        "earliestStart": "08:10",
-        "latestEnd": "21:55"
+        "deliveryMethods": ["in_person", "online"]
       },
-      "instructors": ["DOE, JANE", "SMITH, JOHN"],
-      "updatedAt": "2025-11-11T21:33:02Z"
+      "sections": [
+        {
+          "sectionId": 56789,
+          "indexNumber": "12345",
+          "sectionNumber": "01",
+          "openStatus": "OPEN",
+          "isOpen": true,
+          "deliveryMethod": "in_person",
+          "campusCode": "NB",
+          "meetingCampus": "LIV",
+          "instructorsText": "DOE",
+          "meetingModeSummary": "LEC",
+          "meetings": [
+            {
+              "meetingDay": "M",
+              "startMinutes": 600,
+              "endMinutes": 690,
+              "campus": "LIV",
+              "building": "HLL",
+              "room": "005"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
@@ -185,7 +207,7 @@ Provides detailed rows for subscription + advanced filtering experiences.
 | `sourceHash` | string | `source_hash` |
 
 ## `GET /api/filters`
-Returns curated dictionaries so the UI can avoid hard-coding. Example payload:
+Returns curated dictionaries so the UI can avoid hard-coding. Core codes are sourced from `course_core_attributes` (fallback set includes AHO/AHP/AHQ/AHR/CCD/CCO/HST/SCL/NS/QQ/QR/WCD/WCR/WC/W/ITR/CE/ECN/GVT/SOEHS) and exam codes mirror the SOC exam letters (`A,B,C,D,F,G,I,J,M,O,Q,S,T,U`). When a table is empty, the API omits that array and the UI falls back to the baked-in defaults.
 ```json5
 {
   "meta": { "generatedAt": "2025-11-13T12:00:00Z", "version": "v1" },
@@ -194,6 +216,7 @@ Returns curated dictionaries so the UI can avoid hard-coding. Example payload:
     "campuses": [ { "code": "NB", "display": "New Brunswick" } ],
     "subjects": [ { "code": "01:198", "description": "COMPUTER SCIENCE", "campus": "NB" } ],
     "coreCodes": [ { "code": "WC", "description": "Writing and Communication" } ],
+    "examCodes": [ { "code": "A", "description": "Common Exam A" } ],
     "levels": [ "UG", "GR" ],
     "deliveryMethods": [ "in_person", "online", "hybrid" ]
   }

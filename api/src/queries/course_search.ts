@@ -131,6 +131,20 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
     filters.push(buildInClause('c.campus_code', campusFilter, binder));
   }
 
+  const campusLocations = normalizeStringList(query.campusLocation, (value) => value.toUpperCase());
+  if (campusLocations.length) {
+    filters.push(`
+      EXISTS (
+        SELECT 1
+        FROM course_campus_locations ccl
+        WHERE ccl.course_id = c.course_id
+          AND ccl.term_id = c.term_id
+          AND ccl.campus_code = c.campus_code
+          AND ${buildInClause('ccl.location_code', campusLocations, binder)}
+      )
+    `);
+  }
+
   const subjects = normalizeSubjectCodes(query.subject);
   if (subjects.length) {
     filters.push(buildInClause('c.subject_code', subjects, binder));

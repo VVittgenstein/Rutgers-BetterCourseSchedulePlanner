@@ -21,6 +21,7 @@ const courseQuerySchema = paginationSchema(100, 20)
     level: stringOrArrayParam,
     coreCode: stringOrArrayParam,
     examCode: stringOrArrayParam,
+    campusLocation: stringOrArrayParam,
     creditsMin: z.coerce.number().int().min(0).max(20).optional(),
     creditsMax: z.coerce.number().int().min(0).max(20).optional(),
     delivery: enumArrayParam(['in_person', 'online', 'hybrid']),
@@ -124,6 +125,7 @@ function summarizeCourseFilters(query: CoursesQuery) {
   return {
     term: query.term,
     campus: query.campus ?? [],
+    campusLocation: query.campusLocation ?? [],
     subject: query.subject ?? [],
     level: query.level ?? [],
     hasSearchQuery: Boolean(query.q),

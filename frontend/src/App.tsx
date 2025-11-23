@@ -36,7 +36,7 @@ export function App() {
   }, [dictionaryState.dictionary]);
 
   const courseQuery = useCourseQuery(filters, { enabled: dictionaryReady });
-  const readyForQuery = Boolean(filters.term && (filters.campus || filters.subjects.length));
+  const readyForQuery = Boolean(filters.term && filters.campus);
   const emptyMessage = readyForQuery ? t('app.shell.empty.ready') : t('app.shell.empty.missingFilters');
 
   const handleApplyFetchedSelection = useCallback((term: string, campus: string) => {
@@ -44,9 +44,18 @@ export function App() {
       const base = createInitialCourseFilterState();
       base.term = term;
       base.campus = campus;
-      base.pagination.pageSize = prev.pagination.pageSize;
+      base.pagination = { ...base.pagination, page: 1, pageSize: prev.pagination.pageSize };
       return base;
     });
+  }, []);
+
+  const handleSelectionChange = useCallback((term: string, campus: string) => {
+    setFilters((prev) => ({
+      ...prev,
+      term,
+      campus,
+      pagination: { ...prev.pagination, page: 1 },
+    }));
   }, []);
 
   const handlePageChange = (page: number) => {
@@ -68,6 +77,7 @@ export function App() {
             defaultCampus={filters.campus ?? dictionaryState.dictionary?.campuses[0]?.value}
             campusOptions={dictionaryState.dictionary?.campuses}
             onApplySelection={handleApplyFetchedSelection}
+            onSelectionChange={handleSelectionChange}
             onDictionaryRefresh={dictionaryState.refetch}
           />
           {dictionaryState.dictionary ? (

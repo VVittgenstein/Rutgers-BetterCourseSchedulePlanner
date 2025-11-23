@@ -16,9 +16,10 @@
 | Secondary filters (accordion groups)  |  List View                                                            |
 | - Search keyword                      |  ------------------------------------------------------------------  |
 | - Course metadata (subject, level,    |  | CourseCard (collapsible)                                        | |
-|   credits, core codes, prereq tags)   |  | - summary row (code, title, open chips, credits)                 | |
-| - Section filters (meeting day/time,  |  | - expand: instructors, prereqs, tags, CTA to view sections       | |
-|   instructor, delivery, campus/site)  |  |                                                                ↑ | |
+|   credits, core codes, exam codes,    |  | - summary row (code, title, open chips, credits)                 | |
+|   prerequisite toggle)                |  | - expand: section preview (index/status/meetings) + CTA          | |
+| - Section filters (meeting day/time   |  |                                                                ↑ | |
+|   subset, delivery mode)              |  |                                                                | |  Virtualized
 | - State chips: each active filter is  |  |                                                                | |  Virtualized
 |   mirrored as removable chips in the  |  |                                                                | |  scroller
 |   Filters header + Results header     |  ------------------------------------------------------------------  |
@@ -81,12 +82,11 @@ export type CourseFilterState = {
   level: Array<'UG' | 'GR' | 'N/A'>;
   credits: { min?: number; max?: number };
   coreCodes: string[];
-  keywords: string[];     // derived from chips such as "hasWaitlist"
-  tags: string[];         // UI-only quick filters (e.g., "writing intensive")
+  examCodes: string[];
+  prerequisite: 'any' | 'has' | 'none';
   meeting: MeetingFilter;
-  instructors: string[];
   delivery: Array<'in_person' | 'online' | 'hybrid'>;
-  openStatus: 'all' | 'openOnly' | 'hasWaitlist';
+  openStatus: 'all' | 'openOnly';
   pagination: { page: number; pageSize: number };
   sort: { field: 'relevance' | 'courseNumber' | 'title' | 'updated'; dir: 'asc' | 'desc' };
   uiStatus: 'idle' | 'loading' | 'error';
@@ -94,16 +94,18 @@ export type CourseFilterState = {
 };
 ```
 
+- meeting.days 采用子集逻辑：只要某节次存在未选星期就被排除；时间窗口与 day 过滤同时成立。
+- openStatus 仅 all/openOnly，通过 `hasOpenSection` 序列化；先修 pills 写入 `hasPrerequisite` true/false。
+- core/exam codes 为多选 chips，依赖 `/api/filters` 与 fallback 字典。
+
 ### URL 同步策略
-- 使用 `?term=20241&campus=NB&subject=01:198&delivery=online&meetingDays=MWF&meetingStart=600`.
-- 除 `queryText` 外，所有数组参数使用多值编码：`subject=01:198&subject=01:640`。移动端复制链接保持人类可读。
+- 使用 `?term=20241&campus=NB&subject=01:198&coreCode=WC&examCode=B&meetingDays=MWF&meetingStart=600&hasOpenSection=true&hasPrerequisite=false`。
+- 除 `queryText` 外，`subject/level/coreCode/examCode/delivery` 使用多值编码：`subject=01:198&subject=01:640`。移动端复制链接保持人类可读。
 - `pagination.page` 总是同步；`pageSize` 仅在偏离默认 25 时写入。
 - `sort` 组合编码为 `sort=courseNumber:asc`。
-- `meeting`：`meetingDays=MWF`、`meetingStart=600`、`meetingEnd=900`。
-- `tags`（UI 快捷开关）写入 `tag=writing_intensive` 等 slug。
+- `meeting`：`meetingDays=MWF`、`meetingStart=600`、`meetingEnd=900`，语义为所有 meeting 都落在所选星期与时间窗口内。
+- `openStatus=openOnly` 转换为 `hasOpenSection=true`；先修开关写入 `hasPrerequisite=true/false`。
 - 通过 `URLSearchParams` 比较增量变化，只 pushState 当查询 key 发生变化（避免刷历史记录）。
-
-> 目前 `/api/courses` 仅支持 meeting day/time 过滤，会议校区/地点关键字将在 API 增强后再开启。
 
 ## 4. 核心组件清单与依赖
 
@@ -121,7 +123,7 @@ export type CourseFilterState = {
 
 ### 后续实现拆分建议
 1. **组件基础设施**：实现 `GlobalFilterStore` + `useUrlSync` + `FiltersDictionaryProvider`，保证 term/campus 选择和 URL 分享可用。
-2. **筛选面板与 chips**：分支任务开发 SearchField、SubjectPicker、AdvancedFilters（meeting/instructor/delivery 等）。
+2. **筛选面板与 chips**：分支任务开发 SearchField、SubjectPicker、CourseMeta（credits/core/exam/prereq）、Meeting（子集逻辑）与 delivery/level 切换。
 3. **结果视图**：先行搭建 `CourseList`（含虚拟滚动 + loading skeleton），随后并行制作 `CalendarView` 布局。
 4. **Section 细节与订阅 Drawer**：在 API `/api/sections` ready 后接入，复用 Drawer 容器。
 

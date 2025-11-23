@@ -55,7 +55,6 @@
       "shell": {
         "loadingDictionary": "Loading filter dictionary…",
         "fallbackAlert": "Filters API is unavailable, falling back to the offline dictionary.",
-        "waitlistNotice": "Waitlist filtering is not wired to the API yet. Results are for reference only.",
         "empty": {
           "ready": "No results matched your filters. Try adjusting them.",
           "missingFilters": "Select a term and campus to load courses."
@@ -63,8 +62,8 @@
       }
     },
     "fetcher": {
-      "title": "Fetch new term data",
-      "description": "Pick year/semester and campus; we'll convert to the SOC term code and start the crawler.",
+      "title": "Term data fetch",
+      "description": "Choose year/semester and campus, then run the crawler.",
       "fields": {
         "year": "Year",
         "season": "Semester",
@@ -78,20 +77,20 @@
         "winter": "Winter"
       },
       "actions": {
-        "start": "Start fetch",
+        "start": "Run fetch",
         "running": "Fetching…"
       },
       "status": {
-        "idle": "No fetch running.",
-        "started": "Starting fetch for {{term}} / {{campus}}…",
-        "running": "Fetching {{term}} / {{campus}}…",
-        "success": "Last run completed for {{term}} / {{campus}}.",
-        "error": "Fetch failed: {{message}}",
+        "idle": "Ready.",
+        "started": "Starting {{term}} / {{campus}}…",
+        "running": "Running {{term}} / {{campus}}…",
+        "success": "Done {{term}} / {{campus}}.",
+        "error": "Failed: {{message}}",
         "errorFallback": "Fetch failed, check logs."
       },
       "hints": {
-        "apply": "After completion we'll switch filters to this term/campus and reload options.",
-        "log": "Log: {{path}}"
+        "apply": "Will switch filters after completion.",
+        "log": "Log {{path}}"
       }
     },
     "filters": {
@@ -134,12 +133,16 @@
           },
           "truncatedHint": "Showing {{current}} / {{total}} subjects. Continue typing to narrow the list."
         },
+        "campusLocations": {
+          "title": "Campus locations",
+          "clear": "Clear"
+        },
         "meeting": {
           "title": "Meeting time",
           "clear": "Clear",
           "start": "Start time",
           "end": "End time",
-          "subsetHint": "Only sections whose meetings stay within these days and times will appear."
+          "subsetHint": "Only sections whose meetings are all within the selected days and times will appear."
         },
         "courseMeta": {
           "title": "Course attributes",
@@ -166,19 +169,20 @@
       "chips": {
         "keyword": "Keyword",
         "subject": "Subject",
-      "level": "Level",
-      "delivery": "Delivery",
-      "core": "Core",
-      "exam": "Exam",
-      "meeting": "Meeting",
-      "credits": "Credits",
-      "creditsMin": "Min {{value}}",
-      "creditsMax": "Max {{value}}",
-      "prerequisite": "Prerequisite",
-      "meetingFallback": "Meeting filter",
-      "openOnly": "Open seats only",
-      "timePlaceholder": {
-        "start": "Start",
+        "campusLocation": "Campus location",
+        "level": "Level",
+        "delivery": "Delivery",
+        "core": "Core",
+        "exam": "Exam",
+        "meeting": "Meeting",
+        "credits": "Credits",
+        "creditsMin": "Min {{value}}",
+        "creditsMax": "Max {{value}}",
+        "prerequisite": "Prerequisite",
+        "meetingFallback": "Meeting filter",
+        "openOnly": "Open seats only",
+        "timePlaceholder": {
+          "start": "Start",
           "end": "End"
         }
       }
@@ -385,7 +389,6 @@
       "shell": {
         "loadingDictionary": "正在加载筛选字典...",
         "fallbackAlert": "Filters API 不可用，已切换到离线字典。",
-        "waitlistNotice": "等候名单筛选尚未接入 API，当前结果仅供参考。",
         "empty": {
           "ready": "暂无匹配结果，请调整筛选条件。",
           "missingFilters": "请先选择学期与校区以加载课程列表。"
@@ -393,8 +396,8 @@
       }
     },
     "fetcher": {
-      "title": "拉取新学期数据",
-      "description": "选择学年/学期与校区，自动换算 SOC term 并立即启动爬取。",
+      "title": "拉取数据",
+      "description": "选择学年/学期与校区并启动爬虫。",
       "fields": {
         "year": "学年",
         "season": "学期",
@@ -408,20 +411,20 @@
         "winter": "冬季"
       },
       "actions": {
-        "start": "开始爬取",
+        "start": "开始",
         "running": "执行中…"
       },
       "status": {
-        "idle": "当前没有运行中的爬取任务。",
-        "started": "准备拉取 {{term}} / {{campus}}…",
-        "running": "正在拉取 {{term}} / {{campus}}…",
-        "success": "已完成 {{term}} / {{campus}} 的数据更新。",
-        "error": "拉取失败：{{message}}",
+        "idle": "就绪。",
+        "started": "启动 {{term}} / {{campus}}…",
+        "running": "拉取 {{term}} / {{campus}}…",
+        "success": "完成 {{term}} / {{campus}}。",
+        "error": "失败：{{message}}",
         "errorFallback": "拉取失败，请查看日志。"
       },
       "hints": {
-        "apply": "完成后会自动切换筛选的学期与校区并刷新选项。",
-        "log": "日志：{{path}}"
+        "apply": "完成后会自动切换筛选并刷新。",
+        "log": "日志 {{path}}"
       }
     },
     "filters": {
@@ -464,12 +467,16 @@
           },
           "truncatedHint": "已截断 {{current}} / {{total}}，请继续搜索以缩小范围。"
         },
+        "campusLocations": {
+          "title": "校区地点",
+          "clear": "清除"
+        },
         "meeting": {
           "title": "上课时间",
           "clear": "清除",
           "start": "开始时间",
           "end": "结束时间",
-          "subsetHint": "仅显示所有 meeting 都落在这些星期与时间范围内的节次。"
+          "subsetHint": "仅显示所有 meeting 都落在所选星期与时间范围内的节次。"
         },
         "courseMeta": {
           "title": "课程属性",
@@ -496,19 +503,20 @@
       "chips": {
         "keyword": "关键词",
         "subject": "科目",
+        "campusLocation": "校区地点",
         "level": "年级",
-      "delivery": "授课方式",
-      "core": "核心课程",
-      "exam": "考试代码",
-      "meeting": "上课时间",
-      "credits": "学分",
-      "creditsMin": "至少 {{value}} 学分",
-      "creditsMax": "至多 {{value}} 学分",
-      "prerequisite": "先修要求",
-      "meetingFallback": "上课时间筛选",
-      "openOnly": "只看有空位",
-      "timePlaceholder": {
-        "start": "开始",
+        "delivery": "授课方式",
+        "core": "核心课程",
+        "exam": "考试代码",
+        "meeting": "上课时间",
+        "credits": "学分",
+        "creditsMin": "至少 {{value}} 学分",
+        "creditsMax": "至多 {{value}} 学分",
+        "prerequisite": "先修要求",
+        "meetingFallback": "上课时间筛选",
+        "openOnly": "只看有空位",
+        "timePlaceholder": {
+          "start": "开始",
           "end": "结束"
         }
       }
