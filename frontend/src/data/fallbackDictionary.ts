@@ -27,17 +27,24 @@ export const fallbackFiltersDictionary: FiltersDictionary = {
     { label: 'Online', value: 'online' },
     { label: 'Hybrid', value: 'hybrid' },
   ],
-  tags: [
-    { label: 'Writing Intensive', value: 'writing' },
-    { label: 'Requires Permission', value: 'permission' },
-    { label: 'STEM', value: 'stem' },
-  ],
   coreCodes: [
     { label: 'Q: Quantitative', value: 'QQ' },
     { label: 'W: Writing', value: 'W' },
   ],
-  instructors: [
-    { label: 'Prof. Rivera', value: 'rivera' },
-    { label: 'Prof. Nguyen', value: 'nguyen' },
+  examCodes: [
+    { label: 'Exam A', value: 'A' },
+    { label: 'Exam B', value: 'B' },
+    { label: 'Exam C', value: 'C' },
+    { label: 'Exam D', value: 'D' },
+    { label: 'Exam F', value: 'F' },
+    { label: 'Exam G', value: 'G' },
+    { label: 'Exam I', value: 'I' },
+    { label: 'Exam J', value: 'J' },
+    { label: 'Exam M', value: 'M' },
+    { label: 'Exam O', value: 'O' },
+    { label: 'Exam Q', value: 'Q' },
+    { label: 'Exam S', value: 'S' },
+    { label: 'Exam T', value: 'T' },
+    { label: 'Exam U', value: 'U' },
   ],
 };

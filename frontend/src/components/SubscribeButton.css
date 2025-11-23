@@ -44,6 +44,16 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.5rem;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 0.15rem;
+}
+
+.subscribe-panel__sections--list {
+  grid-template-columns: 1fr;
+  max-height: 520px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .subscribe-panel__section {

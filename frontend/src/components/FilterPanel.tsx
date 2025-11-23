@@ -6,7 +6,6 @@ import type {
   CourseFilterState,
   DeliveryMethod,
   MeetingDay,
-  SectionStatus,
 } from '../state/courseFilters';
 import { createInitialCourseFilterState } from '../state/courseFilters';
 import { TagChip } from './TagChip';
@@ -44,9 +43,8 @@ export interface FiltersDictionary {
   subjects: SubjectOption[];
   levels: LevelOption[];
   deliveries: DeliveryOption[];
-  tags: FilterOption[];
   coreCodes: FilterOption[];
-  instructors: FilterOption[];
+  examCodes: FilterOption[];
 }
 
 export interface FilterPanelProps {
@@ -68,8 +66,6 @@ const MEETING_DAY_KEYS = {
   SA: 'common.days.short.sat',
   SU: 'common.days.short.sun',
 } as const;
-
-const SECTION_STATUS_ORDER: SectionStatus[] = ['OPEN', 'WAITLIST', 'CLOSED'];
 
 const toggleValue = <T,>(list: T[], value: T): T[] =>
   list.includes(value) ? list.filter((entry) => entry !== value) : [...list, value];
@@ -100,14 +96,12 @@ export function FilterPanel({
 }: FilterPanelProps) {
   const { t } = useTranslation();
   const [subjectQuery, setSubjectQuery] = useState('');
-  const [instructorQuery, setInstructorQuery] = useState('');
 
   const subjectLookup = useMemo(() => buildLookup(dictionary.subjects), [dictionary.subjects]);
   const levelLookup = useMemo(() => buildLookup(dictionary.levels), [dictionary.levels]);
   const deliveryLookup = useMemo(() => buildLookup(dictionary.deliveries), [dictionary.deliveries]);
-  const tagLookup = useMemo(() => buildLookup(dictionary.tags), [dictionary.tags]);
   const coreLookup = useMemo(() => buildLookup(dictionary.coreCodes), [dictionary.coreCodes]);
-  const instructorLookup = useMemo(() => buildLookup(dictionary.instructors), [dictionary.instructors]);
+  const examLookup = useMemo(() => buildLookup(dictionary.examCodes), [dictionary.examCodes]);
   const meetingDayLabels = useMemo(() => createMeetingDayLabels(t), [t]);
 
   const emitState = (
@@ -142,23 +136,13 @@ export function FilterPanel({
 
   const trimmedSubjects = filteredSubjects.slice(0, 12);
 
-  const filteredInstructors = useMemo(() => {
-    if (!instructorQuery.trim()) return dictionary.instructors;
-    const terms = instructorQuery.toLowerCase().split(/\s+/).filter(Boolean);
-    return dictionary.instructors.filter((entry) =>
-      terms.every((term) => `${entry.label} ${entry.value}`.toLowerCase().includes(term)),
-    );
-  }, [dictionary.instructors, instructorQuery]);
-  const trimmedInstructors = filteredInstructors.slice(0, 8);
-
   const chips = buildFilterChips({
     state,
     subjectLookup,
     levelLookup,
     deliveryLookup,
-    tagLookup,
     coreLookup,
-    instructorLookup,
+    examLookup,
     emitState,
     meetingDayLabels,
     t,
@@ -205,19 +189,7 @@ export function FilterPanel({
   };
 
   const handleOpenStatus = (next: CourseFilterState['openStatus']) => {
-    const statusSet = new Set(state.sectionStatuses);
-    if (next === 'openOnly') {
-      statusSet.add('OPEN');
-      statusSet.delete('WAITLIST');
-    } else if (next === 'hasWaitlist') {
-      statusSet.add('WAITLIST');
-      statusSet.delete('OPEN');
-    }
-    if (next === 'all') {
-      statusSet.delete('OPEN');
-      statusSet.delete('WAITLIST');
-    }
-    emitState({ openStatus: next, sectionStatuses: Array.from(statusSet) }, 'openStatus');
+    emitState({ openStatus: next }, 'openStatus');
   };
 
   const handleQueryChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -244,34 +216,8 @@ export function FilterPanel({
     );
   };
 
-  const handleSectionStatusToggle = (status: SectionStatus) => {
-    emitState(
-      {
-        sectionStatuses: toggleValue(state.sectionStatuses, status),
-        openStatus: 'all',
-      },
-      'sectionStatuses',
-    );
-  };
-
-  const handleLocationChange = (field: 'building' | 'room', value: string) => {
-    emitState(
-      {
-        location: {
-          ...state.location,
-          [field]: value,
-        },
-      },
-      'location',
-    );
-  };
-
   const handlePrerequisiteChange = (next: CourseFilterState['prerequisite']) => {
     emitState({ prerequisite: next }, 'prerequisite');
-  };
-
-  const handlePermissionChange = (next: CourseFilterState['permission']) => {
-    emitState({ permission: next }, 'permission');
   };
 
   return (
@@ -367,16 +313,6 @@ export function FilterPanel({
             >
               {t('filters.sections.basic.openStatus.openOnly')}
             </button>
-            <button
-              type="button"
-              className={classNames(
-                'filter-panel__pill',
-                state.openStatus === 'hasWaitlist' && 'filter-panel__pill--active',
-              )}
-              onClick={() => handleOpenStatus('hasWaitlist')}
-            >
-              {t('filters.sections.basic.openStatus.waitlist')}
-            </button>
           </div>
         </div>
       </section>
@@ -447,6 +383,8 @@ export function FilterPanel({
           ))}
         </div>
 
+        <p className="filter-panel__hint">{t('filters.sections.meeting.subsetHint')}</p>
+
         <div className="filter-panel__grid">
           <label className="filter-panel__control">
             <span>{t('filters.sections.meeting.start')}</span>
@@ -473,22 +411,13 @@ export function FilterPanel({
           <button
             type="button"
             className="filter-panel__clear-btn"
-            onClick={() => emitState({ courseNumber: '', credits: {}, coreCodes: [] }, 'courseMeta')}
+            onClick={() => emitState({ credits: {}, coreCodes: [], examCodes: [], prerequisite: 'any' }, 'courseMeta')}
           >
             {t('filters.sections.courseMeta.clear')}
           </button>
         </div>
 
         <div className="filter-panel__grid">
-          <label className="filter-panel__control">
-            <span>{t('filters.sections.courseMeta.courseNumber')}</span>
-            <input
-              type="text"
-              placeholder={t('filters.sections.courseMeta.courseNumberPlaceholder')}
-              value={state.courseNumber}
-              onChange={(event) => emitState({ courseNumber: event.target.value }, 'courseNumber')}
-            />
-          </label>
           <label className="filter-panel__control">
             <span>{t('filters.sections.courseMeta.creditsMin')}</span>
             <input
@@ -514,19 +443,73 @@ export function FilterPanel({
         </div>
 
         {dictionary.coreCodes.length > 0 && (
-          <div className="filter-panel__checkboxes">
-            {dictionary.coreCodes.map((core) => (
-              <label key={core.value}>
-                <input
-                  type="checkbox"
-                  checked={state.coreCodes.includes(core.value)}
-                  onChange={() => emitState({ coreCodes: toggleValue(state.coreCodes, core.value) }, 'coreCodes')}
-                />
-                <span>{core.label}</span>
-              </label>
-            ))}
-          </div>
+          <>
+            <p className="filter-panel__label">{t('filters.sections.courseMeta.core')}</p>
+            <div className="filter-panel__checkboxes">
+              {dictionary.coreCodes.map((core) => (
+                <label key={core.value}>
+                  <input
+                    type="checkbox"
+                    checked={state.coreCodes.includes(core.value)}
+                    onChange={() => emitState({ coreCodes: toggleValue(state.coreCodes, core.value) }, 'coreCodes')}
+                  />
+                  <span>{core.label}</span>
+                </label>
+              ))}
+            </div>
+          </>
         )}
+
+        {dictionary.examCodes.length > 0 && (
+          <>
+            <p className="filter-panel__label">{t('filters.sections.courseMeta.exam')}</p>
+            <div className="filter-panel__checkboxes filter-panel__checkboxes--wrap">
+              {dictionary.examCodes.map((exam) => (
+                <label key={exam.value}>
+                  <input
+                    type="checkbox"
+                    checked={state.examCodes.includes(exam.value)}
+                    onChange={() => emitState({ examCodes: toggleValue(state.examCodes, exam.value) }, 'examCodes')}
+                  />
+                  <span>{exam.label}</span>
+                </label>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div className="filter-panel__pill-group filter-panel__pill-group--wrap">
+          <button
+            type="button"
+            className={classNames(
+              'filter-panel__pill',
+              state.prerequisite === 'any' && 'filter-panel__pill--active',
+            )}
+            onClick={() => handlePrerequisiteChange('any')}
+          >
+            {t('filters.sections.section.prerequisite.any')}
+          </button>
+          <button
+            type="button"
+            className={classNames(
+              'filter-panel__pill',
+              state.prerequisite === 'has' && 'filter-panel__pill--active',
+            )}
+            onClick={() => handlePrerequisiteChange('has')}
+          >
+            {t('filters.sections.section.prerequisite.has')}
+          </button>
+          <button
+            type="button"
+            className={classNames(
+              'filter-panel__pill',
+              state.prerequisite === 'none' && 'filter-panel__pill--active',
+            )}
+            onClick={() => handlePrerequisiteChange('none')}
+          >
+            {t('filters.sections.section.prerequisite.none')}
+          </button>
+        </div>
       </section>
 
       <section className="filter-panel__section">
@@ -574,257 +557,6 @@ export function FilterPanel({
           </div>
         </div>
       </section>
-
-      <section className="filter-panel__section">
-        <div className="filter-panel__section-heading">
-          <h3>{t('filters.sections.section.title')}</h3>
-          <button
-            type="button"
-            className="filter-panel__clear-btn"
-            onClick={() =>
-              emitState(
-                {
-                  sectionIndex: '',
-                  sectionNumber: '',
-                  instructors: [],
-                  sectionStatuses: [],
-                  prerequisite: 'any',
-                  permission: 'any',
-                },
-                'sections',
-              )
-            }
-          >
-            {t('filters.sections.section.clear')}
-          </button>
-        </div>
-
-        <div className="filter-panel__grid">
-          <label className="filter-panel__control">
-            <span>{t('filters.sections.section.index')}</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              placeholder={t('filters.sections.section.indexPlaceholder')}
-              value={state.sectionIndex}
-              onChange={(event) => emitState({ sectionIndex: event.target.value }, 'sectionIndex')}
-            />
-          </label>
-          <label className="filter-panel__control">
-            <span>{t('filters.sections.section.sectionNumber')}</span>
-            <input
-              type="text"
-              placeholder={t('filters.sections.section.sectionPlaceholder')}
-              value={state.sectionNumber}
-              onChange={(event) => emitState({ sectionNumber: event.target.value }, 'sectionNumber')}
-            />
-          </label>
-        </div>
-
-        <label className="filter-panel__control">
-          <span>{t('filters.sections.section.instructorSearch')}</span>
-          <input
-            type="search"
-            placeholder={t('filters.sections.section.instructorPlaceholder')}
-            value={instructorQuery}
-            onChange={(event) => setInstructorQuery(event.target.value)}
-          />
-        </label>
-        {trimmedInstructors.length > 0 && (
-          <div className="filter-panel__checkboxes filter-panel__checkboxes--wrap">
-            {trimmedInstructors.map((teacher) => (
-              <label key={teacher.value}>
-                <input
-                  type="checkbox"
-                  checked={state.instructors.includes(teacher.value)}
-                  onChange={() => emitState({ instructors: toggleValue(state.instructors, teacher.value) }, 'instructors')}
-                />
-                <span>{teacher.label}</span>
-              </label>
-            ))}
-          </div>
-        )}
-        {filteredInstructors.length > trimmedInstructors.length && (
-          <span className="filter-panel__hint">
-            {t('filters.sections.section.instructorTruncated', {
-              current: trimmedInstructors.length,
-              total: filteredInstructors.length,
-            })}
-          </span>
-        )}
-
-        <div className="filter-panel__subgrid">
-          <div>
-            <p className="filter-panel__label">{t('filters.sections.section.status')}</p>
-            <div className="filter-panel__checkboxes filter-panel__checkboxes--wrap">
-              {SECTION_STATUS_ORDER.map((status) => (
-                <label key={status}>
-                  <input
-                    type="checkbox"
-                    checked={state.sectionStatuses.includes(status)}
-                    onChange={() => handleSectionStatusToggle(status)}
-                  />
-                  <span>{t(`filters.sections.section.statusLabels.${status.toLowerCase()}` as any)}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div>
-            <p className="filter-panel__label">{t('filters.sections.section.requirements')}</p>
-            <div className="filter-panel__pill-group filter-panel__pill-group--wrap">
-              <button
-                type="button"
-                className={classNames(
-                  'filter-panel__pill',
-                  state.prerequisite === 'any' && 'filter-panel__pill--active',
-                )}
-                onClick={() => handlePrerequisiteChange('any')}
-              >
-                {t('filters.sections.section.prerequisite.any')}
-              </button>
-              <button
-                type="button"
-                className={classNames(
-                  'filter-panel__pill',
-                  state.prerequisite === 'has' && 'filter-panel__pill--active',
-                )}
-                onClick={() => handlePrerequisiteChange('has')}
-              >
-                {t('filters.sections.section.prerequisite.has')}
-              </button>
-              <button
-                type="button"
-                className={classNames(
-                  'filter-panel__pill',
-                  state.prerequisite === 'none' && 'filter-panel__pill--active',
-                )}
-                onClick={() => handlePrerequisiteChange('none')}
-              >
-                {t('filters.sections.section.prerequisite.none')}
-              </button>
-            </div>
-            <div className="filter-panel__pill-group filter-panel__pill-group--wrap">
-              <button
-                type="button"
-                className={classNames(
-                  'filter-panel__pill',
-                  state.permission === 'any' && 'filter-panel__pill--active',
-                )}
-                onClick={() => handlePermissionChange('any')}
-              >
-                {t('filters.sections.section.permission.any')}
-              </button>
-              <button
-                type="button"
-                className={classNames(
-                  'filter-panel__pill',
-                  state.permission === 'requires' && 'filter-panel__pill--active',
-                )}
-                onClick={() => handlePermissionChange('requires')}
-              >
-                {t('filters.sections.section.permission.requires')}
-              </button>
-              <button
-                type="button"
-                className={classNames(
-                  'filter-panel__pill',
-                  state.permission === 'not_required' && 'filter-panel__pill--active',
-                )}
-                onClick={() => handlePermissionChange('not_required')}
-              >
-                {t('filters.sections.section.permission.none')}
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="filter-panel__section">
-        <div className="filter-panel__section-heading">
-          <h3>{t('filters.sections.location.title')}</h3>
-          <button
-            type="button"
-            className="filter-panel__clear-btn"
-            onClick={() =>
-              emitState(
-                {
-                  meetingCampuses: [],
-                  location: { building: '', room: '' },
-                },
-                'location',
-              )
-            }
-          >
-            {t('filters.sections.location.clear')}
-          </button>
-        </div>
-
-        <p className="filter-panel__label">{t('filters.sections.location.campus')}</p>
-        <div className="filter-panel__checkboxes filter-panel__checkboxes--wrap">
-          {dictionary.campuses.map((campus) => (
-            <label key={campus.value}>
-              <input
-                type="checkbox"
-                checked={state.meetingCampuses.includes(campus.value)}
-                onChange={() =>
-                  emitState(
-                    { meetingCampuses: toggleValue(state.meetingCampuses, campus.value) },
-                    'meetingCampuses',
-                  )
-                }
-              />
-              <span>{campus.label}</span>
-            </label>
-          ))}
-        </div>
-
-        <div className="filter-panel__grid">
-          <label className="filter-panel__control">
-            <span>{t('filters.sections.location.building')}</span>
-            <input
-              type="text"
-              placeholder={t('filters.sections.location.buildingPlaceholder')}
-              value={state.location.building}
-              onChange={(event) => handleLocationChange('building', event.target.value)}
-            />
-          </label>
-          <label className="filter-panel__control">
-            <span>{t('filters.sections.location.room')}</span>
-            <input
-              type="text"
-              placeholder={t('filters.sections.location.roomPlaceholder')}
-              value={state.location.room}
-              onChange={(event) => handleLocationChange('room', event.target.value)}
-            />
-          </label>
-        </div>
-      </section>
-
-      {dictionary.tags.length > 0 && (
-        <section className="filter-panel__section">
-          <div className="filter-panel__section-heading">
-            <h3>{t('filters.sections.tags.title')}</h3>
-            <button type="button" className="filter-panel__clear-btn" onClick={() => emitState({ tags: [] }, 'tags')}>
-              {t('filters.sections.tags.clear')}
-            </button>
-          </div>
-
-          <div className="filter-panel__chip-grid">
-            {dictionary.tags.map((tag) => {
-              const isActive = state.tags.includes(tag.value);
-              return (
-                <TagChip
-                  key={tag.value}
-                  label={tag.label}
-                  tone={isActive ? 'success' : 'default'}
-                  active={isActive}
-                  onClick={() => emitState({ tags: toggleValue(state.tags, tag.value) }, 'tags')}
-                />
-              );
-            })}
-          </div>
-        </section>
-      )}
     </aside>
   );
 }
@@ -850,9 +582,8 @@ const buildFilterChips = ({
   subjectLookup,
   levelLookup,
   deliveryLookup,
-  tagLookup,
   coreLookup,
-  instructorLookup,
+  examLookup,
   emitState,
   meetingDayLabels,
   t,
@@ -861,9 +592,8 @@ const buildFilterChips = ({
   subjectLookup: Map<string, SubjectOption>;
   levelLookup: Map<string, LevelOption>;
   deliveryLookup: Map<string, DeliveryOption>;
-  tagLookup: Map<string, FilterOption>;
   coreLookup: Map<string, FilterOption>;
-  instructorLookup: Map<string, FilterOption>;
+  examLookup: Map<string, FilterOption>;
   emitState: (partial: Partial<CourseFilterState>, dirtyKey?: string) => void;
   meetingDayLabels: Record<MeetingDay, string>;
   t: TFunction;
@@ -874,22 +604,12 @@ const buildFilterChips = ({
     subject: t('filters.chips.subject'),
     level: t('filters.chips.level'),
     delivery: t('filters.chips.delivery'),
-    tag: t('filters.chips.tag'),
     core: t('filters.chips.core'),
+    exam: t('filters.chips.exam'),
     meeting: t('filters.chips.meeting'),
     openOnly: t('filters.chips.openOnly'),
-    hasWaitlist: t('filters.chips.hasWaitlist'),
     credits: t('filters.chips.credits'),
-    courseNumber: t('filters.chips.courseNumber'),
-    sectionIndex: t('filters.chips.sectionIndex'),
-    sectionNumber: t('filters.chips.sectionNumber'),
-    status: t('filters.chips.status'),
-    instructor: t('filters.chips.instructor'),
     prerequisite: t('filters.chips.prerequisite'),
-    permission: t('filters.chips.permission'),
-    meetingCampus: t('filters.chips.meetingCampus'),
-    building: t('filters.chips.building'),
-    room: t('filters.chips.room'),
   };
 
   if (state.queryText.trim()) {
@@ -935,17 +655,6 @@ const buildFilterChips = ({
     });
   });
 
-  state.tags.forEach((tag) => {
-    const option = tagLookup.get(tag);
-    chips.push({
-      id: `tag:${tag}`,
-      label: chipLabels.tag,
-      value: option ? option.label : tag,
-      tone: 'success',
-      onRemove: () => emitState({ tags: state.tags.filter((entry) => entry !== tag) }, 'tags'),
-    });
-  });
-
   state.coreCodes.forEach((core) => {
     const option = coreLookup.get(core);
     chips.push({
@@ -954,6 +663,17 @@ const buildFilterChips = ({
       value: core,
       tone: 'warning',
       onRemove: () => emitState({ coreCodes: state.coreCodes.filter((entry) => entry !== core) }, 'coreCodes'),
+    });
+  });
+
+  state.examCodes.forEach((exam) => {
+    const option = examLookup.get(exam);
+    chips.push({
+      id: `exam:${exam}`,
+      label: option ? option.label : chipLabels.exam,
+      value: exam,
+      tone: 'info',
+      onRemove: () => emitState({ examCodes: state.examCodes.filter((entry) => entry !== exam) }, 'examCodes'),
     });
   });
 
@@ -972,62 +692,6 @@ const buildFilterChips = ({
       onRemove: () => emitState({ credits: {} }, 'credits'),
     });
   }
-
-  if (state.courseNumber.trim()) {
-    chips.push({
-      id: 'courseNumber',
-      label: chipLabels.courseNumber,
-      value: state.courseNumber.trim(),
-      tone: 'default',
-      onRemove: () => emitState({ courseNumber: '' }, 'courseNumber'),
-    });
-  }
-
-  if (state.sectionIndex.trim()) {
-    chips.push({
-      id: 'sectionIndex',
-      label: chipLabels.sectionIndex,
-      value: state.sectionIndex.trim(),
-      tone: 'info',
-      onRemove: () => emitState({ sectionIndex: '' }, 'sectionIndex'),
-    });
-  }
-
-  if (state.sectionNumber.trim()) {
-    chips.push({
-      id: 'sectionNumber',
-      label: chipLabels.sectionNumber,
-      value: state.sectionNumber.trim(),
-      tone: 'info',
-      onRemove: () => emitState({ sectionNumber: '' }, 'sectionNumber'),
-    });
-  }
-
-  state.sectionStatuses.forEach((status) => {
-    chips.push({
-      id: `status:${status}`,
-      label: chipLabels.status,
-      value: t(`filters.sections.section.statusLabels.${status.toLowerCase()}` as any),
-      tone: 'info',
-      onRemove: () =>
-        emitState(
-          { sectionStatuses: state.sectionStatuses.filter((entry) => entry !== status), openStatus: 'all' },
-          'sectionStatuses',
-        ),
-    });
-  });
-
-  state.instructors.forEach((instructor) => {
-    const option = instructorLookup.get(instructor);
-    chips.push({
-      id: `instructor:${instructor}`,
-      label: chipLabels.instructor,
-      value: option?.label ?? instructor,
-      tone: 'default',
-      onRemove: () =>
-        emitState({ instructors: state.instructors.filter((entry) => entry !== instructor) }, 'instructors'),
-    });
-  });
 
   if (state.meeting.days.length || state.meeting.startMinutes !== undefined || state.meeting.endMinutes !== undefined) {
     chips.push({
@@ -1049,16 +713,6 @@ const buildFilterChips = ({
     });
   }
 
-  if (state.openStatus === 'hasWaitlist') {
-    chips.push({
-      id: 'hasWaitlist',
-      label: chipLabels.hasWaitlist,
-      value: '',
-      tone: 'success',
-      onRemove: () => emitState({ openStatus: 'all' }, 'openStatus'),
-    });
-  }
-
   if (state.prerequisite !== 'any') {
     chips.push({
       id: 'prerequisite',
@@ -1066,47 +720,6 @@ const buildFilterChips = ({
       value: t(`filters.sections.section.prerequisite.${state.prerequisite}`),
       tone: 'warning',
       onRemove: () => emitState({ prerequisite: 'any' }, 'prerequisite'),
-    });
-  }
-
-  if (state.permission !== 'any') {
-    chips.push({
-      id: 'permission',
-      label: chipLabels.permission,
-      value: t(`filters.sections.section.permission.${state.permission}` as any),
-      tone: 'warning',
-      onRemove: () => emitState({ permission: 'any' }, 'permission'),
-    });
-  }
-
-  state.meetingCampuses.forEach((campus) => {
-    chips.push({
-      id: `meetingCampus:${campus}`,
-      label: chipLabels.meetingCampus,
-      value: campus,
-      tone: 'info',
-      onRemove: () =>
-        emitState({ meetingCampuses: state.meetingCampuses.filter((entry) => entry !== campus) }, 'meetingCampuses'),
-    });
-  });
-
-  if (state.location.building.trim()) {
-    chips.push({
-      id: 'building',
-      label: chipLabels.building,
-      value: state.location.building.trim(),
-      tone: 'default',
-      onRemove: () => emitState({ location: { ...state.location, building: '' } }, 'location'),
-    });
-  }
-
-  if (state.location.room.trim()) {
-    chips.push({
-      id: 'room',
-      label: chipLabels.room,
-      value: state.location.room.trim(),
-      tone: 'default',
-      onRemove: () => emitState({ location: { ...state.location, room: '' } }, 'location'),
     });
   }
 

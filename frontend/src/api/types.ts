@@ -94,9 +94,37 @@ export interface FiltersPayload {
     code: string;
     description: string;
   }>;
+  examCodes?: Array<{
+    code: string;
+    description?: string | null;
+  }>;
   levels: string[];
   deliveryMethods: string[];
   instructors?: Array<{ id: string; name: string }>;
+}
+
+export type FetchJobStatus = 'running' | 'success' | 'error';
+
+export interface FetchJob {
+  id: string;
+  term: string;
+  campus: string;
+  mode: 'full-init' | 'incremental';
+  status: FetchJobStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  message?: string;
+  logFile?: string;
+}
+
+export interface FetchStatusResponse {
+  meta: {
+    generatedAt: string;
+    version: string;
+  };
+  data: {
+    job: FetchJob | null;
+  };
 }
 
 export type SubscriptionContactType = 'email' | 'discord_user' | 'discord_channel';

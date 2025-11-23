@@ -104,7 +104,7 @@ export function fetchFiltersDictionary(db: Database.Database): FiltersDictionary
           )
           .all() as Array<{ level: string | null }>,
     )
-      .map((row) => row.level)
+      .map((row) => normalizeLevelCode(row.level))
       .filter((level): level is string => Boolean(level)),
     (level) => level,
   );
@@ -197,6 +197,15 @@ function extractCoreDescription(metadata: string | null | undefined) {
   } catch {
     return null;
   }
+}
+
+function normalizeLevelCode(level: string | null | undefined): string | null {
+  if (!level) return null;
+  const upper = level.toUpperCase();
+  if (upper === 'U' || upper === 'UG' || upper === 'UNDERGRADUATE') return 'UG';
+  if (upper === 'G' || upper === 'GR' || upper === 'GRADUATE') return 'GR';
+  if (upper === 'N/A' || upper === 'NA' || upper === 'OTHER') return 'N/A';
+  return upper;
 }
 
 function fallbackTerms(): FiltersDictionaryResult['terms'] {

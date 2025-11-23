@@ -25,7 +25,7 @@ export async function fetchFiltersDictionary(signal?: AbortSignal): Promise<Filt
     coreCodes: [],
     levels: [],
     deliveryMethods: [],
-    instructors: [],
+    examCodes: [],
   };
 
   const terms =
@@ -55,14 +55,6 @@ export async function fetchFiltersDictionary(signal?: AbortSignal): Promise<Filt
         }))
       : fallbackFiltersDictionary.subjects;
 
-  const instructors =
-    data.instructors && data.instructors.length > 0
-      ? data.instructors.map((teacher) => ({
-          label: teacher.name,
-          value: teacher.id,
-        }))
-      : fallbackFiltersDictionary.instructors;
-
   const coreCodes =
     data.coreCodes.length > 0
       ? data.coreCodes.map((core) => ({
@@ -71,15 +63,22 @@ export async function fetchFiltersDictionary(signal?: AbortSignal): Promise<Filt
         }))
       : fallbackFiltersDictionary.coreCodes;
 
+  const examCodes =
+    data.examCodes && data.examCodes.length > 0
+      ? data.examCodes.map((exam) => ({
+          label: exam.description ?? exam.code,
+          value: exam.code,
+        }))
+      : fallbackFiltersDictionary.examCodes;
+
   return {
     terms,
     campuses,
     subjects,
     levels: normalizeLevels(data.levels),
     deliveries: normalizeDeliveryMethods(data.deliveryMethods),
-    tags: fallbackFiltersDictionary.tags,
     coreCodes,
-    instructors,
+    examCodes,
   };
 }
 
