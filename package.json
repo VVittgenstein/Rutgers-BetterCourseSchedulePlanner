@@ -15,6 +15,7 @@
     "db:migrate": "tsx scripts/migrate_db.ts",
     "data:incremental-trial": "tsx scripts/incremental_trial.ts",
     "data:fetch": "tsx scripts/fetch_soc_data.ts",
+    "data:backfill-core": "tsx scripts/backfill_core_attributes.ts",
     "api:start": "tsx api/src/server.ts",
     "api:dev": "tsx watch api/src/server.ts",
     "discord:test-send": "tsx scripts/discord_send_test.ts",

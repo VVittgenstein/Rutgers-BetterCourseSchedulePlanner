@@ -115,6 +115,8 @@ interface PreparedStatements {
   insertCourse: Database.Statement;
   updateCourse: Database.Statement;
   deleteCourse: Database.Statement;
+  deleteCourseCoreAttributes: Database.Statement;
+  insertCourseCoreAttribute: Database.Statement;
   selectSections: Database.Statement;
   insertSection: Database.Statement;
   updateSection: Database.Statement;
@@ -143,6 +145,36 @@ interface PipelineContext {
   fullInitPrepared: boolean;
   statements: PreparedStatements;
 }
+
+interface NormalizedCoreAttribute {
+  code: string;
+  referenceId: string | null;
+  effectiveTerm: string | null;
+  metadata: string | null;
+}
+
+const CORE_CODE_FALLBACKS: Record<string, string> = {
+  AHO: 'Arts and Humanities',
+  AHP: 'Arts and Humanities',
+  AHQ: 'Arts and Humanities',
+  AHR: 'Arts and Humanities',
+  CCD: 'Contemporary Challenges: Diversity & Difference',
+  CCO: 'Contemporary Challenges: Our Common Future',
+  HST: 'Historical Analysis',
+  SCL: 'Social & Behavioral Sciences',
+  NS: 'Natural Sciences',
+  QQ: 'Quantitative & Formal Reasoning',
+  QR: 'Quantitative Reasoning',
+  WCD: 'Writing and Communication',
+  WCR: 'Writing and Communication',
+  WC: 'Writing and Communication',
+  W: 'Writing Intensive',
+  ITR: 'Information Technology & Research',
+  CE: 'CE',
+  ECN: 'ECN',
+  GVT: 'GVT',
+  SOEHS: 'SOEHS',
+};
 
 class CLIError extends Error {}
 
@@ -416,6 +448,11 @@ function createStatements(db: DB): PreparedStatements {
       WHERE course_id = ?
     `),
     deleteCourse: db.prepare('DELETE FROM courses WHERE course_id = ?'),
+    deleteCourseCoreAttributes: db.prepare('DELETE FROM course_core_attributes WHERE course_id = ?'),
+    insertCourseCoreAttribute: db.prepare(`
+      INSERT INTO course_core_attributes (course_id, term_id, core_code, reference_id, effective_term, metadata)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `),
     selectSections: db.prepare(
       'SELECT section_id, index_number, source_hash, open_status, is_open, open_status_updated_at FROM sections WHERE term_id = ? AND campus_code = ? AND subject_code = ?',
     ),
@@ -520,6 +557,114 @@ function toNullableNumber(value: number | null): number | null {
     return value;
   }
   return null;
+}
+
+function normalizeCoreAttributes(rawValue: unknown, fallbackCodes: string[]): NormalizedCoreAttribute[] {
+  const seen = new Set<string>();
+  const attributes: NormalizedCoreAttribute[] = [];
+  const entries = Array.isArray(rawValue) ? rawValue : [];
+  for (const entry of entries) {
+    const normalized = normalizeCoreAttributeEntry(entry);
+    if (!normalized) continue;
+    if (seen.has(normalized.code)) continue;
+    seen.add(normalized.code);
+    attributes.push(normalized);
+  }
+
+  if (attributes.length === 0) {
+    for (const code of fallbackCodes) {
+      const normalizedCode = normalizeCoreCode(code);
+      if (!normalizedCode || seen.has(normalizedCode)) continue;
+      seen.add(normalizedCode);
+      const description = CORE_CODE_FALLBACKS[normalizedCode];
+      attributes.push({
+        code: normalizedCode,
+        referenceId: null,
+        effectiveTerm: null,
+        metadata: safeStringify({
+          code: normalizedCode,
+          description,
+          source: 'fallback',
+        }),
+      });
+    }
+  }
+
+  return attributes;
+}
+
+function normalizeCoreAttributeEntry(entry: unknown): NormalizedCoreAttribute | null {
+  if (typeof entry === 'string' || typeof entry === 'number') {
+    const code = normalizeCoreCode(entry);
+    if (!code) return null;
+    const description = CORE_CODE_FALLBACKS[code];
+    return {
+      code,
+      referenceId: null,
+      effectiveTerm: null,
+      metadata: safeStringify({
+        code,
+        description,
+        source: 'string',
+      }),
+    };
+  }
+
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const raw = entry as Record<string, unknown>;
+  const code = normalizeCoreCode(raw.coreCode ?? raw.code ?? raw.core_code);
+  if (!code) return null;
+
+  const referenceId = normalizeNullableText(raw.coreCodeReferenceId ?? raw.referenceId);
+  const effectiveTerm = normalizeNullableText(raw.effective ?? raw.effectiveTerm ?? raw.term);
+  const description =
+    normalizeNullableText(raw.description) ??
+    normalizeNullableText((raw as Record<string, unknown>).coreCodeDescription) ??
+    normalizeNullableText((raw as Record<string, unknown>).coreDescription) ??
+    normalizeNullableText((raw as Record<string, unknown>).title) ??
+    CORE_CODE_FALLBACKS[code];
+  const title = normalizeNullableText(raw.title);
+
+  return {
+    code,
+    referenceId,
+    effectiveTerm,
+    metadata: safeStringify({
+      code,
+      referenceId,
+      effectiveTerm,
+      description,
+      title,
+    }),
+  };
+}
+
+function normalizeCoreCode(value: unknown): string | null {
+  if (typeof value === 'string' || typeof value === 'number') {
+    const normalized = String(value).trim().toUpperCase();
+    return normalized.length > 0 ? normalized : null;
+  }
+  return null;
+}
+
+function normalizeNullableText(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const normalized = String(value).trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+  return null;
+}
+
+function safeStringify(value: unknown): string | null {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -865,8 +1010,12 @@ function applySubjectBatch(
       const row = existingCourses.get(course.record.courseNumber);
       const payload = JSON.stringify(course.raw);
       const coreJson = JSON.stringify((course.raw as Record<string, unknown>).coreCodes ?? course.record.coreCodes);
+      const coreAttributes = normalizeCoreAttributes(
+        (course.raw as Record<string, unknown>).coreCodes,
+        course.record.coreCodes,
+      );
       const campusLocationsJson = JSON.stringify(course.record.campusLocations);
-      const hasCore = course.record.coreCodes.length > 0 ? 1 : 0;
+      const hasCore = coreAttributes.length > 0 ? 1 : 0;
       const tags = course.record.tags.join(',');
       const creditsMin = toNullableNumber(course.record.creditsMin);
       const creditsMax = toNullableNumber(course.record.creditsMax);
@@ -943,6 +1092,7 @@ function applySubjectBatch(
 
       const courseId = courseIds.get(course.record.courseNumber);
       if (!courseId) continue;
+      syncCourseCoreAttributes(ctx, slice, courseId, coreAttributes);
       for (const section of course.sections) {
         const existing = existingSections.get(section.key);
         const commentsJson = JSON.stringify(section.record.comments);
@@ -1093,6 +1243,25 @@ function applySubjectBatch(
     `  subject ${subject}: Δcourses +${stats.coursesInserted}/~${stats.coursesUpdated}/-${stats.coursesDeleted} • Δsections +${stats.sectionsInserted}/~${stats.sectionsUpdated}/-${stats.sectionsDeleted}`,
   );
   return stats;
+}
+
+function syncCourseCoreAttributes(
+  ctx: PipelineContext,
+  slice: PlannedSlice,
+  courseId: number,
+  attributes: NormalizedCoreAttribute[],
+): void {
+  ctx.statements.deleteCourseCoreAttributes.run(courseId);
+  for (const attribute of attributes) {
+    ctx.statements.insertCourseCoreAttribute.run(
+      courseId,
+      slice.term,
+      attribute.code,
+      attribute.referenceId,
+      attribute.effectiveTerm,
+      attribute.metadata,
+    );
+  }
 }
 
 function ensureReferenceRows(ctx: PipelineContext, slice: PlannedSlice, course: NormalizedCourse): void {

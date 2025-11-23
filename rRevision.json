@@ -109,17 +109,17 @@
         },
         "ST-20251122-filter-rewrite-03-data-pipeline-dicts": {
           "seed_id": null,
-          "title": "核心/考试代码数据管道与字典",
+          "title": "核心代码数据管道与字典",
           "type": "coding",
-          "summary": "在 fetch 管道中写入 course_core_attributes，并从 sections.exam_code 去重生成 examCode 字典；确保 `/api/filters` 提供核心/考试代码给前端。",
+          "summary": "在 fetch 管道中写入 course_core_attributes，补齐核心代码字典并确保 `/api/filters` 提供核心输出，忽略考试代码处理。",
           "acceptance_draft": [
             "scripts/fetch_soc_data.ts 写入/更新 course_core_attributes（先删后插 per course），has_core_attribute 置位；核心 JSON 仍保留。",
-            "filters 查询返回 distinct core_code/description 与 exam_code 列表；fallback 字典更新为观测到的核心/考试代码集合。",
-            "本地 fresh_local.db 重新跑一次后 core_code 非空，exam_code 覆盖 14+ 代码；手查一门课核心代码可用于过滤。"
+            "filters 查询返回 distinct core_code/description 列表；fallback 核心字典更新为观测到的核心集合（考试代码可忽略）。",
+            "本地 fresh_local.db 重新跑一次后 core_code 非空且可用于过滤；考试代码无需校验或返回。"
           ],
           "lane": "now",
           "priority_suggested": "P0",
-          "status": "todo",
+          "status": "in_review",
           "dependencies": [],
           "blocked": false,
           "blocked_by": [],
@@ -131,7 +131,9 @@
             "data-pipeline",
             "api-query"
           ],
-          "artifacts": []
+          "artifacts": [
+            "Compact/Compact-ST-20251122-filter-rewrite-03-data-pipeline-dicts-2025-11-23-T110512Z.md"
+          ]
         },
         "ST-20251122-filter-rewrite-04-docs-i18n": {
           "seed_id": null,

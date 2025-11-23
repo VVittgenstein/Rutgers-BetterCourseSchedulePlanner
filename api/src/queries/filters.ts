@@ -10,6 +10,29 @@ export interface FiltersDictionaryResult {
   instructors: Array<{ id: string; name: string }>;
 }
 
+const FALLBACK_CORE_CODES: Array<{ code: string; description: string }> = [
+  { code: 'AHO', description: 'Arts and Humanities' },
+  { code: 'AHP', description: 'Arts and Humanities' },
+  { code: 'AHQ', description: 'Arts and Humanities' },
+  { code: 'AHR', description: 'Arts and Humanities' },
+  { code: 'CCD', description: 'Contemporary Challenges: Diversity & Difference' },
+  { code: 'CCO', description: 'Contemporary Challenges: Our Common Future' },
+  { code: 'HST', description: 'Historical Analysis' },
+  { code: 'SCL', description: 'Social & Behavioral Sciences' },
+  { code: 'NS', description: 'Natural Sciences' },
+  { code: 'QQ', description: 'Quantitative & Formal Reasoning' },
+  { code: 'QR', description: 'Quantitative Reasoning' },
+  { code: 'WCD', description: 'Writing and Communication' },
+  { code: 'WCR', description: 'Writing and Communication' },
+  { code: 'WC', description: 'Writing and Communication' },
+  { code: 'W', description: 'Writing Intensive' },
+  { code: 'ITR', description: 'Information Technology & Research' },
+  { code: 'CE', description: 'CE' },
+  { code: 'ECN', description: 'ECN' },
+  { code: 'GVT', description: 'GVT' },
+  { code: 'SOEHS', description: 'SOEHS' },
+];
+
 export function fetchFiltersDictionary(db: Database.Database): FiltersDictionaryResult {
   const now = Date.now();
   const terms = safeAll(
@@ -72,7 +95,7 @@ export function fetchFiltersDictionary(db: Database.Database): FiltersDictionary
     campus: row.campus ?? null,
   }));
 
-  const coreCodes = dedupe(
+  const coreCodesFromDb = dedupe(
     safeAll(
       () =>
         db
@@ -84,12 +107,16 @@ export function fetchFiltersDictionary(db: Database.Database): FiltersDictionary
           `,
           )
           .all() as Array<{ code: string; metadata?: string | null }>,
-    ).map((row) => ({
-      code: row.code,
-      description: extractCoreDescription(row.metadata) ?? row.code,
-    })),
+    ).map((row) => {
+      const code = row.code;
+      return {
+        code,
+        description: extractCoreDescription(row.metadata) ?? findFallbackCoreDescription(code) ?? code,
+      };
+    }),
     (entry) => entry.code,
   );
+  const coreCodes = coreCodesFromDb.length ? coreCodesFromDb : fallbackCoreCodes();
 
   const levels = dedupe(
     safeAll(
@@ -206,6 +233,20 @@ function normalizeLevelCode(level: string | null | undefined): string | null {
   if (upper === 'G' || upper === 'GR' || upper === 'GRADUATE') return 'GR';
   if (upper === 'N/A' || upper === 'NA' || upper === 'OTHER') return 'N/A';
   return upper;
+}
+
+function findFallbackCoreDescription(code: string | null | undefined): string | undefined {
+  if (!code) return undefined;
+  const normalized = code.toUpperCase();
+  const match = FALLBACK_CORE_CODES.find((entry) => entry.code === normalized);
+  return match?.description;
+}
+
+function fallbackCoreCodes(): FiltersDictionaryResult['coreCodes'] {
+  return FALLBACK_CORE_CODES.map((entry) => ({
+    code: entry.code,
+    description: entry.description,
+  }));
 }
 
 function fallbackTerms(): FiltersDictionaryResult['terms'] {
