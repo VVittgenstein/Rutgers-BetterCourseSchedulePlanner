@@ -128,6 +128,8 @@ export function useCourseQuery(state: CourseFilterState, options?: UseCourseQuer
   });
   const [isFetching, setIsFetching] = useState(false);
 
+  const filteredItems = useMemo(() => filterCoursesForState(resultState.items, state), [resultState.items, state]);
+
   useEffect(() => {
     if (queryKey && params) {
       paramsRef.current.set(queryKey, params);
@@ -256,7 +258,7 @@ export function useCourseQuery(state: CourseFilterState, options?: UseCourseQuer
 
   return {
     status: resultState.status,
-    items: resultState.items,
+    items: filteredItems,
     meta: resultState.meta,
     isLoading: resultState.status === 'loading',
     isFetching,
@@ -395,4 +397,71 @@ function normalizeInstructors(raw?: string | null): string[] {
   if (!raw) return [];
   const parts = raw.split(/[,;/]+/).map((token) => token.trim()).filter(Boolean);
   return Array.from(new Set(parts));
+}
+
+function filterCoursesForState(courses: CourseResultItem[], state: CourseFilterState): CourseResultItem[] {
+  if (!courses.length) return [];
+  return courses
+    .map((course) => {
+      const filteredSections = filterSectionsForState(course.sectionPreviews, state);
+      return {
+        ...course,
+        hasOpenSections: filteredSections.some((section) => section.isOpen),
+        sectionPreviews: filteredSections,
+      };
+    })
+    .filter((course) => course.sectionPreviews.length > 0);
+}
+
+function filterSectionsForState(sections: CourseSectionPreview[], state: CourseFilterState): CourseSectionPreview[] {
+  if (!sections.length) return [];
+  return sections.filter((section) => matchesSectionFilters(section, state));
+}
+
+function matchesSectionFilters(section: CourseSectionPreview, state: CourseFilterState): boolean {
+  if (state.delivery.length) {
+    const delivery = section.deliveryMethod?.toLowerCase() ?? '';
+    if (!delivery || !state.delivery.includes(delivery as CourseFilterState['delivery'][number])) {
+      return false;
+    }
+  }
+
+  if (state.openStatus === 'openOnly' && !section.isOpen) {
+    return false;
+  }
+
+  if (!matchesMeetingFilters(section, state)) return false;
+
+  return true;
+}
+
+function matchesMeetingFilters(section: CourseSectionPreview, state: CourseFilterState): boolean {
+  const requireDays = state.meeting.days.length > 0;
+  const requireStart = state.meeting.startMinutes !== undefined;
+  const requireEnd = state.meeting.endMinutes !== undefined;
+  if (!requireDays && !requireStart && !requireEnd) {
+    return true;
+  }
+
+  if (!section.meetings.length) {
+    return false;
+  }
+
+  if (requireDays) {
+    const allowedDays = new Set(state.meeting.days);
+    const hasOutOfScopeMeeting = section.meetings.some((meeting) => !allowedDays.has(meeting.day));
+    if (hasOutOfScopeMeeting) {
+      return false;
+    }
+  }
+
+  return section.meetings.every((meeting) => {
+    if (requireStart && meeting.startMinutes < (state.meeting.startMinutes ?? 0)) {
+      return false;
+    }
+    if (requireEnd && meeting.endMinutes > (state.meeting.endMinutes ?? Infinity)) {
+      return false;
+    }
+    return true;
+  });
 }

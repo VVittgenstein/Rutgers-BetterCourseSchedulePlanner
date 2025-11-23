@@ -40,7 +40,7 @@ const courseQuerySchema = paginationSchema(100, 20)
     sortBy: z.enum(['subject', 'courseNumber', 'title', 'credits', 'sectionsOpen', 'updatedAt']).optional(),
     sortDir: sortDirectionSchema.optional(),
     include: stringOrArrayParam,
-    sectionsLimit: z.coerce.number().int().min(1).max(50).optional(),
+    sectionsLimit: z.coerce.number().int().min(1).max(300).optional(),
   })
   .superRefine((value, ctx) => {
     if (!value.campus?.length && !value.subject?.length) {

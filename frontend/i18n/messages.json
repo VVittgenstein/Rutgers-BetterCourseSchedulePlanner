@@ -62,6 +62,38 @@
         }
       }
     },
+    "fetcher": {
+      "title": "Fetch new term data",
+      "description": "Pick year/semester and campus; we'll convert to the SOC term code and start the crawler.",
+      "fields": {
+        "year": "Year",
+        "season": "Semester",
+        "campus": "Campus code",
+        "termPreview": "Term {{term}}"
+      },
+      "seasons": {
+        "spring": "Spring",
+        "summer": "Summer",
+        "fall": "Fall",
+        "winter": "Winter"
+      },
+      "actions": {
+        "start": "Start fetch",
+        "running": "Fetching…"
+      },
+      "status": {
+        "idle": "No fetch running.",
+        "started": "Starting fetch for {{term}} / {{campus}}…",
+        "running": "Fetching {{term}} / {{campus}}…",
+        "success": "Last run completed for {{term}} / {{campus}}.",
+        "error": "Fetch failed: {{message}}",
+        "errorFallback": "Fetch failed, check logs."
+      },
+      "hints": {
+        "apply": "After completion we'll switch filters to this term/campus and reload options.",
+        "log": "Log: {{path}}"
+      }
+    },
     "filters": {
       "header": {
         "eyebrow": "Filters",
@@ -85,13 +117,12 @@
           },
           "keyword": {
             "label": "Search keyword",
-            "placeholder": "Course title, code, or instructor"
+            "placeholder": "Course title or code"
           },
           "openStatus": {
             "label": "Show sections",
             "all": "All",
-            "openOnly": "Open seats",
-            "waitlist": "Has waitlist"
+            "openOnly": "Open seats"
           }
         },
         "subjects": {
@@ -107,52 +138,16 @@
           "title": "Meeting time",
           "clear": "Clear",
           "start": "Start time",
-          "end": "End time"
+          "end": "End time",
+          "subsetHint": "Only sections whose meetings stay within these days and times will appear."
         },
         "courseMeta": {
-          "title": "Course details",
+          "title": "Course attributes",
           "clear": "Clear course filters",
-          "courseNumber": "Course number / code",
-          "courseNumberPlaceholder": "e.g. 01:198:111",
           "creditsMin": "Credits (min)",
-          "creditsMax": "Credits (max)"
-        },
-        "section": {
-          "title": "Sections & instructors",
-          "clear": "Reset section filters",
-          "index": "Index number",
-          "indexPlaceholder": "e.g. 12345",
-          "sectionNumber": "Section",
-          "sectionPlaceholder": "e.g. 01",
-          "instructorSearch": "Instructor",
-          "instructorPlaceholder": "Name or keyword",
-          "instructorTruncated": "Showing {{current}} / {{total}} instructors. Narrow your search to see more.",
-          "status": "Status",
-          "statusLabels": {
-            "open": "Open",
-            "waitlist": "Waitlist",
-            "closed": "Closed"
-          },
-          "requirements": "Requirements",
-          "prerequisite": {
-            "any": "Any prereq",
-            "has": "Has prereq",
-            "none": "No prereq"
-          },
-          "permission": {
-            "any": "Any permission",
-            "requires": "Needs permission",
-            "none": "No permission"
-          }
-        },
-        "location": {
-          "title": "Location",
-          "clear": "Clear location",
-          "campus": "Meeting campus / site",
-          "building": "Building",
-          "buildingPlaceholder": "e.g. HLL or ARC",
-          "room": "Room",
-          "roomPlaceholder": "Room number"
+          "creditsMax": "Credits (max)",
+          "core": "Core codes",
+          "exam": "Exam codes"
         },
         "meta": {
           "title": "Delivery & Level",
@@ -160,9 +155,12 @@
           "delivery": "Delivery",
           "level": "Level"
         },
-        "tags": {
-          "title": "Quick tags",
-          "clear": "Clear"
+        "section": {
+          "prerequisite": {
+            "any": "Any prereq",
+            "has": "Has prereq",
+            "none": "No prereq"
+          }
         }
       },
       "chips": {
@@ -170,25 +168,15 @@
         "subject": "Subject",
       "level": "Level",
       "delivery": "Delivery",
-      "tag": "Tag",
       "core": "Core",
+      "exam": "Exam",
       "meeting": "Meeting",
       "credits": "Credits",
       "creditsMin": "Min {{value}}",
       "creditsMax": "Max {{value}}",
-      "courseNumber": "Course #",
-      "sectionIndex": "Index",
-      "sectionNumber": "Section",
-      "status": "Status",
-      "instructor": "Instructor",
       "prerequisite": "Prerequisite",
-      "permission": "Permission",
-      "meetingCampus": "Meeting campus",
-      "building": "Building",
-      "room": "Room",
       "meetingFallback": "Meeting filter",
       "openOnly": "Open seats only",
-      "hasWaitlist": "Has waitlist",
       "timePlaceholder": {
         "start": "Start",
           "end": "End"
@@ -201,6 +189,7 @@
         "loading": "Loading courses…",
         "count": "{{countLabel}} courses",
         "range": "Showing {{start}} - {{end}} · Page {{page}}",
+        "simpleRange": "Page {{page}} / {{pages}} · Total {{total}}",
         "refreshing": "Refreshing…"
       },
       "empty": {
@@ -228,6 +217,15 @@
       "badges": {
         "open": "Open",
         "levelFallback": "N/A"
+      },
+      "sections": {
+        "anyOpen": "Open sections",
+        "allClosed": "All sections closed",
+        "index": "Section index",
+        "status": "Status",
+        "statusOpen": "Open",
+        "statusClosed": "Closed",
+        "empty": "No sections matched these filters."
       },
       "meta": {
         "credits": "Credits",
@@ -291,6 +289,26 @@
         },
         "traceId": "Trace {{id}}"
       }
+    },
+    "subscriptionCenter": {
+      "eyebrow": "Subscribe",
+      "title": "Subscription center",
+      "subtitle": "Input a section index and we’ll use your current term/campus and contact preferences.",
+      "sectionLabel": "Section index",
+      "sectionPlaceholder": "e.g. 12345",
+      "contactLabel": "Contact",
+      "submit": "Subscribe",
+      "errors": {
+        "missingContext": "Select term and campus first.",
+        "missingSection": "Enter a section index.",
+        "missingContact": "Add an email or Discord ID."
+      },
+      "status": {
+        "created": "Subscription saved.",
+        "existing": "You already subscribed to this section."
+      },
+      "missingCampus": "Campus?",
+      "missingTerm": "Term?"
     },
     "schedule": {
       "header": {
@@ -374,6 +392,38 @@
         }
       }
     },
+    "fetcher": {
+      "title": "拉取新学期数据",
+      "description": "选择学年/学期与校区，自动换算 SOC term 并立即启动爬取。",
+      "fields": {
+        "year": "学年",
+        "season": "学期",
+        "campus": "校区代码",
+        "termPreview": "Term {{term}}"
+      },
+      "seasons": {
+        "spring": "春季",
+        "summer": "夏季",
+        "fall": "秋季",
+        "winter": "冬季"
+      },
+      "actions": {
+        "start": "开始爬取",
+        "running": "执行中…"
+      },
+      "status": {
+        "idle": "当前没有运行中的爬取任务。",
+        "started": "准备拉取 {{term}} / {{campus}}…",
+        "running": "正在拉取 {{term}} / {{campus}}…",
+        "success": "已完成 {{term}} / {{campus}} 的数据更新。",
+        "error": "拉取失败：{{message}}",
+        "errorFallback": "拉取失败，请查看日志。"
+      },
+      "hints": {
+        "apply": "完成后会自动切换筛选的学期与校区并刷新选项。",
+        "log": "日志：{{path}}"
+      }
+    },
     "filters": {
       "header": {
         "eyebrow": "Filters",
@@ -397,13 +447,12 @@
           },
           "keyword": {
             "label": "Search keyword",
-            "placeholder": "课程名、编号或教师"
+            "placeholder": "课程名或编号"
           },
           "openStatus": {
             "label": "Show sections",
             "all": "全部",
-            "openOnly": "有空位",
-            "waitlist": "有候补"
+            "openOnly": "有空位"
           }
         },
         "subjects": {
@@ -419,52 +468,16 @@
           "title": "上课时间",
           "clear": "清除",
           "start": "开始时间",
-          "end": "结束时间"
+          "end": "结束时间",
+          "subsetHint": "仅显示所有 meeting 都落在这些星期与时间范围内的节次。"
         },
         "courseMeta": {
-          "title": "课程信息",
+          "title": "课程属性",
           "clear": "清空课程筛选",
-          "courseNumber": "课程编号/代码",
-          "courseNumberPlaceholder": "例如 01:198:111",
           "creditsMin": "最小学分",
-          "creditsMax": "最大学分"
-        },
-        "section": {
-          "title": "班次与教师",
-          "clear": "重置班次筛选",
-          "index": "Index 号",
-          "indexPlaceholder": "如 12345",
-          "sectionNumber": "班次",
-          "sectionPlaceholder": "如 01",
-          "instructorSearch": "教师",
-          "instructorPlaceholder": "姓名或关键词",
-          "instructorTruncated": "已显示 {{current}} / {{total}} 位教师，请继续筛选。",
-          "status": "状态",
-          "statusLabels": {
-            "open": "开放",
-            "waitlist": "候补",
-            "closed": "关闭"
-          },
-          "requirements": "限制条件",
-          "prerequisite": {
-            "any": "不限先修",
-            "has": "需要先修",
-            "none": "无先修"
-          },
-          "permission": {
-            "any": "不限许可",
-            "requires": "需要许可码",
-            "none": "无需许可"
-          }
-        },
-        "location": {
-          "title": "上课地点",
-          "clear": "清空地点",
-          "campus": "授课校区/站点",
-          "building": "教学楼",
-          "buildingPlaceholder": "如 HLL 或 ARC",
-          "room": "教室",
-          "roomPlaceholder": "教室号"
+          "creditsMax": "最大学分",
+          "core": "核心代码",
+          "exam": "考试代码"
         },
         "meta": {
           "title": "授课方式 & 年级",
@@ -472,9 +485,12 @@
           "delivery": "Delivery",
           "level": "Level"
         },
-        "tags": {
-          "title": "快速标签",
-          "clear": "清除"
+        "section": {
+          "prerequisite": {
+            "any": "不限先修",
+            "has": "需要先修",
+            "none": "无先修"
+          }
         }
       },
       "chips": {
@@ -482,25 +498,15 @@
         "subject": "科目",
         "level": "年级",
       "delivery": "授课方式",
-      "tag": "标签",
       "core": "核心课程",
+      "exam": "考试代码",
       "meeting": "上课时间",
       "credits": "学分",
       "creditsMin": "至少 {{value}} 学分",
       "creditsMax": "至多 {{value}} 学分",
-      "courseNumber": "课程编号",
-      "sectionIndex": "Index",
-      "sectionNumber": "班次",
-      "status": "状态",
-      "instructor": "教师",
       "prerequisite": "先修要求",
-      "permission": "许可",
-      "meetingCampus": "上课校区",
-      "building": "教学楼",
-      "room": "教室",
       "meetingFallback": "上课时间筛选",
       "openOnly": "只看有空位",
-      "hasWaitlist": "有候补",
       "timePlaceholder": {
         "start": "开始",
           "end": "结束"
@@ -513,6 +519,7 @@
         "loading": "加载课程中…",
         "count": "{{countLabel}} 门课程",
         "range": "显示 {{start}} - {{end}} · 第 {{page}} 页",
+        "simpleRange": "第 {{page}} / {{pages}} 页 · 共 {{total}} 门",
         "refreshing": "刷新中…"
       },
       "empty": {
@@ -540,6 +547,15 @@
       "badges": {
         "open": "有空位",
         "levelFallback": "暂无"
+      },
+      "sections": {
+        "anyOpen": "有可选节次",
+        "allClosed": "全部关闭",
+        "index": "节次索引",
+        "status": "状态",
+        "statusOpen": "开放",
+        "statusClosed": "关闭",
+        "empty": "当前筛选没有匹配的节次。"
       },
       "meta": {
         "credits": "学分",
@@ -603,6 +619,26 @@
         },
         "traceId": "追踪 {{id}}"
       }
+    },
+    "subscriptionCenter": {
+      "eyebrow": "订阅",
+      "title": "订阅入口",
+      "subtitle": "输入想要跟踪的节次索引，使用当前学期/校区和联系方式提交。",
+      "sectionLabel": "节次索引",
+      "sectionPlaceholder": "例如 12345",
+      "contactLabel": "联系方式",
+      "submit": "提交订阅",
+      "errors": {
+        "missingContext": "请先选择学期和校区。",
+        "missingSection": "请输入节次索引。",
+        "missingContact": "填写邮箱或 Discord ID。"
+      },
+      "status": {
+        "created": "订阅已保存。",
+        "existing": "你已订阅该节次。"
+      },
+      "missingCampus": "未选校区",
+      "missingTerm": "未选学期"
     },
     "schedule": {
       "header": {

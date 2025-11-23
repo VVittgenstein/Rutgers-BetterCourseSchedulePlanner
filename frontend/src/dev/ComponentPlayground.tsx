@@ -20,17 +20,26 @@ export function ComponentPlayground() {
         if (!matchesSubject) return false;
       }
 
-      if (filters.meeting.days.length) {
-        const hasDay = section.meetings.some((meeting) => filters.meeting.days.includes(meeting.day));
-        if (!hasDay) return false;
+      const requireDays = filters.meeting.days.length > 0;
+      const requireStart = filters.meeting.startMinutes !== undefined;
+      const requireEnd = filters.meeting.endMinutes !== undefined;
+
+      if ((requireDays || requireStart || requireEnd) && !section.meetings.length) {
+        return false;
       }
 
-      if (filters.meeting.startMinutes !== undefined || filters.meeting.endMinutes !== undefined) {
-        const matchesWindow = section.meetings.some((meeting) => {
-          if (filters.meeting.startMinutes !== undefined && meeting.startMinutes < filters.meeting.startMinutes) {
+      if (requireDays) {
+        const allowedDays = new Set(filters.meeting.days);
+        const hasOutlierDay = section.meetings.some((meeting) => !allowedDays.has(meeting.day));
+        if (hasOutlierDay) return false;
+      }
+
+      if (requireStart || requireEnd) {
+        const matchesWindow = section.meetings.every((meeting) => {
+          if (requireStart && meeting.startMinutes < (filters.meeting.startMinutes ?? 0)) {
             return false;
           }
-          if (filters.meeting.endMinutes !== undefined && meeting.endMinutes > filters.meeting.endMinutes) {
+          if (requireEnd && meeting.endMinutes > (filters.meeting.endMinutes ?? Infinity)) {
             return false;
           }
           return true;

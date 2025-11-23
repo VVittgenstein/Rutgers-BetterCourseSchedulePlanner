@@ -1,0 +1,120 @@
+.subscription-center {
+  background: #ffffff;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  padding: 1rem 1.1rem;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.subscription-center__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.subscription-center__eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.subscription-center__title {
+  margin: 0.1rem 0 0;
+  font-size: 1.1rem;
+}
+
+.subscription-center__badge {
+  background: #eef2ff;
+  color: #312e81;
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.subscription-center__hint {
+  margin: 0;
+  color: #475569;
+  font-size: 0.9rem;
+}
+
+.subscription-center__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+.subscription-center__field input {
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.7);
+  padding: 0.55rem 0.65rem;
+  font-size: 0.95rem;
+}
+
+.subscription-center__contact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.subscription-center__contact-types {
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.subscription-center__pill {
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 999px;
+  background: transparent;
+  color: #4c1d95;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.subscription-center__pill--active {
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.subscription-center__feedback {
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+.subscription-center__feedback--success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.subscription-center__feedback--info {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.subscription-center__feedback--error {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.subscription-center__submit {
+  border: none;
+  background: linear-gradient(135deg, #312e81, #6366f1);
+  color: white;
+  padding: 0.65rem;
+  border-radius: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.subscription-center__submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

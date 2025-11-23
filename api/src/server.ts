@@ -11,6 +11,7 @@ import { registerCourseRoutes } from './routes/courses.js';
 import { registerSectionRoutes } from './routes/sections.js';
 import { registerFilterRoutes } from './routes/filters.js';
 import { registerSubscriptionRoutes } from './routes/subscriptions.js';
+import { registerFetchRoutes } from './routes/fetch.js';
 
 export async function createServer() {
   const config = loadConfig();
@@ -84,6 +85,7 @@ export async function createServer() {
     await registerSectionRoutes(router);
     await registerFilterRoutes(router);
     await registerSubscriptionRoutes(router);
+    await registerFetchRoutes(router);
   }, { prefix: '/api' });
 
   return app;

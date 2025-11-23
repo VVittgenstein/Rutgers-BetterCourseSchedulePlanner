@@ -1,0 +1,424 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const MIN_NODE_MAJOR = 22;
+const API_PORT = process.env.CSP_API_PORT ?? '3333';
+const FRONTEND_PORT = process.env.CSP_FRONTEND_PORT ?? '5174';
+const POLLER_INTERVAL = process.env.CSP_POLLER_INTERVAL ?? '20';
+const SKIP_POLLER = process.env.CSP_SKIP_POLLER === '1';
+const FORCE_FETCH = process.env.CSP_FORCE_FETCH === '1';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ROOT_DIR = path.resolve(process.cwd());
+const FRONTEND_DIR = path.join(ROOT_DIR, 'frontend');
+const FETCH_CONFIG_PATH = path.join(ROOT_DIR, 'configs', 'fetch_pipeline.local.json');
+const FETCH_CONFIG_TEMPLATE = path.join(ROOT_DIR, 'configs', 'fetch_pipeline.example.json');
+const CHECKPOINT_FILE = path.join(ROOT_DIR, 'data', 'poller_checkpoint.json');
+
+const children = [];
+let shuttingDown = false;
+
+function sanitizeDbPath(rawDbPath) {
+  let preferredDb = rawDbPath ?? path.join('data', 'fresh_local.db');
+
+  if (process.platform === 'win32') {
+    if (preferredDb.startsWith('/')) {
+      warn(`Detected Unix-style sqliteFile (${preferredDb}); switching to data\\fresh_local.db.`);
+      preferredDb = path.join('data', 'fresh_local.db');
+    }
+    if (preferredDb.toLowerCase().includes(`${path.sep}mnt${path.sep}`)) {
+      warn(`Detected WSL-style sqliteFile (${preferredDb}); switching to data\\fresh_local.db.`);
+      preferredDb = path.join('data', 'fresh_local.db');
+    }
+  }
+
+  const resolved = path.isAbsolute(preferredDb) ? path.resolve(preferredDb) : path.resolve(ROOT_DIR, preferredDb);
+  const resolvedDir = path.dirname(resolved);
+  if (!fs.existsSync(resolvedDir)) {
+    fs.mkdirSync(resolvedDir, { recursive: true });
+  }
+  return resolved;
+}
+
+function resolveNpmLike(base) {
+  if (process.platform !== 'win32') return base;
+  const candidate = path.join(path.dirname(process.execPath), `${base}.cmd`);
+  if (fs.existsSync(candidate)) return candidate;
+  return `${base}.cmd`;
+}
+
+const NPM_CMD = resolveNpmLike('npm');
+const NPX_CMD = resolveNpmLike('npx');
+
+function log(message) {
+  console.log(`[oneclick] ${message}`);
+}
+
+function warn(message) {
+  console.warn(`[oneclick] ${message}`);
+}
+
+function ensureNodeVersion() {
+  const major = Number(process.versions.node.split('.')[0]);
+  if (Number.isNaN(major) || major < MIN_NODE_MAJOR) {
+    console.error(
+      `[oneclick] Node ${MIN_NODE_MAJOR}+ is required. Detected ${process.versions.node}. Install a newer Node.js from https://nodejs.org/.`,
+    );
+    process.exit(1);
+  }
+}
+
+function parseCampuses(raw) {
+  return raw
+    .split(',')
+    .map((code) => code.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function readJsonSafe(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    warn(`Could not read ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+function ensureFetchConfig() {
+  if (!fs.existsSync(FETCH_CONFIG_PATH)) {
+    if (!fs.existsSync(FETCH_CONFIG_TEMPLATE)) {
+      console.error('[oneclick] Missing fetch config template under configs/.');
+      process.exit(1);
+    }
+    fs.copyFileSync(FETCH_CONFIG_TEMPLATE, FETCH_CONFIG_PATH);
+    log('Created configs/fetch_pipeline.local.json from example.');
+  }
+
+  const rawConfig = readJsonSafe(FETCH_CONFIG_PATH) ?? {};
+
+  const envDb = process.env.CSP_DB_PATH ?? process.env.CSP_SQLITE_FILE ?? process.env.SQLITE_FILE;
+  const defaultDb =
+    typeof rawConfig.sqliteFile === 'string' && rawConfig.sqliteFile.length > 0
+      ? rawConfig.sqliteFile
+      : path.join('data', 'fresh_local.db');
+  const dbPath = sanitizeDbPath(envDb ?? defaultDb);
+
+  const targets = Array.isArray(rawConfig.targets) ? rawConfig.targets : [];
+  const primaryTarget = targets[0] ?? {};
+  const envTerm = process.env.CSP_TERM;
+  const envCampuses = process.env.CSP_CAMPUSES;
+  const term = envTerm ?? primaryTarget.term ?? '12024';
+  const campuses = envCampuses ?? (Array.isArray(primaryTarget.campuses) ? primaryTarget.campuses.map((c) => c.code).join(',') : 'NB');
+  const campusList = parseCampuses(campuses);
+
+  let updated = false;
+  if (rawConfig.sqliteFile !== dbPath) {
+    rawConfig.sqliteFile = dbPath;
+    updated = true;
+  }
+  if (!primaryTarget.term) {
+    primaryTarget.term = term;
+    updated = true;
+  }
+  if (!primaryTarget.mode) {
+    primaryTarget.mode = 'full-init';
+    updated = true;
+  }
+  if (!Array.isArray(primaryTarget.campuses) || primaryTarget.campuses.length === 0 || envCampuses) {
+    primaryTarget.campuses = campusList.map((code) => ({ code, subjects: ['ALL'] }));
+    updated = true;
+  }
+  if (!targets[0]) {
+    rawConfig.targets = [primaryTarget];
+  } else {
+    rawConfig.targets[0] = primaryTarget;
+  }
+
+  if (updated) {
+    fs.writeFileSync(FETCH_CONFIG_PATH, JSON.stringify(rawConfig, null, 2));
+    log(`Updated fetch config (${FETCH_CONFIG_PATH}) to use ${dbPath}`);
+  }
+
+  return { dbPath, term, campuses: campusList, fetchConfigPath: FETCH_CONFIG_PATH };
+}
+
+function runCommand(label, command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    log(`${label}...`);
+    log(`  cmd: ${command} ${args.join(' ')} (cwd=${options.cwd ?? process.cwd()})`);
+    const child = spawn(command, args, { stdio: 'inherit', shell: process.platform === 'win32', ...options });
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve(0);
+      } else {
+        reject(new Error(`${label} failed (exit code ${code ?? 'unknown'})`));
+      }
+    });
+    child.on('error', (error) =>
+      reject(
+        new Error(
+          `${label} failed to start (${error instanceof Error ? `${error.message}` : String(error)}); cmd=${command} cwd=${
+            options.cwd ?? process.cwd()
+          }`,
+        ),
+      ),
+    );
+  });
+}
+
+async function ensureDependencies() {
+  log(`Node runtime: ${process.platform} ${process.arch} ${process.versions.node}`);
+  const tsxBin = path.join(
+    ROOT_DIR,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'tsx.cmd' : 'tsx',
+  );
+  const viteBin = path.join(
+    FRONTEND_DIR,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'vite.cmd' : 'vite',
+  );
+
+  const needsRootInstall =
+    !fs.existsSync(path.join(ROOT_DIR, 'node_modules')) || (process.platform === 'win32' && !fs.existsSync(tsxBin));
+  if (needsRootInstall) {
+    await runCommand('Installing root dependencies (platform-specific rebuild)', NPM_CMD, ['install', '--force'], {
+      cwd: ROOT_DIR,
+    });
+  } else {
+    log('Root dependencies already installed.');
+  }
+
+  const needsFrontendInstall =
+    !fs.existsSync(path.join(FRONTEND_DIR, 'node_modules')) ||
+    (process.platform === 'win32' && !fs.existsSync(viteBin));
+  if (needsFrontendInstall) {
+    await runCommand('Installing frontend dependencies (platform-specific rebuild)', NPM_CMD, ['install', '--force'], {
+      cwd: FRONTEND_DIR,
+    });
+  } else {
+    log('Frontend dependencies already installed.');
+  }
+
+  // Validate better-sqlite3 binary matches the platform; if not, force reinstall.
+  const validate = spawn(process.execPath, ['-e', "require('better-sqlite3')"], {
+    cwd: ROOT_DIR,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+  const exitCode = await new Promise((resolve) => {
+    validate.on('error', () => resolve(1));
+    validate.on('exit', (code) => resolve(typeof code === 'number' ? code : 1));
+  });
+  if (exitCode !== 0) {
+    warn('Detected broken better-sqlite3 binary; retrying install for this platform...');
+    const betterSqliteDir = path.join(ROOT_DIR, 'node_modules', 'better-sqlite3');
+    try {
+      if (fs.existsSync(betterSqliteDir)) {
+        fs.rmSync(betterSqliteDir, { recursive: true, force: true });
+      }
+    } catch (err) {
+      warn(`Could not clean old better-sqlite3 folder: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    await runCommand('Reinstalling better-sqlite3', NPM_CMD, ['install', '--force', 'better-sqlite3'], {
+      cwd: ROOT_DIR,
+      env: { ...process.env, npm_config_build_from_source: '1' },
+    });
+    const revalidate = spawn(process.execPath, ['-e', "require('better-sqlite3')"], {
+      cwd: ROOT_DIR,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    });
+    const revalidateExit = await new Promise((resolve) => {
+      revalidate.on('error', () => resolve(1));
+      revalidate.on('exit', (code) => resolve(typeof code === 'number' ? code : 1));
+    });
+    if (revalidateExit !== 0) {
+      warn('better-sqlite3 still failing; doing a clean reinstall of all dependencies (this may take a bit)...');
+      try {
+        fs.rmSync(path.join(ROOT_DIR, 'node_modules'), { recursive: true, force: true });
+      } catch (err) {
+        warn(`Could not remove node_modules completely: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await runCommand('Reinstalling all dependencies cleanly', NPM_CMD, ['install', '--force'], {
+        cwd: ROOT_DIR,
+        env: { ...process.env, npm_config_build_from_source: '1' },
+      });
+      const finalValidate = spawn(process.execPath, ['-e', "require('better-sqlite3')"], {
+        cwd: ROOT_DIR,
+        stdio: 'inherit',
+        shell: process.platform === 'win32',
+      });
+      const finalExit = await new Promise((resolve) => {
+        finalValidate.on('error', () => resolve(1));
+        finalValidate.on('exit', (code) => resolve(typeof code === 'number' ? code : 1));
+      });
+      if (finalExit !== 0) {
+        throw new Error(
+          'better-sqlite3 is still not loading. Please install "Microsoft C++ Build Tools" (Desktop development with C++) and then rerun Start-WebUI.bat, or manually delete node_modules and rerun.',
+        );
+      }
+    }
+  }
+}
+
+async function prepareDatabase(dbPath, term, campuses, fetchConfigPath) {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  await runCommand(
+    'Running database migrations',
+    NPM_CMD,
+    ['run', 'db:migrate', '--', '--db', dbPath, '--verbose'],
+    {
+      cwd: ROOT_DIR,
+    },
+  );
+
+  const needsFetch = FORCE_FETCH || !fs.existsSync(dbPath);
+  if (!needsFetch) {
+    log('Database already exists; skipping full fetch. Set CSP_FORCE_FETCH=1 to refresh.');
+    return;
+  }
+
+  await runCommand(
+    'Fetching course data (this can take a few minutes on first run)',
+    NPM_CMD,
+    ['run', 'data:fetch', '--', '--config', fetchConfigPath, '--mode', 'full-init', '--terms', term, '--campuses', campuses.join(',')],
+    { cwd: ROOT_DIR },
+  );
+}
+
+function startProcess(name, command, args, options = {}) {
+  log(`Starting ${name}...`);
+  const child = spawn(command, args, { stdio: 'inherit', shell: process.platform === 'win32', ...options });
+  children.push({ name, child });
+  child.on('exit', (code, signal) => {
+    if (shuttingDown) return;
+    const reason = signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`;
+    console.error(`[oneclick] ${name} stopped (${reason}). Shutting down.`);
+    cleanup(typeof code === 'number' ? code : 1);
+  });
+  child.on('error', (error) => {
+    console.error(`[oneclick] Failed to start ${name}: ${error instanceof Error ? error.message : String(error)}`);
+    cleanup(1);
+  });
+}
+
+function cleanup(exitCode = 0) {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  for (const { child } of children) {
+    if (!child.killed) {
+      child.kill();
+    }
+  }
+  process.exit(exitCode);
+}
+
+function openBrowser(url) {
+  let command;
+  let args;
+
+  if (process.platform === 'win32') {
+    command = 'cmd';
+    args = ['/c', 'start', '', url];
+  } else if (process.platform === 'darwin') {
+    command = 'open';
+    args = [url];
+  } else {
+    command = 'xdg-open';
+    args = [url];
+  }
+
+  const opener = spawn(command, args, { stdio: 'ignore', detached: true });
+  opener.unref();
+}
+
+async function main() {
+  console.log('=== BetterCourseSchedulePlanner one-click launcher ===');
+  log('If you close this window, the servers will stop.');
+  ensureNodeVersion();
+
+  const { dbPath, term, campuses, fetchConfigPath } = ensureFetchConfig();
+  log(`Using SQLite DB at: ${dbPath}`);
+  log(`Default term: ${term} | campuses: ${campuses.join(',')}`);
+
+  await ensureDependencies();
+  await prepareDatabase(dbPath, term, campuses, fetchConfigPath);
+
+  startProcess(
+    'api',
+    NPM_CMD,
+    ['run', 'api:start'],
+    {
+      cwd: ROOT_DIR,
+      env: { ...process.env, APP_PORT: API_PORT, APP_HOST: '0.0.0.0', SQLITE_FILE: dbPath },
+    },
+  );
+
+  startProcess(
+    'frontend',
+    NPM_CMD,
+    ['run', 'dev', '--', '--host', '0.0.0.0', '--port', FRONTEND_PORT],
+    {
+      cwd: FRONTEND_DIR,
+      env: {
+        ...process.env,
+        VITE_API_PROXY_TARGET: `http://localhost:${API_PORT}`,
+        VITE_API_BASE_URL: '/api',
+      },
+    },
+  );
+
+  if (!SKIP_POLLER) {
+    fs.mkdirSync(path.dirname(CHECKPOINT_FILE), { recursive: true });
+    startProcess(
+      'open_sections_poller',
+      NPX_CMD,
+      [
+        'tsx',
+        'workers/open_sections_poller.ts',
+        '--term',
+        term,
+        '--campuses',
+        campuses.join(','),
+        '--sqlite',
+        dbPath,
+        '--interval',
+        POLLER_INTERVAL,
+        '--checkpoint',
+        CHECKPOINT_FILE,
+      ],
+      { cwd: ROOT_DIR },
+    );
+  } else {
+    log('Skipping poller (CSP_SKIP_POLLER=1).');
+  }
+
+  const uiUrl = `http://localhost:${FRONTEND_PORT}`;
+  setTimeout(() => openBrowser(uiUrl), 1500);
+  log(`Opening the web UI at ${uiUrl} ...`);
+  log('Press Ctrl+C in this window to stop the stack.');
+}
+
+process.on('SIGINT', () => {
+  log('Shutting down...');
+  cleanup(0);
+});
+
+process.on('SIGTERM', () => {
+  log('Shutting down...');
+  cleanup(0);
+});
+
+main().catch((error) => {
+  console.error(`[oneclick] ${error instanceof Error ? error.message : String(error)}`);
+  cleanup(1);
+});

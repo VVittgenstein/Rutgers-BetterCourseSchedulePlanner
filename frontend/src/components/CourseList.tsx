@@ -1,18 +1,11 @@
 import { useMemo } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import { FixedSizeList as VirtualList } from 'react-window';
 
 import type { CourseQueryMeta, CourseResultItem } from '../hooks/useCourseQuery';
 import type { ApiError } from '../api/client';
-import { SubscribeButton } from './SubscribeButton';
+import { classNames } from '../utils/classNames';
 import './CourseList.css';
-
-// Increased to match the taller course card after adding the subscribe panel.
-const ROW_HEIGHT = 420;
-const VIRTUAL_THRESHOLD = 16;
-const MIN_ROWS = 4;
-const MAX_ROWS = 6;
 
 export interface CourseListProps {
   items: CourseResultItem[];
@@ -41,12 +34,11 @@ export function CourseList({
     return new Intl.NumberFormat(locale);
   }, [i18n.language]);
   const formatNumber = (value: number) => numberFormatter.format(value);
-  const total = meta?.total ?? 0;
+  const total = meta?.total ?? items.length;
   const page = meta?.page ?? 1;
   const pageSize = meta?.pageSize ?? (items.length || 25);
-  const rangeStart = total > 0 ? (page - 1) * pageSize + 1 : 0;
-  const rangeEnd = total > 0 ? Math.min(rangeStart + items.length - 1, total) : 0;
   const totalPages = Math.max(1, Math.ceil((total || pageSize) / pageSize));
+  const displayCount = items.length;
   const resolvedEmptyState = emptyState ?? t('courseList.empty.default');
 
   const renderBody = () => {
@@ -59,7 +51,13 @@ export function CourseList({
     if (!items.length) {
       return <EmptyState message={resolvedEmptyState} />;
     }
-    return renderVirtualizedList(items, t);
+    return (
+      <div className="course-list__rows">
+        {items.map((item) => (
+          <CourseRow key={item.id} course={item} t={t} />
+        ))}
+      </div>
+    );
   };
 
   const handlePrev = () => {
@@ -79,17 +77,15 @@ export function CourseList({
           <h2>
             {isLoading
               ? t('courseList.header.loading')
-              : t('courseList.header.count', { countLabel: formatNumber(total) })}
+              : t('courseList.header.count', { countLabel: formatNumber(displayCount) })}
           </h2>
-          {total > 0 && (
-            <p className="course-list__summary">
-              {t('courseList.header.range', {
-                start: formatNumber(rangeStart),
-                end: formatNumber(rangeEnd),
-                page: formatNumber(page),
-              })}
-            </p>
-          )}
+          <p className="course-list__summary">
+            {t('courseList.header.simpleRange', {
+              page: formatNumber(page),
+              pages: formatNumber(totalPages),
+              total: formatNumber(total),
+            })}
+          </p>
         </div>
         {isFetching && !isLoading && (
           <span className="course-list__badge">{t('courseList.header.refreshing')}</span>
@@ -100,16 +96,12 @@ export function CourseList({
 
       <footer className="course-list__footer">
         <div className="course-list__footer-meta">
-          {total > 0 ? (
-            <span>
-              {t('courseList.footer.pagination', {
-                pages: formatNumber(totalPages),
-                pageSize: formatNumber(pageSize),
-              })}
-            </span>
-          ) : (
-            <span>{t('courseList.footer.none')}</span>
-          )}
+          <span>
+            {t('courseList.footer.pagination', {
+              pages: formatNumber(totalPages),
+              pageSize: formatNumber(pageSize),
+            })}
+          </span>
         </div>
         <div className="course-list__pagination">
           <button type="button" onClick={handlePrev} disabled={page <= 1 || isLoading}>
@@ -130,48 +122,8 @@ export function CourseList({
   );
 }
 
-function renderVirtualizedList(items: CourseResultItem[], t: TFunction) {
-  if (items.length <= VIRTUAL_THRESHOLD) {
-    return (
-      <div className="course-list__rows">
-        {items.map((item) => (
-          <CourseRow key={item.id} course={item} t={t} />
-        ))}
-      </div>
-    );
-  }
-
-  const rowsToShow = Math.min(MAX_ROWS, Math.max(MIN_ROWS, Math.min(items.length, MAX_ROWS)));
-  const height = rowsToShow * ROW_HEIGHT;
-
-  return (
-    <VirtualList
-      height={height}
-      width="100%"
-      itemCount={items.length}
-      itemSize={ROW_HEIGHT}
-      className="course-list__virtual"
-    >
-      {({ index, style }) => {
-        const course = items[index];
-        return (
-          <div style={style}>
-            <CourseRow course={course} t={t} />
-          </div>
-        );
-      }}
-    </VirtualList>
-  );
-}
-
 function CourseRow({ course, t }: { course: CourseResultItem; t: TFunction }) {
-  const deliveryLabels = course.sections.deliveryMethods.map((method) =>
-    t(`courseCard.tags.delivery.${method}`, { defaultValue: method.toUpperCase() }),
-  );
-  const updatedLabel = formatRelativeTime(course.updatedAt, t);
-  const leadInstructor =
-    course.sectionPreviews.find((section) => section.instructors.length)?.instructors[0] ?? null;
-
+  const hasOpen = course.sectionPreviews.some((section) => section.isOpen);
   return (
     <article className="course-card">
       <header className="course-card__header">
@@ -180,110 +132,54 @@ function CourseRow({ course, t }: { course: CourseResultItem; t: TFunction }) {
             {course.code} · {course.campusCode}
           </p>
           <h3>{course.title}</h3>
-          {course.subtitle && <p className="course-card__subtitle">{course.subtitle}</p>}
         </div>
-        <div className="course-card__badges">
-          {course.hasOpenSections && (
-            <span className="course-card__badge course-card__badge--success">{t('courseCard.badges.open')}</span>
+        <span
+          className={classNames(
+            'course-card__status',
+            hasOpen ? 'course-card__status--open' : 'course-card__status--closed',
           )}
-          <span className="course-card__badge">{course.level ?? t('courseCard.badges.levelFallback')}</span>
-        </div>
+        >
+          {hasOpen ? t('courseCard.sections.anyOpen') : t('courseCard.sections.allClosed')}
+        </span>
       </header>
 
-      <div className="course-card__meta">
-        <MetaItem label={t('courseCard.meta.credits')} value={formatCredits(course.credits, t)} />
-        <MetaItem label={t('courseCard.meta.sections')} value={`${course.sections.open}/${course.sections.total}`} />
-        <MetaItem label={t('courseCard.meta.subject')} value={course.subjectDescription ?? course.subjectCode} />
-        <MetaItem
-          label={t('courseCard.meta.instructor')}
-          value={leadInstructor ?? t('courseCard.meta.instructorFallback')}
-        />
-      </div>
-
-      <div className="course-card__tags">
-        {deliveryLabels.length ? (
-          deliveryLabels.map((label, index) => (
-            <span key={`${label}-${index}`} className="course-card__tag">
-              {label}
-            </span>
-          ))
-        ) : (
-          <span className="course-card__tag course-card__tag--muted">{t('courseCard.tags.deliveryFallback')}</span>
-        )}
-      </div>
-
-      {course.coreCodes.length > 0 && (
-        <div className="course-card__tags">
-          {course.coreCodes.map((code) => (
-            <span key={`core-${code}`} className="course-card__tag course-card__tag--muted">
-              {t('courseCard.tags.core', { code })}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {course.prerequisites && (
-        <p className="course-card__prereq">
-          <strong>{t('courseCard.details.prerequisites')}</strong> {course.prerequisites}
-        </p>
-      )}
-
-      <SubscribeButton
-        term={course.termId}
-        campus={course.campusCode}
-        sections={course.sectionPreviews}
-        courseTitle={course.title}
-        courseCode={course.code}
-      />
-
-      <footer className="course-card__footer">
-        <span>
-          {updatedLabel
-            ? t('courseCard.details.updated', { time: updatedLabel })
-            : t('courseCard.details.updatedRecent')}
-        </span>
-        <span>{t('courseCard.details.term', { term: course.termId })}</span>
-      </footer>
+      <SectionList sections={course.sectionPreviews} t={t} />
     </article>
   );
 }
 
-function MetaItem({ label, value }: { label: string; value: string }) {
+function SectionList({ sections, t }: { sections: CourseResultItem['sectionPreviews']; t: TFunction }) {
+  if (!sections.length) {
+    return (
+      <div className="course-card__sections course-card__sections--empty">
+        <p>{t('courseCard.sections.empty')}</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="course-card__meta-item">
-      <p>{label}</p>
-      <strong>{value}</strong>
+    <div className="course-card__sections">
+      <div className="course-card__sections-head">
+        <span>{t('courseCard.sections.index')}</span>
+        <span>{t('courseCard.sections.status')}</span>
+      </div>
+      <div className="course-card__sections-body">
+        {sections.map((section) => (
+          <div key={section.id} className="course-card__section-row">
+            <span className="course-card__section-index">{section.index}</span>
+            <span
+              className={classNames(
+                'course-card__section-status',
+                section.isOpen ? 'course-card__section-status--open' : 'course-card__section-status--closed',
+              )}
+            >
+              {section.isOpen ? t('courseCard.sections.statusOpen') : t('courseCard.sections.statusClosed')}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
-}
-
-function formatCredits(credits: CourseResultItem['credits'], t: TFunction) {
-  if (credits.display) return credits.display;
-  if (typeof credits.min === 'number' && typeof credits.max === 'number') {
-    if (credits.min === credits.max) return `${credits.min}`;
-    return `${credits.min}–${credits.max}`;
-  }
-  if (typeof credits.min === 'number') return `${credits.min}`;
-  if (typeof credits.max === 'number') return `${credits.max}`;
-  return t('courseCard.badges.levelFallback');
-}
-
-function formatRelativeTime(timestamp: string | null | undefined, t: TFunction): string | null {
-  if (!timestamp) return null;
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return null;
-  const diffMs = Date.now() - date.getTime();
-  if (diffMs < 60_000) return t('common.time.relative.justNow');
-  if (diffMs < 3_600_000) {
-    const minutes = Math.max(1, Math.round(diffMs / 60_000));
-    return t('common.time.relative.minutes', { count: minutes });
-  }
-  if (diffMs < 86_400_000) {
-    const hours = Math.max(1, Math.round(diffMs / 3_600_000));
-    return t('common.time.relative.hours', { count: hours });
-  }
-  const days = Math.max(1, Math.round(diffMs / 86_400_000));
-  return t('common.time.relative.days', { count: days });
 }
 
 function SkeletonList() {

@@ -84,6 +84,7 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
         index: section.index,
         label: `${section.sectionNumber ?? section.index} · ${section.index}`,
         status: formatStatus(section.isOpen ? 'OPEN' : section.openStatus, t),
+        instructor: section.instructors[0] ?? t('courseCard.meta.instructorFallback'),
         meeting: formatMeeting(section.meetings[0]),
         isOpen: section.isOpen,
       })),
@@ -92,7 +93,7 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
 
   const selectedLabel = useMemo(() => {
     const current = sectionOptions.find((entry) => entry.index === sectionIndex);
-    return current ? current.label : '';
+    return current ? `${current.label} · ${current.instructor}` : '';
   }, [sectionIndex, sectionOptions]);
 
   const guardDoubleClick = () => {
@@ -232,6 +233,7 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
       : t('courseCard.subscribe.contactPlaceholder.discord');
 
   const panelLabel = `${t('courseCard.subscribe.title')} · ${courseCode} ${courseTitle}`;
+  const useScrollableList = sectionOptions.length > 12;
 
   return (
     <div className="subscribe-panel" aria-label={panelLabel}>
@@ -246,8 +248,13 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
       </div>
 
       {sectionOptions.length > 0 && (
-        <div className="subscribe-panel__sections">
-          {sectionOptions.slice(0, 4).map((entry) => (
+        <div
+          className={classNames(
+            'subscribe-panel__sections',
+            useScrollableList && 'subscribe-panel__sections--list',
+          )}
+        >
+          {sectionOptions.map((entry) => (
             <button
               key={entry.index}
               type="button"
@@ -262,6 +269,7 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
               <span className="subscribe-panel__section-code">{entry.label}</span>
               <span className="subscribe-panel__section-status">{entry.status}</span>
               {entry.meeting && <span className="subscribe-panel__section-meta">{entry.meeting}</span>}
+              <span className="subscribe-panel__section-meta">{entry.instructor}</span>
             </button>
           ))}
         </div>

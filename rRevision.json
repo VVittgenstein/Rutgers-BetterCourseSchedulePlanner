@@ -1,0 +1,166 @@
+{
+  "project_context": {
+    "brief": "构建一个基于 Rutgers SOC 公开数据的选课查询与空位提醒网站，在“浏览/筛选课程 + 订阅空位提醒”场景下替代 CSP 和 WebReg 的日常使用体验，同时保持低运营成本与开源可一键部署能力。",
+    "mvp_goal": "在每个部署环境内运行本地 SQLite 数据库 + 轻量 API 服务 + 前端 UI，实现针对多学期与多校区课程的浏览、多维筛选与邮箱/Discord 空位提醒闭环，并保持低运营成本与可在个人电脑/服务器一键部署。",
+    "non_goals": [
+      "不接入 WebReg 或任何需要登录的系统页面，不在本项目中执行自动选课/退课操作。",
+      "不实现完整的学位规划、毕业审核或复杂先修关系校验，仅在 UI 展示先修与核心课程标签。",
+      "不处理除邮箱地址与 Discord 标识之外的用户敏感信息，也不构建账号/登录体系。",
+      "不承担对 Rutgers 官方课程与容量信息的权威解释责任，数据以官方 SOC 为准。",
+      "MVP 不支持短信等额外通知渠道，仅聚焦邮箱和 Discord。",
+      "MVP 不强求覆盖全部校区与研究生课程，具体范围后续确认。"
+    ]
+  },
+  "md_source": "2025-11-22-rRevision.md",
+  "generated_at": "2025-11-22T00:00:00Z",
+  "tasks": {
+    "T-20251122-filter-rewrite": {
+      "seed_id": "REV-001",
+      "title": "筛选面板与查询参数重写（11 项改动）",
+      "type": "coding",
+      "summary": "按新版筛选需求移除冗余选项、对齐“拉取新学期数据”参数、补充核心要求与考试代码筛选，并调整上课星期为“仅限所选”逻辑，前后端与文案同步收敛。",
+      "acceptance_draft": [
+        "前端 UI 去除快速标签、基础信息/班次与教师/候补状态/许可筛选，保留“有空位”与学分区间；课程编号字段移除；先修仅保留不限/有先修/无先修；上课星期变为只允许所选星期。",
+        "新增核心要求筛选且实际数据源填充核心代码（当前 staging 观测含 AHo/AHp/AHq/AHr/CCD/CCO/HST/SCL/NS/QQ/QR/WCd/WCr/WC/W/ITR/CE/ECN/GVT/SOEHS），后端 `/api/filters` 返回，课程查询按 core_code 过滤生效。",
+        "新增考试代码筛选：`A,C,B,D,F,G,H,I,J,L,M,Q,O,S,T,U`（数据中实际有 A,B,C,D,F,G,I,J,M,O,Q,S,T,U；无 H/L 时应隐藏或灰显），后端过滤 sections.exam_code 并前端可多选。",
+        "上课星期查询改为子集判断：选定星期后仅匹配全部 meeting 都在集合内的节次；前后端一致，并更新文档/i18n。",
+        "与“拉取新学期数据”参数一致：默认 term/campus 取自 fetch 选择；基础信息区块移除或变为只读展示；URL/查询参数不再包含移除的字段；测试通过/或有最小验证。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "先补齐核心/考试代码数据管道，再并行收敛前端状态与路由 schema；最后校对 i18n 与文档。",
+      "estimate_h": 12,
+      "risk": "high",
+      "confidence": 0.58,
+      "interfaces_touched": [
+        "frontend-ui",
+        "frontend-state",
+        "api-query",
+        "data-pipeline",
+        "docs"
+      ],
+      "artifacts": [],
+      "tags": [
+        "filters",
+        "frontend",
+        "api",
+        "data"
+      ],
+      "subtasks": {
+        "ST-20251122-filter-rewrite-01-frontend-state-ui": {
+          "seed_id": null,
+          "title": "前端状态与 UI 收敛",
+          "type": "coding",
+          "summary": "精简 CourseFilterState/URL 序列化，删除快捷标签/班次与教师/建筑教室/候补/许可等字段；保留学分/开放状态（仅全部|有空位）；新增核心与考试代码筛选块；上课星期改为只允许所选集合；课程编号字段移除；先修仅三态。",
+          "acceptance_draft": [
+            "FilterPanel 只包含 term/campus（与 fetch 同源）、关键词、科目、上课时间（子集逻辑提示）、学分、核心、考试代码、授课方式/年级；对应 chips/URL 同步一致。",
+            "openStatus 仅 all/openOnly；section statuses、instructor、section index/number、permission 状态被移除。",
+            "meeting days 前端过滤逻辑与后端一致（子集判断）；控制逻辑覆盖 start/end 时间。",
+            "标签/快捷 chips、courseNumber 输入、location building/room 控件彻底移除且无序列化残留。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P0",
+          "status": "todo",
+          "dependencies": [],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先改 state 与序列化，跑 TypeScript 编译；再删 UI 区块并更新 i18n；最后手测 URL 同步与 chips。",
+          "estimate_h": 5,
+          "risk": "medium",
+          "confidence": 0.62,
+          "interfaces_touched": [
+            "frontend-ui",
+            "frontend-state"
+          ],
+          "artifacts": []
+        },
+        "ST-20251122-filter-rewrite-02-api-schema-query": {
+          "seed_id": null,
+          "title": "API 查询参数与 SQL 调整",
+          "type": "coding",
+          "summary": "更新 `/api/courses` schema 去除废弃字段（courseNumber、index、sectionNumber、sectionStatus、instructor、building/room、requiresPermission、waitlist openStatus 逻辑），新增 examCode 参数并改进 meetingDays 子集判断。",
+          "acceptance_draft": [
+            "Zod schema 与 summarizer 输出不含移除字段；支持 examCode 数组。",
+            "SQL meeting 过滤使用 week_mask 子集（排除有未选星期的节次），仍兼容时间窗口；前后端结果一致。",
+            "examCode 过滤作用于 sections.exam_code，课程结果仅包含匹配节次。",
+            "回归 `api/tests/course_search.test.ts` 或新增测试覆盖 core/examCode/meetingDays 子集。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P0",
+          "status": "todo",
+          "dependencies": [],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先改 schema 与 normalize 函数，再改 SQL 与 tests；本地跑测试验证。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.6,
+          "interfaces_touched": [
+            "api-query",
+            "tests"
+          ],
+          "artifacts": []
+        },
+        "ST-20251122-filter-rewrite-03-data-pipeline-dicts": {
+          "seed_id": null,
+          "title": "核心/考试代码数据管道与字典",
+          "type": "coding",
+          "summary": "在 fetch 管道中写入 course_core_attributes，并从 sections.exam_code 去重生成 examCode 字典；确保 `/api/filters` 提供核心/考试代码给前端。",
+          "acceptance_draft": [
+            "scripts/fetch_soc_data.ts 写入/更新 course_core_attributes（先删后插 per course），has_core_attribute 置位；核心 JSON 仍保留。",
+            "filters 查询返回 distinct core_code/description 与 exam_code 列表；fallback 字典更新为观测到的核心/考试代码集合。",
+            "本地 fresh_local.db 重新跑一次后 core_code 非空，exam_code 覆盖 14+ 代码；手查一门课核心代码可用于过滤。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P0",
+          "status": "todo",
+          "dependencies": [],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先改管道再刷新本地 DB；校验字典接口输出；与前端一起验证筛选可用。",
+          "estimate_h": 4,
+          "risk": "high",
+          "confidence": 0.55,
+          "interfaces_touched": [
+            "data-pipeline",
+            "api-query"
+          ],
+          "artifacts": []
+        },
+        "ST-20251122-filter-rewrite-04-docs-i18n": {
+          "seed_id": null,
+          "title": "文档与 i18n 对齐",
+          "type": "docs",
+          "summary": "更新 i18n 文案与 docs/query_api_contract.md，反映筛选项裁剪、meeting 子集逻辑、核心/考试代码列表与 fetch 参数对齐。",
+          "acceptance_draft": [
+            "中英 i18n 去除废弃字段文案，新增核心/考试代码/星期子集描述；openStatus 仅两项。",
+            "docs/query_api_contract.md 与 UI Flow 文档同步新参数与去除项；说明 meetingDays 子集语义。",
+            "必要处添加 examCode 定义与核心代码示例来源说明。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P1",
+          "status": "todo",
+          "dependencies": [
+            "ST-20251122-filter-rewrite-01-frontend-state-ui",
+            "ST-20251122-filter-rewrite-02-api-schema-query"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "在实现完成后统一补文档与翻译；逐项对照 UI。",
+          "estimate_h": 2,
+          "risk": "low",
+          "confidence": 0.68,
+          "interfaces_touched": [
+            "docs",
+            "i18n"
+          ],
+          "artifacts": []
+        }
+      }
+    }
+  }
+}

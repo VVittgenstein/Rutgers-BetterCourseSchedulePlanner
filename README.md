@@ -16,6 +16,11 @@ A modern course filtering and sniping tool for Rutgers University SOC data.
    ```
    Logs go to `logs/run_stack/`; Ctrl+C stops all children.
 
+## One-click launch (Windows/macOS)
+- Windows: double-click `Start-WebUI.bat`. macOS: double-click `Start-WebUI.command`.
+- The launcher installs deps if missing, migrates/creates the SQLite DB, runs a fetch for the default term/campus, starts API + web UI, and opens `http://localhost:5174`.
+- Change term/campus or ports via the env vars described in `docs/oneclick.md`.
+
 ## Useful scripts
 - Database migrations (SQLite in `data/migrations`):
   ```bash
@@ -31,4 +36,5 @@ A modern course filtering and sniping tool for Rutgers University SOC data.
 
 ## Docs
 - docs/quickstart.md (step-by-step local bring-up + troubleshooting)
+- docs/oneclick.md (no-code one-click launcher guide for Windows/macOS)
 - docs/deployment_playbook.md (full checklist, validation, and notification flows)
