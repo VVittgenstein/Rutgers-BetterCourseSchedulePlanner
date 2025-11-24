@@ -49,13 +49,18 @@ const smtpSchema = z.object({
   tls: z.object({ rejectUnauthorized: z.boolean().optional() }).optional(),
 });
 
-const sendgridSchema = z.object({
-  apiKeyEnv: z.string().min(1),
-  sandboxMode: z.boolean().default(false),
-  categories: z.array(z.string()).default([]),
-  ipPool: z.string().nullable().optional(),
-  apiBaseUrl: z.string().optional(),
-});
+const sendgridSchema = z
+  .object({
+    apiKey: z.string().trim().min(1).optional(),
+    apiKeyEnv: z.string().trim().min(1).optional(),
+    sandboxMode: z.boolean().default(false),
+    categories: z.array(z.string()).default([]),
+    ipPool: z.string().nullable().optional(),
+    apiBaseUrl: z.string().optional(),
+  })
+  .refine((value) => Boolean(value.apiKey || value.apiKeyEnv), {
+    message: 'SendGrid config requires either apiKey or apiKeyEnv',
+  });
 
 const rateLimitSchema = z
   .object({
@@ -157,7 +162,9 @@ export function resolveMailSenderConfig(
   validateDefaultProvider(parsed.provider, parsed.providers);
 
   const resolvedSendgrid = resolveSendgrid(parsed.providers.sendgrid, env);
-  const resolvedSmtp = resolveSmtp(parsed.providers.smtp, env);
+  const resolvedSmtp = resolveSmtp(parsed.providers.smtp, env, {
+    requirePassword: parsed.provider === 'smtp',
+  });
 
   const resolved: ResolvedMailSenderConfig = {
     provider: parsed.provider,
@@ -182,23 +189,38 @@ export function resolveMailSenderConfig(
 
 function resolveSendgrid(config: SendGridConfig | undefined, env: NodeJS.ProcessEnv): ResolvedSendGridConfig | undefined {
   if (!config) return undefined;
-  const apiKey = env[config.apiKeyEnv];
-  if (!apiKey) {
-    throw new Error(`Missing SendGrid API key env variable: ${config.apiKeyEnv}`);
+  const { apiKey, apiKeyEnv, ...rest } = config;
+  if (apiKey) {
+    return { ...rest, apiKey, apiKeyEnv };
   }
-  const { apiKeyEnv, ...rest } = config;
+
+  if (!apiKeyEnv) {
+    throw new Error('Missing SendGrid API key: provide providers.sendgrid.apiKey or apiKeyEnv');
+  }
+
+  const envApiKey = env[apiKeyEnv];
+  if (!envApiKey) {
+    throw new Error(`Missing SendGrid API key env variable: ${apiKeyEnv}`);
+  }
+
   return {
     ...rest,
-    apiKey,
+    apiKey: envApiKey,
+    apiKeyEnv,
   };
 }
 
-function resolveSmtp(config: SMTPConfig | undefined, env: NodeJS.ProcessEnv): ResolvedSMTPConfig | undefined {
+function resolveSmtp(
+  config: SMTPConfig | undefined,
+  env: NodeJS.ProcessEnv,
+  options: { requirePassword?: boolean } = {},
+): ResolvedSMTPConfig | undefined {
   if (!config) return undefined;
+  const { requirePassword = false } = options;
   const { passwordEnv, ...rest } = config;
   const password = passwordEnv ? env[passwordEnv] : undefined;
 
-  if (passwordEnv && rest.username && !password) {
+  if (passwordEnv && rest.username && !password && requirePassword) {
     throw new Error(`Missing SMTP password env variable: ${passwordEnv}`);
   }
 

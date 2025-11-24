@@ -1,0 +1,4 @@
+请确认你的课程提醒订阅。
+联系方式：{{contactValue}}
+链接将在 {{expirationMinutes}} 分钟后失效。
+确认链接：{{verificationUrl}}

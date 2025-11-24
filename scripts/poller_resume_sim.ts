@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { decodeSemester } from './soc_api_client.js';
+import { decodeSemester, performProbe } from './soc_api_client.js';
 import {
   applySnapshot,
   createStatements,
@@ -14,6 +14,7 @@ import {
   type PollerContext,
   type PollerOptions,
   type Metrics,
+  type PollTarget,
 } from '../workers/open_sections_poller.js';
 
 type SimulationTotals = {
@@ -79,11 +80,21 @@ function seedData(db: Database.Database) {
   ).run(sectionId, TERM, CAMPUS, '00001', 'sim@example.com', 'hash-sim', now, now);
 }
 
-function buildContext(dbPath: string): PollerContext {
+function buildTarget(): PollTarget {
+  return {
+    termId: TERM,
+    campus: CAMPUS,
+    decodedTerm: decodeSemester(TERM),
+  };
+}
+
+function buildContext(dbPath: string): { ctx: PollerContext; target: PollTarget } {
   const options: PollerOptions = {
-    term: TERM,
+    termsMode: 'explicit',
+    terms: [TERM],
     campuses: [CAMPUS],
     intervalMs: 60000,
+    refreshIntervalMs: 5 * 60 * 1000,
     jitter: 0,
     sqliteFile: dbPath,
     timeoutMs: 8000,
@@ -99,16 +110,7 @@ function buildContext(dbPath: string): PollerContext {
     pollsFailed: 0,
     eventsEmitted: 0,
     notificationsQueued: 0,
-    campus: {
-      [CAMPUS]: {
-        pollsTotal: 0,
-        pollsFailed: 0,
-        eventsTotal: 0,
-        notificationsTotal: 0,
-        lastDurationMs: 0,
-        lastOpenCount: 0,
-      },
-    },
+    targets: {},
   };
 
   const db = new Database(dbPath);
@@ -117,17 +119,19 @@ function buildContext(dbPath: string): PollerContext {
 
   const ctx: PollerContext = {
     options,
-    term: decodeSemester(options.term),
     db,
     statements: createStatements(db),
+    probeFn: performProbe,
     missCounters: new Map(),
     metrics,
     checkpoint: loadCheckpointState(CHECKPOINT_FILE),
+    datasetStatus: new Map(),
   };
+  const target = buildTarget();
 
-  hydrateMissCountersFromCheckpoint(ctx, CAMPUS);
+  hydrateMissCountersFromCheckpoint(ctx, target);
 
-  return ctx;
+  return { ctx, target };
 }
 
 function openIndexesForTick(tick: number): string[] {
@@ -149,21 +153,21 @@ function runSimulation() {
     seedData(db);
     db.close();
 
-    let ctx = buildContext(dbPath);
+    let { ctx, target } = buildContext(dbPath);
     const totals: SimulationTotals = { opened: 0, closed: 0, events: 0, notifications: 0 };
     const timeline: string[] = [];
 
     for (let tick = 0; tick < TOTAL_TICKS; tick += 1) {
       if (tick === RESTART_AFTER_TICK + 1) {
         ctx.db.close();
-        ctx = buildContext(dbPath);
-        timeline.push(`restart at tick=${tick}, restored misses=${ctx.missCounters.get(CAMPUS)?.size ?? 0}`);
+        ({ ctx, target } = buildContext(dbPath));
+        timeline.push(`restart at tick=${tick}, restored misses=${ctx.missCounters.get(`${TERM}|${CAMPUS}`)?.size ?? 0}`);
       }
 
       const now = new Date(BASE_TIME.getTime() + tick * 60 * 1000);
       const indexes = openIndexesForTick(tick);
-      const outcome = applySnapshot(ctx, CAMPUS, indexes, now);
-      persistCheckpoint(ctx, CAMPUS, outcome);
+      const outcome = applySnapshot(ctx, target, indexes, now);
+      persistCheckpoint(ctx, target, outcome);
 
       totals.opened += outcome.opened;
       totals.closed += outcome.closed;

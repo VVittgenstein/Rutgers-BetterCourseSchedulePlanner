@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
-import { decodeSemester } from './soc_api_client.js';
+import { decodeSemester, performProbe } from './soc_api_client.js';
 import { MailDispatcher } from '../workers/mail_dispatcher.js';
 import {
   applySnapshot,
@@ -14,6 +14,7 @@ import {
   type Metrics,
   type PollerContext,
   type PollerOptions,
+  type PollTarget,
 } from '../workers/open_sections_poller.js';
 import type { MailMessage, ResolvedMailSenderConfig, SendWithRetryResult } from '../notifications/mail/types.js';
 
@@ -144,11 +145,16 @@ function seedData(db: Database.Database, campus: string, term: string, nowIso: s
   });
 }
 
-function buildContext(dbPath: string, options: { term: string; campus: string; intervalMs: number; jitter: number }) {
+function buildContext(
+  dbPath: string,
+  options: { term: string; campus: string; intervalMs: number; jitter: number },
+): { ctx: PollerContext; target: PollTarget } {
   const pollerOptions: PollerOptions = {
-    term: options.term,
+    termsMode: 'explicit',
+    terms: [options.term],
     campuses: [options.campus],
     intervalMs: options.intervalMs,
+    refreshIntervalMs: 5 * 60 * 1000,
     jitter: options.jitter,
     sqliteFile: dbPath,
     timeoutMs: 8000,
@@ -165,16 +171,7 @@ function buildContext(dbPath: string, options: { term: string; campus: string; i
     pollsFailed: 0,
     eventsEmitted: 0,
     notificationsQueued: 0,
-    campus: {
-      [options.campus]: {
-        pollsTotal: 0,
-        pollsFailed: 0,
-        eventsTotal: 0,
-        notificationsTotal: 0,
-        lastDurationMs: 0,
-        lastOpenCount: 0,
-      },
-    },
+    targets: {},
   };
 
   const db = new Database(dbPath);
@@ -183,15 +180,17 @@ function buildContext(dbPath: string, options: { term: string; campus: string; i
 
   const ctx: PollerContext = {
     options: pollerOptions,
-    term: decodeSemester(options.term),
     db,
     statements: createStatements(db),
+    probeFn: performProbe,
     missCounters: new Map(),
     metrics,
     checkpoint: loadCheckpointState(pollerOptions.checkpointFile),
+    datasetStatus: new Map(),
   };
+  const target: PollTarget = { termId: options.term, campus: options.campus, decodedTerm: decodeSemester(options.term) };
 
-  return ctx;
+  return { ctx, target };
 }
 
 async function simulate() {
@@ -215,7 +214,7 @@ async function simulate() {
     ]);
     db.close();
 
-    const ctx = buildContext(dbPath, { term, campus, intervalMs: pollIntervalMs, jitter });
+    const { ctx, target } = buildContext(dbPath, { term, campus, intervalMs: pollIntervalMs, jitter });
     const sender = new TimedSender(250);
     const dispatcher = new MailDispatcher(ctx.db, sender, mailConfig, {
       batchSize: 25,
@@ -230,7 +229,7 @@ async function simulate() {
 
     const detectionStart = performance.now();
     const openAt = new Date('2025-02-01T10:01:05.000Z');
-    const openOutcome = applySnapshot(ctx, campus, ['12345'], openAt);
+    const openOutcome = applySnapshot(ctx, target, ['12345'], openAt);
 
     await dispatcher.runOnce();
 
@@ -238,9 +237,9 @@ async function simulate() {
     const detectionToSendMs = dispatchFinished - detectionStart;
 
     // Force a close then a reopen within the same 5-minute bucket to confirm dedupe.
-    applySnapshot(ctx, campus, [], new Date(openAt.getTime() + 20000));
-    applySnapshot(ctx, campus, [], new Date(openAt.getTime() + 40000));
-    const reopenOutcome = applySnapshot(ctx, campus, ['12345'], new Date(openAt.getTime() + 2 * 60 * 1000));
+    applySnapshot(ctx, target, [], new Date(openAt.getTime() + 20000));
+    applySnapshot(ctx, target, [], new Date(openAt.getTime() + 40000));
+    const reopenOutcome = applySnapshot(ctx, target, ['12345'], new Date(openAt.getTime() + 2 * 60 * 1000));
     await dispatcher.runOnce();
 
     const bestCaseMs = detectionToSendMs;

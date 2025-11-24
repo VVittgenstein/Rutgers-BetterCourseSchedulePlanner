@@ -4,12 +4,18 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { evaluateMailConfig as evaluateMailConfigFile, summarizeIssues as summarizeTemplateIssues } from './mail_templates.js';
+
 const MIN_NODE_MAJOR = 22;
 const API_PORT = process.env.CSP_API_PORT ?? '3333';
 const FRONTEND_PORT = process.env.CSP_FRONTEND_PORT ?? '5174';
 const POLLER_INTERVAL = process.env.CSP_POLLER_INTERVAL ?? '20';
+const POLLER_TERMS = process.env.CSP_TERMS ?? process.env.CSP_TERM ?? 'auto';
+const POLLER_CAMPUSES = process.env.CSP_CAMPUSES;
 const SKIP_POLLER = process.env.CSP_SKIP_POLLER === '1';
 const FORCE_FETCH = process.env.CSP_FORCE_FETCH === '1';
+const MAIL_BATCH = Number(process.env.CSP_MAIL_BATCH ?? '25');
+const APP_BASE_URL = process.env.CSP_APP_BASE_URL ?? `http://localhost:${FRONTEND_PORT}`;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +24,9 @@ const FRONTEND_DIR = path.join(ROOT_DIR, 'frontend');
 const FETCH_CONFIG_PATH = path.join(ROOT_DIR, 'configs', 'fetch_pipeline.local.json');
 const FETCH_CONFIG_TEMPLATE = path.join(ROOT_DIR, 'configs', 'fetch_pipeline.example.json');
 const CHECKPOINT_FILE = path.join(ROOT_DIR, 'data', 'poller_checkpoint.json');
+const MAIL_CONFIG_DIR = resolveConfigDir(process.env.MAIL_CONFIG_DIR);
+const MAIL_USER_CONFIG = path.join(MAIL_CONFIG_DIR, 'mail_sender.user.json');
+const MAIL_LOCAL_CONFIG = path.join(MAIL_CONFIG_DIR, 'mail_sender.local.json');
 
 const children = [];
 let shuttingDown = false;
@@ -42,6 +51,13 @@ function sanitizeDbPath(rawDbPath) {
     fs.mkdirSync(resolvedDir, { recursive: true });
   }
   return resolved;
+}
+
+function resolveConfigDir(rawDir) {
+  if (!rawDir) {
+    return path.join(ROOT_DIR, 'configs');
+  }
+  return path.isAbsolute(rawDir) ? rawDir : path.resolve(ROOT_DIR, rawDir);
 }
 
 function resolveNpmLike(base) {
@@ -86,6 +102,57 @@ function readJsonSafe(file) {
     warn(`Could not read ${file}: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
+}
+
+function inspectMailConfig() {
+  const userStatus = evaluateMailConfigFile(MAIL_USER_CONFIG);
+  if (userStatus.exists) {
+    if (userStatus.parseError) {
+      return {
+        start: false,
+        message: `Mail config at ${MAIL_USER_CONFIG} is invalid. 去 WebUI 填写邮件设置并关闭 dryRun 后重启。`,
+      };
+    }
+    if (userStatus.templateIssues?.length) {
+      const summary = summarizeTemplateIssues(userStatus.templateIssues);
+      return {
+        start: false,
+        message: `Mail templates missing (${summary}). 补齐 templates/email 后再关闭 dryRun。`,
+      };
+    }
+    if (userStatus.dryRun) {
+      return {
+        start: false,
+        message: 'Mail dispatcher not started (dryRun=true in configs/mail_sender.user.json). 去 WebUI 填写邮件设置并关闭 dryRun 后重启。',
+      };
+    }
+    if (!userStatus.hasKey) {
+      const envHint = userStatus.apiKeyEnv ? ` (env ${userStatus.apiKeyEnv} not set)` : '';
+      return {
+        start: false,
+        message: `Mail dispatcher not started: missing SendGrid API key${envHint}. 去 WebUI 填写邮件设置并关闭 dryRun 后重启。`,
+      };
+    }
+    return { start: true, path: MAIL_USER_CONFIG, source: 'user', apiKeyEnv: userStatus.apiKeyEnv };
+  }
+
+  const fallbackStatus = evaluateMailConfigFile(MAIL_LOCAL_CONFIG);
+  if (fallbackStatus.exists && fallbackStatus.templateIssues?.length) {
+    const summary = summarizeTemplateIssues(fallbackStatus.templateIssues);
+    return { start: false, message: `Mail templates missing (${summary}). 补齐 templates/email 后再关闭 dryRun。` };
+  }
+
+  if (fallbackStatus.exists && !fallbackStatus.parseError && !fallbackStatus.templateIssues?.length && fallbackStatus.hasKey) {
+    return { start: true, path: MAIL_LOCAL_CONFIG, source: 'env', apiKeyEnv: fallbackStatus.apiKeyEnv };
+  }
+  if (fallbackStatus.parseError && fallbackStatus.exists) {
+    return {
+      start: false,
+      message: `Mail config at ${MAIL_LOCAL_CONFIG} is invalid. 去 WebUI 填写邮件设置并关闭 dryRun 后重启。`,
+    };
+  }
+
+  return { start: false, message: 'Mail dispatcher not started. 去 WebUI 填写邮件设置并关闭 dryRun 后重启。' };
 }
 
 function ensureFetchConfig() {
@@ -347,8 +414,24 @@ async function main() {
   ensureNodeVersion();
 
   const { dbPath, term, campuses, fetchConfigPath } = ensureFetchConfig();
+  const pollerTermsRaw = POLLER_TERMS;
+  const pollerAuto = pollerTermsRaw.toLowerCase() === 'auto';
+  const pollerAllowlist = POLLER_CAMPUSES ? parseCampuses(POLLER_CAMPUSES) : [];
+  const pollerCampuses = pollerAuto ? pollerAllowlist : pollerAllowlist.length ? pollerAllowlist : campuses;
+
   log(`Using SQLite DB at: ${dbPath}`);
-  log(`Default term: ${term} | campuses: ${campuses.join(',')}`);
+  log(`Fetch target (configs/fetch_pipeline.local.json): term=${term} | campuses=${campuses.join(',')}`);
+  if (pollerAuto) {
+    const allowlistText = pollerCampuses.length ? pollerCampuses.join(',') : 'none';
+    log(
+      `Poller terms=auto (discover subscriptions); campus allowlist: ${allowlistText}. Missing term/campus data will log "fetch course data"—fetch that combo before expecting notifications.`,
+    );
+  } else {
+    log(`Poller terms=${pollerTermsRaw} campuses=${pollerCampuses.join(',')}`);
+  }
+  if (!pollerAuto && pollerCampuses.length === 0) {
+    throw new Error('Explicit poller mode requires campuses. Set CSP_CAMPUSES or update fetch_pipeline.local.json targets[].');
+  }
 
   await ensureDependencies();
   await prepareDatabase(dbPath, term, campuses, fetchConfigPath);
@@ -379,27 +462,58 @@ async function main() {
 
   if (!SKIP_POLLER) {
     fs.mkdirSync(path.dirname(CHECKPOINT_FILE), { recursive: true });
+    const pollerArgs = [
+      'tsx',
+      'workers/open_sections_poller.ts',
+      '--terms',
+      pollerTermsRaw,
+      '--sqlite',
+      dbPath,
+      '--interval',
+      POLLER_INTERVAL,
+      '--checkpoint',
+      CHECKPOINT_FILE,
+    ];
+    if (pollerCampuses.length) {
+      pollerArgs.push('--campuses', pollerCampuses.join(','));
+    }
     startProcess(
       'open_sections_poller',
       NPX_CMD,
-      [
-        'tsx',
-        'workers/open_sections_poller.ts',
-        '--term',
-        term,
-        '--campuses',
-        campuses.join(','),
-        '--sqlite',
-        dbPath,
-        '--interval',
-        POLLER_INTERVAL,
-        '--checkpoint',
-        CHECKPOINT_FILE,
-      ],
+      pollerArgs,
       { cwd: ROOT_DIR },
     );
   } else {
     log('Skipping poller (CSP_SKIP_POLLER=1).');
+  }
+
+  const mailDecision = inspectMailConfig();
+  if (mailDecision.start && mailDecision.path) {
+    startProcess(
+      'mail_dispatcher',
+      NPX_CMD,
+      [
+        'tsx',
+        'workers/mail_dispatcher.ts',
+        '--sqlite',
+        dbPath,
+        '--mail-config',
+        mailDecision.path,
+        '--batch',
+        String(MAIL_BATCH),
+        '--app-base-url',
+        APP_BASE_URL,
+      ],
+      { cwd: ROOT_DIR },
+    );
+    const envNote = mailDecision.apiKeyEnv ? ` (${mailDecision.apiKeyEnv})` : '';
+    log(
+      mailDecision.source === 'user'
+        ? 'Detected configs/mail_sender.user.json with dryRun=false; mail dispatcher started automatically.'
+        : `Mail dispatcher started using configs/mail_sender.local.json${envNote ? ` and ${envNote}` : ''}.`,
+    );
+  } else if (mailDecision.message) {
+    log(mailDecision.message);
   }
 
   const uiUrl = `http://localhost:${FRONTEND_PORT}`;

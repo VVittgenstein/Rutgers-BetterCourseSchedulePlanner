@@ -90,7 +90,7 @@ Operators provide deployment settings via `configs/mail_sender.example.json` (to
 | `rateLimit` | `{ maxPerSecond, burst, bucketWidthSeconds }` shared across providers. |
 | `retryPolicy` | `{ maxAttempts, backoffMs, jitter, retryableErrors }`, where `retryableErrors` maps `SendErrorCode` to retry behavior. |
 | `timeouts` | `{ connectMs, sendMs, idleMs }` enforced by adapters. |
-| `providers.sendgrid` | `{ apiKeyEnv, sandboxMode, categories, ipPool? }`. `apiKeyEnv` points to an environment variable holding the key. |
+| `providers.sendgrid` | `{ apiKey?, apiKeyEnv?, sandboxMode, categories, ipPool?, apiBaseUrl? }`. Use `apiKey` for inline/local configs; when absent, `apiKeyEnv` points to the environment variable holding the key. |
 | `providers.smtp` | `{ host, port, secure, username, passwordEnv, poolSize, tls?: { rejectUnauthorized } }`. Secrets referenced via `passwordEnv`. |
 | `logging` | `{ redactPII, traceHeader }` controls log redaction and trace header name. |
 | `testHooks` | `{ dryRun, overrideRecipient }` used by CLI/test scripts to avoid accidental sends. |
@@ -98,7 +98,7 @@ Operators provide deployment settings via `configs/mail_sender.example.json` (to
 See `configs/mail_sender.example.json` for a concrete sample with both providers configured.
 
 ## Security and operational requirements
-- **Secret handling**: Never store API keys or SMTP passwords in git. Config files reference environment variable names (`apiKeyEnv`, `passwordEnv`); loaders must read from `process.env` and reject startup if missing.
+- **Secret handling**: Never store real API keys in git. Config supports inline `apiKey` for local setups and `apiKeyEnv` for env-based secrets; loaders reject startup when neither is provided or when the env var is unset. SMTP passwords still flow through `passwordEnv`.
 - **Transport security**: SMTP defaults to STARTTLS (`secure=false` + `port=587`) with optional enforcement via `tls.rejectUnauthorized=true`. SendGrid uses HTTPS by default.
 - **Timeouts and connection pooling**: Enforce `timeouts.connectMs/sendMs` per attempt; SMTP adapters should cap `poolSize` and evict idle connections at `idleMs` to avoid hanging sockets.
 - **PII hygiene**: Logs must redact full email addresses; include only hashed or truncated values plus `traceId`. Template rendering should escape variables to prevent HTML injection.

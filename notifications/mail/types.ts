@@ -114,15 +114,17 @@ export type MailSenderConfig = {
 };
 
 export type SendGridConfig = {
-  apiKeyEnv: string;
+  apiKey?: string;
+  apiKeyEnv?: string;
   sandboxMode?: boolean;
   categories?: string[];
   ipPool?: string | null;
   apiBaseUrl?: string;
 };
 
-export type ResolvedSendGridConfig = Omit<SendGridConfig, 'apiKeyEnv'> & {
+export type ResolvedSendGridConfig = Omit<SendGridConfig, 'apiKeyEnv' | 'apiKey'> & {
   apiKey: string;
+  apiKeyEnv?: string;
 };
 
 export type SMTPConfig = {

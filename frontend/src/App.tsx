@@ -9,6 +9,7 @@ import { useCourseQuery } from './hooks/useCourseQuery';
 import { useFiltersDictionary } from './hooks/useFiltersDictionary';
 import { CourseList } from './components/CourseList';
 import { DataFetchCard } from './components/DataFetchCard';
+import { MailSettingsPanel } from './components/MailSettingsPanel';
 import { SubscriptionCenter } from './components/SubscriptionCenter';
 import { SubscriptionManager } from './components/SubscriptionManager';
 import './App.css';
@@ -119,6 +120,7 @@ export function App() {
         </main>
       </div>
       <div className="course-app__manager">
+        <MailSettingsPanel />
         <SubscriptionManager />
       </div>
     </div>
