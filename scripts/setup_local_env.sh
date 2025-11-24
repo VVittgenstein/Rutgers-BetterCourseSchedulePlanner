@@ -145,7 +145,7 @@ create_env_helpers() {
   if [ ! -f "$api_env" ]; then
     cat >"$api_env" <<EOF
 APP_PORT=3333
-APP_HOST=0.0.0.0
+APP_HOST=127.0.0.1
 SQLITE_FILE=$DB_PATH
 LOG_LEVEL=info
 EOF

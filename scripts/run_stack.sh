@@ -193,11 +193,11 @@ monitor_children() {
 }
 
 start_api() {
-  start_component "api" bash -c "cd \"$ROOT_DIR\" && APP_PORT=$API_PORT APP_HOST=\${APP_HOST:-0.0.0.0} SQLITE_FILE=\"$DB_PATH\" npm run api:start"
+  start_component "api" bash -c "cd \"$ROOT_DIR\" && APP_PORT=$API_PORT APP_HOST=\${APP_HOST:-127.0.0.1} SQLITE_FILE=\"$DB_PATH\" npm run api:start"
 }
 
 start_frontend() {
-  start_component "frontend" bash -c "cd \"$ROOT_DIR/frontend\" && VITE_API_PROXY_TARGET=$API_ORIGIN VITE_API_BASE_URL=/api npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT"
+  start_component "frontend" bash -c "cd \"$ROOT_DIR/frontend\" && VITE_API_PROXY_TARGET=$API_ORIGIN VITE_API_BASE_URL=/api npm run dev -- --host 127.0.0.1 --port $FRONTEND_PORT"
 }
 
 start_poller() {

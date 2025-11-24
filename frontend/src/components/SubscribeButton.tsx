@@ -127,12 +127,6 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
           contactType: 'email',
           contactValue: trimmedContact,
           locale: i18n.language,
-          clientContext:
-            typeof navigator !== 'undefined' && navigator.userAgent
-              ? {
-                  userAgent: navigator.userAgent,
-                }
-              : undefined,
         },
         undefined,
       );
@@ -174,14 +168,10 @@ export function SubscribeButton({ term, campus, sections, courseTitle, courseCod
     const trimmedToken = unsubscribeToken.trim();
     const trimmedContact = contactValue.trim();
     const useToken = Boolean(trimmedToken);
-    const useId = !useToken && recentSubscriptionId !== null;
+    const useId = recentSubscriptionId !== null;
 
     if (!useToken && !useId) {
       setFeedback({ tone: 'error', message: t('courseCard.subscribe.errors.missingToken') });
-      return;
-    }
-    if (useId && !trimmedContact) {
-      setFeedback({ tone: 'error', message: t('courseCard.subscribe.errors.missingContact') });
       return;
     }
 

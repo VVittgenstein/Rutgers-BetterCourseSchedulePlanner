@@ -5,7 +5,7 @@ import { z } from 'zod';
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_PORT: z.coerce.number().int().min(0).max(65535).default(3333),
-  APP_HOST: z.string().min(1).default('0.0.0.0'),
+  APP_HOST: z.string().min(1).default('127.0.0.1'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   SQLITE_FILE: z.string().min(1).default(path.resolve('data', 'local.db')),
 });

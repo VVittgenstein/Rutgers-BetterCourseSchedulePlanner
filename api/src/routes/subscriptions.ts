@@ -7,10 +7,6 @@ import { API_VERSION } from './sharedSchemas.js';
 const EMAIL_REGEX =
   /^(?:[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+|"[^"]+")@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9-]+)+$/;
 const DEFAULT_LOCALE = 'en-US';
-const CONTACT_ACTIVE_LIMIT = 3;
-const SECTION_ACTIVE_LIMIT = 50;
-const IP_WINDOW_MS = 10 * 60 * 1000;
-const IP_MAX_ATTEMPTS = 10;
 
 const ACTIVE_STATUSES = ['pending', 'active'] as const;
 
@@ -67,12 +63,6 @@ const subscribePayloadSchema = z.object({
     .regex(/^[A-Za-z]{2,3}(?:[-_][A-Za-z]{2,3})?$/)
     .optional(),
   preferences: preferencesInputSchema,
-  clientContext: z
-    .object({
-      ip: z.string().trim().min(3).max(64).optional(),
-      userAgent: z.string().trim().min(3).max(512).optional(),
-    })
-    .optional(),
 });
 
 const unsubscribePayloadSchema = z
@@ -82,8 +72,8 @@ const unsubscribePayloadSchema = z
     contactValue: z.string().trim().min(3).max(256).optional(),
     reason: z.string().trim().min(3).max(64).optional(),
   })
-  .refine((value) => Boolean(value.unsubscribeToken || (value.subscriptionId && value.contactValue)), {
-    message: 'Provide unsubscribeToken or subscriptionId with matching contactValue',
+  .refine((value) => Boolean(value.unsubscribeToken || value.subscriptionId), {
+    message: 'Provide unsubscribeToken or subscriptionId',
     path: ['subscriptionId'],
   });
 
@@ -167,8 +157,6 @@ const defaultPreferences: Preferences = {
   channelMetadata: {},
 };
 
-const ipAttempts = new Map<string, number[]>();
-
 export async function registerSubscriptionRoutes(app: FastifyInstance) {
   app.post(
     '/subscribe',
@@ -188,11 +176,6 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
       const body = request.body as SubscribePayload;
       const traceId = String(request.id);
       reply.header('x-trace-id', traceId);
-
-      const clientIp = resolveClientIp(request.ip, request.headers['x-forwarded-for']);
-      if (!allowIpAttempt(clientIp)) {
-        return sendError(reply, 400, 'rate_limited', 'Too many subscribe attempts from this IP', traceId);
-      }
 
       const contact = normalizeContact(body.contactType, body.contactValue);
       if (!contact) {
@@ -238,27 +221,11 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
         return reply.status(200).send(response);
       }
 
-      if (!checkContactLimit(db, contact.hash, body.contactType)) {
-        return sendError(
-          reply,
-          400,
-          'rate_limited',
-          'Contact reached the maximum number of active subscriptions',
-          traceId,
-        );
-      }
-
-      if (section?.section_id && !checkSectionLimit(db, section.section_id)) {
-        return sendError(reply, 400, 'rate_limited', 'Section reached the maximum number of subscriptions', traceId);
-      }
-
       const now = new Date().toISOString();
       const status: SubscriptionStatus = 'active';
       const preferences = mergePreferences(body.preferences);
       const unsubscribeToken = crypto.randomBytes(16).toString('hex');
-      const metadata = buildMetadata(preferences, {
-        client: buildClientContext(body.clientContext, clientIp, request.headers['user-agent']),
-      });
+      const metadata = buildMetadata(preferences);
 
       const subscriptionId = createSubscription(db, {
         sectionId: section?.section_id ?? null,
@@ -320,13 +287,6 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
       const row = findSubscriptionForUnsubscribe(db, body);
       if (!row) {
         return sendError(reply, 404, 'subscription_not_found', 'Subscription not found', traceId);
-      }
-
-      if (body.contactValue) {
-        const normalized = normalizeContact(row.contact_type, body.contactValue);
-        if (!normalized || normalized.hash !== row.contact_hash) {
-          return sendError(reply, 400, 'contact_mismatch', 'Contact value does not match subscription', traceId);
-        }
       }
 
       const response = {
@@ -451,31 +411,6 @@ function sha1(value: string) {
   return crypto.createHash('sha1').update(value.toLowerCase()).digest('hex');
 }
 
-function resolveClientIp(requestIp: string, forwarded?: string | string[]) {
-  if (typeof forwarded === 'string' && forwarded.length) {
-    const [first] = forwarded.split(',').map((token) => token.trim());
-    if (first) {
-      return first;
-    }
-  }
-  if (Array.isArray(forwarded) && forwarded.length) {
-    return forwarded[0] ?? requestIp;
-  }
-  return requestIp;
-}
-
-function allowIpAttempt(ip: string | undefined) {
-  if (!ip) {
-    return true;
-  }
-  const now = Date.now();
-  const history = ipAttempts.get(ip) ?? [];
-  const nextHistory = history.filter((timestamp) => now - timestamp < IP_WINDOW_MS);
-  nextHistory.push(now);
-  ipAttempts.set(ip, nextHistory);
-  return nextHistory.length <= IP_MAX_ATTEMPTS;
-}
-
 function mergePreferences(preferences?: z.infer<typeof preferencesInputSchema>): Preferences {
   if (!preferences) {
     return defaultPreferences;
@@ -499,35 +434,8 @@ function mergePreferences(preferences?: z.infer<typeof preferencesInputSchema>):
   };
 }
 
-function buildClientContext(
-  clientContext: SubscribePayload['clientContext'],
-  resolvedIp: string | undefined,
-  userAgentHeader?: string,
-) {
-  const ip = resolvedIp ?? clientContext?.ip;
-  const userAgent = clientContext?.userAgent ?? (typeof userAgentHeader === 'string' ? userAgentHeader : undefined);
-  if (!ip && !userAgent) {
-    return undefined;
-  }
-  return {
-    ...(ip ? { ip } : {}),
-    ...(userAgent ? { userAgent } : {}),
-  };
-}
-
-function buildMetadata(
-  preferences: Preferences,
-  extras: {
-    client?: { ip?: string; userAgent?: string };
-  },
-) {
-  const metadata: Record<string, unknown> = {
-    preferences,
-  };
-  if (extras.client) {
-    metadata.client = extras.client;
-  }
-  return JSON.stringify(metadata);
+function buildMetadata(preferences: Preferences) {
+  return JSON.stringify({ preferences });
 }
 
 function lookupTerm(db: any, term: string) {
@@ -600,35 +508,6 @@ function findExistingSubscription(
     .get(args.contactHash, args.contactType, args.term, args.campus, args.sectionIndex, ...ACTIVE_STATUSES) as
     | SubscriptionRow
     | undefined;
-}
-
-function checkContactLimit(db: any, contactHash: string, contactType: ContactType) {
-  const row = db
-    .prepare(
-      `
-        SELECT COUNT(*) as count
-        FROM subscriptions
-        WHERE contact_hash = ?
-          AND contact_type = ?
-          AND status IN (${ACTIVE_STATUSES.map(() => '?').join(', ')})
-      `,
-    )
-    .get(contactHash, contactType, ...ACTIVE_STATUSES) as { count: number };
-  return row.count < CONTACT_ACTIVE_LIMIT;
-}
-
-function checkSectionLimit(db: any, sectionId: number) {
-  const row = db
-    .prepare(
-      `
-        SELECT COUNT(*) as count
-        FROM subscriptions
-        WHERE section_id = ?
-          AND status IN (${ACTIVE_STATUSES.map(() => '?').join(', ')})
-      `,
-    )
-    .get(sectionId, ...ACTIVE_STATUSES) as { count: number };
-  return row.count < SECTION_ACTIVE_LIMIT;
 }
 
 function createSubscription(
