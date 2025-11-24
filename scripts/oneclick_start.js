@@ -359,14 +359,14 @@ async function main() {
     ['run', 'api:start'],
     {
       cwd: ROOT_DIR,
-      env: { ...process.env, APP_PORT: API_PORT, APP_HOST: '0.0.0.0', SQLITE_FILE: dbPath },
+      env: { ...process.env, APP_PORT: API_PORT, APP_HOST: '127.0.0.1', SQLITE_FILE: dbPath },
     },
   );
 
   startProcess(
     'frontend',
     NPM_CMD,
-    ['run', 'dev', '--', '--host', '0.0.0.0', '--port', FRONTEND_PORT],
+    ['run', 'dev', '--', '--host', '127.0.0.1', '--port', FRONTEND_PORT],
     {
       cwd: FRONTEND_DIR,
       env: {

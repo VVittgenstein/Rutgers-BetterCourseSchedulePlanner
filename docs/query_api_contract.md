@@ -246,7 +246,7 @@ The `X-Trace-Id` response header repeats the same identifier.
 
 ## Operations & Observability
 ### Environment & ports
-- `APP_HOST`/`APP_PORT` control the Fastify listener (defaults `0.0.0.0:3333`).
+- `APP_HOST`/`APP_PORT` control the Fastify listener (defaults `127.0.0.1:3333`).
 - `SQLITE_FILE` points to the SQLite snapshot (defaults to `data/local.db`). The service refuses to start if the file is missing.
 - `LOG_LEVEL` defaults to `info`. Set `warn`/`error` for quiet cron deployments or `debug` when tracing filters locally.
 - `NODE_ENV` toggles general runtime behavior; keep `production` for deployments so Fastify disables extra logging noise.

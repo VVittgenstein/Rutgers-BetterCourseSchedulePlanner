@@ -261,20 +261,20 @@ Stores FR-04 subscription requests.
 | `subscription_id` (PK) | INTEGER | surrogate | |
 | `section_id` (FK) | INTEGER | references `sections.section_id` | |
 | `term_id`, `campus_code`, `index_number` | TEXT | Denormalized from section | Ensure lookups resilient even if FK missing temporarily.
-| `contact_type` | TEXT | User input | Enum (`email`, `discord_user`, `discord_channel`).
+| `contact_type` | TEXT | User input | Always `email` in local mode.
 | `contact_value` | TEXT | User input | Raw string.
 | `contact_hash` | TEXT | SHA1(contact_value) | Dedup + rate limit.
 | `locale` | TEXT | User input/default | e.g. `en-US`, `zh-CN`.
-| `status` | TEXT | Derived | `pending`, `active`, `paused`, `deleted`.
-| `is_verified` | INTEGER | Derived from verification flow | Email double-opt-in, Discord handshake.
+| `status` | TEXT | Derived | `active`, `unsubscribed` (others reserved).
+| `is_verified` | INTEGER | Derived from verification flow | Always 1 on insert in local mode.
 | `created_at`, `updated_at` | TEXT | System timestamps | |
 | `last_notified_at` | TEXT | Updated when alert sent | |
 | `last_known_section_status` | TEXT | Derived from joined section at subscription time | Helps avoid duplicate triggers.
 | `unsubscribe_token` | TEXT | Random string | Provided to UI.
-| `metadata` | TEXT | JSON (channel-specific) | e.g. Discord webhook id.
+| `metadata` | TEXT | JSON (channel-specific) | Stores preferences; no channel bindings.
 
 Indexes:
-- Unique partial index on `(section_id, contact_hash, contact_type)` for active rows → prevents duplicate subscriptions to same channel.
+- Unique partial index on `(section_id, contact_hash, contact_type)` for active rows → prevents duplicate subscriptions to the same contact.
 - Index on `(status, section_id)` for fast polling.
 
 #### `subscription_events`
@@ -284,9 +284,9 @@ Audit log for subscription lifecycle + notification sends.
 | --- | --- | --- | --- |
 | `event_id` (PK) | INTEGER | surrogate | |
 | `subscription_id` | INTEGER | references `subscriptions` | |
-| `event_type` | TEXT | Derived (`created`, `verified`, `notified`, `cancelled`) | |
+| `event_type` | TEXT | Derived (`created`, `unsubscribed`) | |
 | `section_status_snapshot` | TEXT | Derived from joined section at time of event | |
-| `payload` | TEXT | JSON (email id, discord message id, error) | |
+| `payload` | TEXT | JSON (email id, error) | |
 | `created_at` | TEXT | timestamp | |
 
 ### Utility tables and views

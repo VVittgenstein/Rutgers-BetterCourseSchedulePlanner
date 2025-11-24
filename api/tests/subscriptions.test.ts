@@ -141,7 +141,7 @@ test('list active subscriptions returns active rows', async (t) => {
   assert.equal(match?.status, 'active');
 });
 
-test('contact limit prevents more than three active subscriptions per contact', async (t) => {
+test('contact limit is removed for local-only mode', async (t) => {
   const fixture = createSubscriptionFixture();
   const restoreEnv = overrideEnv('SQLITE_FILE', fixture.file);
   seedSection(fixture.file, { sectionId: 2, index: '11111' });
@@ -185,9 +185,14 @@ test('contact limit prevents more than three active subscriptions per contact', 
     url: '/api/subscribe',
     payload: { ...payloadBase, sectionIndex: '33333' },
   });
-  assert.equal(blocked.statusCode, 400);
-  const error = blocked.json();
-  assert.equal(error.error.code, 'rate_limited');
+  assert.equal(blocked.statusCode, 201);
+  const created = blocked.json();
+  assert.equal(created.existing, false);
+
+  const db = new Database(fixture.file);
+  const row = db.prepare('SELECT COUNT(*) as count FROM subscriptions').get() as { count: number };
+  assert.equal(row.count, 4);
+  db.close();
 });
 
 test('subscribe accepts unresolved sections but reports sectionResolved false', async (t) => {
@@ -296,7 +301,7 @@ test('unsubscribe transitions status and redacts contact value', async (t) => {
   db.close();
 });
 
-test('unsubscribe rejects id-only payloads without token or contact proof', async (t) => {
+test('unsubscribe accepts id-only payloads in local mode', async (t) => {
   const fixture = createSubscriptionFixture();
   const restoreEnv = overrideEnv('SQLITE_FILE', fixture.file);
   const server = await createServer();
@@ -327,9 +332,9 @@ test('unsubscribe rejects id-only payloads without token or contact proof', asyn
     },
   });
 
-  assert.equal(response.statusCode, 400);
+  assert.equal(response.statusCode, 200);
   const body = response.json();
-  assert.equal(body.error.code, 'VALIDATION_FAILED');
+  assert.equal(body.status, 'unsubscribed');
 });
 
 test('unsubscribe prioritizes valid tokens over subscription ids', async (t) => {

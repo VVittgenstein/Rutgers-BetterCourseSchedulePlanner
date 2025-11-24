@@ -5,7 +5,7 @@ Tested on WSL2 (Ubuntu) with Node.js 24.11.1 + npm 11.6.x. Python 3 is available
 ## Prerequisites
 - Node.js 22+ (match one version for root + `frontend/`). If you switch Node majors, delete `node_modules/ frontend/node_modules/` and reinstall to rebuild native deps (better-sqlite3).
 - Git + bash; outbound HTTPS to `classes.rutgers.edu` and any notification providers you plan to use.
-- Optional: `python3` for quick DB sanity checks, SendGrid/Discord credentials for dispatchers.
+- Optional: `python3` for quick DB sanity checks, SendGrid credentials if you want email alerts.
 
 ## Bootstrap everything
 ```bash
@@ -21,10 +21,9 @@ Notes:
 ## Run the stack
 ```bash
 ./scripts/run_stack.sh --term 12024 --campuses NB \
-  [--with-mail --mail-config configs/mail_sender.local.json] \
-  [--with-discord --allow-channel <id>]
+  [--with-mail --mail-config configs/mail_sender.local.json]
 ```
-Defaults start API + frontend + openSections poller. Logs stream to `logs/run_stack/`. Use `--no-frontend`, `--no-poller`, or `--poller-once` to slim down the process list.
+Defaults start API + frontend + openSections poller. The API binds to `127.0.0.1`; change `APP_HOST` only if you explicitly want remote access. Logs stream to `logs/run_stack/`. Use `--no-frontend`, `--no-poller`, or `--poller-once` to slim down the process list.
 
 ## Verify quickly
 - Check the fetch summary: `cat logs/fetch_runs/summary_latest.log` (expect inserts >0).

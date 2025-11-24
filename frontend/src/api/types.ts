@@ -158,7 +158,6 @@ export interface SubscribeRequestPayload {
   contactValue: string;
   locale?: string;
   preferences?: SubscriptionPreferencesInput;
-  clientContext?: { ip?: string; userAgent?: string };
 }
 
 export interface SubscribeResponsePayload {
