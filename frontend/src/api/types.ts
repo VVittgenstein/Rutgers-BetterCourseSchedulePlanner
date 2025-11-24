@@ -205,3 +205,65 @@ export interface ActiveSubscriptionsResponse {
   subscriptions: ActiveSubscription[];
   traceId: string;
 }
+
+export type MailTemplateDefinition = {
+  subject?: Record<string, string>;
+  html: Record<string, string>;
+  text?: Record<string, string>;
+  requiredVariables: string[];
+};
+
+export type SanitizedSendgridConfig = {
+  apiKeyEnv?: string;
+  apiKeySet?: boolean;
+  sandboxMode?: boolean;
+  categories?: string[];
+  ipPool?: string | null;
+  apiBaseUrl?: string;
+};
+
+export type SanitizedMailSenderConfig = {
+  provider: 'sendgrid' | 'smtp';
+  defaultFrom: { email: string; name?: string };
+  replyTo?: { email: string; name?: string };
+  supportedLocales: string[];
+  templateRoot: string;
+  templates: Record<string, MailTemplateDefinition>;
+  rateLimit?: { maxPerSecond: number; burst: number; bucketWidthSeconds: number };
+  retryPolicy?: { maxAttempts: number; backoffMs: number[]; jitter: number; retryableErrors: string[] };
+  timeouts: { connectMs: number; sendMs: number; idleMs: number };
+  providers: {
+    sendgrid?: SanitizedSendgridConfig;
+    smtp?: unknown;
+  };
+  logging?: { redactPII?: boolean; traceHeader?: string };
+  testHooks?: { dryRun?: boolean; overrideRecipient?: string | null };
+};
+
+export type MailConfigMeta = {
+  source: 'example' | 'user';
+  hasSendgridKey: boolean;
+  path: string;
+  traceId: string;
+  templateIssues?: Array<{ templateId: string; locale?: string; kind?: string; message?: string }>;
+};
+
+export interface MailConfigResponse {
+  config: SanitizedMailSenderConfig;
+  meta: MailConfigMeta;
+}
+
+export type MailConfigUpdatePayload = {
+  provider: 'sendgrid';
+  defaultFrom: { email: string; name?: string };
+  replyTo?: { email: string; name?: string };
+  sendgrid: {
+    apiKey?: string;
+    apiKeyEnv?: string;
+    sandboxMode?: boolean;
+    categories?: string[];
+    ipPool?: string | null;
+    apiBaseUrl?: string;
+  };
+  testHooks?: { dryRun?: boolean; overrideRecipient?: string | null };
+};

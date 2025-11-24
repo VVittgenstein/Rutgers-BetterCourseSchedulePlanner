@@ -60,6 +60,25 @@ export async function apiPost<TResponse>(
   return handleResponse<TResponse>(response);
 }
 
+export async function apiPut<TResponse>(
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<TResponse> {
+  const url = buildUrl(path);
+  const response = await fetch(url.toString(), {
+    method: 'PUT',
+    signal,
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    credentials: 'same-origin',
+    body: body ? JSON.stringify(body) : '{}',
+  });
+  return handleResponse<TResponse>(response);
+}
+
 function buildUrl(path: string, params?: Record<string, ApiQueryParamValue>) {
   const url = new URL(trimSlash(API_BASE_URL) + ensureLeadingSlash(path), window.location.origin);
   if (params) {

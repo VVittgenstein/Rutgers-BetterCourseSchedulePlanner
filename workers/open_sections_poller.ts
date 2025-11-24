@@ -24,9 +24,12 @@ type Preferences = {
 };
 
 export type PollerOptions = {
-  term: string;
+  openReminderIntervalMs: number;
+  termsMode: 'auto' | 'explicit';
+  terms: string[];
   campuses: string[];
   intervalMs: number;
+  refreshIntervalMs: number;
   jitter: number;
   sqliteFile: string;
   timeoutMs: number;
@@ -56,6 +59,7 @@ type SubscriptionRow = {
   last_known_section_status: string | null;
   contact_type: string;
   contact_value: string | null;
+  last_notified_at: string | null;
 };
 
 export type Metrics = {
@@ -63,9 +67,11 @@ export type Metrics = {
   pollsFailed: number;
   eventsEmitted: number;
   notificationsQueued: number;
-  campus: Record<
+  targets: Record<
     string,
     {
+      term: string;
+      campus: string;
       pollsTotal: number;
       pollsFailed: number;
       eventsTotal: number;
@@ -77,6 +83,7 @@ export type Metrics = {
 };
 
 type Statements = {
+  countSectionsForTarget: Database.Statement;
   selectSections: Database.Statement;
   updateSectionStatus: Database.Statement;
   insertStatusEvent: Database.Statement;
@@ -84,6 +91,7 @@ type Statements = {
   insertSnapshot: Database.Statement;
   selectRecentEvent: Database.Statement;
   insertOpenEvent: Database.Statement;
+  hasActiveSubscription: Database.Statement;
   selectSubscriptionsPage: Database.Statement;
   insertNotification: Database.Statement;
   updateSubscriptionStatus: Database.Statement;
@@ -102,6 +110,7 @@ export type PollOutcome = {
 };
 
 const ACTIVE_STATUSES: SubscriptionStatus[] = ['pending', 'active'];
+const TARGET_KEY_SEPARATOR = '|';
 
 const defaultPreferences: Preferences = {
   notifyOn: ['open'],
@@ -113,6 +122,8 @@ const defaultPreferences: Preferences = {
   snoozeUntil: null,
   channelMetadata: {},
 };
+
+const OPEN_REMINDER_INTERVAL_MS = 5 * 60 * 1000;
 
 type CampusCheckpoint = {
   term: string;
@@ -129,20 +140,53 @@ type CheckpointFile = {
   campuses: Record<string, CampusCheckpoint>;
 };
 
+type DatasetStatus = 'ready' | 'missing';
+
 export type CheckpointState = {
   path: string;
   data: CheckpointFile;
 };
 
+export type PollTarget = {
+  termId: string;
+  campus: string;
+  decodedTerm: SemesterParts;
+};
+
 export type PollerContext = {
   options: PollerOptions;
-  term: SemesterParts;
   db: Database.Database;
   statements: Statements;
+  probeFn: typeof performProbe;
   missCounters: Map<string, Map<string, number>>;
   metrics: Metrics;
   checkpoint: CheckpointState;
+  datasetStatus: Map<string, DatasetStatus>;
 };
+
+function makeTargetKey(term: string, campus: string): string {
+  return `${term}${TARGET_KEY_SEPARATOR}${campus}`;
+}
+
+function targetLabel(target: PollTarget): string {
+  return `${target.termId}/${target.campus}`;
+}
+
+function ensureMetricsTarget(metrics: Metrics, target: PollTarget): void {
+  const key = makeTargetKey(target.termId, target.campus);
+  if (!metrics.targets[key]) {
+    metrics.targets[key] = {
+      term: target.termId,
+      campus: target.campus,
+      pollsTotal: 0,
+      pollsFailed: 0,
+      eventsTotal: 0,
+      notificationsTotal: 0,
+      lastDurationMs: 0,
+      lastOpenCount: 0,
+    };
+  }
+}
 
 class Semaphore {
   private active = 0;
@@ -179,11 +223,14 @@ class Semaphore {
   }
 }
 
-function parseArgs(argv: string[]): PollerOptions {
+export function parseArgs(argv: string[]): PollerOptions {
   const defaults: PollerOptions = {
-    term: '12024',
-    campuses: ['NB'],
+    openReminderIntervalMs: OPEN_REMINDER_INTERVAL_MS,
+    termsMode: 'auto',
+    terms: [],
+    campuses: [],
     intervalMs: 60000,
+    refreshIntervalMs: 5 * 60 * 1000,
     jitter: 0.3,
     sqliteFile: path.resolve('data', 'local.db'),
     timeoutMs: 12000,
@@ -195,7 +242,9 @@ function parseArgs(argv: string[]): PollerOptions {
     checkpointFile: path.resolve('scripts', 'poller_checkpoint.json'),
   };
 
-  const options = { ...defaults };
+  const options: PollerOptions = { ...defaults };
+  let campusesProvided = false;
+  let termsProvided = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
@@ -207,7 +256,27 @@ function parseArgs(argv: string[]): PollerOptions {
     switch (key) {
       case 'term':
         if (!next) throw new Error('Missing value for --term');
-        options.term = next;
+        if (termsProvided) throw new Error('Only one of --term/--terms may be provided');
+        options.termsMode = 'explicit';
+        options.terms = [next];
+        termsProvided = true;
+        i += 1;
+        break;
+      case 'terms':
+        if (!next) throw new Error('Missing value for --terms');
+        if (termsProvided) throw new Error('Only one of --term/--terms may be provided');
+        if (next.toLowerCase() === 'auto') {
+          options.termsMode = 'auto';
+          options.terms = [];
+        } else {
+          const terms = parseList(next);
+          if (terms.length === 0) {
+            throw new Error('Provide at least one term for --terms');
+          }
+          options.termsMode = 'explicit';
+          options.terms = terms;
+        }
+        termsProvided = true;
         i += 1;
         break;
       case 'campuses':
@@ -216,6 +285,7 @@ function parseArgs(argv: string[]): PollerOptions {
         if (options.campuses.length === 0) {
           throw new Error('Provide at least one campus code');
         }
+        campusesProvided = true;
         i += 1;
         break;
       case 'interval':
@@ -232,6 +302,15 @@ function parseArgs(argv: string[]): PollerOptions {
         if (!Number.isFinite(options.intervalMs) || options.intervalMs <= 0) {
           throw new Error('--interval-ms must be a positive integer');
         }
+        i += 1;
+        break;
+      case 'refresh-interval-mins':
+        if (!next) throw new Error('Missing value for --refresh-interval-mins');
+        const mins = Number.parseInt(next, 10);
+        if (!Number.isFinite(mins) || mins < 1) {
+          throw new Error('--refresh-interval-mins must be at least 1 minute');
+        }
+        options.refreshIntervalMs = mins * 60 * 1000;
         i += 1;
         break;
       case 'sqlite':
@@ -295,6 +374,19 @@ function parseArgs(argv: string[]): PollerOptions {
     }
   }
 
+  if (options.termsMode === 'explicit') {
+    if (options.terms.length === 0) {
+      throw new Error('Provide at least one term via --terms or --term');
+    }
+    options.terms = Array.from(new Set(options.terms));
+    if (!campusesProvided && options.campuses.length === 0) {
+      options.campuses = ['NB'];
+    }
+    if (options.campuses.length === 0) {
+      throw new Error('Provide at least one campus code');
+    }
+  }
+
   return options;
 }
 
@@ -302,22 +394,24 @@ function showUsage(): void {
   console.log(`openSections poller
 
 Usage:
-  tsx workers/open_sections_poller.ts --term 12024 --campuses NB,NK [--interval 60] [--sqlite data/local.db]
+  tsx workers/open_sections_poller.ts [--terms auto|12024,12026] [--campuses NB,NK] [--interval 60] [--sqlite data/local.db]
 
 Flags:
-  --term <id>            Semester code (e.g. 12024)
-  --campuses <list>      Comma list of campus codes (NB,NK,CM)
-  --interval <sec>       Base interval between polls in seconds (default: 60)
-  --interval-ms <ms>     Base interval in milliseconds (overrides --interval)
-  --sqlite <path>        SQLite database file (default: data/local.db)
-  --timeout <ms>         HTTP timeout for openSections (default: 12000)
-  --concurrency <n>      Max parallel polls (default: 3)
-  --chunk <n>            Subscription page size for fan-out (default: 200)
-  --metrics-port <port>  Expose Prometheus metrics on /metrics
-  --miss-threshold <n>   Consecutive misses before marking Closed (default: 2)
-  --checkpoint <path>    Where to persist per-campus poll checkpoints
-  --once                 Run a single poll per campus then exit
-  --help                 Show this message
+  --terms <auto|list>          Terms to poll; use auto to read active subscriptions (default: auto)
+  --term <id>                  Alias for --terms <id> (backwards compatibility)
+  --campuses <list>            Comma list of campus codes; acts as allowlist in auto mode
+  --refresh-interval-mins <m>  How often to rescan subscriptions in auto mode (default: 5)
+  --interval <sec>             Base interval between polls in seconds (default: 60)
+  --interval-ms <ms>           Base interval in milliseconds (overrides --interval)
+  --sqlite <path>              SQLite database file (default: data/local.db)
+  --timeout <ms>               HTTP timeout for openSections (default: 12000)
+  --concurrency <n>            Max parallel polls (default: 3)
+  --chunk <n>                  Subscription page size for fan-out (default: 200)
+  --metrics-port <port>        Expose Prometheus metrics on /metrics
+  --miss-threshold <n>         Consecutive misses before marking Closed (default: 2)
+  --checkpoint <path>          Where to persist per-target poll checkpoints
+  --once                       Run a single poll per campus then exit
+  --help                       Show this message
 `);
 }
 
@@ -371,10 +465,12 @@ export function loadCheckpointState(pathname: string): CheckpointState {
   return emptyCheckpoint(pathname);
 }
 
-export function hydrateMissCountersFromCheckpoint(ctx: PollerContext, campus: string): void {
-  const entry = ctx.checkpoint.data.campuses[campus];
+export function hydrateMissCountersFromCheckpoint(ctx: PollerContext, target: PollTarget): void {
+  const key = makeTargetKey(target.termId, target.campus);
+  const entry =
+    ctx.checkpoint.data.campuses[key] ?? ctx.checkpoint.data.campuses[target.campus];
   if (!entry) return;
-  if (entry.term !== ctx.options.term) return;
+  if (entry.term !== target.termId) return;
   const misses = new Map<string, number>();
   for (const [index, value] of Object.entries(entry.misses ?? {})) {
     const count = Number(value);
@@ -383,27 +479,35 @@ export function hydrateMissCountersFromCheckpoint(ctx: PollerContext, campus: st
     }
   }
   if (misses.size > 0) {
-    ctx.missCounters.set(campus, misses);
+    ctx.missCounters.set(key, misses);
   }
-  const campusMetrics = ctx.metrics.campus[campus];
+  const campusMetrics = ctx.metrics.targets[key];
   if (campusMetrics) {
     campusMetrics.lastOpenCount = entry.openIndexes ?? 0;
   }
   const hash = entry.lastSnapshotHash ?? 'none';
   const restoredMisses = misses.size;
-  console.log(`[${campus}] restored checkpoint at ${entry.lastPollAt} (hash=${hash}, misses=${restoredMisses})`);
+  console.log(
+    `[${target.termId}/${target.campus}] restored checkpoint at ${entry.lastPollAt} (hash=${hash}, misses=${restoredMisses})`,
+  );
 }
 
-export function persistCheckpoint(ctx: PollerContext, campus: string, outcome: PollOutcome): void {
+export function persistCheckpoint(ctx: PollerContext, target: PollTarget, outcome: PollOutcome): void {
   const entry: CampusCheckpoint = {
-    term: ctx.options.term,
-    campus,
+    term: target.termId,
+    campus: target.campus,
     lastPollAt: outcome.polledAt,
     lastSnapshotHash: outcome.snapshotHash,
     openIndexes: outcome.openCount,
     misses: Object.fromEntries(outcome.misses),
   };
-  ctx.checkpoint.data.campuses[campus] = entry;
+  const key = makeTargetKey(target.termId, target.campus);
+  ctx.checkpoint.data.campuses[key] = entry;
+  const legacyKey = target.campus;
+  const legacyEntry = ctx.checkpoint.data.campuses[legacyKey];
+  if (legacyKey !== key && legacyEntry?.term === target.termId) {
+    delete ctx.checkpoint.data.campuses[legacyKey];
+  }
   ctx.checkpoint.data.updatedAt = new Date().toISOString();
   try {
     fs.mkdirSync(path.dirname(ctx.checkpoint.path), { recursive: true });
@@ -414,8 +518,60 @@ export function persistCheckpoint(ctx: PollerContext, campus: string, outcome: P
   }
 }
 
+function persistMissingCheckpoint(ctx: PollerContext, target: PollTarget): void {
+  const key = makeTargetKey(target.termId, target.campus);
+  const misses = ctx.missCounters.get(key) ?? new Map<string, number>();
+  const outcome: PollOutcome = {
+    opened: 0,
+    closed: 0,
+    events: 0,
+    notifications: 0,
+    openCount: 0,
+    snapshotHash: 'missing-data',
+    polledAt: new Date().toISOString(),
+    misses,
+  };
+  persistCheckpoint(ctx, target, outcome);
+}
+
+function setDatasetStatus(ctx: PollerContext, target: PollTarget, status: DatasetStatus): void {
+  const key = makeTargetKey(target.termId, target.campus);
+  const previous = ctx.datasetStatus.get(key);
+  if (previous === status) return;
+  ctx.datasetStatus.set(key, status);
+  if (status === 'missing') {
+    console.warn(
+      `[${targetLabel(target)}] no sections found locally; fetch course data for this term/campus before polling.`,
+    );
+    persistMissingCheckpoint(ctx, target);
+  } else if (previous === 'missing') {
+    console.log(`[${targetLabel(target)}] detected sections data; resuming polls.`);
+  }
+}
+
+export function ensureSectionsData(ctx: PollerContext, target: PollTarget): boolean {
+  const row = ctx.statements.countSectionsForTarget.get(target.termId, target.campus) as
+    | { total?: number; count?: number }
+    | undefined;
+  const total = Number(row?.total ?? row?.count ?? 0);
+  if (!Number.isFinite(total) || total <= 0) {
+    setDatasetStatus(ctx, target, 'missing');
+    return false;
+  }
+  setDatasetStatus(ctx, target, 'ready');
+  return true;
+}
+
 export function createStatements(db: Database.Database): Statements {
   return {
+    countSectionsForTarget: db.prepare(
+      `
+      SELECT COUNT(*) AS total
+      FROM sections
+      WHERE term_id = ?
+        AND campus_code = ?
+    `,
+    ),
     selectSections: db.prepare(
       `
       SELECT s.section_id, s.index_number, s.is_open, s.open_status, s.open_status_updated_at,
@@ -464,9 +620,20 @@ export function createStatements(db: Database.Database): Statements {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     ),
+    hasActiveSubscription: db.prepare(
+      `
+      SELECT 1
+      FROM subscriptions
+      WHERE term_id = ?
+        AND campus_code = ?
+        AND index_number = ?
+        AND status IN (?, ?)
+      LIMIT 1
+    `,
+    ),
     selectSubscriptionsPage: db.prepare(
       `
-      SELECT subscription_id, status, metadata, last_known_section_status, contact_type, contact_value
+      SELECT subscription_id, status, metadata, last_known_section_status, contact_type, contact_value, last_notified_at
       FROM subscriptions
       WHERE term_id = ?
         AND campus_code = ?
@@ -558,9 +725,8 @@ function parsePreferences(metadata: string | null): Preferences {
   return defaultPreferences;
 }
 
-function shouldNotify(row: SubscriptionRow, now: Date): boolean {
+function shouldNotify(row: SubscriptionRow, now: Date, reminderIntervalMs: number): boolean {
   if (!ACTIVE_STATUSES.includes(row.status)) return false;
-  if (row.last_known_section_status && row.last_known_section_status.toUpperCase() === 'OPEN') return false;
   const prefs = parsePreferences(row.metadata);
   if (!prefs.notifyOn.includes('open')) return false;
   if (prefs.snoozeUntil) {
@@ -573,6 +739,12 @@ function shouldNotify(row: SubscriptionRow, now: Date): boolean {
   if (minutes < prefs.deliveryWindow.startMinutes || minutes > prefs.deliveryWindow.endMinutes) {
     return false;
   }
+  if (row.last_notified_at) {
+    const last = new Date(row.last_notified_at);
+    if (!Number.isNaN(last.getTime()) && now.getTime() - last.getTime() < reminderIntervalMs) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -584,13 +756,14 @@ function renderMetrics(metrics: Metrics): string {
   lines.push('# TYPE poller_notifications_queued_total counter');
   lines.push('# TYPE poller_last_duration_ms gauge');
   lines.push('# TYPE poller_last_open_indexes gauge');
-  for (const [campus, entry] of Object.entries(metrics.campus)) {
-    lines.push(`poller_polls_total{campus="${campus}"} ${entry.pollsTotal}`);
-    lines.push(`poller_poll_failures_total{campus="${campus}"} ${entry.pollsFailed}`);
-    lines.push(`poller_events_emitted_total{campus="${campus}"} ${entry.eventsTotal}`);
-    lines.push(`poller_notifications_queued_total{campus="${campus}"} ${entry.notificationsTotal}`);
-    lines.push(`poller_last_duration_ms{campus="${campus}"} ${entry.lastDurationMs.toFixed(0)}`);
-    lines.push(`poller_last_open_indexes{campus="${campus}"} ${entry.lastOpenCount}`);
+  for (const entry of Object.values(metrics.targets)) {
+    const labels = `term="${entry.term}",campus="${entry.campus}"`;
+    lines.push(`poller_polls_total{${labels}} ${entry.pollsTotal}`);
+    lines.push(`poller_poll_failures_total{${labels}} ${entry.pollsFailed}`);
+    lines.push(`poller_events_emitted_total{${labels}} ${entry.eventsTotal}`);
+    lines.push(`poller_notifications_queued_total{${labels}} ${entry.notificationsTotal}`);
+    lines.push(`poller_last_duration_ms{${labels}} ${entry.lastDurationMs.toFixed(0)}`);
+    lines.push(`poller_last_open_indexes{${labels}} ${entry.lastOpenCount}`);
   }
   lines.push(`# last scrape totals`);
   lines.push(`poller_events_emitted_total{campus="all"} ${metrics.eventsEmitted}`);
@@ -617,26 +790,123 @@ function startMetricsServer(port: number, metrics: Metrics): http.Server {
   return server;
 }
 
+type LoopHandle = {
+  target: PollTarget;
+  stop: () => void;
+  done: Promise<void>;
+};
+
+export function resolveExplicitTargets(options: PollerOptions): PollTarget[] {
+  const targets: PollTarget[] = [];
+  for (const termId of options.terms) {
+    const decodedTerm = decodeSemester(termId);
+    for (const campus of options.campuses) {
+      targets.push({ termId, campus, decodedTerm });
+    }
+  }
+  return targets.sort((a, b) =>
+    a.termId === b.termId ? a.campus.localeCompare(b.campus) : a.termId.localeCompare(b.termId),
+  );
+}
+
+export function discoverSubscriptionTargets(ctx: PollerContext): PollTarget[] {
+  const rows = ctx.db
+    .prepare(
+      `
+      SELECT term_id AS termId, campus_code AS campus
+      FROM subscriptions
+      WHERE status IN (?, ?)
+        AND term_id IS NOT NULL
+        AND campus_code IS NOT NULL
+      GROUP BY term_id, campus_code
+    `,
+    )
+    .all(ACTIVE_STATUSES[0], ACTIVE_STATUSES[1]) as Array<{ termId: string; campus: string }>;
+
+  const allowCampuses = ctx.options.campuses;
+  const targets: PollTarget[] = [];
+  for (const row of rows) {
+    const termId = String(row.termId ?? '').trim();
+    const campus = String(row.campus ?? '').trim().toUpperCase();
+    if (!termId || !campus) continue;
+    if (allowCampuses.length > 0 && !allowCampuses.includes(campus)) continue;
+    const key = makeTargetKey(termId, campus);
+    if (targets.some((target) => makeTargetKey(target.termId, target.campus) === key)) {
+      continue;
+    }
+    try {
+      targets.push({ termId, campus, decodedTerm: decodeSemester(termId) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'invalid term';
+      console.warn(`Skipping subscription target ${termId}/${campus}: ${message}`);
+    }
+  }
+
+  return targets.sort((a, b) =>
+    a.termId === b.termId ? a.campus.localeCompare(b.campus) : a.termId.localeCompare(b.termId),
+  );
+}
+
+function startTargetLoop(
+  ctx: PollerContext,
+  target: PollTarget,
+  semaphore: Semaphore,
+  shouldContinue: () => boolean,
+): LoopHandle {
+  let active = true;
+  const stop = () => {
+    active = false;
+  };
+  const done = pollLoop(ctx, target, semaphore, () => active && shouldContinue()).catch((error) => {
+    console.error(`[${targetLabel(target)}] loop failed:`, error);
+  });
+  return { target, stop, done };
+}
+
+export function syncTargetLoops(
+  ctx: PollerContext,
+  semaphore: Semaphore,
+  running: Map<string, LoopHandle>,
+  desiredTargets: PollTarget[],
+  shouldContinue: () => boolean,
+  startLoop: typeof startTargetLoop = startTargetLoop,
+): void {
+  const desiredKeys = new Set<string>();
+  for (const target of desiredTargets) {
+    const key = makeTargetKey(target.termId, target.campus);
+    desiredKeys.add(key);
+    if (running.has(key)) continue;
+    ensureMetricsTarget(ctx.metrics, target);
+    hydrateMissCountersFromCheckpoint(ctx, target);
+    const handle = startLoop(ctx, target, semaphore, shouldContinue);
+    running.set(key, handle);
+    void handle.done.finally(() => {
+      if (running.get(key) === handle) {
+        running.delete(key);
+      }
+    });
+    console.log(
+      `Started loop for ${targetLabel(target)} interval=${ctx.options.intervalMs}ms jitter=${ctx.options.jitter}`,
+    );
+  }
+
+  for (const [key, handle] of running.entries()) {
+    if (!desiredKeys.has(key)) {
+      handle.stop();
+      console.log(`Stopping loop for ${targetLabel(handle.target)} (no longer matched)`);
+    }
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const term = decodeSemester(options.term);
   const metrics: Metrics = {
     pollsTotal: 0,
     pollsFailed: 0,
     eventsEmitted: 0,
     notificationsQueued: 0,
-    campus: {},
+    targets: {},
   };
-  for (const campus of options.campuses) {
-    metrics.campus[campus] = {
-      pollsTotal: 0,
-      pollsFailed: 0,
-      eventsTotal: 0,
-      notificationsTotal: 0,
-      lastDurationMs: 0,
-      lastOpenCount: 0,
-    };
-  }
 
   const db = new Database(options.sqliteFile, { fileMustExist: true });
   db.pragma('journal_mode = WAL');
@@ -649,43 +919,90 @@ async function main() {
   const shutdownSignals = ['SIGINT', 'SIGTERM'] as const;
   let shuttingDown = false;
 
+  const server = options.metricsPort ? startMetricsServer(options.metricsPort, metrics) : null;
+  const runningLoops = new Map<string, LoopHandle>();
+
+  const stopAll = () => {
+    runningLoops.forEach((loop) => loop.stop());
+  };
+
   shutdownSignals.forEach((signal) => {
     process.on(signal, () => {
       if (shuttingDown) return;
       shuttingDown = true;
       console.log(`Received ${signal}, shutting down...`);
-      db.close();
-      process.exit(0);
+      stopAll();
     });
   });
 
-  const server = options.metricsPort ? startMetricsServer(options.metricsPort, metrics) : null;
-
   const context: PollerContext = {
     options,
-    term,
     db,
     statements,
+    probeFn: performProbe,
     missCounters,
     metrics,
     checkpoint,
+    datasetStatus: new Map(),
   };
 
-  for (const campus of options.campuses) {
-    hydrateMissCountersFromCheckpoint(context, campus);
+  const resolveTargets =
+    options.termsMode === 'auto' ? () => discoverSubscriptionTargets(context) : () => resolveExplicitTargets(options);
+
+  const initialTargets = resolveTargets();
+  if (options.termsMode === 'explicit' && initialTargets.length === 0) {
+    throw new Error('No term/campus targets resolved. Check --terms/--campuses.');
   }
 
-  console.log(
-    `Starting openSections poller for term=${options.term} campuses=${options.campuses.join(',')} interval=${options.intervalMs}ms (jitter=${options.jitter}) sqlite=${options.sqliteFile} checkpoint=${options.checkpointFile}`,
-  );
+  if (options.termsMode === 'auto') {
+    const campusFilter = options.campuses.length > 0 ? options.campuses.join(',') : 'all';
+    console.log(
+      `Starting openSections poller in auto mode (campus allowlist: ${campusFilter}) refresh=${Math.round(
+        options.refreshIntervalMs / 60000,
+      )}m interval=${options.intervalMs}ms sqlite=${options.sqliteFile} checkpoint=${options.checkpointFile}`,
+    );
+    if (initialTargets.length === 0) {
+      console.warn(
+        `No active subscriptions found. Will idle and retry in ${Math.round(options.refreshIntervalMs / 60000)}m.`,
+      );
+    }
+  } else {
+    console.log(
+      `Starting openSections poller for terms=${options.terms.join(',')} campuses=${options.campuses.join(',')} interval=${options.intervalMs}ms (jitter=${options.jitter}) sqlite=${options.sqliteFile} checkpoint=${options.checkpointFile}`,
+    );
+  }
 
-  await Promise.all(
-    options.campuses.map((campus) =>
-      pollLoop(context, campus, semaphore).catch((error) => {
-        console.error(`Loop for campus ${campus} failed:`, error);
-      }),
-    ),
-  );
+  syncTargetLoops(context, semaphore, runningLoops, initialTargets, () => !shuttingDown);
+
+  if (options.runOnce) {
+    await Promise.all([...runningLoops.values()].map((loop) => loop.done));
+    if (server) {
+      server.close();
+    }
+    db.close();
+    return;
+  }
+
+  if (options.termsMode === 'auto') {
+    while (!shuttingDown) {
+      await sleep(options.refreshIntervalMs);
+      if (shuttingDown) break;
+      const targets = resolveTargets();
+      syncTargetLoops(context, semaphore, runningLoops, targets, () => !shuttingDown);
+      if (targets.length === 0) {
+        console.warn(
+          `No active subscriptions detected; next refresh in ${Math.round(options.refreshIntervalMs / 60000)}m.`,
+        );
+      } else {
+        console.log(`Monitoring ${targets.length} targets: ${targets.map((t) => targetLabel(t)).join(', ')}`);
+      }
+    }
+  } else {
+    await Promise.all([...runningLoops.values()].map((loop) => loop.done));
+  }
+
+  stopAll();
+  await Promise.all([...runningLoops.values()].map((loop) => loop.done));
 
   if (server) {
     server.close();
@@ -693,68 +1010,91 @@ async function main() {
   db.close();
 }
 
-async function pollLoop(ctx: PollerContext, campus: string, semaphore: Semaphore): Promise<void> {
+async function pollLoop(
+  ctx: PollerContext,
+  target: PollTarget,
+  semaphore: Semaphore,
+  shouldContinue: () => boolean,
+): Promise<void> {
+  const key = makeTargetKey(target.termId, target.campus);
   do {
-    if (ctx.options.runOnce && ctx.metrics.campus[campus].pollsTotal > 0) {
+    if (!shouldContinue()) break;
+    if (ctx.options.runOnce && (ctx.metrics.targets[key]?.pollsTotal ?? 0) > 0) {
       break;
     }
     await semaphore.run(async () => {
-      await pollOnce(ctx, campus);
+      if (shouldContinue()) {
+        await pollOnce(ctx, target);
+      }
     });
     if (ctx.options.runOnce) {
       break;
     }
     const delay = jitteredDelay(ctx.options.intervalMs, ctx.options.jitter);
     await sleep(delay);
-  } while (true);
+  } while (shouldContinue());
 }
 
-async function pollOnce(ctx: PollerContext, campus: string): Promise<void> {
+async function pollOnce(ctx: PollerContext, target: PollTarget): Promise<void> {
   const started = performance.now();
+  ensureMetricsTarget(ctx.metrics, target);
+  const key = makeTargetKey(target.termId, target.campus);
+  if (!ensureSectionsData(ctx, target)) {
+    return;
+  }
   ctx.metrics.pollsTotal += 1;
-  ctx.metrics.campus[campus].pollsTotal += 1;
+  ctx.metrics.targets[key].pollsTotal += 1;
 
   try {
-    const response = await performProbe({ campus, endpoint: 'openSections', timeoutMs: ctx.options.timeoutMs }, ctx.term);
+    const response = await ctx.probeFn(
+      { campus: target.campus, endpoint: 'openSections', timeoutMs: ctx.options.timeoutMs },
+      target.decodedTerm,
+    );
     const indexes = normalizeOpenIndexes(response.body);
-    const outcome = applySnapshot(ctx, campus, indexes);
-    persistCheckpoint(ctx, campus, outcome);
+    const outcome = applySnapshot(ctx, target, indexes);
+    persistCheckpoint(ctx, target, outcome);
     const durationMs = performance.now() - started;
-    const campusEntry = ctx.metrics.campus[campus];
+    const targetMetrics = ctx.metrics.targets[key];
     ctx.metrics.eventsEmitted += outcome.events;
     ctx.metrics.notificationsQueued += outcome.notifications;
-    campusEntry.eventsTotal += outcome.events;
-    campusEntry.notificationsTotal += outcome.notifications;
-    campusEntry.lastDurationMs = durationMs;
-    campusEntry.lastOpenCount = outcome.openCount;
+    targetMetrics.eventsTotal += outcome.events;
+    targetMetrics.notificationsTotal += outcome.notifications;
+    targetMetrics.lastDurationMs = durationMs;
+    targetMetrics.lastOpenCount = outcome.openCount;
     console.log(
-      `[${campus}] openSections=${indexes.length} opened=${outcome.opened} closed=${outcome.closed} events=${outcome.events} notifications=${outcome.notifications} durationMs=${durationMs.toFixed(
+      `[${targetLabel(target)}] openSections=${indexes.length} opened=${outcome.opened} closed=${outcome.closed} events=${outcome.events} notifications=${outcome.notifications} durationMs=${durationMs.toFixed(
         0,
       )}`,
     );
   } catch (error) {
     ctx.metrics.pollsFailed += 1;
-    ctx.metrics.campus[campus].pollsFailed += 1;
+    ctx.metrics.targets[key].pollsFailed += 1;
     const durationMs = performance.now() - started;
-    ctx.metrics.campus[campus].lastDurationMs = durationMs;
+    ctx.metrics.targets[key].lastDurationMs = durationMs;
     if (error instanceof SOCRequestError) {
       console.error(
-        `[${campus}] openSections failed (${error.requestId}): ${error.message} [${error.kind}] retryHint=${error.retryHint ?? 'n/a'}`,
+        `[${targetLabel(target)}] openSections failed (${error.requestId}): ${error.message} [${error.kind}] retryHint=${error.retryHint ?? 'n/a'}`,
       );
     } else if (error instanceof Error) {
-      console.error(`[${campus}] openSections failed: ${error.message}`);
+      console.error(`[${targetLabel(target)}] openSections failed: ${error.message}`);
     } else {
-      console.error(`[${campus}] openSections failed due to unknown error`);
+      console.error(`[${targetLabel(target)}] openSections failed due to unknown error`);
     }
   }
 }
 
-export function applySnapshot(ctx: PollerContext, campus: string, indexes: string[], now: Date = new Date()): PollOutcome {
+export function applySnapshot(
+  ctx: PollerContext,
+  target: PollTarget,
+  indexes: string[],
+  now: Date = new Date(),
+): PollOutcome {
   const nowIso = now.toISOString();
-  const sourceHash = hashPayload({ term: ctx.options.term, campus, indexes });
+  const sourceHash = hashPayload({ term: target.termId, campus: target.campus, indexes });
   const seen = new Set(indexes);
-  const missSet = ctx.missCounters.get(campus) ?? new Map<string, number>();
-  const sections = ctx.statements.selectSections.all(ctx.options.term, campus) as SectionRow[];
+  const missKey = makeTargetKey(target.termId, target.campus);
+  const missSet = ctx.missCounters.get(missKey) ?? new Map<string, number>();
+  const sections = ctx.statements.selectSections.all(target.termId, target.campus) as SectionRow[];
 
   const toOpen: SectionRow[] = [];
   const toClose: SectionRow[] = [];
@@ -777,15 +1117,15 @@ export function applySnapshot(ctx: PollerContext, campus: string, indexes: strin
       }
     }
   }
-  ctx.missCounters.set(campus, missSet);
+  ctx.missCounters.set(missKey, missSet);
 
   let events = 0;
   let notifications = 0;
 
   const tx = ctx.db.transaction(() => {
     for (const index of indexes) {
-      ctx.statements.deleteSnapshot.run(ctx.options.term, campus, index);
-      ctx.statements.insertSnapshot.run(ctx.options.term, campus, index, nowIso, sourceHash);
+      ctx.statements.deleteSnapshot.run(target.termId, target.campus, index);
+      ctx.statements.insertSnapshot.run(target.termId, target.campus, index, nowIso, sourceHash);
     }
 
     for (const section of toOpen) {
@@ -796,16 +1136,33 @@ export function applySnapshot(ctx: PollerContext, campus: string, indexes: strin
         previous,
         'OPEN',
         'openSections',
-        ctx.options.term,
-        campus,
+        target.termId,
+        target.campus,
         nowIso,
       );
-      const eventOutcome = createEventAndFanout(ctx, {
+      const eventOutcome = createEventAndFanout(ctx, target.termId, {
         section,
-        campus,
+        campus: target.campus,
         statusBefore: previous,
         statusAfter: 'OPEN',
         seatDelta: previous === 'OPEN' ? 0 : 1,
+        eventAt: nowIso,
+        snapshotHash: sourceHash,
+      });
+      events += eventOutcome.events;
+      notifications += eventOutcome.notifications;
+    }
+
+    // Emit periodic reminders for sections that are already open (deduped to one event per 5-minute bucket).
+    for (const section of sections) {
+      if (section.is_open !== 1) continue;
+      if (!seen.has(section.index_number)) continue;
+      const eventOutcome = createEventAndFanout(ctx, target.termId, {
+        section,
+        campus: target.campus,
+        statusBefore: section.open_status ?? 'OPEN',
+        statusAfter: 'OPEN',
+        seatDelta: 0,
         eventAt: nowIso,
         snapshotHash: sourceHash,
       });
@@ -821,21 +1178,15 @@ export function applySnapshot(ctx: PollerContext, campus: string, indexes: strin
         previous,
         'CLOSED',
         'openSections',
-        ctx.options.term,
-        campus,
+        target.termId,
+        target.campus,
         nowIso,
       );
-      ctx.statements.deleteSnapshot.run(ctx.options.term, campus, section.index_number);
-      ctx.statements.resetSubscriptionsForIndex.run(
-        'CLOSED',
-        nowIso,
-        ctx.options.term,
-        campus,
-        section.index_number,
-      );
-      const eventOutcome = createEventAndFanout(ctx, {
+      ctx.statements.deleteSnapshot.run(target.termId, target.campus, section.index_number);
+      ctx.statements.resetSubscriptionsForIndex.run('CLOSED', nowIso, target.termId, target.campus, section.index_number);
+      const eventOutcome = createEventAndFanout(ctx, target.termId, {
         section,
-        campus,
+        campus: target.campus,
         statusBefore: previous,
         statusAfter: 'CLOSED',
         seatDelta: -1,
@@ -867,6 +1218,7 @@ function createEventAndFanout(
     db: Database.Database;
     statements: Statements;
   },
+  term: string,
   args: {
     section: SectionRow;
     campus: string;
@@ -878,7 +1230,19 @@ function createEventAndFanout(
   },
 ): { events: number; notifications: number } {
   const eventTime = new Date(args.eventAt);
-  const dedupeKey = buildDedupeKey(ctx.options.term, args.campus, args.section.index_number, args.statusAfter, eventTime);
+  if (args.statusAfter === 'OPEN') {
+    const hasActiveSub = ctx.statements.hasActiveSubscription.get(
+      term,
+      args.campus,
+      args.section.index_number,
+      ACTIVE_STATUSES[0],
+      ACTIVE_STATUSES[1],
+    ) as { 1: number } | undefined;
+    if (!hasActiveSub) {
+      return { events: 0, notifications: 0 };
+    }
+  }
+  const dedupeKey = buildDedupeKey(term, args.campus, args.section.index_number, args.statusAfter, eventTime);
   const cutoff = new Date(eventTime.getTime() - 5 * 60 * 1000).toISOString();
   const existing = ctx.statements.selectRecentEvent.get(dedupeKey, cutoff) as { open_event_id: number } | undefined;
   if (existing) {
@@ -887,7 +1251,7 @@ function createEventAndFanout(
 
   const traceId = crypto.randomUUID();
   const payload = {
-    term: ctx.options.term,
+    term,
     campus: args.campus,
     index: args.section.index_number,
     sectionNumber: args.section.section_number,
@@ -899,7 +1263,7 @@ function createEventAndFanout(
 
   const result = ctx.statements.insertOpenEvent.run(
     args.section.section_id,
-    ctx.options.term,
+    term,
     args.campus,
     args.section.index_number,
     args.statusBefore,
@@ -917,7 +1281,7 @@ function createEventAndFanout(
   let notifications = 0;
 
   if (args.statusAfter === 'OPEN') {
-    notifications = enqueueNotifications(ctx, {
+    notifications = enqueueNotifications(ctx, term, {
       campus: args.campus,
       index: args.section.index_number,
       eventId,
@@ -934,6 +1298,7 @@ function enqueueNotifications(
     options: PollerOptions;
     statements: Statements;
   },
+  term: string,
   args: { campus: string; index: string; eventId: number; dedupeKey: string; eventAt: string },
 ): number {
   let offset = 0;
@@ -941,7 +1306,7 @@ function enqueueNotifications(
   const now = args.eventAt;
   while (true) {
     const rows = ctx.statements.selectSubscriptionsPage.all(
-      ctx.options.term,
+      term,
       args.campus,
       args.index,
       ACTIVE_STATUSES[0],
@@ -952,7 +1317,7 @@ function enqueueNotifications(
     if (rows.length === 0) break;
     offset += rows.length;
     for (const sub of rows) {
-      if (!shouldNotify(sub, new Date(now))) {
+      if (!shouldNotify(sub, new Date(now), ctx.options.openReminderIntervalMs)) {
         continue;
       }
       const result = ctx.statements.insertNotification.run(

@@ -1,0 +1,253 @@
+{
+  "project_context": {
+    "brief": "让非技术用户在本地部署时，只需在 WebUI 填写 SendGrid API Key 与 defaultFrom，关闭 dryRun 后重启启动脚本，即可开启邮件提醒功能，无需手动设置环境变量或命令行参数。",
+    "mvp_goal": "提供一键式邮件启用路径：前端配置表单 → 写入本地 mail sender 配置 → 启动脚本自动检测并拉起 mail dispatcher，确保模板就绪与安全提示。",
+    "non_goals": [
+      "不做多用户共享密钥或远程配置，限本机单人使用。",
+      "不实现完整权限控制，admin API 默认仅本机可访问。",
+      "不改动 mail worker 业务逻辑（队列/重试/模板渲染保持现状）。"
+    ]
+  },
+  "md_source": "rEmail-plan.md",
+  "generated_at": "2025-11-22T00:00:00Z",
+  "tasks": {
+    "T-20251122-mail-onboarding-no-code": {
+      "seed_id": null,
+      "title": "无代码邮件启用路径（WebUI 填 Key + 重启启动器自动发信）",
+      "type": "coding",
+      "summary": "为个人用户提供最少操作的邮件开启流程：在 WebUI 填写 SendGrid API Key 与 defaultFrom，关闭 dryRun 后，重新点击 Start-WebUI.bat 即自动启动 mail dispatcher 并开始发送邮件。",
+      "acceptance_draft": [
+        "配置层支持在 JSON 中直接存储 SendGrid API Key（优先 apiKey，其次 apiKeyEnv），缺失时给出明确错误。",
+        "后端提供本机 admin 路由（如 /api/admin/mail-config）读写 configs/mail_sender.user.json，校验邮箱格式，不回显 key 明文。",
+        "前端有“邮件设置”表单：输入 API Key、From 邮箱/名称、可选 Reply-To、dryRun/sandbox 开关；保存成功提示需重启以生效。",
+        "启动脚本（Start-WebUI/ run_stack.sh）在检测到 configs/mail_sender.user.json 且 dryRun=false 时自动加 --with-mail --mail-config configs/mail_sender.user.json，未配置时提示去 WebUI 填写。",
+        "模板存在性检查：缺失模板时前端/后端提示“模板缺失，邮件无法发送”，并阻止将 dryRun=false 状态生效。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "done",
+      "dependencies": [],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "先落地配置解析与脚本检测（低风险），再补 admin API + 前端表单，最后做模板存在性检查与提示。",
+      "estimate_h": 8,
+      "risk": "medium",
+      "confidence": 0.62,
+      "interfaces_touched": [
+        "notifications/mail/config.ts",
+        "api/admin",
+        "frontend/settings",
+        "scripts/run_stack.sh",
+        "scripts/oneclick_start.js"
+      ],
+      "artifacts": [],
+      "citations": [
+        "docs/mail_sender_contract.md",
+        "docs/deployment_playbook.md",
+        "docs/oneclick.md"
+      ],
+      "created_at": "2025-11-22T00:00:00Z",
+      "updated_at": "2025-11-24T12:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "mail",
+        "dx",
+        "no-code"
+      ],
+      "artifacts": [
+        "notifications/mail/config.ts",
+        "notifications/mail/template_checker.ts",
+        "notifications/mail/types.ts",
+        "notifications/mail/tests/config.test.ts",
+        "notifications/mail/tests/template_checker.test.ts",
+        "api/src/routes/admin.ts",
+        "api/tests/admin_mail_config.test.ts",
+        "frontend/src/components/MailSettingsPanel.tsx",
+        "frontend/src/components/MailSettingsPanel.css",
+        "frontend/src/api/admin.ts",
+        "frontend/src/api/types.ts",
+        "frontend/src/api/client.ts",
+        "frontend/i18n/messages.json",
+        "frontend/src/App.tsx",
+        "frontend/src/App.css",
+        "scripts/mail_templates.js",
+        "scripts/run_stack.sh",
+        "scripts/oneclick_start.js",
+        "configs/mail_sender.user.json"
+      ],
+      "subtasks": {
+        "ST-20251122-mail-config-direct-key": {
+          "seed_id": null,
+          "title": "支持 SendGrid apiKey 明文配置并保持向后兼容",
+          "type": "coding",
+          "summary": "扩展 mail sender 配置解析，允许 providers.sendgrid.apiKey 明文或 apiKeyEnv 取环境变量；缺失时抛出清晰错误。",
+          "acceptance_draft": [
+            "config 解析优先 apiKey，其次 apiKeyEnv+env 变量；两者皆缺时报错。",
+            "保留现有字段校验与 locale/template 校验，新增单元测试覆盖。",
+            "日志/错误信息不泄露 key。"
+          ],
+          "lane": "next",
+      "priority_suggested": "P1",
+      "status": "done",
+      "dependencies": [],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "先补解析逻辑与测试，再跑现有 mail tests 确认无回归。",
+      "estimate_h": 2,
+      "risk": "low",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "notifications/mail/config.ts",
+        "notifications/mail/types.ts",
+        "notifications/mail/tests/config.test.ts",
+        "docs/mail_sender_contract.md"
+      ],
+      "artifacts": [
+        "notifications/mail/config.ts",
+        "notifications/mail/types.ts",
+        "notifications/mail/tests/config.test.ts",
+        "docs/mail_sender_contract.md"
+      ]
+        },
+        "ST-20251122-mail-admin-api": {
+          "seed_id": null,
+          "title": "本机 admin 路由读写 mail_sender.user.json",
+          "type": "coding",
+          "summary": "新增后端接口 GET/PUT /api/admin/mail-config，读写 configs/mail_sender.user.json，校验邮箱与必填字段，不回显 key。",
+          "acceptance_draft": [
+            "保存时基于 example 模板填充默认值（supportedLocales/templates/rateLimit/retryPolicy/timeout）。",
+            "返回状态不含 key 明文，成功/错误有可读提示。",
+            "仅监听本地或沿用 Fastify 默认 127.0.0.1，避免暴露到公网。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251122-mail-config-direct-key"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "复用 zod/已有邮箱校验；落地文件写入与权限提示；补接口测试。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.6,
+          "interfaces_touched": [
+            "api/admin",
+            "configs/mail_sender.user.json"
+          ],
+          "artifacts": [
+            "api/src/routes/admin.ts",
+            "api/tests/admin_mail_config.test.ts",
+            "configs/mail_sender.user.json"
+          ]
+        },
+        "ST-20251122-mail-frontend-settings": {
+          "seed_id": null,
+          "title": "前端邮件设置表单",
+          "type": "coding",
+          "summary": "前端新增“邮件设置”界面，录入 SendGrid API Key、From/Reply-To、dryRun/sandbox 开关，调用 admin API 保存。",
+          "acceptance_draft": [
+            "表单校验邮箱格式，必填提示，保存成功提示需要重启。",
+            "GET 预填已有配置（不显示 key，显示已保存状态）。",
+            "模板缺失时在 UI 给出阻断提示。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251122-mail-admin-api"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "复用现有 API client 与 i18n；加最小 UI 测试/故事。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.55,
+          "interfaces_touched": [
+            "frontend/settings",
+            "frontend/api client"
+          ],
+          "artifacts": [
+            "frontend/src/components/MailSettingsPanel.tsx",
+            "frontend/src/components/MailSettingsPanel.css",
+            "frontend/src/api/admin.ts",
+            "frontend/src/api/types.ts",
+            "frontend/src/api/client.ts",
+            "frontend/i18n/messages.json",
+            "frontend/src/App.tsx",
+            "frontend/src/App.css"
+          ]
+        },
+        "ST-20251122-mail-launcher-integration": {
+          "seed_id": null,
+          "title": "启动脚本自动启用邮件",
+          "type": "coding",
+          "summary": "更新 Start-WebUI/ run_stack.sh：检测 configs/mail_sender.user.json 且 dryRun=false 时自动 --with-mail；否则提示去 WebUI 配置。",
+          "acceptance_draft": [
+            "若 user 配置存在且 dryRun=false，启动 mail_dispatcher 使用该配置，无需 env 变量。",
+            "若未配置或 dryRun=true，日志提示“去 WebUI 填写邮件设置并关闭 dryRun 后重启”。",
+            "兼容旧路径：存在 SENDGRID_API_KEY 仍可用 env 启动。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251122-mail-admin-api"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "读取 user.json 的 testHooks.dryRun/sandboxMode，保持原有 CLI 参数；补 bash/node 启动路径测试。",
+          "estimate_h": 1,
+          "risk": "low",
+          "confidence": 0.7,
+          "interfaces_touched": [
+            "scripts/run_stack.sh",
+            "scripts/oneclick_start.js",
+            "Start-WebUI.*"
+          ],
+          "artifacts": [
+            "scripts/run_stack.sh",
+            "scripts/oneclick_start.js"
+          ]
+        },
+        "ST-20251122-mail-template-check": {
+          "seed_id": null,
+          "title": "模板存在性与提示",
+          "type": "coding",
+          "summary": "在保存/启动时检查 templates/email/open-seat/*、verification/* 是否存在，缺失时提示并阻止 dryRun=false 生效。",
+          "acceptance_draft": [
+            "后端保存配置时检测模板路径存在，否则返回错误。",
+            "启动脚本检测模板缺失时给出可读日志并继续以 dryRun=true 运行或拒绝启动 mail worker。",
+            "前端表单显示“模板缺失”状态，指导用户补齐文件。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P2",
+          "status": "done",
+          "dependencies": [
+            "ST-20251122-mail-admin-api"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "重用模板根路径与 requiredVariables，添加文件存在检查；记录缺失路径列表。",
+          "estimate_h": 1,
+          "risk": "medium",
+          "confidence": 0.6,
+          "interfaces_touched": [
+            "notifications/mail/template_loader.ts",
+            "api/admin",
+            "scripts/run_stack.sh"
+          ],
+          "artifacts": [
+            "notifications/mail/template_checker.ts",
+            "notifications/mail/tests/template_checker.test.ts",
+            "api/src/routes/admin.ts",
+            "api/tests/admin_mail_config.test.ts",
+            "scripts/mail_templates.js",
+            "scripts/run_stack.sh",
+            "scripts/oneclick_start.js"
+          ]
+        }
+      }
+    }
+  }
+}

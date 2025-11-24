@@ -428,6 +428,7 @@ export class MailDispatcher {
     const courseTitle =
       job.course?.title ?? (typeof job.payload.courseTitle === 'string' ? job.payload.courseTitle : 'Course update');
     const courseString = deriveCourseString(job, courseTitle);
+    const indexNumber = job.event.indexNumber ?? job.subscription.indexNumber ?? 'TBD';
     const sectionNumber =
       job.section?.section_number ??
       (typeof job.payload.sectionNumber === 'string' ? job.payload.sectionNumber : job.subscription.indexNumber) ??
@@ -443,10 +444,12 @@ export class MailDispatcher {
         courseTitle,
         courseString,
         sectionIndex: job.event.indexNumber,
+        indexNumber,
         sectionNumber,
         meetingSummary,
         campus: job.event.campusCode,
         eventDetectedAt: job.event.eventAt,
+        subscriptionId: job.subscription.subscriptionId,
         manageUrl: links.manageUrl,
         unsubscribeUrl: links.unsubscribeUrl ?? '',
       },

@@ -1,0 +1,144 @@
+{
+  "project_context": {
+    "brief": "让 openSections 轮询器自动根据本地订阅决定要监控的学期/校区组合，默认无需手动指定单一 term 参数，兼容原有显式 term/campus 配置与 checkpoint 结构。",
+    "mvp_goal": "提供“自动发现订阅学期并轮询”模式：启动时扫描 SQLite 里的活跃订阅，动态生成 term/campus 轮询任务并定期刷新；缺少数据或 key 信息时给出清晰提示，并保持与现有 run_stack/oneclick 启动脚本兼容。"
+  },
+  "md_source": "rSubscribe-plan.md",
+  "generated_at": "2025-11-24T00:00:00Z",
+  "tasks": {
+    "T-20251124-auto-term-poller": {
+      "seed_id": null,
+      "title": "轮询器按订阅自动发现学期/校区",
+      "type": "coding",
+      "summary": "为 openSections 轮询器新增 auto 模式，自动从 SQLite 订阅表推断需要监控的 term/campus 组合，动态增删轮询循环，避免用户手动指定单一学期导致漏通知。",
+      "acceptance_draft": [
+        "支持 `--terms auto`（默认）从订阅中收集 term/campus，`--terms 12024,12026` 保持旧行为；`--campuses` 在 auto 模式下可作为 allowlist 过滤。",
+        "运行中每隔固定时间（默认 5–10 分钟）刷新订阅列表，对新增组合自动创建轮询 loop，对失效组合可停用或标记 idle。",
+        "针对缺少课程数据的 term/campus 在日志中提示“需先 fetch 数据”，不中断其他组合；metrics/日志列出当前监控组合。",
+        "checkpoint 文件仍按 term/campus 存储，新增组合会写入新条目，旧组合保留或可通过 flag 清理。",
+        "保持 run_stack.sh 与 oneclick 启动脚本兼容：无显式 term 时自动传递 auto 模式；有显式 env/参数时沿用旧行为。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "in_progress",
+      "dependencies": [],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "先在 poller 内部实现组合发现与调度，再扩展 CLI 参数与 checkpoint 写入，最后更新 run_stack/oneclick 脚本与文档。",
+      "estimate_h": 6,
+      "risk": "medium",
+      "confidence": 0.62,
+      "interfaces_touched": [
+        "workers/open_sections_poller.ts",
+        "scripts/run_stack.sh",
+        "scripts/oneclick_start.js",
+        "docs"
+      ],
+      "artifacts": [
+        "workers/open_sections_poller.ts",
+        "workers/tests/open_sections_poller.auto.test.ts",
+        "scripts/run_stack.sh",
+        "scripts/oneclick_start.js",
+        "docs/quickstart.md",
+        "docs/deployment_playbook.md",
+        "docs/oneclick.md"
+      ],
+      "subtasks": {
+        "ST-20251124-auto-mode-cli": {
+          "seed_id": null,
+          "title": "CLI 支持 auto 模式与刷新周期",
+          "type": "coding",
+          "summary": "扩展 poller 参数：新增 `--terms auto|list`、`--refresh-interval-mins`，在 auto 时从订阅收集 term/campus，并按 allowlist 过滤。",
+          "acceptance_draft": [
+            "默认使用 auto；显式传单一/多 term 时行为不变。",
+            "刷新周期可配置，最小粒度分钟级；无订阅时给出提示后进入 idle。",
+            "命令行帮助与错误信息清晰、不中断旧用法。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先调整参数解析与配置模型，再补测试覆盖 auto/显式列表/非法参数。",
+          "estimate_h": 2,
+          "risk": "low",
+          "confidence": 0.7,
+          "interfaces_touched": [
+            "workers/open_sections_poller.ts"
+          ],
+          "artifacts": [
+            "workers/open_sections_poller.ts",
+            "workers/tests/open_sections_poller.auto.test.ts"
+          ]
+        },
+        "ST-20251124-dynamic-loops": {
+          "seed_id": null,
+          "title": "动态增删 term/campus 轮询循环",
+          "type": "coding",
+          "summary": "实现基于订阅的组合发现与 loop 管理，支持在运行时增量添加/停用轮询，并在缺数据时跳过组合。",
+          "acceptance_draft": [
+            "每个 term/campus 有独立循环与 checkpoint；新增组合会即时创建并写 checkpoint。",
+            "缺少 sections 数据时记录 warning 不报错，其他组合继续运行。",
+            "metrics/日志打印当前活跃组合与变更事件。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251124-auto-mode-cli"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "提取 loop 管理器共享信号量；用测试 fixture 验证新增/移除组合与 checkpoint 写入。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.58,
+          "interfaces_touched": [
+            "workers/open_sections_poller.ts"
+          ],
+          "artifacts": [
+            "workers/open_sections_poller.ts",
+            "workers/tests/open_sections_poller.auto.test.ts"
+          ]
+        },
+        "ST-20251124-launcher-docs": {
+          "seed_id": null,
+          "title": "启动脚本与文档对齐 auto 模式",
+          "type": "coding",
+          "summary": "让 run_stack/oneclick 默认传递 auto 模式并提示数据前置条件，更新文档与故障排查。",
+          "acceptance_draft": [
+            "run_stack.sh/oneclick 在未提供 term/env 时默认 `--terms auto`；提供 env 时保持原逻辑。",
+            "缺少 term 数据时在启动日志提示“先 fetch 对应 term/campus”。",
+            "quickstart/oneclick/deployment 文档加入 auto 模式说明与排查步骤。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P2",
+          "status": "done",
+          "dependencies": [
+            "ST-20251124-auto-mode-cli",
+            "ST-20251124-dynamic-loops"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "完成 poller 改造后更新脚本与文档并快速回归启动路径。",
+          "estimate_h": 1,
+          "risk": "low",
+          "confidence": 0.76,
+          "interfaces_touched": [
+            "scripts/run_stack.sh",
+            "scripts/oneclick_start.js",
+            "docs"
+          ],
+          "artifacts": [
+            "scripts/run_stack.sh",
+            "scripts/oneclick_start.js",
+            "docs/quickstart.md",
+            "docs/oneclick.md",
+            "docs/deployment_playbook.md"
+          ]
+        }
+      }
+    }
+  }
+}

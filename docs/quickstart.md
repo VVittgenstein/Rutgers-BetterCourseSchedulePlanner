@@ -20,10 +20,11 @@ Notes:
 
 ## Run the stack
 ```bash
-./scripts/run_stack.sh --term 12024 --campuses NB \
+./scripts/run_stack.sh \
+  [--terms 12024 --campuses NB] \
   [--with-mail --mail-config configs/mail_sender.local.json]
 ```
-Defaults start API + frontend + openSections poller. The API binds to `127.0.0.1`; change `APP_HOST` only if you explicitly want remote access. Logs stream to `logs/run_stack/`. Use `--no-frontend`, `--no-poller`, or `--poller-once` to slim down the process list.
+Defaults start API + frontend + openSections poller. The poller runs with `--terms auto` (discovers term/campus from subscriptions); add `--terms 12024 --campuses NB` to pin it. If a discovered combo lacks local sections data, logs will say `fetch course data` but other combos keep running. The API binds to `127.0.0.1`; change `APP_HOST` only if you explicitly want remote access. Logs stream to `logs/run_stack/`. Use `--no-frontend`, `--no-poller`, or `--poller-once` to slim down the process list.
 
 ## Verify quickly
 - Check the fetch summary: `cat logs/fetch_runs/summary_latest.log` (expect inserts >0).
@@ -43,3 +44,4 @@ Defaults start API + frontend + openSections poller. The API binds to `127.0.0.1
 - `Missing required command: node` or `invalid ELF header` for better-sqlite3 → install Node 22+ and rerun `npm install` after deleting `node_modules/ frontend/node_modules/`.
 - Full-init stuck on deletes → wipe `data/local.db*` or switch to `--db data/fresh_<date>.db`, then rerun setup.
 - Persistent `openSections` failures → retry `npm run data:fetch -- --config configs/fetch_pipeline.local.json --mode full-init --terms 12024 --campuses NB` after a short pause; network issues will surface with request IDs.
+- Poller logs `fetch course data for this term/campus` → run a fetch for that combo (`npm run data:fetch -- --config configs/fetch_pipeline.local.json --mode full-init --terms <term> --campuses <campus>`) so auto mode has local sections.

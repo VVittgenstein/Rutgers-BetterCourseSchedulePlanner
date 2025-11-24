@@ -9,8 +9,8 @@ Bring a clean laptop/VM from git clone to a running stack (SQLite + data fetch +
   `./scripts/setup_local_env.sh --terms 12024 --campuses NB`  
   Creates `configs/*.local.json` if missing, runs `npm install` (root + frontend), applies migrations to `data/local.db`, then triggers a full-init fetch (use `--skip-fetch` to defer).
 - Start local stack with logs under `logs/run_stack/`:  
-  `./scripts/run_stack.sh --term 12024 --campuses NB`  
-  Starts API + frontend + openSections poller by default; add `--with-mail` (requires `SENDGRID_API_KEY` + mail config) if you want email alerts.
+  `./scripts/run_stack.sh [--terms 12024 --campuses NB]`  
+  Starts API + frontend + openSections poller by default; poller uses `--terms auto` (discover from subscriptions) unless you pin terms. Add `--with-mail` (requires `SENDGRID_API_KEY` + mail config) if you want email alerts.
 
 ## Pre-flight checklist
 | Item | Notes |
@@ -77,12 +77,12 @@ Bring a clean laptop/VM from git clone to a running stack (SQLite + data fetch +
    - openSections poller (queues open-seat events):
      ```bash
      tsx workers/open_sections_poller.ts \
-       --term 12024 --campuses NB \
+       --terms auto \
        --interval 20 --sqlite data/local.db \
        --checkpoint data/poller_checkpoint.json \
        --metrics-port 9309
      ```
-     Expected: lines like `[NB] openSections=XX opened=Y closed=Z events=E notifications=N ...`.
+     Pin to one term with `--terms 12024 --campuses NB` if you don't want auto discovery. Expected: lines like `[NB] openSections=XX opened=Y closed=Z events=E notifications=N ...`; missing datasets log `fetch course data` without stopping other targets.
    - Mail dispatcher:
      ```bash
      SENDGRID_API_KEY=... tsx workers/mail_dispatcher.ts \
@@ -124,7 +124,7 @@ Bring a clean laptop/VM from git clone to a running stack (SQLite + data fetch +
 3. Force an open event for smoke testing (avoids waiting for a live flip):
   ```bash
   sqlite3 data/local.db "UPDATE sections SET is_open=0, open_status='CLOSED' WHERE index_number='12345';"
-  tsx workers/open_sections_poller.ts --term 12024 --campuses NB --once --sqlite data/local.db --checkpoint data/poller_checkpoint.json
+  tsx workers/open_sections_poller.ts --terms 12024 --campuses NB --once --sqlite data/local.db --checkpoint data/poller_checkpoint.json
   sqlite3 data/local.db "SELECT fanout_status,COUNT(*) FROM open_event_notifications GROUP BY 1;"
   ```
   Expected: a `pending` count ≥1 for that index.

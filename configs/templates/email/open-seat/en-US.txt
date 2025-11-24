@@ -1,0 +1,3 @@
+Course {{courseTitle}} (Index {{indexNumber}}) has an open seat.
+Manage: {{manageUrl}}
+Unsubscribe: {{unsubscribeUrl}}

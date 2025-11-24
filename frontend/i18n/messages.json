@@ -323,6 +323,63 @@
       "meta": "{{campus}} · {{term}}",
       "fallbackTitle": "Untitled course"
     },
+    "mailSettings": {
+      "eyebrow": "Delivery",
+      "title": "Mail settings",
+      "subtitle": "Store your SendGrid key locally and control dry-run without touching env vars.",
+      "status": {
+        "loading": "Loading mail config…",
+        "source": {
+          "user": "User config in use",
+          "example": "Example defaults"
+        },
+        "keyPresent": "API key saved",
+        "keyMissing": "API key missing",
+        "path": "Config: {{path}}"
+      },
+      "fields": {
+        "defaultFromEmail": "From email",
+        "defaultFromName": "From name",
+        "defaultFromPlaceholder": "Course Alerts",
+        "replyToEmail": "Reply-To email (optional)",
+        "replyToName": "Reply-To name",
+        "replyToPlaceholder": "Support desk",
+        "apiKey": "SendGrid API Key",
+        "apiKeyPlaceholder": "Paste SG.xxxxx key (kept locally)",
+        "apiKeySaved": "Key already stored; leave blank to keep existing value.",
+        "sandboxMode": "SendGrid sandbox mode",
+        "sandboxHint": "Send test calls without reaching real inboxes.",
+        "dryRun": "Dry-run mode",
+        "dryRunHint": "Skips provider send but keeps the pipeline healthy."
+      },
+      "templates": {
+        "warningTitle": "Templates missing",
+        "warningBody": "We detected gaps in template locales. Keep dry-run on until files are restored.",
+        "cta": "Place email templates under {{root}} to enable sending.",
+        "blocking": "Missing templates block real sends. Keep dry-run enabled.",
+        "missingEntry": "Missing {{kind}} for {{id}} ({{locale}})",
+        "none": "No templates configured.",
+        "kinds": {
+          "html": "HTML",
+          "text": "Text",
+          "subject": "Subject"
+        }
+      },
+      "actions": {
+        "save": "Save mail settings",
+        "retry": "Retry"
+      },
+      "messages": {
+        "saved": "Saved. Restart Start-WebUI to apply mail changes."
+      },
+      "errors": {
+        "missingFrom": "Add a From email.",
+        "invalidFrom": "From email looks invalid.",
+        "invalidReplyTo": "Reply-To email looks invalid.",
+        "missingKey": "Provide a SendGrid API key before sending real mail.",
+        "templatesBlocking": "Resolve template gaps before disabling dry-run."
+      }
+    },
     "schedule": {
       "header": {
         "eyebrow": "Preview · Weekly grid",
@@ -665,6 +722,63 @@
       "error": "获取订阅失败：{{message}}",
       "meta": "{{campus}} · {{term}}",
       "fallbackTitle": "未命名课程"
+    },
+    "mailSettings": {
+      "eyebrow": "邮件",
+      "title": "邮件设置",
+      "subtitle": "在本地写入 SendGrid Key 并控制 dry-run，无需命令行。",
+      "status": {
+        "loading": "正在加载邮件配置…",
+        "source": {
+          "user": "使用用户配置",
+          "example": "示例默认值"
+        },
+        "keyPresent": "已保存 API Key",
+        "keyMissing": "缺少 API Key",
+        "path": "配置文件：{{path}}"
+      },
+      "fields": {
+        "defaultFromEmail": "From 邮箱",
+        "defaultFromName": "发件人名称",
+        "defaultFromPlaceholder": "课程提醒",
+        "replyToEmail": "Reply-To 邮箱（可选）",
+        "replyToName": "Reply-To 名称",
+        "replyToPlaceholder": "客服/帮助台",
+        "apiKey": "SendGrid API Key",
+        "apiKeyPlaceholder": "粘贴 SG.xxxxx（仅保存在本机）",
+        "apiKeySaved": "已存在 key，如不变更可留空。",
+        "sandboxMode": "SendGrid sandbox 模式",
+        "sandboxHint": "用于联调，不会真正投递。",
+        "dryRun": "Dry-run（跳过真实发送）",
+        "dryRunHint": "仅走流程，不触达用户。"
+      },
+      "templates": {
+        "warningTitle": "模板缺失",
+        "warningBody": "检测到模板/语言缺口。修复前请保持 dry-run。",
+        "cta": "将模板放到 {{root}} 后再关闭 dry-run。",
+        "blocking": "模板缺失会阻止真实发送，请先补齐。",
+        "missingEntry": "缺少 {{id}} 的 {{kind}}（{{locale}}）",
+        "none": "尚未配置模板。",
+        "kinds": {
+          "html": "HTML",
+          "text": "纯文本",
+          "subject": "主题"
+        }
+      },
+      "actions": {
+        "save": "保存邮件设置",
+        "retry": "重试"
+      },
+      "messages": {
+        "saved": "已保存。请重启 Start-WebUI 脚本使配置生效。"
+      },
+      "errors": {
+        "missingFrom": "请填写发件邮箱。",
+        "invalidFrom": "发件邮箱格式不正确。",
+        "invalidReplyTo": "Reply-To 邮箱格式不正确。",
+        "missingKey": "没有 SendGrid API Key 不能真实发信。",
+        "templatesBlocking": "请先补齐模板后再关闭 dry-run。"
+      }
     },
     "schedule": {
       "header": {

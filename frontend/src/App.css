@@ -78,6 +78,9 @@
 
 .course-app__manager {
   margin-top: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 @media (max-width: 960px) {
