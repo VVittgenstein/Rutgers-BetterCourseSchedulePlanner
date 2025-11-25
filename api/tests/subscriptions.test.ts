@@ -129,16 +129,38 @@ test('list active subscriptions returns active rows', async (t) => {
   assert.equal(create.statusCode, 201);
   const created = create.json();
 
+  const localSound = await server.inject({
+    method: 'POST',
+    url: '/api/subscribe',
+    payload: {
+      term: '20251',
+      campus: 'NB',
+      sectionIndex: '99999',
+      contactType: 'local_sound',
+      contactValue: 'device-001',
+    },
+  });
+  assert.equal(localSound.statusCode, 201);
+  const localCreated = localSound.json();
+
   const response = await server.inject({
     method: 'GET',
     url: '/api/subscriptions',
   });
 
   assert.equal(response.statusCode, 200);
-  const body = response.json() as { subscriptions: Array<{ subscriptionId: number; status: string }> };
-  const match = body.subscriptions.find((entry) => entry.subscriptionId === created.subscriptionId);
-  assert.ok(match);
-  assert.equal(match?.status, 'active');
+  const body = response.json() as {
+    subscriptions: Array<{ subscriptionId: number; status: string; contactType: string }>;
+  };
+  const emailSubscription = body.subscriptions.find((entry) => entry.subscriptionId === created.subscriptionId);
+  assert.ok(emailSubscription);
+  assert.equal(emailSubscription?.status, 'active');
+  assert.equal(emailSubscription?.contactType, 'email');
+
+  const soundSubscription = body.subscriptions.find((entry) => entry.subscriptionId === localCreated.subscriptionId);
+  assert.ok(soundSubscription);
+  assert.equal(soundSubscription?.status, 'active');
+  assert.equal(soundSubscription?.contactType, 'local_sound');
 });
 
 test('contact limit is removed for local-only mode', async (t) => {

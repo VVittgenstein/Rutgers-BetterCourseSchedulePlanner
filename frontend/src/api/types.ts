@@ -132,7 +132,7 @@ export interface FetchStatusResponse {
   };
 }
 
-export type SubscriptionContactType = 'email';
+export type SubscriptionContactType = 'email' | 'local_sound';
 
 export type SubscriptionPreferencesInput = Partial<{
   notifyOn: Array<'open' | 'waitlist'>;
@@ -195,10 +195,31 @@ export interface ActiveSubscription {
   sectionIndex: string;
   status: 'active';
   contactValue: string;
+  contactType: SubscriptionContactType;
   createdAt: string | null;
   sectionNumber: string | null;
   subjectCode: string | null;
   courseTitle: string | null;
+}
+
+export interface LocalNotification {
+  notificationId: number;
+  term: string;
+  campus: string;
+  sectionIndex: string;
+  courseTitle: string | null;
+  eventAt: string;
+  dedupeKey: string;
+  traceId: string | null;
+}
+
+export interface ClaimLocalNotificationsResponse {
+  notifications: LocalNotification[];
+  traceId: string;
+  meta?: {
+    version: string;
+    count: number;
+  };
 }
 
 export interface ActiveSubscriptionsResponse {

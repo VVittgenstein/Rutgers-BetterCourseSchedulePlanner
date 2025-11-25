@@ -198,7 +198,7 @@ async function simulate() {
   const dbPath = path.join(tempDir, 'local.db');
   const term = '12025';
   const campus = 'NB';
-  const pollIntervalMs = 20000;
+  const pollIntervalMs = 15000;
   const jitter = 0.2;
   const nowIso = '2025-02-01T10:00:00.000Z';
 
@@ -236,7 +236,7 @@ async function simulate() {
     const dispatchFinished = performance.now();
     const detectionToSendMs = dispatchFinished - detectionStart;
 
-    // Force a close then a reopen within the same 5-minute bucket to confirm dedupe.
+    // Force a close then a reopen within the same 3-minute bucket to confirm dedupe.
     applySnapshot(ctx, target, [], new Date(openAt.getTime() + 20000));
     applySnapshot(ctx, target, [], new Date(openAt.getTime() + 40000));
     const reopenOutcome = applySnapshot(ctx, target, ['12345'], new Date(openAt.getTime() + 2 * 60 * 1000));

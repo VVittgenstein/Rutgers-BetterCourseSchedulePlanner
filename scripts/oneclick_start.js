@@ -9,7 +9,7 @@ import { evaluateMailConfig as evaluateMailConfigFile, summarizeIssues as summar
 const MIN_NODE_MAJOR = 22;
 const API_PORT = process.env.CSP_API_PORT ?? '3333';
 const FRONTEND_PORT = process.env.CSP_FRONTEND_PORT ?? '5174';
-const POLLER_INTERVAL = process.env.CSP_POLLER_INTERVAL ?? '20';
+const POLLER_INTERVAL = process.env.CSP_POLLER_INTERVAL ?? '15';
 const POLLER_TERMS = process.env.CSP_TERMS ?? process.env.CSP_TERM ?? 'auto';
 const POLLER_CAMPUSES = process.env.CSP_CAMPUSES;
 const SKIP_POLLER = process.env.CSP_SKIP_POLLER === '1';
@@ -60,15 +60,30 @@ function resolveConfigDir(rawDir) {
   return path.isAbsolute(rawDir) ? rawDir : path.resolve(ROOT_DIR, rawDir);
 }
 
+function resolveNpmCli(baseCli) {
+  const nodeDir = path.dirname(process.execPath);
+  const cliPath = path.join(nodeDir, 'node_modules', 'npm', 'bin', baseCli);
+  return fs.existsSync(cliPath) ? cliPath : null;
+}
+
 function resolveNpmLike(base) {
   if (process.platform !== 'win32') return base;
   const candidate = path.join(path.dirname(process.execPath), `${base}.cmd`);
-  if (fs.existsSync(candidate)) return candidate;
-  return `${base}.cmd`;
+  return fs.existsSync(candidate) ? candidate : `${base}.cmd`;
 }
 
-const NPM_CMD = resolveNpmLike('npm');
-const NPX_CMD = resolveNpmLike('npx');
+const NPM_CLI = resolveNpmCli('npm-cli.js');
+const NPX_CLI = resolveNpmCli('npx-cli.js');
+const NPM_CMD = process.platform === 'win32' && NPM_CLI ? process.execPath : resolveNpmLike('npm');
+const NPX_CMD = process.platform === 'win32' && NPX_CLI ? process.execPath : resolveNpmLike('npx');
+
+function withNpmArgs(args) {
+  return process.platform === 'win32' && NPM_CLI ? [NPM_CLI, ...args] : args;
+}
+
+function withNpxArgs(args) {
+  return process.platform === 'win32' && NPX_CLI ? [NPX_CLI, ...args] : args;
+}
 
 function log(message) {
   console.log(`[oneclick] ${message}`);
@@ -76,6 +91,20 @@ function log(message) {
 
 function warn(message) {
   console.warn(`[oneclick] ${message}`);
+}
+
+function quoteWindowsArg(arg) {
+  if (!/[ \t"&]/.test(arg)) return arg;
+  return `"${arg.replace(/(["\\])/g, '\\$1')}"`;
+}
+
+function prepareCommand(command, args) {
+  if (process.platform !== 'win32' || !command.toLowerCase().endsWith('.cmd')) {
+    return { command, args };
+  }
+  const cmdExe = process.env.ComSpec || 'cmd.exe';
+  const full = [quoteWindowsArg(command), ...args.map(quoteWindowsArg)].join(' ').trim();
+  return { command: cmdExe, args: ['/d', '/s', '/c', full] };
 }
 
 function ensureNodeVersion() {
@@ -215,9 +244,11 @@ function ensureFetchConfig() {
 
 function runCommand(label, command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const prepared = prepareCommand(command, args);
     log(`${label}...`);
-    log(`  cmd: ${command} ${args.join(' ')} (cwd=${options.cwd ?? process.cwd()})`);
-    const child = spawn(command, args, { stdio: 'inherit', shell: process.platform === 'win32', ...options });
+    log(`  cmd: ${prepared.command} ${prepared.args.join(' ')} (cwd=${options.cwd ?? process.cwd()})`);
+    // Avoid shell on Windows so paths with spaces (e.g., "C:\\Program Files\\") don't break.
+    const child = spawn(prepared.command, prepared.args, { stdio: 'inherit', shell: false, ...options });
     child.on('exit', (code) => {
       if (code === 0) {
         resolve(0);
@@ -228,9 +259,7 @@ function runCommand(label, command, args, options = {}) {
     child.on('error', (error) =>
       reject(
         new Error(
-          `${label} failed to start (${error instanceof Error ? `${error.message}` : String(error)}); cmd=${command} cwd=${
-            options.cwd ?? process.cwd()
-          }`,
+          `${label} failed to start (${error instanceof Error ? `${error.message}` : String(error)}); cmd=${prepared.command} cwd=${options.cwd ?? process.cwd()}`,
         ),
       ),
     );
@@ -255,7 +284,7 @@ async function ensureDependencies() {
   const needsRootInstall =
     !fs.existsSync(path.join(ROOT_DIR, 'node_modules')) || (process.platform === 'win32' && !fs.existsSync(tsxBin));
   if (needsRootInstall) {
-    await runCommand('Installing root dependencies (platform-specific rebuild)', NPM_CMD, ['install', '--force'], {
+    await runCommand('Installing root dependencies (platform-specific rebuild)', NPM_CMD, withNpmArgs(['install', '--force']), {
       cwd: ROOT_DIR,
     });
   } else {
@@ -266,7 +295,7 @@ async function ensureDependencies() {
     !fs.existsSync(path.join(FRONTEND_DIR, 'node_modules')) ||
     (process.platform === 'win32' && !fs.existsSync(viteBin));
   if (needsFrontendInstall) {
-    await runCommand('Installing frontend dependencies (platform-specific rebuild)', NPM_CMD, ['install', '--force'], {
+    await runCommand('Installing frontend dependencies (platform-specific rebuild)', NPM_CMD, withNpmArgs(['install', '--force']), {
       cwd: FRONTEND_DIR,
     });
   } else {
@@ -277,7 +306,7 @@ async function ensureDependencies() {
   const validate = spawn(process.execPath, ['-e', "require('better-sqlite3')"], {
     cwd: ROOT_DIR,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: false,
   });
   const exitCode = await new Promise((resolve) => {
     validate.on('error', () => resolve(1));
@@ -293,14 +322,14 @@ async function ensureDependencies() {
     } catch (err) {
       warn(`Could not clean old better-sqlite3 folder: ${err instanceof Error ? err.message : String(err)}`);
     }
-    await runCommand('Reinstalling better-sqlite3', NPM_CMD, ['install', '--force', 'better-sqlite3'], {
+    await runCommand('Reinstalling better-sqlite3', NPM_CMD, withNpmArgs(['install', '--force', 'better-sqlite3']), {
       cwd: ROOT_DIR,
       env: { ...process.env, npm_config_build_from_source: '1' },
     });
     const revalidate = spawn(process.execPath, ['-e', "require('better-sqlite3')"], {
       cwd: ROOT_DIR,
       stdio: 'inherit',
-      shell: process.platform === 'win32',
+      shell: false,
     });
     const revalidateExit = await new Promise((resolve) => {
       revalidate.on('error', () => resolve(1));
@@ -313,14 +342,14 @@ async function ensureDependencies() {
       } catch (err) {
         warn(`Could not remove node_modules completely: ${err instanceof Error ? err.message : String(err)}`);
       }
-      await runCommand('Reinstalling all dependencies cleanly', NPM_CMD, ['install', '--force'], {
+      await runCommand('Reinstalling all dependencies cleanly', NPM_CMD, withNpmArgs(['install', '--force']), {
         cwd: ROOT_DIR,
         env: { ...process.env, npm_config_build_from_source: '1' },
       });
       const finalValidate = spawn(process.execPath, ['-e', "require('better-sqlite3')"], {
         cwd: ROOT_DIR,
         stdio: 'inherit',
-        shell: process.platform === 'win32',
+        shell: false,
       });
       const finalExit = await new Promise((resolve) => {
         finalValidate.on('error', () => resolve(1));
@@ -340,7 +369,7 @@ async function prepareDatabase(dbPath, term, campuses, fetchConfigPath) {
   await runCommand(
     'Running database migrations',
     NPM_CMD,
-    ['run', 'db:migrate', '--', '--db', dbPath, '--verbose'],
+    withNpmArgs(['run', 'db:migrate', '--', '--db', dbPath, '--verbose']),
     {
       cwd: ROOT_DIR,
     },
@@ -355,14 +384,15 @@ async function prepareDatabase(dbPath, term, campuses, fetchConfigPath) {
   await runCommand(
     'Fetching course data (this can take a few minutes on first run)',
     NPM_CMD,
-    ['run', 'data:fetch', '--', '--config', fetchConfigPath, '--mode', 'full-init', '--terms', term, '--campuses', campuses.join(',')],
+    withNpmArgs(['run', 'data:fetch', '--', '--config', fetchConfigPath, '--mode', 'full-init', '--terms', term, '--campuses', campuses.join(',')]),
     { cwd: ROOT_DIR },
   );
 }
 
 function startProcess(name, command, args, options = {}) {
   log(`Starting ${name}...`);
-  const child = spawn(command, args, { stdio: 'inherit', shell: process.platform === 'win32', ...options });
+  const prepared = prepareCommand(command, args);
+  const child = spawn(prepared.command, prepared.args, { stdio: 'inherit', shell: false, ...options });
   children.push({ name, child });
   child.on('exit', (code, signal) => {
     if (shuttingDown) return;
@@ -439,7 +469,7 @@ async function main() {
   startProcess(
     'api',
     NPM_CMD,
-    ['run', 'api:start'],
+    withNpmArgs(['run', 'api:start']),
     {
       cwd: ROOT_DIR,
       env: { ...process.env, APP_PORT: API_PORT, APP_HOST: '127.0.0.1', SQLITE_FILE: dbPath },
@@ -449,7 +479,7 @@ async function main() {
   startProcess(
     'frontend',
     NPM_CMD,
-    ['run', 'dev', '--', '--host', '127.0.0.1', '--port', FRONTEND_PORT],
+    withNpmArgs(['run', 'dev', '--', '--host', '127.0.0.1', '--port', FRONTEND_PORT]),
     {
       cwd: FRONTEND_DIR,
       env: {
@@ -480,7 +510,7 @@ async function main() {
     startProcess(
       'open_sections_poller',
       NPX_CMD,
-      pollerArgs,
+      withNpxArgs(pollerArgs),
       { cwd: ROOT_DIR },
     );
   } else {
@@ -492,7 +522,7 @@ async function main() {
     startProcess(
       'mail_dispatcher',
       NPX_CMD,
-      [
+      withNpxArgs([
         'tsx',
         'workers/mail_dispatcher.ts',
         '--sqlite',
@@ -503,7 +533,7 @@ async function main() {
         String(MAIL_BATCH),
         '--app-base-url',
         APP_BASE_URL,
-      ],
+      ]),
       { cwd: ROOT_DIR },
     );
     const envNote = mailDecision.apiKeyEnv ? ` (${mailDecision.apiKeyEnv})` : '';

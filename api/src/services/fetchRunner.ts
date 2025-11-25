@@ -75,6 +75,37 @@ function resolveNpmLike(base: string) {
   return candidate;
 }
 
+function resolveNpmCli(baseCli: string) {
+  const nodeDir = path.dirname(process.execPath);
+  const cliPath = path.join(nodeDir, 'node_modules', 'npm', 'bin', baseCli);
+  return fs.existsSync(cliPath) ? cliPath : null;
+}
+
+function resolveNpmCommand() {
+  if (process.platform === 'win32') {
+    const cli = resolveNpmCli('npm-cli.js');
+    if (cli) {
+      return { cmd: process.execPath, prefix: [cli] };
+    }
+    return { cmd: resolveNpmLike('npm'), prefix: [] };
+  }
+  return { cmd: 'npm', prefix: [] };
+}
+
+function quoteWindowsArg(arg: string) {
+  if (!/[ \t"&]/.test(arg)) return arg;
+  return `"${arg.replace(/(["\\])/g, '\\$1')}"`;
+}
+
+function prepareCommand(command: string, args: string[]) {
+  if (process.platform !== 'win32' || !command.toLowerCase().endsWith('.cmd')) {
+    return { command, args };
+  }
+  const cmdExe = process.env.ComSpec || 'cmd.exe';
+  const full = [quoteWindowsArg(command), ...args.map(quoteWindowsArg)].join(' ').trim();
+  return { command: cmdExe, args: ['/d', '/s', '/c', full] };
+}
+
 function buildRuntimeConfig(options: StartFetchJobOptions, job: FetchJob) {
   ensureDir(RUNTIME_DIR);
   const baseConfigPath = resolveBaseConfig(options.baseConfigPath);
@@ -154,17 +185,31 @@ export function startFetchJob(options: StartFetchJobOptions): FetchJob {
   const logStream = fs.createWriteStream(logFile, { flags: 'a' });
   logStream.write(`[webui] Starting fetch for term=${job.term}, campus=${job.campus}, mode=${job.mode}\n`);
 
-  const npmCmd = resolveNpmLike('npm');
+  const npm = resolveNpmCommand();
+  const prepared = prepareCommand(npm.cmd, [
+    ...npm.prefix,
+    'run',
+    'data:fetch',
+    '--',
+    '--config',
+    configPath,
+    '--mode',
+    options.mode,
+    '--terms',
+    options.term,
+    '--campuses',
+    options.campus,
+  ]);
   let child: ChildProcessWithoutNullStreams;
   try {
     child = spawn(
-      npmCmd,
-      ['run', 'data:fetch', '--', '--config', configPath, '--mode', options.mode, '--terms', options.term, '--campuses', options.campus],
+      prepared.command,
+      prepared.args,
       {
         cwd: options.workdir ?? process.cwd(),
         env: { ...process.env, SQLITE_FILE: options.sqliteFile },
         stdio: ['ignore', 'pipe', 'pipe'],
-        shell: process.platform === 'win32',
+        shell: false, // avoid cmd.exe so paths with spaces (e.g., Program Files) don't break
       },
     );
   } catch (error) {

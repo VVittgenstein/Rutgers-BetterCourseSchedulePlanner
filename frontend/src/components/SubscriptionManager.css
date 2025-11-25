@@ -136,6 +136,31 @@
   font-size: 0.9rem;
 }
 
+.subscription-manager__channel-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+  line-height: 1.1;
+  flex-shrink: 0;
+}
+
+.subscription-manager__channel-pill--email {
+  background: #f8f0e0;
+  border-color: #d5c6a1;
+  color: #6b5f45;
+}
+
+.subscription-manager__channel-pill--sound {
+  background: #e8f1ff;
+  border-color: #9eb7e0;
+  color: #274a78;
+}
+
 .subscription-manager__title {
   margin: 0;
   color: #2f2a1f;

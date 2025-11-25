@@ -12,7 +12,7 @@ TERMS_MODE="auto"
 if [[ "${TERMS,,}" != "auto" ]]; then
   TERMS_MODE="explicit"
 fi
-POLL_INTERVAL=20
+POLL_INTERVAL=15
 POLL_INTERVAL_MS=""
 POLL_CHECKPOINT="$ROOT_DIR/data/poller_checkpoint.json"
 START_API=1

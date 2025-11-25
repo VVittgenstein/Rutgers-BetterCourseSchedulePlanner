@@ -75,13 +75,13 @@ Bring a clean laptop/VM from git clone to a running stack (SQLite + data fetch +
      ```
      Expected output: Vite ready message and UI at http://localhost:5174.
    - openSections poller (queues open-seat events):
-     ```bash
-     tsx workers/open_sections_poller.ts \
-       --terms auto \
-       --interval 20 --sqlite data/local.db \
-       --checkpoint data/poller_checkpoint.json \
-       --metrics-port 9309
-     ```
+    ```bash
+    tsx workers/open_sections_poller.ts \
+      --terms auto \
+      --interval 15 --sqlite data/local.db \
+      --checkpoint data/poller_checkpoint.json \
+      --metrics-port 9309
+    ```
      Pin to one term with `--terms 12024 --campuses NB` if you don't want auto discovery. Expected: lines like `[NB] openSections=XX opened=Y closed=Z events=E notifications=N ...`; missing datasets log `fetch course data` without stopping other targets.
    - Mail dispatcher:
      ```bash
