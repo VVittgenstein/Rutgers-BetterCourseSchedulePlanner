@@ -2,11 +2,11 @@
   background: #ffffff;
   border-radius: 14px;
   border: 1px solid rgba(15, 23, 42, 0.08);
-  padding: 1rem 1.1rem;
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  padding: 0.9rem 1rem;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.07);
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.65rem;
 }
 
 .subscription-center__header {
@@ -33,8 +33,8 @@
   background: #eef2ff;
   color: #312e81;
   border-radius: 999px;
-  padding: 0.25rem 0.75rem;
-  font-size: 0.85rem;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.82rem;
 }
 
 .subscription-center__hint {
@@ -66,7 +66,7 @@
 
 .subscription-center__contact-types {
   display: inline-flex;
-  gap: 0.4rem;
+  gap: 0.35rem;
 }
 
 .subscription-center__pill {
@@ -77,16 +77,48 @@
   padding: 0.3rem 0.75rem;
   cursor: pointer;
   font-size: 0.85rem;
+  font-weight: 700;
 }
 
 .subscription-center__pill--active {
   background: rgba(99, 102, 241, 0.2);
 }
 
+.subscription-center__device {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+  border: 1px dashed rgba(99, 102, 241, 0.35);
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: rgba(99, 102, 241, 0.06);
+}
+
+.subscription-center__device-label {
+  margin: 0;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.subscription-center__device-value {
+  background: white;
+  border-radius: 8px;
+  padding: 0.35rem 0.4rem;
+  display: inline-block;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  margin-top: 0.1rem;
+}
+
+.subscription-center__hint--muted {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
 .subscription-center__feedback {
   border-radius: 10px;
-  padding: 0.6rem 0.75rem;
-  font-size: 0.9rem;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.88rem;
 }
 
 .subscription-center__feedback--success {

@@ -123,7 +123,7 @@ const defaultPreferences: Preferences = {
   channelMetadata: {},
 };
 
-const OPEN_REMINDER_INTERVAL_MS = 5 * 60 * 1000;
+const OPEN_REMINDER_INTERVAL_MS = 3 * 60 * 1000;
 
 type CampusCheckpoint = {
   term: string;
@@ -229,7 +229,7 @@ export function parseArgs(argv: string[]): PollerOptions {
     termsMode: 'auto',
     terms: [],
     campuses: [],
-    intervalMs: 60000,
+    intervalMs: 15000,
     refreshIntervalMs: 5 * 60 * 1000,
     jitter: 0.3,
     sqliteFile: path.resolve('data', 'local.db'),
@@ -394,14 +394,14 @@ function showUsage(): void {
   console.log(`openSections poller
 
 Usage:
-  tsx workers/open_sections_poller.ts [--terms auto|12024,12026] [--campuses NB,NK] [--interval 60] [--sqlite data/local.db]
+  tsx workers/open_sections_poller.ts [--terms auto|12024,12026] [--campuses NB,NK] [--interval 15] [--sqlite data/local.db]
 
 Flags:
   --terms <auto|list>          Terms to poll; use auto to read active subscriptions (default: auto)
   --term <id>                  Alias for --terms <id> (backwards compatibility)
   --campuses <list>            Comma list of campus codes; acts as allowlist in auto mode
   --refresh-interval-mins <m>  How often to rescan subscriptions in auto mode (default: 5)
-  --interval <sec>             Base interval between polls in seconds (default: 60)
+  --interval <sec>             Base interval between polls in seconds (default: 15)
   --interval-ms <ms>           Base interval in milliseconds (overrides --interval)
   --sqlite <path>              SQLite database file (default: data/local.db)
   --timeout <ms>               HTTP timeout for openSections (default: 12000)
@@ -695,7 +695,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function buildDedupeKey(term: string, campus: string, index: string, status: string, at: Date): string {
-  const bucket = Math.floor(at.getTime() / (5 * 60 * 1000));
+  const bucket = Math.floor(at.getTime() / (3 * 60 * 1000));
   return crypto.createHash('sha1').update(`${term}|${campus}|${index}|${status}|${bucket}`).digest('hex');
 }
 
@@ -1153,7 +1153,7 @@ export function applySnapshot(
       notifications += eventOutcome.notifications;
     }
 
-    // Emit periodic reminders for sections that are already open (deduped to one event per 5-minute bucket).
+    // Emit periodic reminders for sections that are already open (deduped to one event per 3-minute bucket).
     for (const section of sections) {
       if (section.is_open !== 1) continue;
       if (!seen.has(section.index_number)) continue;
@@ -1243,7 +1243,7 @@ function createEventAndFanout(
     }
   }
   const dedupeKey = buildDedupeKey(term, args.campus, args.section.index_number, args.statusAfter, eventTime);
-  const cutoff = new Date(eventTime.getTime() - 5 * 60 * 1000).toISOString();
+  const cutoff = new Date(eventTime.getTime() - 3 * 60 * 1000).toISOString();
   const existing = ctx.statements.selectRecentEvent.get(dedupeKey, cutoff) as { open_event_id: number } | undefined;
   if (existing) {
     return { events: 0, notifications: 0 };

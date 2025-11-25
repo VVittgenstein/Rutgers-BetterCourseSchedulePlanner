@@ -6,11 +6,14 @@ import { API_VERSION } from './sharedSchemas.js';
 
 const EMAIL_REGEX =
   /^(?:[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+|"[^"]+")@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9-]+)+$/;
+const LOCAL_DEVICE_ID_REGEX = /^[a-zA-Z0-9:_-]+$/;
 const DEFAULT_LOCALE = 'en-US';
 
 const ACTIVE_STATUSES = ['pending', 'active'] as const;
 
-type ContactType = 'email';
+const contactTypeSchema = z.enum(['email', 'local_sound']);
+
+type ContactType = z.infer<typeof contactTypeSchema>;
 type SubscriptionStatus = 'pending' | 'active' | 'paused' | 'suppressed' | 'unsubscribed';
 
 const preferencesInputSchema = z
@@ -55,7 +58,7 @@ const subscribePayloadSchema = z.object({
     .string()
     .trim()
     .regex(/^\d{5}$/),
-  contactType: z.enum(['email']),
+  contactType: contactTypeSchema,
   contactValue: z.string().trim().min(3).max(256),
   locale: z
     .string()
@@ -114,6 +117,7 @@ const activeSubscriptionSchema = z.object({
   sectionIndex: z.string(),
   status: z.literal('active'),
   contactValue: z.string(),
+  contactType: contactTypeSchema,
   createdAt: z.string().nullable(),
   sectionNumber: z.string().nullable(),
   subjectCode: z.string().nullable(),
@@ -156,6 +160,10 @@ const defaultPreferences: Preferences = {
   snoozeUntil: null,
   channelMetadata: {},
 };
+
+function normalizeContactTypeOutput(value: unknown): ContactType {
+  return value === 'local_sound' ? 'local_sound' : 'email';
+}
 
 export async function registerSubscriptionRoutes(app: FastifyInstance) {
   app.post(
@@ -329,6 +337,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
             s.index_number,
             s.status,
             s.contact_value,
+            s.contact_type,
             s.created_at,
             sec.section_number,
             sec.subject_code,
@@ -347,6 +356,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
           index_number: string;
           status: string;
           contact_value: string;
+          contact_type: string;
           created_at: string | null;
           section_number: string | null;
           subject_code: string | null;
@@ -360,6 +370,7 @@ export async function registerSubscriptionRoutes(app: FastifyInstance) {
         sectionIndex: row.index_number,
         status: 'active' as const,
         contactValue: row.contact_value,
+        contactType: normalizeContactTypeOutput(row.contact_type),
         createdAt: row.created_at ?? null,
         sectionNumber: row.section_number ?? null,
         subjectCode: row.subject_code ?? null,
@@ -396,6 +407,20 @@ function normalizeContact(contactType: ContactType, rawValue: string) {
     const email = match ? match[1] : trimmed;
     const normalized = email.toLowerCase();
     if (!EMAIL_REGEX.test(normalized)) {
+      return null;
+    }
+    return {
+      value: normalized,
+      hash: sha1(normalized),
+    };
+  }
+
+  if (contactType === 'local_sound') {
+    const normalized = trimmed.toLowerCase();
+    if (normalized.length < 6 || normalized.length > 128) {
+      return null;
+    }
+    if (!LOCAL_DEVICE_ID_REGEX.test(normalized)) {
       return null;
     }
     return {

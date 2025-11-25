@@ -6,7 +6,7 @@ Defines the contract between the `open_events` fan-out producer and the email wo
 - **Source**: `open_event_notifications` rows created by `workers/open_sections_poller.ts` when a section flips `Closed/Wait → Open`.
 - **Fields used by the worker**: `notification_id`, `open_event_id`, `subscription_id`, `dedupe_key`, `fanout_status (pending|sent|skipped|failed|expired)`, `fanout_attempts`, `last_attempt_at`, `locked_by`, `locked_at`, `error` (JSON text).
 - **Locking**: consumer selects `fanout_status='pending'` with `locked_at IS NULL OR locked_at < now() - lockTtl` (default lock TTL 120s), sets `locked_by` to the worker id and `locked_at=now()`. `fanout_attempts` is incremented exactly once per completed MailSender attempt when persisting the result (sent/retryable/failed), never during lock acquisition.
-- **Idempotency**: uniqueness on `(open_event_id, subscription_id)` plus `dedupe_key` copied from `open_events` ensures at most one email per event+subscription per 5m dedupe window. `MailMessage.dedupeKey` must reuse the same value for provider-level dedupe.
+- **Idempotency**: uniqueness on `(open_event_id, subscription_id)` plus `dedupe_key` copied from `open_events` ensures at most one email per event+subscription per 3m dedupe window. `MailMessage.dedupeKey` must reuse the same value for provider-level dedupe.
 
 ## Message payload shape (handed to the email worker)
 The worker builds the job payload by joining `open_event_notifications` → `open_events` → `subscriptions` (+`sections`/`courses` for enrichment when available). JSON Schema (Draft 2020-12):

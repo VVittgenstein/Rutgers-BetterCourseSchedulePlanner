@@ -299,15 +299,54 @@
       "sectionLabel": "Section index",
       "sectionPlaceholder": "e.g. 12345",
       "contactLabel": "Contact",
+      "contactTypes": {
+        "email": "Email",
+        "sound": "Sound"
+      },
       "submit": "Subscribe",
       "errors": {
         "missingContext": "Select term and campus first.",
         "missingSection": "Enter a section index.",
-        "missingContact": "Add an email address."
+        "missingContact": "Add an email address.",
+        "missingDevice": "Device ID is missing. Reset the sound ID and try again."
       },
       "status": {
         "created": "Subscription saved.",
         "existing": "You already subscribed to this section."
+      },
+      "localSound": {
+        "eyebrow": "Local sound",
+        "title": "Sound alerts",
+        "subtitle": "Keep this tab open; we’ll chime and toast when seats open.",
+        "deviceLabel": "Device ID",
+        "deviceHint": "Stored locally and sent as contact value for sound alerts.",
+        "state": {
+          "on": "Sound on",
+          "off": "Sound off"
+        },
+        "status": {
+          "disabled": "Sound reminders are off.",
+          "polling": "Polling for new alerts…",
+          "error": "Polling paused; retrying shortly.",
+          "idle": "Listening · last check {{time}}",
+          "ready": "Ready to poll. Enable to start."
+        },
+        "actions": {
+          "enable": "Enable sound",
+          "disable": "Disable",
+          "resetDevice": "Reset ID",
+          "resumeAudio": "Click to enable sound",
+          "dismiss": "Dismiss"
+        },
+        "errors": {
+          "polling": "Sound channel failed: {{message}} (will retry soon)"
+        },
+        "soundBlocked": "Browser blocked autoplay. Click to re-enable audio.",
+        "toast": {
+          "body": "New alert for {{index}} · {{campus}} · {{term}}",
+          "traceId": "Trace {{id}}",
+          "fallbackTitle": "Open seat ping"
+        }
       },
       "missingCampus": "Campus?",
       "missingTerm": "Term?"
@@ -321,6 +360,10 @@
       "removing": "Canceling…",
       "error": "Failed to load subscriptions: {{message}}",
       "meta": "{{campus}} · {{term}}",
+      "channel": {
+        "email": "Email",
+        "sound": "Sound"
+      },
       "fallbackTitle": "Untitled course"
     },
     "mailSettings": {
@@ -699,15 +742,54 @@
       "sectionLabel": "节次索引",
       "sectionPlaceholder": "例如 12345",
       "contactLabel": "联系方式",
+      "contactTypes": {
+        "email": "邮箱",
+        "sound": "声音"
+      },
       "submit": "提交订阅",
       "errors": {
         "missingContext": "请先选择学期和校区。",
         "missingSection": "请输入节次索引。",
-        "missingContact": "填写邮箱。"
+        "missingContact": "填写邮箱。",
+        "missingDevice": "缺少设备 ID，请重置声音 ID 后重试。"
       },
       "status": {
         "created": "订阅已保存。",
         "existing": "你已订阅该节次。"
+      },
+      "localSound": {
+        "eyebrow": "本地声音",
+        "title": "声音提醒",
+        "subtitle": "保持页面打开，座位有变会播放短提示音并弹出提示。",
+        "deviceLabel": "设备 ID",
+        "deviceHint": "仅保存在本地，并作为声音提醒的 contact 值提交。",
+        "state": {
+          "on": "声音开启",
+          "off": "声音关闭"
+        },
+        "status": {
+          "disabled": "声音提醒已关闭。",
+          "polling": "正在轮询提醒…",
+          "error": "轮询失败，稍后重试。",
+          "idle": "监听中 · 上次检查 {{time}}",
+          "ready": "准备就绪，开启后开始轮询。"
+        },
+        "actions": {
+          "enable": "开启声音",
+          "disable": "关闭",
+          "resetDevice": "重置 ID",
+          "resumeAudio": "点击开启声音",
+          "dismiss": "关闭提示"
+        },
+        "errors": {
+          "polling": "声音通道失败：{{message}}（稍后会重试）"
+        },
+        "soundBlocked": "浏览器阻止了自动播放，请点击恢复声音。",
+        "toast": {
+          "body": "收到提醒 {{index}} · {{campus}} · {{term}}",
+          "traceId": "Trace {{id}}",
+          "fallbackTitle": "空位提醒"
+        }
       },
       "missingCampus": "未选校区",
       "missingTerm": "未选学期"
@@ -721,6 +803,10 @@
       "removing": "正在取消…",
       "error": "获取订阅失败：{{message}}",
       "meta": "{{campus}} · {{term}}",
+      "channel": {
+        "email": "邮件",
+        "sound": "本地声音"
+      },
       "fallbackTitle": "未命名课程"
     },
     "mailSettings": {

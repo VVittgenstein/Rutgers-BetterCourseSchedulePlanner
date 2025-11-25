@@ -13,6 +13,7 @@ import { registerFilterRoutes } from './routes/filters.js';
 import { registerSubscriptionRoutes } from './routes/subscriptions.js';
 import { registerFetchRoutes } from './routes/fetch.js';
 import { registerAdminRoutes } from './routes/admin.js';
+import { registerLocalNotificationRoutes } from './routes/notifications.local.js';
 
 export async function createServer() {
   const config = loadConfig();
@@ -86,6 +87,7 @@ export async function createServer() {
     await registerSectionRoutes(router);
     await registerFilterRoutes(router);
     await registerSubscriptionRoutes(router);
+    await registerLocalNotificationRoutes(router);
     await registerFetchRoutes(router);
     await registerAdminRoutes(router);
   }, { prefix: '/api' });

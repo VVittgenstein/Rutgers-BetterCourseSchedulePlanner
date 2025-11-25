@@ -21,11 +21,11 @@ import { decodeSemester, performProbe } from '../../scripts/soc_api_client.js';
 
 function makeBaseOptions(overrides: Partial<PollerOptions> = {}): PollerOptions {
   return {
-    openReminderIntervalMs: 5 * 60 * 1000,
+    openReminderIntervalMs: 3 * 60 * 1000,
     termsMode: 'auto',
     terms: [],
     campuses: [],
-    intervalMs: 60000,
+    intervalMs: 15000,
     refreshIntervalMs: 5 * 60 * 1000,
     jitter: 0.3,
     sqliteFile: path.resolve('data', 'local.db'),
@@ -80,7 +80,7 @@ test('parseArgs defaults to auto mode with refresh interval', () => {
   assert.equal(opts.termsMode, 'auto');
   assert.deepEqual(opts.campuses, []);
   assert.equal(opts.refreshIntervalMs, 5 * 60 * 1000);
-  assert.equal(opts.intervalMs, 60000);
+  assert.equal(opts.intervalMs, 15000);
 });
 
 test('parseArgs preserves legacy campus default for explicit term', () => {

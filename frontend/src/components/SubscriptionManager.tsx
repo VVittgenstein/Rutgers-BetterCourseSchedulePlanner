@@ -92,47 +92,67 @@ export function SubscriptionManager() {
 
       {hasItems && (
         <ul className="subscription-manager__list">
-          {subscriptions.map((entry) => (
-            <li key={entry.subscriptionId} className="subscription-manager__item">
-              <button
-                type="button"
-                className="subscription-manager__remove"
-              aria-label={t('subscriptionManager.remove')}
-              onClick={() => handleRemove(entry)}
-              disabled={removingId === entry.subscriptionId}
-            >
-                <span aria-hidden="true">-</span>
-              </button>
-              <div className="subscription-manager__info">
-                <div className="subscription-manager__row">
-                  <span className="subscription-manager__code">{entry.sectionIndex}</span>
-                  <span className="subscription-manager__meta">
-                    {t('subscriptionManager.meta', { campus: entry.campus, term: entry.term })}
-                  </span>
-                </div>
-                <p className="subscription-manager__title">{entry.courseTitle ?? t('subscriptionManager.fallbackTitle')}</p>
-                {entry.sectionNumber && (
-                  <p className="subscription-manager__hint">
-                    {entry.sectionNumber}
-                    {entry.subjectCode ? ` · ${entry.subjectCode}` : ''}
+          {subscriptions.map((entry) => {
+            const contactType = entry.contactType === 'local_sound' ? 'local_sound' : 'email';
+            const channelLabel =
+              contactType === 'local_sound'
+                ? t('subscriptionManager.channel.sound')
+                : t('subscriptionManager.channel.email');
+
+            return (
+              <li key={entry.subscriptionId} className="subscription-manager__item">
+                <button
+                  type="button"
+                  className="subscription-manager__remove"
+                  aria-label={t('subscriptionManager.remove')}
+                  onClick={() => handleRemove(entry)}
+                  disabled={removingId === entry.subscriptionId}
+                >
+                  <span aria-hidden="true">-</span>
+                </button>
+                <div className="subscription-manager__info">
+                  <div className="subscription-manager__row">
+                    <span className="subscription-manager__code">{entry.sectionIndex}</span>
+                    <span className="subscription-manager__meta">
+                      {t('subscriptionManager.meta', { campus: entry.campus, term: entry.term })}
+                    </span>
+                    <span
+                      className={classNames(
+                        'subscription-manager__channel-pill',
+                        contactType === 'local_sound'
+                          ? 'subscription-manager__channel-pill--sound'
+                          : 'subscription-manager__channel-pill--email',
+                      )}
+                    >
+                      {channelLabel}
+                    </span>
+                  </div>
+                  <p className="subscription-manager__title">
+                    {entry.courseTitle ?? t('subscriptionManager.fallbackTitle')}
                   </p>
-                )}
-              </div>
-              <button
-                type="button"
-                className={classNames(
-                  'subscription-manager__action',
-                  removingId === entry.subscriptionId && 'subscription-manager__action--disabled',
-                )}
-                onClick={() => handleRemove(entry)}
-                disabled={removingId === entry.subscriptionId}
-              >
-                {removingId === entry.subscriptionId
-                  ? t('subscriptionManager.removing')
-                  : t('subscriptionManager.remove')}
-              </button>
-            </li>
-          ))}
+                  {entry.sectionNumber && (
+                    <p className="subscription-manager__hint">
+                      {entry.sectionNumber}
+                      {entry.subjectCode ? ` · ${entry.subjectCode}` : ''}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className={classNames(
+                    'subscription-manager__action',
+                    removingId === entry.subscriptionId && 'subscription-manager__action--disabled',
+                  )}
+                  onClick={() => handleRemove(entry)}
+                  disabled={removingId === entry.subscriptionId}
+                >
+                  {removingId === entry.subscriptionId
+                    ? t('subscriptionManager.removing')
+                    : t('subscriptionManager.remove')}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

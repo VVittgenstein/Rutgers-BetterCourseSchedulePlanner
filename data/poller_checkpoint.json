@@ -1,32 +1,14 @@
 {
   "version": 1,
-  "updatedAt": "2025-11-24T15:12:13.418Z",
+  "updatedAt": "2025-11-25T18:36:51.084Z",
   "campuses": {
-    "NB": {
-      "term": "12024",
-      "campus": "NB",
-      "lastPollAt": "2025-11-24T11:49:47.938Z",
-      "lastSnapshotHash": "2d9f081fa1bec6ac4b254436aae921f16af5b02f",
-      "openIndexes": 8494,
-      "misses": {}
-    },
-    "NK": {
-      "term": "12024",
-      "campus": "NK",
-      "lastPollAt": "2025-11-24T11:49:48.016Z",
-      "lastSnapshotHash": "a373f6a757df76218e885a1fd8d9e88a202565cf",
-      "openIndexes": 1825,
-      "misses": {}
-    },
     "12026|NB": {
       "term": "12026",
       "campus": "NB",
-      "lastPollAt": "2025-11-24T15:12:13.184Z",
-      "lastSnapshotHash": "579a6e2f4990bc3d4180ac2ed3c713181e1f4ad0",
-      "openIndexes": 12358,
-      "misses": {
-        "22617": 1
-      }
+      "lastPollAt": "2025-11-25T18:36:50.976Z",
+      "lastSnapshotHash": "178cd82f218da4614aa523c25d31b601523c95fe",
+      "openIndexes": 12399,
+      "misses": {}
     }
   }
 }

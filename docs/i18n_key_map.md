@@ -168,6 +168,48 @@ Relative time helpers (`frontend/src/components/CourseList.tsx`)
 | `errors.runtime.missingRoot` | Missing #root element | 缺少 #root 根节点 | Runtime guard inside `frontend/src/main.tsx`. |
 | `errors.network.requestFailed` | Request failed: {{status}} | 请求失败：{{status}} | Default message produced by `frontend/src/api/client.ts` when HTTP status is not OK. |
 
+### Subscription center & local sound (`frontend/src/components/SubscriptionCenter.tsx`, `LocalSoundToggle.tsx`)
+
+| Key | English default | zh-CN default | Usage |
+| --- | --- | --- | --- |
+| `subscriptionCenter.eyebrow` | Subscribe | 订阅 | Eyebrow text at the top of the subscription card. |
+| `subscriptionCenter.title` | Subscription center | 订阅入口 | Main title above the form. |
+| `subscriptionCenter.subtitle` | Input a section index and we’ll use your current term/campus and contact preferences. | 输入想要跟踪的节次索引，使用当前学期/校区和联系方式提交。 | Supporting description under the title. |
+| `subscriptionCenter.sectionLabel` | Section index | 节次索引 | Label for the index input. |
+| `subscriptionCenter.sectionPlaceholder` | e.g. 12345 | 例如 12345 | Placeholder inside the index input. |
+| `subscriptionCenter.contactLabel` | Contact | 联系方式 | Label above the contact selector. |
+| `subscriptionCenter.contactTypes.email` | Email | 邮箱 | Pill label for the email channel. |
+| `subscriptionCenter.contactTypes.sound` | Sound | 声音 | Pill label for the local sound channel. |
+| `subscriptionCenter.submit` | Subscribe | 提交订阅 | Primary action button. |
+| `subscriptionCenter.errors.missingContext` | Select term and campus first. | 请先选择学期和校区。 | Validation shown when filters are missing. |
+| `subscriptionCenter.errors.missingSection` | Enter a section index. | 请输入节次索引。 | Validation for empty index input. |
+| `subscriptionCenter.errors.missingContact` | Add an email address. | 填写邮箱。 | Validation when email mode is active but empty. |
+| `subscriptionCenter.errors.missingDevice` | Device ID is missing. Reset the sound ID and try again. | 缺少设备 ID，请重置声音 ID 后重试。 | Validation for local sound mode when no device ID is present. |
+| `subscriptionCenter.status.created` | Subscription saved. | 订阅已保存。 | Success feedback after creating a subscription. |
+| `subscriptionCenter.status.existing` | You already subscribed to this section. | 你已订阅该节次。 | Info feedback when the request already exists. |
+| `subscriptionCenter.localSound.eyebrow` | Local sound | 本地声音 | Eyebrow for the sound-alert block. |
+| `subscriptionCenter.localSound.title` | Sound alerts | 声音提醒 | Title for the sound-alert block. |
+| `subscriptionCenter.localSound.subtitle` | Keep this tab open; we’ll chime and toast when seats open. | 保持页面打开，座位有变会播放短提示音并弹出提示。 | Helper text explaining the channel behavior. |
+| `subscriptionCenter.localSound.deviceLabel` | Device ID | 设备 ID | Label next to the generated device identifier. |
+| `subscriptionCenter.localSound.deviceHint` | Stored locally and sent as contact value for sound alerts. | 仅保存在本地，并作为声音提醒的 contact 值提交。 | Hint under the device ID block. |
+| `subscriptionCenter.localSound.state.on` | Sound on | 声音开启 | Chip showing the enabled state. |
+| `subscriptionCenter.localSound.state.off` | Sound off | 声音关闭 | Chip showing the disabled state. |
+| `subscriptionCenter.localSound.status.disabled` | Sound reminders are off. | 声音提醒已关闭。 | Status line when the toggle is off. |
+| `subscriptionCenter.localSound.status.polling` | Polling for new alerts… | 正在轮询提醒… | Status line while a fetch is in progress. |
+| `subscriptionCenter.localSound.status.error` | Polling paused; retrying shortly. | 轮询失败，稍后重试。 | Status line after a failed poll. |
+| `subscriptionCenter.localSound.status.idle` | Listening · last check {{time}} | 监听中 · 上次检查 {{time}} | Status line once polling is running with a last-checked time. |
+| `subscriptionCenter.localSound.status.ready` | Ready to poll. Enable to start. | 准备就绪，开启后开始轮询。 | Status line before the first poll runs. |
+| `subscriptionCenter.localSound.actions.enable` | Enable sound | 开启声音 | Toggle label to start polling + audio. |
+| `subscriptionCenter.localSound.actions.disable` | Disable | 关闭 | Toggle label to stop polling. |
+| `subscriptionCenter.localSound.actions.resetDevice` | Reset ID | 重置 ID | Button that regenerates the stored device ID. |
+| `subscriptionCenter.localSound.actions.resumeAudio` | Click to enable sound | 点击开启声音 | Button shown when autoplay is blocked. |
+| `subscriptionCenter.localSound.actions.dismiss` | Dismiss | 关闭提示 | Button that hides an individual toast. |
+| `subscriptionCenter.localSound.errors.polling` | Sound channel failed: {{message}} (will retry soon) | 声音通道失败：{{message}}（稍后会重试） | Error banner shown after a failed claim request. |
+| `subscriptionCenter.localSound.soundBlocked` | Browser blocked autoplay. Click to re-enable audio. | 浏览器阻止了自动播放，请点击恢复声音。 | Warning shown when the AudioContext is suspended by the browser. |
+| `subscriptionCenter.localSound.toast.body` | New alert for {{index}} · {{campus}} · {{term}} | 收到提醒 {{index}} · {{campus}} · {{term}} | Toast body when a new notification arrives. |
+| `subscriptionCenter.localSound.toast.traceId` | Trace {{id}} | Trace {{id}} | Optional trace helper rendered inside the toast. |
+| `subscriptionCenter.localSound.toast.fallbackTitle` | Open seat ping | 空位提醒 | Toast title when course title is absent. |
+
 ### Common helpers
 
 | Key | English default | zh-CN default | Usage |
