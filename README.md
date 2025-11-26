@@ -29,16 +29,20 @@ This tool crawls course data, supports flexible filtering, and provides email or
 
 ## 使用说明 / How to Use
 
-1. **开始爬取数据 / Start Crawling**
-   - 点击「开始」后，程序会自动开始爬取所选学科的课程数据。
+1. **设置学期与校区 / Select Semester & Campus**
+   - 在页面顶部或设置区域，首先选择你所在的 **校区 (Campus)** 和当前的 **学期 (Semester)**。
+
+2. **开始爬取数据 / Start Crawling**
+   - 点击 **「开始」**（Start）按钮。
+   - 程序会自动开始爬取对应校区和学期的课程数据。
    - 期间请保持程序运行，不要关闭窗口。
-   - 当界面提示 **「完成」** 时，说明所有课程数据已经爬取完成。
+   - 当界面提示 **「完成」**（Completed）时，说明数据已下载完毕。
 
-2. **选择学科 / Choose Subjects**
-   - 在界面左上角，选择你想要 **筛选/订阅** 的学科（Subject）。
-   - 选择完成后，点击 **「开始」**（Start）。
+3. **刷新浏览器 / Refresh Browser**
+   - **关键步骤**：爬取完成后，请手动 **刷新浏览器页面**。
+   - 刷新后，最新的课程数据才会加载到筛选列表中。
 
-3. **使用「Build your schedule」筛选课程 / Use “Build your schedule”**
+4. **使用「Build your schedule」筛选课程 / Use “Build your schedule”**
    - 爬取完成后，进入 **“Build your schedule”** 功能页面。
    - 可以根据多种条件对课程进行筛选（支持多条件组合）：
      - 是否 open / close
@@ -129,16 +133,20 @@ This tool crawls course data, supports flexible filtering, and provides email or
 
 ### 2. How to Use
 
-1. **Start Crawling Data**
-   - After clicking “Start”, the tool will crawl course data for the selected subjects automatically.
-   - Keep the program running; do not close the window.
-   - When you see a **“Completed”** message, all course data has been fetched.
+1. **Select Semester & Campus**
+   - At the top of the page or in the settings area, select your **Campus** and the current **Semester** first.
 
-2. **Choose Subjects**
-   - In the top-left corner, select the subject(s) you want to **filter/subscribe** to.
-   - Click **“Start”** after selection.
+2. **Start Crawling Data**
+   - Click the **"Start"** button.
+   - The tool will automatically crawl course data for the selected campus/semester.
+   - Keep the program running and do not close the window.
+   - Wait until you see the **"Completed"** message.
 
-3. **Use “Build your schedule”**
+3. **Refresh Browser**
+   - **Crucial Step**: Once crawling is completed, manually **refresh your web browser**.
+   - This ensures the newly fetched data is loaded into the tool.
+
+4. **Use “Build your schedule”**
    - Once crawling is done, go to the **“Build your schedule”** page.
    - You can filter courses by multiple conditions:
      - Open / Closed status
