@@ -141,8 +141,26 @@ vite.config.ts.timestamp-*
 # Local database artifacts
 data/*.db
 data/*.sqlite
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite-shm
+data/*.sqlite-wal
 data/migrations.log
 data/staging/
+data/runtime/
+data/poller_checkpoint.json
 
 # Local configs generated from examples
 configs/*.local.json
+configs/*.user.json
+
+# Release artifacts
+release/
+*.tar.gz
+*.zip
+
+# Tasks/plans
+tasks_bugfix.json
+
+# Claude Code local settings
+.claude/
