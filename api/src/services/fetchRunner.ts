@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FastifyBaseLogger } from 'fastify';
 
 export type FetchMode = 'full-init' | 'incremental';
@@ -29,10 +30,15 @@ export interface StartFetchJobOptions {
   logger?: FastifyBaseLogger;
 }
 
-const DEFAULT_BASE_CONFIG = path.resolve('configs', 'fetch_pipeline.local.json');
-const DEFAULT_BASE_CONFIG_FALLBACK = path.resolve('configs', 'fetch_pipeline.example.json');
-const RUNTIME_DIR = path.resolve('data', 'runtime');
-const DEFAULT_LOG_DIR = path.resolve('logs', 'fetch_runs');
+// Project root directory (api/src/services -> api/src -> api -> project root)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
+
+const DEFAULT_BASE_CONFIG = path.resolve(PROJECT_ROOT, 'configs', 'fetch_pipeline.local.json');
+const DEFAULT_BASE_CONFIG_FALLBACK = path.resolve(PROJECT_ROOT, 'configs', 'fetch_pipeline.example.json');
+const RUNTIME_DIR = path.resolve(PROJECT_ROOT, 'data', 'runtime');
+const DEFAULT_LOG_DIR = path.resolve(PROJECT_ROOT, 'logs', 'fetch_runs');
 
 let activeJob: FetchJob | null = null;
 let activeChild: ChildProcessWithoutNullStreams | null = null;
@@ -66,7 +72,7 @@ function readJsonSafe(file: string): Record<string, unknown> {
 
 function resolvePath(input: string) {
   if (path.isAbsolute(input)) return input;
-  return path.resolve(input);
+  return path.resolve(PROJECT_ROOT, input);
 }
 
 function resolveNpmLike(base: string) {
@@ -206,7 +212,7 @@ export function startFetchJob(options: StartFetchJobOptions): FetchJob {
       prepared.command,
       prepared.args,
       {
-        cwd: options.workdir ?? process.cwd(),
+        cwd: options.workdir ?? PROJECT_ROOT,
         env: { ...process.env, SQLITE_FILE: options.sqliteFile },
         stdio: ['ignore', 'pipe', 'pipe'],
         shell: false, // avoid cmd.exe so paths with spaces (e.g., Program Files) don't break
