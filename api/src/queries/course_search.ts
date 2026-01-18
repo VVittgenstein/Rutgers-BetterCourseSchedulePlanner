@@ -236,14 +236,19 @@ export function executeCourseSearch(db: Database.Database, query: CoursesQuery):
     sectionConditions.push(buildInClause('upper(s_filter.exam_code)', examCodes, binder));
   }
   if (outsideDayMask !== undefined) {
+    // Strict filter: exclude sections that have ANY meeting outside allowed days
+    // Also exclude sections where week_mask is NULL/0 (cannot verify compliance)
     sectionConditions.push(`
       NOT EXISTS (
         SELECT 1
         FROM section_meetings sm_all
         WHERE sm_all.section_id = s_filter.section_id
-          AND sm_all.week_mask IS NOT NULL
-          AND sm_all.week_mask > 0
-          AND (sm_all.week_mask & ${binder.bind(outsideDayMask)}) != 0
+          AND sm_all.meeting_day IS NOT NULL
+          AND (
+            sm_all.week_mask IS NULL
+            OR sm_all.week_mask = 0
+            OR (sm_all.week_mask & ${binder.bind(outsideDayMask)}) != 0
+          )
       )
     `);
   }
@@ -627,14 +632,19 @@ function attachSectionsPreview(
 
   const outsideDayMask = typeof filter?.meetingMask === 'number' ? DAY_MASK_ALL & ~filter.meetingMask : undefined;
   if (outsideDayMask !== undefined) {
+    // Strict filter: exclude sections that have ANY meeting outside allowed days
+    // Also exclude sections where week_mask is NULL/0 (cannot verify compliance)
     filterClauses.push(`
       NOT EXISTS (
         SELECT 1
         FROM section_meetings sm_all
         WHERE sm_all.section_id = s.section_id
-          AND sm_all.week_mask IS NOT NULL
-          AND sm_all.week_mask > 0
-          AND (sm_all.week_mask & ${binder.bind(outsideDayMask)}) != 0
+          AND sm_all.meeting_day IS NOT NULL
+          AND (
+            sm_all.week_mask IS NULL
+            OR sm_all.week_mask = 0
+            OR (sm_all.week_mask & ${binder.bind(outsideDayMask)}) != 0
+          )
       )
     `);
   }

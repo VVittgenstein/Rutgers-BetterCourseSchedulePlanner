@@ -21,6 +21,8 @@
 .course-app__filters {
   position: sticky;
   top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
