@@ -6,206 +6,190 @@ This tool crawls course data, supports flexible filtering, and provides email or
 
 ---
 
-## 安装与启动 / Installation & Startup
+## 使用指南（零基础一步一步） / Beginner-Friendly Guide
 
-1. **下载 Release**
-   - 从发布页下载最新的 `release` 压缩包。
-   - 将压缩包解压到任意一个文件夹（路径中尽量避免中文和空格）。
+（下面的步骤默认你几乎没有电脑/代码操作经验：只需要“下载 → 解压 → 双击启动 → 打开网页 → 点击按钮”。）
 
-2. **一键运行**
-   - 在解压后的文件夹中找到一键启动脚本（如 `start.bat`）并双击运行。
-   - 如果你的电脑 **没有安装 Node.js**：
-     - 脚本会自动打开 Node.js 官网。
-     - 根据你的操作系统（Windows / macOS / Linux）下载并安装 Node.js。
-   - 安装 Node.js 完成后：
-     - 关闭刚才运行的 `.bat` 窗口。
-     - 再次双击运行该 `.bat` 脚本。
+### 0）你需要准备什么？
 
-3. **首次启动**
-   - 启动成功后，会打开界面（或浏览器页面）。
-   - 请按照下方「使用说明」开始爬取数据和筛选课程。
+- 一台电脑（Windows 10/11 或 macOS）。
+- 能联网（第一次启动会自动下载一些依赖，时间可能较久）。
+- 一个浏览器（Chrome / Edge / Safari 均可）。
+- 可选：如果想用邮件提醒，需要一个 SendGrid 账号；如果不想折腾，直接用「本地声音提醒」最简单。
 
 ---
 
-## 使用说明 / How to Use
+### 1）下载（只做一次）
 
-1. **设置学期与校区 / Select Semester & Campus**
-   - 在页面顶部或设置区域，首先选择你所在的 **校区 (Campus)** 和当前的 **学期 (Semester)**。
-
-2. **开始爬取数据 / Start Crawling**
-   - 点击 **「开始」**（Start）按钮。
-   - 程序会自动开始爬取对应校区和学期的课程数据。
-   - 期间请保持程序运行，不要关闭窗口。
-   - 当界面提示 **「完成」**（Completed）时，说明数据已下载完毕。
-
-3. **刷新浏览器 / Refresh Browser**
-   - **关键步骤**：爬取完成后，请手动 **刷新浏览器页面**。
-   - 刷新后，最新的课程数据才会加载到筛选列表中。
-
-4. **使用「Build your schedule」筛选课程 / Use “Build your schedule”**
-   - 爬取完成后，进入 **“Build your schedule”** 功能页面。
-   - 可以根据多种条件对课程进行筛选（支持多条件组合）：
-     - 是否 open / close
-     - 科目（Subject）
-     - 校区与上课地点（Campus / Location）
-     - 上课星期（Day of week）
-     - 上课时间（Time）
-     - 课程学分（Credits）
-     - 核心代码（Core code）
-     - 考试代码（Exam code）
-     - 是否需要先修课程（Prerequisites）
-     - 授课方式（Teaching mode）
-     - 年级（Year / Level）
+1. 打开项目的 Releases（发布）页面：`https://github.com/VVittgenstein/BetterCourseSchedulePlanner/releases`
+2. 下载最新版本的压缩包（通常是 `bcsp-xxxxxx.zip`）。
+3. 如果别人已经把压缩包发给你了：跳过这一步，直接去第 2 步。
 
 ---
 
-## 邮件提醒配置（SendGrid） / Email Notification (SendGrid)
+### 2）解压（把压缩包“拆开”）
 
-若希望通过 **邮件提醒** 来接收课程变化或订阅结果，请按以下步骤配置 SendGrid。
+> 建议解压到一个路径简单的文件夹，避免中文、空格、网盘同步目录（例如 OneDrive/Google Drive）。
 
-1. **注册 SendGrid**
-   - 前往 SendGrid 官网注册一个账户。
-   - 完成邮箱验证。
-   - 在 SendGrid 后台创建并获取一个 **API Key**（请妥善保存）。
+**Windows**
 
-2. **配置邮件设置 / Configure Email Settings**
-   - 打开本工具界面中的 **「邮件设置」**（Email Settings）区域。
-   - 填写以下信息：
-     - **From 邮箱 (From Email)**：  
-       必须是已经在 SendGrid 中完成验证的邮箱地址。
-     - **API Key**：  
-       填入你在 SendGrid 后台拿到的 `api-key`。
-     - 其他选项可暂时忽略（如无特别需求）。
-   - 点击 **「保存邮件设置」**（Save Email Settings）。
-   - 保存成功后，**重启 `.bat` 启动脚本** 让设置生效。
+1. 打开“下载”文件夹，找到刚下载的 `bcsp-xxxxxx.zip`。
+2. 右键它 → 选择“全部解压…”。
+3. 选择一个位置，例如：`C:\\BCSP\\` 或者桌面上的 `BCSP` 文件夹 → 点击“解压”。
+4. 解压完成后，进入新出现的文件夹。
 
-3. **订阅入口设置 / Subscription Settings**
-   - 在订阅入口中，将你想要订阅的课程的 **index（索引）** 填入对应位置。
-   - 建议在接收通知的邮箱中，**至少留一个非 Gmail 的邮箱**，因为：
-     - Gmail 有可能会把正常通知邮件误判为垃圾邮件。
-   - 确认联系方式设置为 **邮箱（Email）**，即可通过邮件收到提醒。
+**macOS**
+
+1. 打开“下载(Downloads)”文件夹，找到 `bcsp-xxxxxx.zip`。
+2. 双击它，系统会自动解压成一个同名文件夹。
+3. 打开这个解压后的文件夹。
+
+解压后的文件夹里，你应该能看到：`Start-WebUI.bat`（Windows 用）和 `Start-WebUI.command`（macOS 用）。
 
 ---
 
-## 本地声音提醒 / Local Sound Notification
+### 3）启动程序（只需要双击）
 
-如果你不想使用邮件提醒，可以使用 **本地声音提醒**：
+> 启动后会弹出一个黑色窗口（Windows）或终端窗口（macOS）。请不要关闭它：关闭就等于停止运行。
 
-1. 打开订阅设置页面。
-2. 在「联系方式」或「通知方式」一栏，将方式切换为 **声音（Sound）**。
-3. 之后当有订阅课程变化时，程序会通过本地声音进行提醒，而不是发送邮件。
+**Windows**
 
----
+1. 在解压后的文件夹里，找到 `Start-WebUI.bat`。
+2. 双击运行。
+3. 如果弹出“Windows 已保护你的电脑”：点击“更多信息”→“仍要运行”。
 
-## 使用建议 / Tips
+**macOS**
 
-- 若长时间未收到邮件，请检查：
-  - SendGrid API Key 是否正确；
-  - 「From 邮箱」是否为已在 SendGrid 验证过的邮箱；
-  - 垃圾邮件/广告邮件目录（特别是 Gmail）。
-- 爬取数据期间不要频繁关闭程序，避免数据不完整。
-- 若修改了配置（例如邮件设置），请记得 **重启 `.bat` 脚本** 使配置生效。
+1. 在解压后的文件夹里，找到 `Start-WebUI.command`。
+2. 双击运行。
+3. 如果提示“无法打开/来自未知开发者”：右键该文件 → 选择“打开” → 再点一次“打开”。（必要时去 系统设置 → 隐私与安全性 → 允许打开。）
 
 ---
 
-## English Version
+### 4）第一次可能会提示安装 Node.js（按提示装就行）
 
-### 1. Installation & Startup
+如果你双击启动脚本后，系统自动打开了 Node.js 官网，或者窗口里提示 “Node 22+ required / Node.js 未安装”：
 
-1. **Download Release**
-   - Download the latest `release` archive from the release page.
-   - Extract it to any folder (preferably without Chinese characters or spaces in the path).
-
-2. **One-click Start**
-   - In the extracted folder, locate the one-click script (e.g., `start.bat`) and double-click it.
-   - If **Node.js is not installed** on your machine:
-     - The script will automatically open the Node.js official website.
-     - Download and install Node.js according to your OS (Windows / macOS / Linux).
-   - After Node.js is installed:
-     - Close the `.bat` window you just ran.
-     - Double-click the `.bat` script again to restart.
-
-3. **First Launch**
-   - After starting successfully, the app UI (or browser page) will open.
-   - Follow the steps below (“How to Use”) to fetch data and filter courses.
+1. 在打开的官网页面下载 **LTS** 版本（建议 v22 或更高）。
+2. 运行安装程序，基本一路“下一步/继续”即可（保持默认选项）。
+3. 安装完成后：把刚才那个黑色/终端窗口关掉，再回到第 3 步重新双击启动脚本。
+4. 如果仍提示未安装：重启电脑后再双击启动脚本。
 
 ---
 
-### 2. How to Use
+### 5）打开网页界面（你真正操作的地方）
 
-1. **Select Semester & Campus**
-   - At the top of the page or in the settings area, select your **Campus** and the current **Semester** first.
+1. 启动脚本运行后，通常会自动打开浏览器。
+2. 如果没有自动打开：手动打开浏览器，在地址栏输入 `http://localhost:5174` 然后回车。
 
-2. **Start Crawling Data**
-   - Click the **"Start"** button.
-   - The tool will automatically crawl course data for the selected campus/semester.
-   - Keep the program running and do not close the window.
-   - Wait until you see the **"Completed"** message.
-
-3. **Refresh Browser**
-   - **Crucial Step**: Once crawling is completed, manually **refresh your web browser**.
-   - This ensures the newly fetched data is loaded into the tool.
-
-4. **Use “Build your schedule”**
-   - Once crawling is done, go to the **“Build your schedule”** page.
-   - You can filter courses by multiple conditions:
-     - Open / Closed status
-     - Subject
-     - Campus / Location
-     - Day of week
-     - Time
-     - Credits
-     - Core code
-     - Exam code
-     - Prerequisites requirement
-     - Teaching mode
-     - Year / Level
+> `localhost` 的意思是“这台电脑自己”，不会把网页公开到互联网。
 
 ---
 
-### 3. Email Notification with SendGrid
+### 6）拉取课程数据（必须做，否则右侧列表是空的）
 
-If you want to receive **email notifications** for course changes or subscriptions, configure SendGrid as follows.
+在网页左侧最上方，找到 **「拉取数据」(Term data fetch)** 这一块：
 
-1. **Sign Up for SendGrid**
-   - Register an account on SendGrid.
-   - Verify your email.
-   - Create and obtain an **API Key** from the SendGrid dashboard.
+1. 在 **学年(Year)** 输入/选择年份（例如 2026）。
+2. 在 **学期(Semester)** 选择：春(Spring) / 夏(Summer) / 秋(Fall) / 冬(Winter)。
+3. 在 **校区代码(Campus code)** 输入：
+   - `NB` = New Brunswick（不确定就选这个）
+   - `NK` = Newark
+   - `CM` = Camden
+4. 点击 **「开始」(Run fetch)**。
+5. 等待状态变成 **「完成…」/ “Done …”**（第一次可能需要几分钟）。
 
-2. **Configure Email Settings**
-   - In this tool’s UI, open the **Email Settings** section.
-   - Fill in:
-     - **From Email**:  
-       Must be an email address that has been verified in SendGrid.
-     - **API Key**:  
-       Use the `api-key` you generated in SendGrid.
-     - Other options can be left as default if not needed.
-   - Click **“Save Email Settings”**.
-   - After saving, **restart the `.bat` script** so the configuration takes effect.
-
-3. **Subscription Settings**
-   - In the subscription area, enter the **index** of the courses you want to subscribe to.
-   - It is recommended to use **at least one non-Gmail email address** for receiving notifications because:
-     - Gmail may occasionally classify normal notifications as spam.
-   - Make sure your contact method is set to **Email**, then you will receive email notifications.
+完成后，工具会自动切换到刚刚拉取的学期/校区，并刷新筛选字典；一般不需要手动刷新网页。如果你仍然看不到课程列表，按一次浏览器刷新（F5）。
 
 ---
 
-### 4. Local Sound Notification
+### 7）筛选课程（找到你要的课）
 
-If you prefer not to use email notifications, you can enable **local sound alerts** instead:
-
-1. Open the subscription settings.
-2. In the “Contact method” or “Notification method” field, switch to **Sound**.
-3. The program will then use local audio alerts instead of sending emails when subscribed courses change.
+1. 左侧找到 **“Build your schedule”**（筛选器区）。你可以只用最常用的几个：
+   - **Search keyword**：输入课程名或课程编号（例如 “CS”/“198”）。
+   - **Show sections → 有空位(Open only)**：只看还有空位的节次。
+   - **Subject / Day of week / Time / Credits**：按科目、上课日、时间、学分等筛选。
+2. 右侧会显示课程列表。每门课下面都有若干个 **Index（节次索引，一般是 5 位数字）** 和状态（有空位/已满）。
 
 ---
 
-### 5. Tips
+### 8）订阅空位提醒（可选：邮件或本地声音）
 
-- If you don’t receive email notifications:
-  - Check whether the SendGrid API Key is correct.
-  - Ensure the “From Email” is a verified sender in SendGrid.
-  - Check your spam/junk folders (especially for Gmail).
-- Avoid closing the program while data is being crawled to ensure data integrity.
-- After changing configurations (e.g., email settings), always **restart the `.bat` script**.
+左侧找到 **「订阅入口」(Subscription center)**：
+
+1. 先确认顶部小徽标里显示的是你的 **校区 + 学期**（不要是“未选校区/未选学期”）。如果没选好，请回到第 6 步先拉取数据。
+2. 在右侧课程列表里找到你想监控的节次，把它的 **Index（5 位数字）** 记下来。
+3. 把这个数字填到 **「节次索引」**。
+4. 选择提醒方式：
+   - **邮箱(Email)**：在下面输入你的邮箱地址。
+   - **声音(Sound)**：保持这个网页打开；如果提示“点击开启声音”，点一下并允许浏览器播放声音。
+5. 点击 **「提交订阅」**。看到“订阅已保存”就成功了。
+
+**取消订阅**
+
+- 在页面底部/右下角的 **「当前监控的课程」(Active subscriptions)** 里，点击 **「取消订阅」** 即可停止监控。
+
+---
+
+### 9）想用邮件提醒？（可选：SendGrid 一次性设置）
+
+> 如果你只想要提醒、不想注册服务：建议直接用「声音」最省事。
+
+**A. 在 SendGrid 做两件事：验证发件邮箱 + 生成 API Key**
+
+1. 打开 `https://sendgrid.com/` 注册账号并完成邮箱验证。
+2. 在 SendGrid 后台找到：**Settings → Sender Authentication → Single Sender Verification**，按提示验证一个发件邮箱。
+3. 在 SendGrid 后台找到：**Settings → API Keys → Create API Key**，创建一个 API Key 并复制保存（只会显示一次）。
+
+**B. 回到本工具填写邮件设置**
+
+1. 在网页底部找到 **「邮件设置」(Mail settings)**。
+2. 填写：
+   - **From 邮箱**：填你在 SendGrid 验证过的那个发件邮箱。
+   - **SendGrid API Key**：粘贴刚复制的 Key。
+   - **Dry-run**：这是“测试模式”。想要真的发邮件，就把 Dry-run 关闭；不确定就先保持开启，确认流程没问题再关。
+3. 点击 **「保存邮件设置」**。
+4. 重要：保存后需要 **重启** 才生效——把启动脚本的黑色/终端窗口关掉，再回到第 3 步重新启动。
+
+**提示**
+
+- Gmail 可能会把提醒邮件放进垃圾邮件/推广邮件，第一次请去那两个目录找一下。
+
+---
+
+### 10）如何关闭/停止？
+
+- 直接关闭启动脚本打开的黑色窗口（Windows）或终端窗口（macOS）即可停止。
+- 关闭后，爬虫/监控/提醒都会停止；想继续监控就保持窗口开着。
+
+---
+
+### 11）常见问题（卡住就看这里）
+
+- **双击启动脚本后“一闪就没了”**：通常是 Node.js 未安装或版本过低；按第 4 步安装/升级 Node.js 后再试。
+- **浏览器打不开页面 / 页面显示无法访问**：确认启动脚本窗口还在运行；然后手动打开 `http://localhost:5174`；仍不行就把窗口关掉重新启动一次。
+- **一直停在“执行中/Fetching…”**：第一次可能较久；请耐心等 5–10 分钟。网络较慢也会变久。
+- **Windows 报错提到 `better-sqlite3` / “Microsoft C++ Build Tools”**：按提示安装 “Visual Studio Build Tools（Desktop development with C++）”，然后重新启动脚本。
+- **没有声音**：浏览器可能禁止自动播放；在「声音提醒」区域点击“点击开启声音/Enable sound”，并检查浏览器标签页是否静音。
+- **邮件不来**：确认你已关闭 Dry-run、From 邮箱已在 SendGrid 验证、保存后已重启 Start-WebUI；并检查垃圾邮件。
+
+---
+
+## English Guide (Step-by-step, no coding)
+
+1) Download the latest release ZIP from `https://github.com/VVittgenstein/BetterCourseSchedulePlanner/releases`, then unzip it.
+2) Start the app:
+   - Windows: double-click `Start-WebUI.bat`
+   - macOS: double-click `Start-WebUI.command` (right-click → Open if blocked)
+3) First run may ask you to install Node.js. Install the **LTS** version (v22+), then rerun the starter script.
+4) Open the web UI:
+   - It usually opens automatically, or go to `http://localhost:5174`
+5) Fetch course data (required):
+   - In **Term data fetch**, choose Year + Semester + Campus code (`NB`/`NK`/`CM`), then click **Run fetch** and wait for **Done**.
+6) Filter courses:
+   - Use **Build your schedule** filters on the left; the course list (with section indexes) is on the right.
+7) Subscribe (optional):
+   - In **Subscription center**, paste a 5-digit section **Index**, choose **Email** or **Sound**, then click **Subscribe**.
+   - Cancel in **Active subscriptions**.
+8) Email delivery (optional, SendGrid):
+   - Verify a sender + create an API key in SendGrid, fill **Mail settings**, then restart the starter script to apply changes.
