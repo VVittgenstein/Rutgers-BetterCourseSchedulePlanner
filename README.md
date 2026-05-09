@@ -1,8 +1,17 @@
-# 课程筛选与订阅工具 / Course Filter & Subscription Tool
+# Rutgers Better Course Schedule Planner
 
-本工具用于自动爬取课程数据，支持多条件筛选，并提供邮件提醒或本地声音提醒功能，帮助你更方便地抢课和订阅感兴趣的课程。
+A local-first Rutgers course search and seat-alert tool built around the public Rutgers SOC data source. It provides multi-term course browsing, flexible filtering, and optional local/email notifications for course availability changes.
 
-This tool crawls course data, supports flexible filtering, and provides email or local sound notifications to help you monitor and subscribe to desired courses more easily.
+## Technical highlights
+
+- TypeScript/Node application with a local API, frontend UI, worker scripts, and SQLite-backed course/subscription data.
+- Rutgers-specific search UX for terms, campuses, subjects, core requirements, sections, meeting patterns, and seat availability.
+- Optional notification flow with local alerts and SendGrid-backed email configuration designed to keep real credentials out of source control.
+- One-click local launch scripts for non-technical users on Windows and macOS.
+
+## 课程筛选与订阅工具
+
+本工具用于 Rutgers 公开课程数据的本地查询和空位提醒，支持多条件筛选，并提供邮件提醒或本地声音提醒功能，帮助用户更方便地浏览和订阅感兴趣的课程。
 
 ---
 
