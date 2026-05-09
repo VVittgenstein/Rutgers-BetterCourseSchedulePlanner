@@ -65,7 +65,7 @@ The normalized JSON used for hashing is described inline within `scripts/increme
 All steps run inside WAL transactions shorter than one second for typical subjects. Readers only see committed rows, and staging tables disappear when the transaction closes.
 
 ## Observability and tooling
-- `npm run data:incremental-trial -- --term 12024 --campus NB --subjects 198,640,750` replays the hashing + diff logic against live SOC data. The script adds simulated legacy rows so we can verify insert/update/delete paths without waiting for a real SOC change. See `notebooks/incremental_trial.md` for the latest run.
+- `npm run data:incremental-trial -- --term 12024 --campus NB --subjects 198,640,750` replays the hashing + diff logic against live SOC data. The script adds simulated legacy rows so we can verify insert/update/delete paths without waiting for a real SOC change. Keep run notes locally rather than committing generated notebooks.
 - `data/migrations.log` captures schema changes coming from `npm run db:migrate` so refresh jobs know whether to invalidate cached queue entries.
 - Each refresh job logs JSON snippets with `term/campus/subject`, counts of `added/updated/deleted` rows, and the max request latency. These logs are tailed by health dashboards in later milestones.
 
