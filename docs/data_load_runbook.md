@@ -8,7 +8,7 @@ This runbook captures the operator steps for initializing and refreshing the Rut
 | Requirement | Details |
 | --- | --- |
 | Node.js | v22.x (the repo is currently using `/mnt/d/Software/Nodejs/node.exe`). Run `npm install` once per environment. |
-| Python 3 | v3.12+ for validation helpers (`reports/field_validation_samples.json`) and light SQLite checks. |
+| Python 3 | v3.12+ for local validation helpers and light SQLite checks. |
 | SQLite files | `data/courses.sqlite` is created by the fetcher; `data/schema.sql` + migrations live in the repo. Ensure the workspace is writable. |
 | Network access | Outbound HTTPS to `https://classes.rutgers.edu/soc/api`. Throttling is handled by the fetcher, but VPN/firewall rules must allow the traffic. |
 | Config | Copy or symlink `configs/fetch_pipeline.example.json` to a local variant and update `targets`, `sqliteFile`, and optional `safety` settings. |
@@ -18,7 +18,7 @@ This runbook captures the operator steps for initializing and refreshing the Rut
 - `scripts/migrate_db.ts` — runs schema migrations (`npm run db:migrate`).
 - `logs/fetch_runs/summary_latest.json|.log` — rolling execution summaries.
 - `data/staging/...` — optional raw payload dumps when `--dry-run` is disabled and staging is enabled.
-- `reports/field_validation.md` / `reports/field_validation_samples.json` — verification artifacts for spot-checking SQLite vs SOC.
+- Local validation reports — generated under `reports/` when needed and kept out of the public repository.
 
 ## Pre-flight checks
 1. `npm install` (once per machine) and `npm run db:migrate` to ensure the schema matches `data/schema.sql`.
@@ -37,7 +37,7 @@ This runbook captures the operator steps for initializing and refreshing the Rut
   Output: `logs/fetch_runs/summary_latest.{log,json}`, raw payloads under `data/staging/<term>/<campus>/`.
 - [ ] **Verify database counts** (1 min).  
   `python3 - <<'PY'\nimport sqlite3\nconn = sqlite3.connect('data/courses.sqlite')\nfor table in ('courses','sections'):\n    cur = conn.execute(f'SELECT COUNT(*) FROM {table} WHERE term_id=?', ('12024',))\n    print(table, cur.fetchone()[0])\nPY`
-- [ ] **Spot-check data fidelity** (optional, 5 min). Regenerate `reports/field_validation_samples.json`/`reports/field_validation.md` and confirm SOC vs SQLite parity before the API and notification services start reading the DB.
+- [ ] **Spot-check data fidelity** (optional, 5 min). Regenerate local field-validation reports and confirm SOC vs SQLite parity before the API and notification services start reading the DB.
 
 ## Routine incremental update checklist (~2–3 minutes per subject batch)
 - [ ] **Confirm config** (1 min). Ensure the incremental queue/filters (`incremental.subjectRecencyMinutes`, `targets`) contain the desired slices.
@@ -46,14 +46,14 @@ This runbook captures the operator steps for initializing and refreshing the Rut
   Output: updated `logs/fetch_runs/summary_latest.*`, `data/courses.sqlite` mutated in-place.
 - [ ] **Review summary + errors** (1 min).  
   `python3 - <<'PY'\nimport json\nfrom pathlib import Path\nsummary = json.loads(Path('logs/fetch_runs/summary_latest.json').read_text())\nprint(summary['totals'])\nprint('errors:', summary['sliceSummaries'][0]['errors'] if summary['sliceSummaries'] else [])\nPY`
-- [ ] **Optional validation** (2 min). If schema or normalizer changed, rerun the sampling helper to refresh `reports/field_validation*.md`.
+- [ ] **Optional validation** (2 min). If schema or normalizer changed, rerun the sampling helper to refresh local validation reports.
 
 ## Verification & monitoring
 - **Success indicators**: 
   - `logs/fetch_runs/summary_latest.log` ends with `Finished <term>/<campus>` and `errors=[]`.
   - `logs/fetch_runs/summary_latest.json` totals show non-zero `coursesInserted`/`sectionsInserted` or expected updates.
   - `sqlite3 data/courses.sqlite 'PRAGMA integrity_check;'` returns `ok`.
-- **Field-level checks**: Run the Python sampler in `reports/field_validation.md` to prove SOC vs SQLite parity after any major change.
+- **Field-level checks**: Run the Python sampler locally to prove SOC vs SQLite parity after any major change.
 - **Disk usage**: Monitor `du -sh data` and prune `data/staging` if it grows past the allotted quota (staging can be disabled via config after initial validation).
 
 ## Common errors & mitigations
@@ -70,4 +70,4 @@ This runbook captures the operator steps for initializing and refreshing the Rut
 - `docs/data_refresh_strategy.md` — hashing + incremental logic.
 - `docs/local_data_model.md` — schema definitions.
 - `docs/soc_rate_limit.md` — throughput guardrails that inform the `concurrency` block.
-- `reports/field_validation.md` — latest SOC vs SQLite sampling evidence.
+- Local field-validation report — latest SOC vs SQLite sampling evidence.
