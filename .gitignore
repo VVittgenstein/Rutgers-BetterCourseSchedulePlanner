@@ -161,6 +161,19 @@ release/
 
 # Tasks/plans
 tasks_bugfix.json
+auto-refresh-tasks.json
+rEmail.json
+rRevision.json
+rSubscribe.json
+
+# Local project-management / agent artifacts
+Compact/
+review/
+Rutgers-dr/
+reports/
+notebooks/
+record.json
+read_only.md
 
 # Claude Code local settings
 .claude/
