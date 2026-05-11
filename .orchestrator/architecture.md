@@ -77,3 +77,38 @@ Stage A currently has seven durable delivery tasks in ngagent. Operationally, ea
    - `escalate`: interrupt the human only for Tier 4 issues.
 
 This means the minimum Stage A operational plan is 14 work units: 7 delivery missions plus 7 review missions. The expected Git shape is one normal delivery commit per delivery task, not one commit per review mission. Additional retry/review cycles may be created dynamically if reviews find real problems.
+
+## Stage P Public Branch Architecture
+Stage P is a publication/synchronization phase. Its target is not a raw merge from internal `dev` into public `main`; that would expose internal planning artifacts and would preserve internal artifacts in public branch history.
+
+The intended branch model is:
+
+```
+origin/dev
+  Internal working branch. May contain ngagent planning docs, Stage A reports,
+  task execution context, and local cleanup evidence.
+
+origin/main
+  Public default branch. Should contain only the project-facing engineering
+  surface and sanitized public history.
+
+public-main-candidate
+  Temporary reviewed candidate branch for replacing/updating main after human
+  cutover approval.
+```
+
+Stage P must first classify the differences between `origin/main` and `origin/dev`. This matters because `origin/main` currently includes prior public-surface cleanup commits and product-facing remote changes, while `origin/dev` contains the local Stage A reconstruction. The branch conflict is real: the old public cleanup deleted historical workflow records, while Stage A moved similar records into an internal archive.
+
+Expected public branch rules:
+- Include product source, tests, package manifests, user-facing docs, public runbooks, schema/config examples, and normal repo metadata.
+- Exclude `.orchestrator/`, `.git/ngagent/`, `AGENTS.md`, ngagent docs, Stage A internal reports, `docs/archive/stage-a-legacy/`, historical workflow JSON, Compact/review records, local runtime databases/checkpoints, private config, nested clone `far/`, and cleanup scratch files.
+- Prefer sanitized replay commits over merging internal `dev` commits into public `main`.
+- Preserve multiple normal commits on the public candidate branch so GitHub shows meaningful project activity without publishing internal workflow content.
+- Use the nested clone `far/Rutgers-BetterCourseSchedulePlanner` only as temporary local evidence for `origin/main`; delete the local `far/` directory after Stage P is complete and no longer needs that evidence.
+
+Stage P execution policy:
+1. Delivery executors use Claude Opus 4.7 Max.
+2. Review missions use GPT-5.5 with xhigh reasoning plus the formal ngagent review gate where applicable.
+3. No model fallback is allowed without human instruction.
+4. Branch cutover to `main`, force-pushes, default-branch changes, and remote branch deletion are human-approved cutover actions, not automatic task side effects.
+5. Internal `dev` remains the coordination branch for ngagent task state unless a later plan changes the orchestration model.

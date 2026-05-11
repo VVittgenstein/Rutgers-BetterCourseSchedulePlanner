@@ -38,3 +38,29 @@ Stage A should produce a clear handoff into Stage B refactoring: what is current
 - Review is not modeled as a recursive implementation task. Instead, every task must pass a dedicated ngagent review gate before merge.
 - Review model fallback is not allowed for Stage A. If the requested Opus 4.7 Max review path cannot run, the task is blocked/escalated instead of reviewed by a weaker or different model.
 - After each successful merge into `dev`, push `dev` to `origin` unless the remote rejects or the human pauses execution.
+
+## Stage P Objective: Public Repository Synchronization
+Stage P turns the cleaned local project understanding into a safe public GitHub default branch.
+
+The public branch should show only the project and its normal engineering surface: product source, user-facing docs, public runbooks, config examples, package manifests, schemas, and other files a reviewer should reasonably see. It should not show ngagent runtime/planning internals, `.orchestrator/`, task/review artifacts, internal historical dialogue records, local runtime data, private config, nested clones, or repository-cleanup scratch material.
+
+The public branch should still preserve visible development activity through multiple normal task-style commits. The goal is not a single squash commit or a raw merge of internal `dev`. Instead, Stage P should produce a sanitized public history whose commits correspond to meaningful cleanup/publication steps while excluding internal workflow artifacts from the public tree and, where practical, from the public branch history.
+
+## Stage P Success Criteria
+- [ ] `origin/main` and `origin/dev` are compared as separate evidence layers, not assumed mutually compatible.
+- [ ] Product-code differences between remote `main` and local/internal `dev` are classified before any default-branch update.
+- [ ] Public include/exclude policy is explicit, including `.orchestrator/`, `AGENTS.md`, ngagent artifacts, `docs/archive/stage-a-legacy/`, local runtime files, private configs, nested clone `far/`, release archives, and historical workflow records.
+- [ ] The proposed public branch commit sequence contains multiple normal commits, each with a clear purpose and no internal-only files.
+- [ ] Secret and sensitive-history risk is checked before any public/default branch update; secret values are never quoted.
+- [ ] The final public branch candidate can be reviewed before replacing or updating `main`.
+- [ ] The temporary nested clone `far/` is treated as local evidence only and is deleted from the local workspace after Stage P completes.
+- [ ] Executor model for Stage P delivery work is Claude Opus 4.7 Max. Reviewer model is GPT-5.5 with xhigh reasoning. Fallback to different models is not allowed unless the human explicitly changes this rule.
+- [ ] No force-push to `main`, default-branch switch, or deletion of remote branches occurs without an explicit human cutover approval after the candidate branch is reviewed.
+
+## Stage P Out of Scope
+- Product refactoring.
+- Feature work.
+- Rewriting old Git history to purge historical secrets. If historical secrets are found, they must be treated as already leaked and handled by rotation/revocation plus a separate history-rewrite plan.
+- Publishing internal ngagent or orchestrator records on the default public branch.
+- Deleting the internal `dev` branch before the public branch strategy is approved.
+- Keeping the temporary nested clone `far/` after it is no longer needed.

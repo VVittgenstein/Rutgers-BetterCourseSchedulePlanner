@@ -3,6 +3,9 @@
 
 ## Architectural Decisions
 <!-- Format: [date] Decision — Rationale -->
+- [2026-05-11] Stage P public sync uses sanitized replay, not raw `dev` -> `main` merge — `origin/main` is the prior public/selective-disclosure surface, while `origin/dev` contains internal ngagent and Stage A reconstruction artifacts. A raw PR exposes internal workflow content and creates rename/delete conflicts where public cleanup deleted files that Stage A archived internally.
+- [2026-05-11] Stage P model assignment differs from Stage A — delivery executors must use Claude Opus 4.7 Max; review missions must use GPT-5.5 with xhigh reasoning. No fallback model should be used unless the human changes the rule.
+- [2026-05-11] Public cutover is a human-approved action — preparing and reviewing a public candidate branch can be delegated, but replacing/updating `main`, force-pushing, changing default branch, or deleting remote branches must pause for explicit human approval.
 
 ## Upstream Summaries
 
@@ -30,6 +33,7 @@
 - [2026-05-11] `ngagent merge task-001` created the merge commit correctly, but left `.orchestrator/stage-a/01-inventory.md` staged as deleted in the main worktree. Restoring that single path from HEAD cleaned the index. Check `git status --short --branch` after each `ngagent merge` before pushing.
 - [2026-05-11] The same post-merge staged-deletion symptom repeated for task-002, task-003, task-004, and task-005 when each merge added a new `.orchestrator/stage-a/*.md` report. After every `ngagent merge`, verify the output report exists and restore the merged path from HEAD if the worktree marks it deleted before pushing.
 - [2026-05-11] `ngagent merge task-007` created merge commit `f5031a1` correctly but left the main worktree/index staged with a large inverse of the cleanup move. Because the main checkout was clean before merge and the local runtime files had been backed up, `git restore --source=HEAD --staged --worktree -- .` safely realigned tracked files to the merge commit; the seven intended local artifacts were then restored from `.git/ngagent/local-backups/task-007-20260511-044954` and verified as ignored/untracked.
+- [2026-05-11] The nested clone at `far/Rutgers-BetterCourseSchedulePlanner` is user-provided evidence for comparing remote `main`; the parent repository sees `far/` as untracked. Stage P tasks must treat `far/` as read-only evidence, must not add it to public commits, and should delete the local `far/` directory after Stage P completes.
 
 ## Session Log
 <!-- Brief summary of each work session for continuity -->
@@ -41,3 +45,4 @@
 - [2026-05-11] Remote repository is a selective-disclosure surface, not a complete historical source of truth. The human recalls a prior cleanup from "everything submitted" toward "only the project submitted"; Stage A reports must compare remote/tracked state against the local main checkout, ignored artifacts, release/archive files, and historical workflow records before inferring what is current or public.
 - [2026-05-11] `.gitignore`, tracked state, ignored state, untracked state, and remote state are evidence layers, not authorities. Current ignored/local status may itself be wrong or stale. Stage A must describe what is observed and why it may be suspect; it must not imply that an ignored artifact is correctly excluded merely because it is ignored today.
 - [2026-05-11] Stage A delivery tasks task-001 through task-007 are merged. The resulting repository is cleaned at the documentation/history/repository-organization layer, with product refactoring intentionally deferred to Stage B.
+- [2026-05-11] Stage P opened to create a clean public/default branch from the local reconstruction without publishing ngagent internals. The human wants public GitHub to show project engineering files and multiple task-style commits for visible contribution activity.
