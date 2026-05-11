@@ -52,7 +52,7 @@ Distill to **≤3 sentences**. Pass as
 
 ## 2A. Execution Provider Selection
 
-Default dispatch remains Claude Code headless:
+Default dispatch uses Codex CLI tmux with gpt-5.5/xhigh:
 
 ```bash
 ngagent spawn <task-id>
@@ -62,7 +62,7 @@ When a task benefits from interactive supervision, tell the Sub-agent which exec
 
 ```bash
 ngagent spawn <task-id> --executor claude-code --transport tmux
-ngagent spawn <task-id> --executor codex-cli --transport tmux
+ngagent spawn <task-id> --executor codex-cli --transport tmux --model gpt-5.5 --effort xhigh
 ```
 
 Use `ngagent execution providers` to inspect capabilities. Use `ngagent session` only through the Sub-agent when manual follow-up prompts, provider commands, or approval-state inspection are required. Provider defaults use auto-review permission modes; Codex linked-worktree git index writes use `on-request` approvals routed to `auto_review` because `.git` and resolved gitdirs remain protected under workspace-write. Review and merge gates pin session status, turn count, transcript hash, and reviewed branch head.

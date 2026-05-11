@@ -28,8 +28,10 @@ ngagent worktree create task-001
 ngagent spawn task-001 \
     --expected-duration 1800 \
     [--context "..."] [--feedback "..."] \
-    [--model claude-opus-4-7] [--effort xhigh]
-# --effort = low<medium<high<xhigh<max (Opus 4.7, 5 tiers ascending; default: xhigh)
+    [--executor codex-cli] [--transport tmux] \
+    [--model gpt-5.5] [--effort xhigh]
+# Codex default: gpt-5.5 with model_reasoning_effort=xhigh.
+# Claude fallback: --executor claude-code --model claude-opus-4-7 --effort xhigh.
 # --context/--feedback are OPTIONAL on first attempt
 # DO NOT add timeouts. DO NOT kill this process.
 
@@ -51,9 +53,9 @@ ngagent events task-001
 Execution Plane v2 also allows explicit execution selection:
 
 ```bash
+ngagent spawn task-001 --executor codex-cli --transport tmux --model gpt-5.5 --effort xhigh
 ngagent spawn task-001 --executor claude-code --transport headless
 ngagent spawn task-001 --executor claude-code --transport tmux
-ngagent spawn task-001 --executor codex-cli --transport tmux
 ```
 
 For interactive supervision, use `ngagent session start|send|command|completion-request|approval-status|capture|wait|finalize|stop`. Do not drive raw tmux sessions directly. `session start` sends the initial task prompt through the provider-safe path: Claude uses the supervised composer path, and Codex uses the interactive CLI PROMPT argument while still recording an initial execution turn.
@@ -61,7 +63,7 @@ For interactive supervision, use `ngagent session start|send|command|completion-
 Canonical supervised tmux lifecycle:
 
 ```bash
-ngagent session start task-001 --executor claude-code --transport tmux
+ngagent session start task-001 --executor codex-cli --transport tmux --model gpt-5.5 --effort xhigh
 ngagent session send task-001 --text "<follow-up prompt when needed>"
 ngagent session completion-request task-001
 ngagent session wait task-001 --until completion-report
@@ -81,7 +83,7 @@ relevant files, allowed_write_paths), pre-freezes an `attempt-{N}.json`
 with provenance hashes (base_sha, prompt_hash, architecture_hash,
 context_manifest_hash), then launches executor as a subprocess:
 
-    ngagent spawn <task-id> --executor claude-code --transport headless
+    ngagent spawn <task-id> --executor codex-cli --transport tmux
 
 It blocks until the executor exits, then finalizes the attempt with
 `finished_at`, `status`, and `completion_ref`.
