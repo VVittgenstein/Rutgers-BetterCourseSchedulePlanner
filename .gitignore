@@ -149,6 +149,8 @@ data/migrations.log
 data/staging/
 data/runtime/
 data/poller_checkpoint.json
+data/refresh_queue.json
+scripts/poller_checkpoint.json
 
 # Local configs generated from examples
 configs/*.local.json
