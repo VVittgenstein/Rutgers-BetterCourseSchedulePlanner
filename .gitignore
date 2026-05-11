@@ -164,3 +164,6 @@ tasks_bugfix.json
 
 # Claude Code local settings
 .claude/
+
+# Multi-agent worktrees
+.worktrees/

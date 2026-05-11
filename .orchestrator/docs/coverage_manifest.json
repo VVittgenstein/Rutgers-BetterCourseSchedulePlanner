@@ -1,0 +1,85 @@
+{
+  "version": "0.8.0",
+  "removed_blocks": [
+    {
+      "id": "inline_subagent_prompt",
+      "description": "Inline Sub-agent mission prompt",
+      "bytes": 10200,
+      "route": "subagent_runbook.md",
+      "cli_fallback": "ngagent prompt subagent"
+    },
+    {
+      "id": "subagent_parallelism",
+      "description": "Sub-agent parallelism + patience",
+      "bytes": 1800,
+      "route": "subagent_runbook.md",
+      "cli_fallback": null
+    },
+    {
+      "id": "cli_manual",
+      "description": "Available Tools: CLI manual",
+      "bytes": 4460,
+      "route": null,
+      "cli_fallback": "ngagent --help"
+    },
+    {
+      "id": "json_output_contract",
+      "description": "JSON Output Contract",
+      "bytes": 870,
+      "route": "eval_and_handoff.md",
+      "cli_fallback": "ngagent plan"
+    },
+    {
+      "id": "evaluation_optin",
+      "description": "Evaluation opt-in",
+      "bytes": 1190,
+      "route": "eval_and_handoff.md",
+      "cli_fallback": "ngagent eval --help"
+    },
+    {
+      "id": "handoff_subsystem",
+      "description": "Handoff subsystem",
+      "bytes": 460,
+      "route": "eval_and_handoff.md",
+      "cli_fallback": "ngagent handoff --help"
+    },
+    {
+      "id": "phase0_bootstrap",
+      "description": "Phase 0 bootstrap",
+      "bytes": 1550,
+      "route": null,
+      "cli_fallback": "ngagent doctor"
+    },
+    {
+      "id": "phase1_planning",
+      "description": "Phase 1 planning",
+      "bytes": 450,
+      "route": null,
+      "cli_fallback": null,
+      "note": "Absorbed into HARD CONSTRAINTS rule 3"
+    },
+    {
+      "id": "phase3_integration",
+      "description": "Phase 3 integration",
+      "bytes": 650,
+      "route": "main_agent_playbook.md",
+      "cli_fallback": null
+    },
+    {
+      "id": "env_escalation_detail",
+      "description": "Environment Escalation full diagram",
+      "bytes": 1050,
+      "route": null,
+      "cli_fallback": null,
+      "note": "Condensed to 3 sentences in root doc"
+    },
+    {
+      "id": "critical_rules",
+      "description": "Critical Rules section",
+      "bytes": 890,
+      "route": null,
+      "cli_fallback": null,
+      "note": "Merged into HARD CONSTRAINTS rules 6-7"
+    }
+  ]
+}
