@@ -112,3 +112,24 @@ Stage P execution policy:
 3. No model fallback is allowed without human instruction.
 4. Branch cutover to `main`, force-pushes, default-branch changes, and remote branch deletion are human-approved cutover actions, not automatic task side effects.
 5. Internal `dev` remains the coordination branch for ngagent task state unless a later plan changes the orchestration model.
+
+## Stage P Remote Surface Closeout Architecture
+Task-011 made `origin/main` clean, but a public repository can still expose non-default branches, tags, and GitHub Releases. For this user's portfolio/display goal, the public remote should not expose the internal construction history.
+
+Closeout target state:
+
+```
+origin/main
+  The only intended public branch. Points to the reviewed sanitized project tree.
+
+local dev
+  Local/internal coordination branch for ngagent records. It must not be pushed
+  back to the public `origin` after `origin/dev` is deleted.
+```
+
+Remote closeout policy:
+- Keep `origin/main`.
+- Delete stale public remote branches such as `dev`, `public-main-candidate`, historical `ST-*`/`T-*` task branches, sync branches, patch branches, and other non-main branches after explicit human approval.
+- Classify remote tags and GitHub Releases before deletion. Deleting a Git tag is possible through Git; deleting a GitHub Release object may require authenticated GitHub API/CLI support. If release deletion cannot be performed with available credentials/tooling, record the blocker and escalate instead of pretending the release surface is clean.
+- Do not push local `dev` to `origin` after the remote closeout, because doing so recreates the public internal branch.
+- Do not force-push `main` for closeout. `main` already points to the reviewed clean state; closeout should only remove stale public refs or release surfaces.

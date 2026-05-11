@@ -7,6 +7,7 @@
 - [2026-05-11] Stage P model assignment differs from Stage A — delivery executors must use Claude Opus 4.7 Max; review missions must use GPT-5.5 with xhigh reasoning. No fallback model should be used unless the human changes the rule.
 - [2026-05-11] Public cutover is a human-approved action — preparing and reviewing a public candidate branch can be delegated, but replacing/updating `main`, force-pushing, changing default branch, or deleting remote branches must pause for explicit human approval.
 - [2026-05-11] Candidate branch publication is distinct from cutover — task-010 is authorized to push `public-main-candidate` to `origin` under that non-default name for review, but must not update `origin/main`, change the default branch, force-push `main`, delete branches, or delete `far/`.
+- [2026-05-11] Public remote closeout must remove visible construction refs — after task-011, `origin/main` is clean but the public remote still has many historical branches and stale tags/releases. The target public state is `origin/main` only, with local `dev` kept internal and not pushed back to the public `origin` after `origin/dev` is deleted.
 
 ## Upstream Summaries
 
@@ -41,6 +42,7 @@
 - [2026-05-11] The nested clone at `far/Rutgers-BetterCourseSchedulePlanner` is user-provided evidence for comparing remote `main`; the parent repository sees `far/` as untracked. Stage P tasks must treat `far/` as read-only evidence, must not add it to public commits, and should delete the local `far/` directory after Stage P completes.
 - [2026-05-11] Task-009's report table is over-conservative where it says the construction task should not push the candidate. Task-010 spec v2 supersedes that line: push `public-main-candidate` to `origin` for review, while leaving `origin/main` and `far/` untouched.
 - [2026-05-11] Task-010 needed a human-approved ngagent gate recovery after three dispatches. The content-bearing candidate and report were valid, but early CompletionReports used schema-hostile values (`interface_changes` text or `null` fields). A schema-only recovery attempt with empty-string `interface_changes` produced a valid CompletionReport and formal review pass. Future recovery prompts should say string fields must be strings, not `null`.
+- [2026-05-11] Remote public surface audit found 147 remote branches and 8 tag refs after task-011. `origin/main` is clean, but visible non-main refs include `dev`, `public-main-candidate`, many `ST-*` task branches, sync branches, patch branches, and historical release tags. GitHub Release API reports one release (`Release-0122`, display name `Release-0121`). GitHub CLI is not installed; deleting a GitHub Release object may require authenticated API/tooling beyond plain Git tag deletion.
 
 ## Session Log
 <!-- Brief summary of each work session for continuity -->

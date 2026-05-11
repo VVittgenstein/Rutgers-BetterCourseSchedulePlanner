@@ -56,6 +56,7 @@ The public branch should still preserve visible development activity through mul
 - [ ] The temporary nested clone `far/` is treated as local evidence only and is deleted from the local workspace after Stage P completes.
 - [ ] Executor model for Stage P delivery work is Claude Opus 4.7 Max. Reviewer model is GPT-5.5 with xhigh reasoning. Fallback to different models is not allowed unless the human explicitly changes this rule.
 - [ ] No force-push to `main`, default-branch switch, or deletion of remote branches occurs without an explicit human cutover approval after the candidate branch is reviewed.
+- [ ] The final public GitHub surface is closed down to the intended public refs only: `main` remains, temporary/internal/stale remote branches are removed, stale tags/releases are classified and handled or explicitly escalated, and no internal `dev`/ngagent/orchestrator branch remains visible on the public remote.
 
 ## Stage P Out of Scope
 - Product refactoring.
@@ -64,3 +65,13 @@ The public branch should still preserve visible development activity through mul
 - Publishing internal ngagent or orchestrator records on the default public branch.
 - Deleting the internal `dev` branch before the public branch strategy is approved.
 - Keeping the temporary nested clone `far/` after it is no longer needed.
+
+## Stage P Remote Surface Closeout
+After task-011, the default public branch is clean, but the public repository may still expose old remote branches, tags, and GitHub Releases that point to historical/internal states. The closeout goal is to make the public GitHub repository look like one clean project repository, not a visible archive of the earlier confused development workflow.
+
+Closeout target:
+- Keep `origin/main` as the public branch.
+- Remove public visibility of `origin/dev`, `origin/public-main-candidate`, historical task branches, sync branches, patch branches, and other stale non-main branches.
+- Classify remote tags and GitHub Releases. Delete or escalate stale public tags/releases that expose old release states.
+- Keep local `dev` and ngagent/orchestrator records as local/internal state only unless a later private remote is configured.
+- After deleting the public `origin/dev` branch, do not push local `dev` back to the public `origin`, because that would recreate the branch and undo the closeout.
