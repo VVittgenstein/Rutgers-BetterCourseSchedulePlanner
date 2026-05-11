@@ -179,3 +179,8 @@ read_only.md
 
 # Claude Code local settings
 .claude/
+
+# Local agent scaffolding and nested clones
+far/
+.git/ngagent/
+.worktrees/
