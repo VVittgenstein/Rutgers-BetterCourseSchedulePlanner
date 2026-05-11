@@ -10,6 +10,7 @@
      [task-001] Changed auth.py: verify() → validate(). New: TokenExpiredError.
      [task-002] Added Redis caching layer. New dep: redis>=5.0
 -->
+- [task-001] Added `.orchestrator/stage-a/01-inventory.md` as the Stage A repository inventory. Downstream tasks must consume its evidence-layer framing: `.gitignore`, tracked state, ignored state, untracked state, and remote state are observations only, not authorities. It explicitly flags `release/` and `bcsp-20260122.zip` as main-checkout local surfaces for task-002, legacy records for task-003, runtime/config artifacts for task-004, and verify rows for task-005/task-006.
 
 ## Failed Approaches
 <!-- Format: [date] What was tried — Why it failed — Lesson -->
@@ -19,6 +20,8 @@
 
 ## Known Gotchas
 <!-- Environment quirks, library bugs, workarounds -->
+- [2026-05-11] Existing agent processes may not inherit later persistent user PATH edits. For Claude CLI execution in this session, prefix PATH with `Z:\.npm-global\node_modules\@anthropic-ai\claude-code\bin` so bare `claude` resolves to the installed executable. Review missions remain pinned to Claude Opus 4.7 Max with max effort; no model fallback.
+- [2026-05-11] `ngagent merge task-001` created the merge commit correctly, but left `.orchestrator/stage-a/01-inventory.md` staged as deleted in the main worktree. Restoring that single path from HEAD cleaned the index. Check `git status --short --branch` after each `ngagent merge` before pushing.
 
 ## Session Log
 <!-- Brief summary of each work session for continuity -->
