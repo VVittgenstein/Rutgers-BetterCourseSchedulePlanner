@@ -11,6 +11,10 @@
      [task-002] Added Redis caching layer. New dep: redis>=5.0
 -->
 - [task-001] Added `.orchestrator/stage-a/01-inventory.md` as the Stage A repository inventory. Downstream tasks must consume its evidence-layer framing: `.gitignore`, tracked state, ignored state, untracked state, and remote state are observations only, not authorities. It explicitly flags `release/` and `bcsp-20260122.zip` as main-checkout local surfaces for task-002, legacy records for task-003, runtime/config artifacts for task-004, and verify rows for task-005/task-006.
+- [task-002] Added `.orchestrator/stage-a/02-release-reconciliation.md`. It inspected `release/bcsp-20260121.tar.gz`, `release/bcsp-20260121.zip`, and `bcsp-20260122.zip`; conclusion: no existing release pack should be trusted as current. Review passed but noted low-risk count inconsistencies and a literal packager username side-channel that final baseline should handle carefully.
+- [task-003] Added `.orchestrator/stage-a/03-record-reconciliation.md`. It classifies legacy planning JSON and historical workflow records as evidence, mostly archive-oriented, with stale or contradictory status fields. Review passed but noted cosmetic bad section references and less explicit enumeration for `reports/`.
+- [task-004] Added `.orchestrator/stage-a/04-runtime-config-hygiene.md`. Highest-priority findings include tracked local config/runtime artifacts despite ignore rules, `scripts/poller_checkpoint.json` as runtime-shaped but unignored, competing DB defaults, missing tracked `.env.example`, and stale absolute runtime paths. Review passed; final cleanup must still treat changes as recommendations until task-007.
+- [task-005] Added `.orchestrator/stage-a/05-module-surface-map.md`. It maps product module surfaces and Stage B refactor candidates, including API route gaps, frontend test gaps, data pipeline/runtime coupling, mail/config risk, startup/bootstrap issues, and docs/source drift. Review passed with no findings.
 
 ## Failed Approaches
 <!-- Format: [date] What was tried — Why it failed — Lesson -->
@@ -22,6 +26,7 @@
 <!-- Environment quirks, library bugs, workarounds -->
 - [2026-05-11] Existing agent processes may not inherit later persistent user PATH edits. For Claude CLI execution in this session, prefix PATH with `Z:\.npm-global\node_modules\@anthropic-ai\claude-code\bin` so bare `claude` resolves to the installed executable. Review missions remain pinned to Claude Opus 4.7 Max with max effort; no model fallback.
 - [2026-05-11] `ngagent merge task-001` created the merge commit correctly, but left `.orchestrator/stage-a/01-inventory.md` staged as deleted in the main worktree. Restoring that single path from HEAD cleaned the index. Check `git status --short --branch` after each `ngagent merge` before pushing.
+- [2026-05-11] The same post-merge staged-deletion symptom repeated for task-002, task-003, task-004, and task-005 when each merge added a new `.orchestrator/stage-a/*.md` report. After every `ngagent merge`, verify the output report exists and restore the merged path from HEAD if the worktree marks it deleted before pushing.
 
 ## Session Log
 <!-- Brief summary of each work session for continuity -->
