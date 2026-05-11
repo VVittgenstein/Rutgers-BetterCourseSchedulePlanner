@@ -138,13 +138,13 @@ one task end-to-end: worktree ──▶ spawn ──▶ review ──▶ inspect
 
     {
       "name": "task-001-worker",
-      "model": "gpt-5.4",
+      "model": "gpt-5.5",
       "model_reasoning_effort": "xhigh",
       "sandbox_mode": "workspace-write",
       "developer_instructions": "... (output of ngagent prompt subagent) ..."
     }
 
-**Model:** gpt-5.4 with xhigh reasoning. Not gpt-5.4-mini.
+**Model:** gpt-5.5 with xhigh reasoning. Not mini variants.
 **Parallelism:** Up to 6 concurrent. Re-assign finished agents before
 spawning new. Do NOT force parallelism when tasks share write scope.
 
@@ -314,12 +314,12 @@ behavior, or retry conditions, consult the relevant source first.
 
 ## Execution Plane v2
 
-Default dispatch remains `ngagent spawn <task-id>` with Claude Code headless execution. Main Agent may ask the Sub-agent to choose explicitly:
+Default dispatch is `ngagent spawn <task-id>` with Codex CLI tmux execution using gpt-5.5/xhigh. Main Agent may ask the Sub-agent to choose explicitly:
 
 ```bash
 ngagent spawn <task-id> --executor claude-code --transport headless
 ngagent spawn <task-id> --executor claude-code --transport tmux
-ngagent spawn <task-id> --executor codex-cli --transport tmux
+ngagent spawn <task-id> --executor codex-cli --transport tmux --model gpt-5.5 --effort xhigh
 ```
 
 Interactive supervision uses `ngagent session`; provider defaults use auto-review permission modes. Review and merge gates pin execution session provenance, turn count, and transcript hash. A continued session invalidates merge.
