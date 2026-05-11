@@ -30,7 +30,8 @@ Expected artifact interfaces:
 - Runtime/config hygiene report: lists generated data, local configs, ignored artifacts, secret-risk surfaces, and clean-checkout blockers.
 - Stage B handoff report: prioritized refactor candidates with evidence and sequencing.
 - Cleanup application patch: applies only non-product organization changes justified by the Stage A baseline, such as archive separation, documentation index updates, source-of-truth notes, and removal from tracking of files proven to be generated/local-only.
-- Review gate: every task result is reviewed through `ngagent review <task-id>` by a dedicated reviewer sub-agent using the Claude CLI route and requested Opus model configuration where available.
+- Delivery commit: every Stage A delivery task should result in one normal task commit before review/merge, unless the task explicitly discovers that no repository change is appropriate.
+- Review gate: every task result is reviewed through `ngagent review <task-id>` by a dedicated reviewer sub-agent using the Claude CLI route with Opus 4.7 Max only. Review model fallback is not allowed; unavailable model/CLI configuration is a blocker, not permission to downgrade.
 
 ## Technology Decisions
 
@@ -40,7 +41,8 @@ Expected artifact interfaces:
 | Active task system | ngagent | The repository now includes ngagent orchestration scaffolding, and Stage A needs durable task state separate from legacy `record.json`. | 2026-05-11 |
 | Legacy records | Evidence, not authority | `record.json` and Compact/review files contain useful history but are known to be stale or inconsistent with code and release artifacts. | 2026-05-11 |
 | Release artifacts | To be reconciled before trusted | The user suspects release pack drift, and current local data/config artifacts already show path and runtime inconsistencies. | 2026-05-11 |
-| Review model | Seven delivery tasks plus seven review missions | The user wants every Stage A task paired with an explicit independent review. To avoid infinite recursion, reviews are modeled as review-gate missions that produce ngagent ReviewArtifacts, not as ordinary implementation tasks that themselves require review. | 2026-05-11 |
+| Review model | Seven delivery tasks plus seven review missions | The user wants every Stage A task paired with an explicit independent review. To avoid infinite recursion, reviews are modeled as review-gate missions that produce ngagent ReviewArtifacts, not as ordinary implementation tasks that themselves require review. Review must use Opus 4.7 Max only; fallback to another model is not allowed. | 2026-05-11 |
+| Task commit shape | One delivery task, one normal task commit | The remote repository already has a task/branch-oriented history. Stage A should preserve that discipline for delivery work; review missions may produce ngagent artifacts but should not create Git commits merely to inflate commit count. | 2026-05-11 |
 | Remote sync | Push each accepted task after merge | The user wants every task submitted to the remote repository, so accepted Stage A progress should not remain local-only. | 2026-05-11 |
 
 ## File Structure
@@ -74,4 +76,4 @@ Stage A currently has seven durable delivery tasks in ngagent. Operationally, ea
    - `blocked`: inspect whether the blocker is mechanical, spec, architecture, environment, or external.
    - `escalate`: interrupt the human only for Tier 4 issues.
 
-This means the minimum Stage A operational plan is 14 work units: 7 delivery missions plus 7 review missions. Additional retry/review cycles may be created dynamically if reviews find real problems.
+This means the minimum Stage A operational plan is 14 work units: 7 delivery missions plus 7 review missions. The expected Git shape is one normal delivery commit per delivery task, not one commit per review mission. Additional retry/review cycles may be created dynamically if reviews find real problems.

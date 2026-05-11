@@ -14,7 +14,8 @@ Stage A should produce a clear handoff into Stage B refactoring: what is current
 - [ ] The current minimal runnable path is documented from a clean checkout, including required generated data/config steps and any blockers.
 - [ ] Local/private artifacts and secret-risk surfaces are identified without exposing secret values.
 - [ ] A Stage B refactor candidate list is produced with evidence, priority, blast radius, and recommended sequencing.
-- [ ] Each Stage A task is independently reviewed through the ngagent review gate by a Claude CLI reviewer configured for the requested Opus model path where available.
+- [ ] Each Stage A delivery task produces one normal task commit before review/merge, unless the task is explicitly found to require no repository change.
+- [ ] Each Stage A task is independently reviewed through the ngagent review gate by a Claude CLI reviewer configured for Opus 4.7 Max; review must block rather than fall back to another model if that model is unavailable.
 - [ ] Each reviewed and merged Stage A task is pushed to the remote repository so remote state tracks the accepted cleanup work.
 - [ ] The final Stage A repository is cleaned, separated, and organized at the repository-structure/documentation/history layer: product code remains behaviorally unchanged, while current-vs-historical sources of truth are explicit.
 - [ ] No product functionality, source-code architecture, or runtime behavior is changed without a separate Stage B plan.
@@ -35,4 +36,5 @@ Stage A should produce a clear handoff into Stage B refactoring: what is current
 - All Stage A findings must be evidence-backed and traceable to file paths, release contents, command outputs, or recorded history.
 - Secrets and private user config values must be redacted in reports.
 - Review is not modeled as a recursive implementation task. Instead, every task must pass a dedicated ngagent review gate before merge.
+- Review model fallback is not allowed for Stage A. If the requested Opus 4.7 Max review path cannot run, the task is blocked/escalated instead of reviewed by a weaker or different model.
 - After each successful merge into `dev`, push `dev` to `origin` unless the remote rejects or the human pauses execution.
