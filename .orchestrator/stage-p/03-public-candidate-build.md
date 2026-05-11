@@ -49,7 +49,7 @@
 | Merge base of `origin/main` and `origin/dev` | `2d762179025e68ee05f853c3e7b5e8b43837893c` | Audit reference; not a construction input. |
 | `origin/main:.gitignore` blob (carried at base) | `b3522eda3134bef75f76c082c183a80e5b4b399a` | Starting `.gitignore`; base tree. |
 | `origin/dev:.gitignore` blob (intent source) | `fe8ce7f58e173f1533cc9bc6e3ab07ed947cc283` | Source of the dev-side runtime-hygiene and `.worktrees/` additions whose intent is merged in (not cherry-picked from). |
-| Candidate `.gitignore` blob (post P-COMMIT-2) | `e201b7a793c37e882ea18a707f37166755d19baf` | Final `.gitignore` on the candidate; differs from `b3522eda…` only by the five appended lines documented in §3. |
+| Candidate `.gitignore` blob (post P-COMMIT-2) | `e201b7a793c37e882ea18a707f37166755d19baf` | Final `.gitignore` on the candidate; differs from `b3522eda…` only by **seven appended lines total** (2 runtime patterns added by P-COMMIT-1 plus the 5-line defensive block added by P-COMMIT-2), documented in §3. P-COMMIT-2's own diff is `+5 / −0`; the candidate-vs-`origin/main` cumulative diff is `+7 / −0` because P-COMMIT-1 contributes the other 2 inserted lines. |
 | `scripts/poller_checkpoint.json` blob on `origin/main` (removed from index by P-COMMIT-1) | `e7b0fe8e2fc89091cd5194d3a850a8c2a1d3021e` | Removed via `git rm --cached`; on-disk copy preserved as ignored. |
 
 ### 1.2 Visible-history math (AC-004 anticipation)
@@ -128,12 +128,15 @@ difference, and for shared paths compare blob SHAs.
 | Tracked file count on `public-main-candidate` | 160 |
 | Paths only on `origin/main` (not on candidate) | `scripts/poller_checkpoint.json` (1 path) |
 | Paths only on candidate (not on `origin/main`) | none (0 paths) |
-| Shared paths with differing blob SHAs | `.gitignore` only — `b3522eda…` on main, `e201b7a7…` on candidate (delta: +5 lines documented in §2) |
+| Shared paths with differing blob SHAs | `.gitignore` only — `b3522eda…` on main, `e201b7a7…` on candidate (delta: **+7 lines total, −0** — i.e. 2 runtime patterns inserted by P-COMMIT-1 + a 5-line defensive block inserted by P-COMMIT-2; `git diff --stat origin/main..origin/public-main-candidate -- .gitignore` reports `1 file changed, 7 insertions(+)`. The per-commit `+5 / −0` figure for P-COMMIT-2 in §2.2 is the diff of that single commit only, not the cumulative candidate-vs-`origin/main` diff.) |
 
 Conclusion: the candidate tree is byte-identical to `origin/main`'s tree
 **except for** (a) the removal of `scripts/poller_checkpoint.json` and (b)
-the five appended `.gitignore` lines. This matches the construction plan
-in `02-public-commit-sequence.md` §6 step 6 exactly.
+**seven appended `.gitignore` lines** in total — 2 runtime-hygiene pattern
+lines added by P-COMMIT-1 and a 5-line defensive block (one blank
+separator + one comment line + three pattern lines) added by P-COMMIT-2.
+This matches the construction plan in `02-public-commit-sequence.md` §6
+step 6 exactly.
 
 ### 3.2 Excluded-path scan on the candidate tree
 
@@ -264,8 +267,9 @@ Hand-off targets:
    (b) both new commits have the human's published identity; (c) both
    subjects contain no task ID, run ID, model name, or reviewer name;
    (d) the candidate tree matches `origin/main`'s tree minus
-   `scripts/poller_checkpoint.json` plus the five new `.gitignore` lines,
-   with nothing else differing; (e) no `.orchestrator/`, `AGENTS.md`,
+   `scripts/poller_checkpoint.json` plus **seven new `.gitignore` lines**
+   in total (2 runtime-hygiene patterns from P-COMMIT-1 + a 5-line
+   defensive block from P-COMMIT-2), with nothing else differing; (e) no `.orchestrator/`, `AGENTS.md`,
    `docs/archive/`, `reports/`, `notebooks/`, `far/`, `*.user.json`,
    `*.local.json`, or `.env*` (except a future `.env.example`, not added
    here) appears anywhere in the candidate tree.
