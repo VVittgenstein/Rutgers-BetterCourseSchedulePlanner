@@ -133,3 +133,57 @@ Remote closeout policy:
 - Classify remote tags and GitHub Releases before deletion. Deleting a Git tag is possible through Git; deleting a GitHub Release object may require authenticated GitHub API/CLI support. If release deletion cannot be performed with available credentials/tooling, record the blocker and escalate instead of pretending the release surface is clean.
 - Do not push local `dev` to `origin` after the remote closeout, because doing so recreates the public internal branch.
 - Do not force-push `main` for closeout. `main` already points to the reviewed clean state; closeout should only remove stale public refs or release surfaces.
+
+## Phase 1 Local Release Architecture
+Phase 1 changes the project from cleanup/publication mode back into product delivery mode. The architecture goal is a complete local Rutgers BetterCourseSchedulePlanner release: local web UI, local API, local SQLite database, local Rutgers SOC ingest, local polling, and local notification flows.
+
+Phase 1 must be driven by a feature matrix before implementation starts. The matrix is the product boundary contract and must classify each major surface:
+
+| Status | Meaning |
+|--------|---------|
+| `complete` | Already exists in the right product direction and needs only release-level validation or polish. |
+| `recover` | Was part of the intended local BCSP product but was skipped, disabled, or abandoned because of historical implementation trouble. Recovering it is not treated as new feature creep. |
+| `repair` | Exists now but is incomplete, misleading, brittle, poorly integrated, or fails release-level validation. |
+| `remove` | Exists in code, docs, UI, or scripts but should not be visible in the Phase 1 release. |
+| `defer` | Reasonable future capability, but belongs to Phase 2 refactor, Phase 3 cloud deployment, or later product expansion. |
+| `unclear` | Requires human product judgment before implementation. |
+
+The most important product invariant is honesty of the release surface: no user-visible UI, route, command, config, or doc should pretend that a stubbed or deferred feature exists. A feature may be fully implemented, deliberately removed, or explicitly documented as out of scope, but it must not remain fake.
+
+## Phase 1 Product Slices
+Phase 1 should be executed as dependent product slices rather than as one broad rewrite:
+
+1. Product boundary and feature matrix.
+2. Validation baseline repair.
+3. Data ingest, database defaults, and local startup reliability.
+4. Course/section API contract repair.
+5. Subscription, polling, and notification reliability.
+6. UI/UX design direction.
+7. Frontend rebuild.
+8. UI polish pass.
+9. Release packaging and cross-platform startup.
+10. Documentation and release notes.
+11. End-to-end release candidate verification.
+
+The UI/UX work is explicitly two-stage:
+- The design/rebuild task must use `gpt-tasteskill` for product-level interface direction, flows, screen structure, hierarchy, and visual system.
+- A later polish task must use `emil-design-eng` for detailed interaction, motion, responsiveness, empty/loading/error states, focus behavior, and tactile quality.
+
+The Main Agent should not load these skills during planning unless the user requests it. The relevant worker/sub-agent should load them when executing the assigned UI/UX task.
+
+## Phase 1 Interface Principles
+- `/api/courses` and `/api/sections` must be reconciled against the actual UX. If standalone section search/detail is part of the redesigned product, `/api/sections` must be implemented and validated. If it is not part of the release contract, public docs/UI should not present it as a real feature.
+- Rutgers SOC ingest should expose predictable local configuration and failure states. Dry-run and fetch behavior should match docs and release defaults.
+- Subscription and notification behavior should be testable without cloud services. Local sound is a first-class Phase 1 notification path. Email is optional only if the product contract says it is optional; if shipped, provider support and setup must be honest.
+- Admin/config routes are acceptable only under the local-tool threat model. Phase 1 must not imply hosted multi-user security.
+- i18n should remain coherent if the UI keeps multilingual support. Message coverage checks are part of release validation.
+
+## Phase 1 Distribution Policy
+The user wants an archive that a non-expert can unpack and use. The existing Node/Vite/Fastify/better-sqlite3 stack makes this a packaging problem, not just a ZIP problem, because native dependencies and local runtime state can break clean-machine startup.
+
+Phase 1 should therefore distinguish:
+- Windows release candidate: must be directly validated in the current Windows environment.
+- macOS support: should be prepared in scripts/docs/package design, but cannot be claimed as validated until a real macOS run confirms install/start/fetch/use behavior.
+- Developer source package: acceptable only as a secondary artifact, not as the primary "unzip and use" promise.
+
+Packaging tasks may choose the minimal reliable mechanism after investigation, but the selected mechanism must make prerequisites, native dependency behavior, database paths, generated configs, logs, and troubleshooting explicit.

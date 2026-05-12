@@ -75,3 +75,41 @@ Closeout target:
 - Classify remote tags and GitHub Releases. Delete or escalate stale public tags/releases that expose old release states.
 - Keep local `dev` and ngagent/orchestrator records as local/internal state only unless a later private remote is configured.
 - After deleting the public `origin/dev` branch, do not push local `dev` back to the public `origin`, because that would recreate the branch and undo the closeout.
+
+## Phase 1 Objective: Local Release BCSP
+Phase 1 is the first product delivery phase after Stage A/P cleanup. Its goal is to produce a complete, releasable local version of Rutgers BetterCourseSchedulePlanner.
+
+The target is not a minimal MVP and not a blind continuation of the current working UI. Phase 1 should recover the intended local-tool product that the project was trying to become before earlier model/tooling limitations, bugs, skipped work, and incomplete reviews distorted the implementation. It must also remove or hide surfaces that should not exist in the local release.
+
+The working interpretation of "all features must exist" is:
+- Every capability that belongs to the Phase 1 local-release product contract must be end-to-end real, documented, tested or otherwise verified, and reachable through an understandable user flow.
+- Historical features that were clearly intended for the local BCSP product but were skipped, disabled, or abandoned because of implementation trouble should be treated as `recover` candidates, not as new feature creep.
+- Existing code/UI/API/docs that expose fake, stubbed, obsolete, or misleading functionality should be treated as `repair` or `remove` candidates. Current existence is not sufficient reason to ship.
+- Ideas that belong to cloud deployment, multi-user hosting, public auth/security, or a future full refactor should be explicitly deferred to Phase 2 or Phase 3.
+
+Phase 1 should ship a local web tool with:
+- Rutgers SOC data fetch/import into local SQLite for the release-supported term/campus/subject scope.
+- Reliable course and section exploration, including the section-level data users need to decide what to take and what to monitor.
+- Search/filter UX that is coherent, fast enough for local use, and aligned with the real API contract.
+- Local subscription/watch workflows for open-seat monitoring.
+- Local notifications, including local sound. Email may ship only if its setup, provider support, configuration, and failure states are honest and complete.
+- A redesigned UI/UX, not just visual polish. The redesign must cover information architecture, primary flows, empty/loading/error states, accessibility basics, responsiveness, and day-to-day ergonomics.
+- A release/startup path suitable for non-expert local users. On Windows, the release candidate must be validated directly. macOS support must either be validated on macOS before being claimed or documented as prepared but not yet externally verified.
+- User-facing documentation that matches the shipped local product and does not advertise deferred, removed, or fake functionality.
+
+## Phase 1 Success Criteria
+- [ ] A Phase 1 feature matrix exists and classifies major product surfaces as `complete`, `recover`, `repair`, `remove`, `defer`, or `unclear`, with evidence from current code, Stage A records, legacy records, and user product intent.
+- [ ] No UI, API route, CLI/startup path, or user-facing doc implies support for a feature that is stubbed, fake, or intentionally deferred.
+- [ ] Core local flow works from a fresh release candidate: unpack/start, fetch or load Rutgers data, search/filter courses, inspect sections, subscribe to a target, run open-seat polling, receive a local notification, and manage the subscription.
+- [ ] The frontend UI/UX is rebuilt through a two-stage design process: first using `gpt-tasteskill` for product-level UI/UX direction, then using `emil-design-eng` for polish and interaction refinement.
+- [ ] Root/frontend/API validation is brought to a release-credible state. Known TypeScript and test failures must be fixed, intentionally removed, or explicitly re-scoped with evidence.
+- [ ] Runtime defaults are coherent: database paths, fetch configs, generated artifacts, logs, checkpoints, and local user config are predictable and documented.
+- [ ] The local release package/start script works on Windows without requiring project-specific hidden state. macOS support is prepared and either verified on a real macOS environment or clearly marked pending external validation.
+- [ ] Product docs, quickstart, troubleshooting, and release notes describe the actual shipped local release.
+
+## Phase 1 Out of Scope
+- Google Cloud deployment, hosted multi-user operation, cloud databases, cloud queues, and production auth.
+- A full architectural rewrite for its own sake. Phase 1 may repair and reshape code where required to make the local release real, but the complete refactor remains Phase 2.
+- Adding speculative new features that were not part of the local BCSP product intent.
+- Publishing internal ngagent/orchestrator artifacts to the public release.
+- Claiming macOS "validated" support without an actual macOS validation run.
