@@ -8,6 +8,7 @@
 - [2026-05-11] Public cutover is a human-approved action — preparing and reviewing a public candidate branch can be delegated, but replacing/updating `main`, force-pushing, changing default branch, or deleting remote branches must pause for explicit human approval.
 - [2026-05-11] Candidate branch publication is distinct from cutover — task-010 is authorized to push `public-main-candidate` to `origin` under that non-default name for review, but must not update `origin/main`, change the default branch, force-push `main`, delete branches, or delete `far/`.
 - [2026-05-11] Public remote closeout must remove visible construction refs — after task-011, `origin/main` is clean but the public remote still has many historical branches and stale tags/releases. The target public state is `origin/main` only, with local `dev` kept internal and not pushed back to the public `origin` after `origin/dev` is deleted.
+- [2026-05-11] Human approved public remote closeout deletion after reviewing task-012 summary — authorized deletion of all non-main remote branches, including `dev` and `public-main-candidate`, and authorized the subsequent deletion path for the 8 stale tags plus the GitHub Release object/asset. `origin/main` remains the only branch to preserve.
 
 ## Upstream Summaries
 
