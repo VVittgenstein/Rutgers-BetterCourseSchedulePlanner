@@ -54,6 +54,7 @@
 - [2026-05-11] `ngagent merge task-012` created merge commit `07d6e83` correctly but left `.orchestrator/stage-p/05-public-remote-surface-audit.md` marked deleted in the main worktree. Restoring that single path from HEAD cleaned the worktree.
 - [2026-05-11] `ngagent merge task-013` created merge commit `ea93b3e` correctly but left `.orchestrator/stage-p/06-public-branch-closeout.md` marked deleted in the main worktree. Restoring that single path from HEAD cleaned the worktree.
 - [2026-05-11] `ngagent merge task-014` created merge commit `c4533ba` correctly but left `.orchestrator/stage-p/07-public-tags-releases-closeout.md` marked deleted in the main worktree. Restoring that single path from HEAD cleaned the worktree.
+- [2026-05-12] `task-015` attempt-001 failed at the execution infrastructure layer because default psmux/tmux session names are not project-qualified. BCSP's `task_015_attempt_001_session_001` collided with NGAT's `task-015`; the BCSP Codex session displayed NGAT/Ai deployment content and NGAT recorded the same session-name collision. Do not review or merge BCSP attempt-001. Future tmux spawns must pass an explicit project-qualified `--session-name`, for example `bcsp_task_015_attempt_002_<timestamp>`, while preserving the intended `codex-cli + tmux` executor choice.
 
 ## Session Log
 <!-- Brief summary of each work session for continuity -->
