@@ -169,3 +169,9 @@ tasks_bugfix.json
 
 # Multi-agent worktrees
 .worktrees/
+
+# Multi-agent worktrees/runtime
+.ngagent/.worktrees/
+.ngagent/.orchestrator/
+.ngagent/state/
+.ngagent/archives/
