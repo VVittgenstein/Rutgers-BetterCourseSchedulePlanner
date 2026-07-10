@@ -156,6 +156,9 @@ scripts/poller_checkpoint.json
 configs/*.local.json
 configs/*.user.json
 
+# Project-local credentials and private infrastructure records
+/.secrets/
+
 # Release artifacts
 release/
 *.tar.gz
