@@ -355,8 +355,19 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
     }
 
     const targets = pkg.targets ?? [];
-    if (targets.length !== 1 || !sameStringArrayAsSet(targets[0]?.kind, [spec.kind]) || !sameStringArrayAsSet(targets[0]?.crate_types, [spec.kind])) {
-      errors.push(`${pkg.name} must expose exactly one ${spec.kind} target`);
+    const primaryTargets = targets.filter((target) => (
+      sameStringArrayAsSet(target.kind, [spec.kind])
+      && sameStringArrayAsSet(target.crate_types, [spec.kind])
+    ));
+    if (primaryTargets.length !== 1) {
+      errors.push(`${pkg.name} must expose exactly one primary ${spec.kind} target`);
+    }
+    const integrationTestTargets = targets.filter((target) => (
+      sameStringArrayAsSet(target.kind, ['test'])
+      && sameStringArrayAsSet(target.crate_types, ['bin'])
+    ));
+    if (targets.length !== primaryTargets.length + integrationTestTargets.length) {
+      errors.push(`${pkg.name} may expose only its primary ${spec.kind} target and explicit integration-test targets`);
     }
     for (const target of targets) {
       if ((target.required_features ?? []).length !== 0) {
@@ -364,7 +375,15 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
       }
       if (target.kind?.includes('bin')) binaries.push({ package: pkg.name, name: target.name });
     }
-    const target = targets[0];
+    for (const target of integrationTestTargets) {
+      const testRoot = `${root}/${spec.dir}/tests/`;
+      const source = normalizedPath(target.src_path);
+      if (!source.startsWith(testRoot) || !source.endsWith('.rs')) {
+        errors.push(`${pkg.name}/${target.name} integration-test source path mismatch`);
+      }
+      if (target.edition !== '2024') errors.push(`${pkg.name}/${target.name} integration-test edition mismatch`);
+    }
+    const target = primaryTargets[0];
     if (target) {
       const expectedSource = `${root}/${spec.dir}/src/${spec.kind === 'bin' ? 'main.rs' : 'lib.rs'}`;
       if (normalizedPath(target.src_path) !== expectedSource) errors.push(`${pkg.name} target source path mismatch`);
@@ -562,6 +581,67 @@ export function validatePublicSourceDenyDocument(document) {
   if (markerCount !== PUBLIC_SOURCE_MARKER_COUNT) errors.push(`public SOURCE marker count must be ${PUBLIC_SOURCE_MARKER_COUNT}, got ${markerCount}`);
   if (new Set(normalizedMarkers).size !== normalizedMarkers.length) errors.push('public SOURCE normalized markers must be globally unique');
   if (semanticSha256(document) !== PUBLIC_SOURCE_DENY_SEMANTIC_SHA256) errors.push('public SOURCE deny marker contract digest mismatch');
+  return errors;
+}
+
+function inspectTargetSource(source, repoRoot) {
+  let current = source;
+  let linkedComponent = false;
+  while (true) {
+    const stat = lstatSync(current);
+    linkedComponent ||= stat.isSymbolicLink();
+    if (normalizedPath(current) === normalizedPath(repoRoot)) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  const sourceStat = lstatSync(source);
+  return {
+    isFile: sourceStat.isFile(),
+    linkedComponent,
+    realPath: realpathSync.native(source),
+  };
+}
+
+export function auditWorkspaceTargetSources(metadata, { repoRoot, inspectSource = inspectTargetSource } = {}) {
+  const errors = [];
+  const root = path.resolve(repoRoot ?? metadata.workspace_root ?? process.cwd());
+  const packagesById = new Map((metadata.packages ?? []).map((pkg) => [pkg.id, pkg]));
+  const workspacePackages = (metadata.workspace_members ?? [])
+    .map((id) => packagesById.get(id))
+    .filter(Boolean);
+
+  for (const pkg of workspacePackages) {
+    for (const target of pkg.targets ?? []) {
+      const label = `${pkg.name}/${target.name}`;
+      if (typeof target.src_path !== 'string' || target.src_path.length === 0) {
+        errors.push(`${label} target source path is missing`);
+        continue;
+      }
+      const declared = path.resolve(target.src_path);
+      const relative = path.relative(root, declared);
+      if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        errors.push(`${label} target source escapes the workspace root`);
+        continue;
+      }
+      try {
+        const inspected = inspectSource(declared, root);
+        if (!inspected || inspected.linkedComponent) {
+          errors.push(`${label} target source path contains a symlink or junction`);
+          continue;
+        }
+        if (!inspected.isFile) {
+          errors.push(`${label} target source is not a regular file`);
+          continue;
+        }
+        if (normalizedPath(path.resolve(inspected.realPath)) !== normalizedPath(declared)) {
+          errors.push(`${label} target real path differs from its declared path`);
+        }
+      } catch {
+        errors.push(`${label} target source is not readable`);
+      }
+    }
+  }
   return errors;
 }
 
@@ -955,6 +1035,7 @@ async function main() {
       try {
         const metadata = JSON.parse(result.stdout);
         errors = verifyGraph(metadata, { repoRoot });
+        errors.push(...auditWorkspaceTargetSources(metadata, { repoRoot }));
         let denyDocument;
         try {
           denyDocument = JSON.parse(readFileSync(path.join(repoRoot, PUBLIC_SOURCE_DENY_PATH), 'utf8'));

@@ -1,0 +1,23 @@
+{
+  "protocolVersion": 1,
+  "data": {
+    "sectionKey": {
+      "term": "T2026F",
+      "campus": "CAMPUS_A",
+      "index": "00001"
+    },
+    "courseGroupKey": {
+      "term": "T2026F",
+      "campus": "CAMPUS_A",
+      "courseString": "00:000:001"
+    },
+    "courseVariantKey": {
+      "group": {
+        "term": "T2026F",
+        "campus": "CAMPUS_A",
+        "courseString": "00:000:001"
+      },
+      "fingerprint": "v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+}

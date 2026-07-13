@@ -1,0 +1,400 @@
+{
+  "schemaVersion": 1,
+  "apiProtocolVersion": 1,
+  "wsProtocolVersion": 1,
+  "scalarConstraints": [
+    {
+      "id": "term-id",
+      "wireType": "string",
+      "maxBytes": 16,
+      "pattern": "^[A-Z0-9_-]+$",
+      "semantic": "dynamic selector identity; no trim or case rewrite"
+    },
+    {
+      "id": "campus-code",
+      "wireType": "string",
+      "maxBytes": 32,
+      "pattern": "^[A-Z0-9_]+$",
+      "semantic": "dynamic selector identity; no fixed campus allowlist"
+    },
+    {
+      "id": "section-index",
+      "wireType": "string",
+      "exactBytes": 5,
+      "pattern": "^[0-9]{5}$",
+      "semantic": "leading zeroes are identity-significant"
+    },
+    {
+      "id": "course-string",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^[A-Za-z0-9:._-]+$",
+      "semantic": "opaque source identifier; no parsing or case rewrite"
+    },
+    {
+      "id": "variant-fingerprint",
+      "wireType": "string",
+      "exactBytes": 67,
+      "pattern": "^v1:[0-9a-f]{64}$",
+      "semantic": "algorithm-versioned canonical course-field fingerprint"
+    },
+    {
+      "id": "reason-field",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "semantic": "stable filter or domain field identifier"
+    },
+    {
+      "id": "detail-name",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "semantic": "safe public error-detail field or limit identifier"
+    },
+    {
+      "id": "message-key",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^error\\.[a-z0-9._-]+$",
+      "semantic": "stable translation key derived from the typed error code"
+    },
+    {
+      "id": "trace-id",
+      "wireType": "string",
+      "exactBytes": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "semantic": "canonical lowercase RFC 4122 random UUID v4; injected source"
+    },
+    {
+      "id": "protocol-version",
+      "wireType": "u16",
+      "semantic": "only integer 1 is accepted"
+    }
+  ],
+  "schemas": [
+    {
+      "id": "bcsp.identity.term-campus-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campus",
+          "typeRef": "$scalar:campus-code",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.identity.section-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campus",
+          "typeRef": "$scalar:campus-code",
+          "required": true
+        },
+        {
+          "name": "index",
+          "typeRef": "$scalar:section-index",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.identity.course-group-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campus",
+          "typeRef": "$scalar:campus-code",
+          "required": true
+        },
+        {
+          "name": "courseString",
+          "typeRef": "$scalar:course-string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.identity.course-variant-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "group",
+          "typeRef": "$schema:bcsp.identity.course-group-key.v1",
+          "required": true
+        },
+        {
+          "name": "fingerprint",
+          "typeRef": "$scalar:variant-fingerprint",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.match.outcome.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "MATCH",
+        "UNCERTAIN",
+        "NO_MATCH"
+      ]
+    },
+    {
+      "id": "bcsp.match.reason-code.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "KNOWN_MISMATCH",
+        "MISSING_RELIABLE_DATA",
+        "UNKNOWN_VALUE",
+        "TBA",
+        "CONFLICTING_EVIDENCE",
+        "INVALID_VALUE",
+        "SOURCE_UNAVAILABLE"
+      ]
+    },
+    {
+      "id": "bcsp.match.reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "code",
+          "typeRef": "$schema:bcsp.match.reason-code.v1",
+          "required": true
+        },
+        {
+          "name": "field",
+          "typeRef": "$scalar:reason-field",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.match.explanation.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "outcome",
+          "typeRef": "$schema:bcsp.match.outcome.v1",
+          "required": true
+        },
+        {
+          "name": "reasons",
+          "typeRef": "$array:$schema:bcsp.match.reason.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.error.shared-code.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "MALFORMED_REQUEST",
+        "UNSUPPORTED_PROTOCOL_VERSION",
+        "INVALID_SECTION_KEY",
+        "INVALID_COURSE_GROUP_KEY",
+        "INVALID_COURSE_VARIANT_KEY",
+        "INVALID_FILTER",
+        "SECTION_NOT_FOUND",
+        "SELECTION_LIMIT_EXCEEDED",
+        "UPSTREAM_UNAVAILABLE",
+        "AUDIO_BLOCKED",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "id": "bcsp.http.request-envelope.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "typeRef": "$generic:T",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.http.success-envelope.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "data",
+          "typeRef": "$generic:T",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.http.error-body.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "code",
+          "typeRef": "$schema:bcsp.error.shared-code.v1",
+          "required": true
+        },
+        {
+          "name": "messageKey",
+          "typeRef": "$scalar:message-key",
+          "required": true
+        },
+        {
+          "name": "traceId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "details",
+          "typeRef": "$array:$schema:bcsp.http.error-detail.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.http.error-detail.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "INVALID_FIELD",
+          "fields": [
+            {
+              "name": "field",
+              "typeRef": "$scalar:detail-name",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "LIMIT",
+          "fields": [
+            {
+              "name": "name",
+              "typeRef": "$scalar:detail-name",
+              "required": true
+            },
+            {
+              "name": "maximum",
+              "typeRef": "$primitive:u32",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "RETRY_AFTER_SECONDS",
+          "fields": [
+            {
+              "name": "seconds",
+              "typeRef": "$primitive:u32",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.http.error-envelope.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "error",
+          "typeRef": "$schema:bcsp.http.error-body.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.ws.client-envelope.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "messageId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "typeRef": "$generic:T",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.ws.server-envelope.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "messageId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "typeRef": "$generic:T",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

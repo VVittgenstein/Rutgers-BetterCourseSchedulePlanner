@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import {
   EXTERNAL_DEPENDENCY_SPEC,
   GRAPH_SPEC,
+  auditWorkspaceTargetSources,
   auditRustSourceFiles,
   createReport,
   formatReport,
@@ -88,6 +89,21 @@ function fixture() {
 
 function packageByName(metadata, name) {
   return metadata.packages.find((pkg) => pkg.name === name);
+}
+
+function integrationTarget(name = 'wire_golden') {
+  return {
+    name,
+    kind: ['test'],
+    crate_types: ['bin'],
+    required_features: [],
+    src_path: `${REPO_ROOT}/crates/bcsp-contracts/tests/${name}.rs`,
+    edition: '2024',
+  };
+}
+
+function cleanSourceInspector(source) {
+  return { isFile: true, linkedComponent: false, realPath: source };
 }
 
 function dependencyByName(metadata, packageName, dependencyName) {
@@ -216,6 +232,90 @@ expectFailure((metadata) => {
 expectFailure((metadata) => {
   packageByName(metadata, 'bcsp-contracts').targets[0].name = 'renamed_contracts';
 }, /library target name mismatch/);
+
+{
+  const metadata = fixture();
+  packageByName(metadata, 'bcsp-contracts').targets.push(integrationTarget());
+  assert.deepEqual(verifyGraph(metadata, { repoRoot: REPO_ROOT }), []);
+  assert.deepEqual(
+    auditWorkspaceTargetSources(metadata, {
+      repoRoot: REPO_ROOT,
+      inspectSource: cleanSourceInspector,
+    }),
+    [],
+  );
+}
+
+expectFailure((metadata) => {
+  packageByName(metadata, 'bcsp-contracts').targets.push({
+    name: 'second_contracts',
+    kind: ['lib'],
+    crate_types: ['lib'],
+    required_features: [],
+    src_path: `${REPO_ROOT}/crates/bcsp-contracts/src/second.rs`,
+    edition: '2024',
+  });
+}, /exactly one primary lib target/);
+
+expectFailure((metadata) => {
+  packageByName(metadata, 'bcsp-contracts').targets.push({
+    name: 'escaped_test',
+    kind: ['test'],
+    crate_types: ['bin'],
+    required_features: [],
+    src_path: `${REPO_ROOT}/outside/escaped_test.rs`,
+    edition: '2024',
+  });
+}, /integration-test source path mismatch/);
+
+expectFailure((metadata) => {
+  packageByName(metadata, 'bcsp-contracts').targets.push({
+    ...integrationTarget('example_target'),
+    kind: ['example'],
+  });
+}, /only its primary lib target and explicit integration-test targets/);
+
+expectFailure((metadata) => {
+  packageByName(metadata, 'bcsp-contracts').targets.push({
+    ...integrationTarget('bench_target'),
+    kind: ['bench'],
+  });
+}, /only its primary lib target and explicit integration-test targets/);
+
+expectFailure((metadata) => {
+  packageByName(metadata, 'bcsp-contracts').targets.push({
+    ...integrationTarget(),
+    required_features: ['hidden-test'],
+  });
+}, /must declare no target required features/);
+
+{
+  const metadata = fixture();
+  packageByName(metadata, 'bcsp-contracts').targets.push(integrationTarget('linked_test'));
+  const errors = auditWorkspaceTargetSources(metadata, {
+    repoRoot: REPO_ROOT,
+    inspectSource: (source) => ({
+      isFile: true,
+      linkedComponent: source.endsWith('linked_test.rs'),
+      realPath: source,
+    }),
+  });
+  assert.ok(errors.some((error) => /symlink or junction/.test(error)));
+}
+
+{
+  const metadata = fixture();
+  packageByName(metadata, 'bcsp-contracts').targets.push(integrationTarget('realpath_escape'));
+  const errors = auditWorkspaceTargetSources(metadata, {
+    repoRoot: REPO_ROOT,
+    inspectSource: (source) => ({
+      isFile: true,
+      linkedComponent: false,
+      realPath: source.endsWith('realpath_escape.rs') ? `${REPO_ROOT}/outside/escape.rs` : source,
+    }),
+  });
+  assert.ok(errors.some((error) => /real path differs/.test(error)));
+}
 
 assert.deepEqual(validatePublicSourceDenyDocument(DENY_DOCUMENT), []);
 
