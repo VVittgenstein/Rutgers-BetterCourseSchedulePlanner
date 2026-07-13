@@ -2,6 +2,12 @@
   "name": "better-course-schedule-planner-frontend",
   "private": true,
   "version": "0.0.1",
+  "license": "ISC",
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": "24.18.0",
+    "npm": "11.16.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,18 +15,25 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "i18next": "^25.6.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-i18next": "^16.3.3",
-    "react-window": "^1.8.10"
+    "i18next": "26.3.6",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-i18next": "17.0.9",
+    "react-router-dom": "7.18.1"
   },
   "devDependencies": {
-    "@types/react": "^18.3.11",
-    "@types/react-dom": "^18.3.5",
-    "@types/react-window": "^1.8.5",
-    "@vitejs/plugin-react": "^4.3.1",
-    "typescript": "^5.6.3",
-    "vite": "^5.4.1"
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.2",
+    "@types/jsdom": "28.0.3",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "axe-core": "4.12.1",
+    "jsdom": "29.1.1",
+    "playwright": "1.61.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
   }
 }
