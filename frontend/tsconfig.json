@@ -1,8 +1,9 @@
 {
-  "extends": "./tsconfig.node.json",
-  "compilerOptions": {
-    "jsx": "react-jsx",
-    "noEmit": true
-  },
-  "include": ["src"]
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.shared.json" },
+    { "path": "./tsconfig.local.json" },
+    { "path": "./tsconfig.public.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
 }

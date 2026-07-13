@@ -1,5 +1,21 @@
 [workspace]
-members = ["crates/dependency-baseline"]
+members = [
+    "crates/bcsp-contracts",
+    "crates/bcsp-domain",
+    "crates/bcsp-query",
+    "crates/bcsp-rutgers-client",
+    "crates/bcsp-operational-storage",
+    "crates/bcsp-catalog",
+    "crates/bcsp-open",
+    "crates/bcsp-watch",
+    "crates/bcsp-application",
+    "crates/bcsp-local-user-state",
+    "crates/bcsp-local-runtime",
+    "crates/bcsp-public-operations",
+    "crates/bcsp-public-runtime",
+    "apps/bcsp-local",
+    "apps/bcsp-server",
+]
 resolver = "3"
 
 [workspace.package]

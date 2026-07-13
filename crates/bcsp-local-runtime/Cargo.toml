@@ -1,0 +1,21 @@
+[package]
+name = "bcsp-local-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+bcsp-application = { version = "=0.0.0", path = "../bcsp-application" }
+bcsp-local-user-state = { version = "=0.0.0", path = "../bcsp-local-user-state" }
+bcsp-operational-storage = { version = "=0.0.0", path = "../bcsp-operational-storage" }
+include_dir.workspace = true
+open.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

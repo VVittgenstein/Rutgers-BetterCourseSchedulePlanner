@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "jsx": "react-jsx",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "outDir": "./node_modules/.cache/typescript/local",
+    "rootDir": ".",
+    "tsBuildInfoFile": "./node_modules/.cache/typescript/local.tsbuildinfo",
+    "types": ["vite/client"]
+  },
+  "include": ["src/entry.local.tsx", "src/ui/local/**/*.ts", "src/ui/local/**/*.tsx"],
+  "exclude": ["dist", "src/entry.public.tsx", "src/ui/public"],
+  "references": [{ "path": "./tsconfig.shared.json" }]
+}

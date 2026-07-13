@@ -1,0 +1,24 @@
+[package]
+name = "bcsp-watch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+bcsp-contracts = { version = "=0.0.0", path = "../bcsp-contracts" }
+bcsp-domain = { version = "=0.0.0", path = "../bcsp-domain" }
+bcsp-open = { version = "=0.0.0", path = "../bcsp-open" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

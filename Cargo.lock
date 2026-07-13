@@ -122,6 +122,206 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bcsp-application"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "bcsp-catalog",
+ "bcsp-contracts",
+ "bcsp-domain",
+ "bcsp-open",
+ "bcsp-operational-storage",
+ "bcsp-query",
+ "bcsp-watch",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "bcsp-catalog"
+version = "0.0.0"
+dependencies = [
+ "bcsp-contracts",
+ "bcsp-domain",
+ "bcsp-operational-storage",
+ "bcsp-rutgers-client",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "bcsp-contracts"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "bcsp-domain"
+version = "0.0.0"
+dependencies = [
+ "bcsp-contracts",
+ "jiff",
+ "proptest",
+ "serde",
+ "thiserror",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "bcsp-local"
+version = "0.0.0"
+dependencies = [
+ "bcsp-local-runtime",
+]
+
+[[package]]
+name = "bcsp-local-runtime"
+version = "0.0.0"
+dependencies = [
+ "bcsp-application",
+ "bcsp-local-user-state",
+ "bcsp-operational-storage",
+ "include_dir",
+ "open",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "bcsp-local-user-state"
+version = "0.0.0"
+dependencies = [
+ "bcsp-contracts",
+ "bcsp-domain",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "bcsp-open"
+version = "0.0.0"
+dependencies = [
+ "bcsp-contracts",
+ "bcsp-domain",
+ "bcsp-operational-storage",
+ "bcsp-rutgers-client",
+ "jiff",
+ "proptest",
+ "serde",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "bcsp-operational-storage"
+version = "0.0.0"
+dependencies = [
+ "bcsp-contracts",
+ "bcsp-domain",
+ "include_dir",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "bcsp-public-operations"
+version = "0.0.0"
+dependencies = [
+ "bcsp-operational-storage",
+ "rusqlite",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "bcsp-public-runtime"
+version = "0.0.0"
+dependencies = [
+ "bcsp-application",
+ "bcsp-operational-storage",
+ "bcsp-public-operations",
+ "include_dir",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "bcsp-query"
+version = "0.0.0"
+dependencies = [
+ "bcsp-contracts",
+ "bcsp-domain",
+ "proptest",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "bcsp-rutgers-client"
+version = "0.0.0"
+dependencies = [
+ "bcsp-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "bcsp-server"
+version = "0.0.0"
+dependencies = [
+ "bcsp-public-runtime",
+]
+
+[[package]]
+name = "bcsp-watch"
+version = "0.0.0"
+dependencies = [
+ "bcsp-contracts",
+ "bcsp-domain",
+ "bcsp-open",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1244,31 +1444,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
  "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rbcsp-dependency-baseline"
-version = "0.0.0"
-dependencies = [
- "axum",
- "include_dir",
- "jiff",
- "open",
- "proptest",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
