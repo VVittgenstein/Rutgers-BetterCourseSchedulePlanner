@@ -1,0 +1,88 @@
+{
+    "schemaVersion":  1,
+    "taskId":  "P7.1-004-R1",
+    "state":  "PASS_COMMIT_ELIGIBLE",
+    "primaryCommit":  "008de8c53da39af5562cd8a4022f839100a8a11d",
+    "primaryCommitPaths":  41,
+    "repairAllowlistPaths":  9,
+    "sourceContract":  "CRLF_TO_LF_ONLY_LONE_CR_REJECTED",
+    "wireGoldenTests":  10,
+    "goldenCanonicalSha256":  {
+                                  "contract-manifest-v1.json":  "E88812B6FD48D5FB4044274A2DA3307A3C026820F0B6B852F0D8C65A7666C11B",
+                                  "http-error-v1.json":  "31F02753F720AC7BCD49CFEB988C47388F1ECF2A99263BFA012417F43BAF29D4",
+                                  "http-request-v1.json":  "256902A25E752F795617AE721A3EC0AD425382E43E4CDD565E2741511A5C8D29",
+                                  "http-success-v1.json":  "29CCFED3D4799E9CE38B9E6C3A63CEF0FD85A47CF46B48D3D5FD8B7BA57901A1",
+                                  "identity-payload-v1.json":  "F910049B6E563ABB23711243C5FD7AAAB050120B2B4FFB80544455714D398643",
+                                  "match-explanation-v1.json":  "3754443DD128227D8E5A5AF47974278BED35E1F11F11D4550A712D998AFACE56",
+                                  "section-key-v1.json":  "5C8901D16DA765456B77F1999F7836B97E3A1E8CFF18B35A02AB7D41C26D5A3B",
+                                  "ws-client-envelope-v1.json":  "B1A35FB6222E8D1C3CB59E57698FEA8D1C5712A907F03E821F6DE33373BB2B5F",
+                                  "ws-server-envelope-v1.json":  "B1A35FB6222E8D1C3CB59E57698FEA8D1C5712A907F03E821F6DE33373BB2B5F"
+                              },
+    "isolatedAutocrlfTrue":  {
+                                 "state":  "PASS",
+                                 "observedCrlfFiles":  1,
+                                 "rawBlobMismatches":  1,
+                                 "normalStatusRows":  0
+                             },
+    "dependencyDelta":  {
+                            "manifestsOrLocksChanged":  0,
+                            "thirdPartyPackages":  249,
+                            "added":  0,
+                            "removed":  0
+                        },
+    "builderExecutedGateIds":  [
+                                   "rust-graph-guard",
+                                   "rust-graph-guard-self-test",
+                                   "cargo-metadata-windows-locked-offline",
+                                   "cargo-metadata-linux-locked-offline",
+                                   "cargo-metadata-complete-closure-locked-offline",
+                                   "cargo-check-workspace-all-targets-locked-offline",
+                                   "cargo-test-workspace-all-targets-locked-offline",
+                                   "cargo-clippy-workspace-all-targets-locked-offline",
+                                   "cargo-fmt-check",
+                                   "cargo-deny-policy-locked-offline",
+                                   "cargo-test-wire-golden-locked-offline",
+                                   "cargo-test-bcsp-contracts-locked-offline",
+                                   "cargo-test-bcsp-domain-locked-offline"
+                               ],
+    "declaredLifecycleGateIds":  [
+                                     "immutable-primary-boundary",
+                                     "repair-commit-boundary",
+                                     "repair-source-contract",
+                                     "rust-graph-guard",
+                                     "rust-graph-guard-self-test",
+                                     "cargo-metadata-windows-locked-offline",
+                                     "cargo-metadata-linux-locked-offline",
+                                     "cargo-metadata-complete-closure-locked-offline",
+                                     "cargo-check-workspace-all-targets-locked-offline",
+                                     "cargo-test-workspace-all-targets-locked-offline",
+                                     "cargo-clippy-workspace-all-targets-locked-offline",
+                                     "cargo-fmt-check",
+                                     "cargo-deny-policy-locked-offline",
+                                     "cargo-test-wire-golden-locked-offline",
+                                     "cargo-test-bcsp-contracts-locked-offline",
+                                     "cargo-test-bcsp-domain-locked-offline",
+                                     "dependency-lock-unchanged",
+                                     "dependency-closure-delta",
+                                     "autocrlf-true-isolated-clone-self-test",
+                                     "protected-worktree-profile",
+                                     "publication-safety",
+                                     "zero-side-effects",
+                                     "evidence-builder-verify",
+                                     "evidence-builder-write",
+                                     "fast-forward-remote-boundary",
+                                     "terminal-clean-clone-replay"
+                                 ],
+    "remainingPostCommitOrPostPushGates":  [
+                                               "fast-forward-remote-boundary",
+                                               "terminal-clean-clone-replay"
+                                           ],
+    "zeroSideEffects":  {
+                            "rutgersRequests":  0,
+                            "databaseMutations":  0,
+                            "packageBuilds":  0,
+                            "vultrMutations":  0,
+                            "releasePublications":  0,
+                            "productionMutations":  0
+                        }
+}

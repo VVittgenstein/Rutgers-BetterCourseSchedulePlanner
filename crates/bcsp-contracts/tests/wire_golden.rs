@@ -73,11 +73,28 @@ fn pretty<T: Serialize>(value: &T) -> String {
     )
 }
 
+fn canonical_golden(expected: &str) -> String {
+    let canonical = expected.replace("\r\n", "\n");
+    assert!(
+        !canonical.contains('\r'),
+        "golden fixture contains a non-CRLF carriage return"
+    );
+    canonical
+}
+
 fn assert_golden<T>(value: &T, expected: &str)
 where
     T: Serialize,
 {
-    assert_eq!(pretty(value), expected);
+    assert_eq!(pretty(value), canonical_golden(expected));
+}
+
+#[test]
+fn golden_comparison_is_portable_across_windows_checkouts() {
+    assert_eq!(
+        canonical_golden("{\r\n  \"version\": 1\r\n}\r\n"),
+        "{\n  \"version\": 1\n}\n"
+    );
 }
 
 #[test]
