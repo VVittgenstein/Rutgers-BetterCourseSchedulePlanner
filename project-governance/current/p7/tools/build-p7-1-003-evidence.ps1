@@ -26,10 +26,28 @@ $nodeExe = Join-Path $nodeRoot 'node.exe'
 $npmExe = Join-Path $nodeRoot 'npm.cmd'
 $npmCache = Join-Path $repo '.cache\p7-1-002-node-24.18.0-win-x64\npm-cache'
 $targetDir = Join-Path $repo '.cache\p7-1-003\target'
+$expectedParent = '1d997f6d3cca70ef54ec5b7adb2124f0b5905fa3'
+$primaryCommit = 'c2af7184aeec06704997f266530535003358c278'
+$primaryContractRelative = 'project-governance/current/p7/03a-p7-1-003-workspace-module-graph-and-capability-build-guards.json'
+$primaryAllowlistRelative = 'project-governance/current/p7/evidence/p7-1-003/commit-allowlist.txt'
+$primaryCompletionRelative = 'project-governance/current/p7/records/p7-1-003-completion.json'
+$repairContractRelative = 'project-governance/current/p7/03r1a-p7-1-003-r1-windows-checkout-portability-repair.json'
 
 function Normalize-Path([string]$Value) { return $Value.Replace('\','/') }
 function Read-Json([string]$Path) { return Get-Content -LiteralPath $Path -Raw -Encoding utf8 | ConvertFrom-Json }
-function Get-Sha256([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+function Get-CanonicalTextSha256([string]$Path) {
+    $bytes=[System.IO.File]::ReadAllBytes($Path)
+    $utf8=[System.Text.UTF8Encoding]::new($false,$true)
+    $text=$utf8.GetString($bytes)
+    if($text.Length -gt 0 -and $text[0] -eq [char]0xFEFF){throw "UTF-8 BOM is forbidden in canonical text: $Path"}
+    if($text.Contains([char]0)){throw "NUL is forbidden in canonical text: $Path"}
+    if($text.Replace("`r`n",'').Contains("`r")){throw "lone CR is forbidden in canonical text: $Path"}
+    $canonical=$text.Replace("`r`n","`n")
+    if(-not $canonical.EndsWith("`n")){throw "canonical text must end with LF: $Path"}
+    $hasher=[System.Security.Cryptography.SHA256]::Create()
+    try{$hash=$hasher.ComputeHash([System.Text.UTF8Encoding]::new($false).GetBytes($canonical))}finally{$hasher.Dispose()}
+    return ([System.BitConverter]::ToString($hash)).Replace('-','')
+}
 function Write-Utf8([string]$Path,[string]$Content) {
     $directory = Split-Path -Parent $Path
     if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory -Force) }
@@ -38,7 +56,7 @@ function Write-Utf8([string]$Path,[string]$Content) {
 function Write-Json([string]$Path,[object]$Value) { Write-Utf8 $Path (($Value | ConvertTo-Json -Depth 30) + "`n") }
 function Invoke-Git([string[]]$Arguments,[bool]$AllowFailure=$false) {
     $old=$ErrorActionPreference
-    try { $ErrorActionPreference='Continue'; $output=@(& git -C $repo -c core.autocrlf=false @Arguments 2>$null); $code=$LASTEXITCODE }
+    try { $ErrorActionPreference='Continue'; $output=@(& git -C $repo @Arguments 2>$null); $code=$LASTEXITCODE }
     finally { $ErrorActionPreference=$old }
     if (-not $AllowFailure -and $code -ne 0) { throw "git $($Arguments -join ' ') failed with exit $code" }
     return [pscustomobject]@{Output=$output;ExitCode=$code}
@@ -59,11 +77,11 @@ function Assert-Pass([object]$Result,[string]$Id) {
 }
 function Test-DeniedTaskPath([string]$Path) {
     $p=Normalize-Path $Path
-    return $p -match '(^|/)\.secrets(/|$)' -or
-        $p -match '(^|/)chat-log-[^/]*\.md$' -or
-        $p -match '^docs/(chat-log-|sessions/|p1-a-recovery/)' -or
-        $p -match '^project-governance/current/p1/' -or
-        $p -match '(^|/)(node_modules|dist|target|\.cache|\.ngagent|\.orchestrator)(/|$)' -or
+    return $p -match '(?i)(^|/)\.secrets(/|$)' -or
+        $p -match '(?i)(^|/)chat-log-[^/]*\.md$' -or
+        $p -match '(?i)^docs/(chat-log-|sessions/|p1-a-recovery/)' -or
+        $p -match '(?i)^project-governance/current/p1/' -or
+        $p -match '(?i)(^|/)(node_modules|dist|target|\.cache|\.ngagent|\.orchestrator)(/|$)' -or
         $p -match '(?i)(\.sqlite3?|\.db|-wal|-shm)$'
 }
 function Get-DerivedAllowlist([object]$Contract) {
@@ -99,16 +117,48 @@ function Compare-Set([string[]]$Actual,[string[]]$Expected,[string]$Label){
 }
 
 $contract=Read-Json $contractPath
-$derived=@(Get-DerivedAllowlist $contract)
-if($DeriveAllowlist){$derived|ForEach-Object{Write-Output $_};exit 0}
+if([string]$contract.taskId -ne 'P7.1-003' -or [string]$contract.branch -ne 'codex/p7-implementation' -or [string]$contract.expectedParent -ne $expectedParent){throw 'current P7.1-003 contract identity mismatch'}
 if(-not ($contract.commitBoundary.finalized -is [bool]) -or -not $contract.commitBoundary.finalized){throw 'contract allowlist is not finalized'}
 $allowlist=@($contract.commitBoundary.taskCommitAllowlist|ForEach-Object{Normalize-Path([string]$_)})
 $head=((Invoke-Git @('rev-parse','HEAD')).Output -join '').Trim()
-if($head -eq [string]$contract.expectedParent){
+if($DeriveAllowlist){
+    if($head -ne $expectedParent){throw "allowlist derivation is only valid at predecessor $expectedParent"}
+    @(Get-DerivedAllowlist $contract)|ForEach-Object{Write-Output $_}
+    exit 0
+}
+if($head -eq $expectedParent){
+    $derived=@(Get-DerivedAllowlist $contract)
     Compare-Set $derived $allowlist 'derived/contract allowlist'
 }else{
-    $committed=@((Invoke-Git @('diff-tree','--no-renames','--no-commit-id','--name-only','-r','HEAD')).Output|ForEach-Object{Normalize-Path([string]$_)}|Where-Object{$_ -ne ''})
-    Compare-Set $committed $allowlist 'committed/contract allowlist'
+    $primaryExists=Invoke-Git @('cat-file','-e',"$primaryCommit^{commit}") $true
+    if($primaryExists.ExitCode -ne 0){throw "primary P7.1-003 commit is unavailable: $primaryCommit"}
+    $parents=((Invoke-Git @('rev-list','--parents','-n','1',$primaryCommit)).Output -join '').Trim() -split '\s+'
+    if($parents.Count -ne 2 -or $parents[0] -ne $primaryCommit -or $parents[1] -ne $expectedParent){throw 'primary P7.1-003 parent boundary mismatch'}
+    $ancestor=Invoke-Git @('merge-base','--is-ancestor',$primaryCommit,'HEAD') $true
+    if($ancestor.ExitCode -ne 0){throw "HEAD is not the primary P7.1-003 commit or its descendant: $head"}
+    if($head -ne $primaryCommit){
+        $headParents=((Invoke-Git @('rev-list','--parents','-n','1','HEAD')).Output -join '').Trim() -split '\s+'
+        if($headParents.Count -ne 2 -or $headParents[0] -ne $head -or $headParents[1] -ne $primaryCommit){throw 'P7.1-003 replay is restricted to the direct single-parent R1 repair child'}
+        $repairContractPath=Join-Path $repo $repairContractRelative.Replace('/','\')
+        if(-not(Test-Path -LiteralPath $repairContractPath -PathType Leaf)){throw 'R1 repair contract is missing from descendant checkout'}
+        $repairContract=Read-Json $repairContractPath
+        if([string]$repairContract.taskId -ne 'P7.1-003-R1' -or [string]$repairContract.expectedParent -ne $primaryCommit -or -not[bool]$repairContract.commitBoundary.finalized){throw 'R1 repair contract identity mismatch'}
+        $repairAllowlist=@($repairContract.commitBoundary.taskCommitAllowlist|ForEach-Object{Normalize-Path([string]$_)})
+        $repairCommitted=@((Invoke-Git @('diff-tree','--no-renames','--no-commit-id','--name-only','-r','HEAD')).Output|ForEach-Object{Normalize-Path([string]$_)}|Where-Object{$_ -ne ''})
+        Compare-Set $repairCommitted $repairAllowlist 'R1 repair commit/contract allowlist'
+    }
+    $primaryContractResult=Invoke-Git @('show',"$primaryCommit`:$primaryContractRelative")
+    $primaryContract=(@($primaryContractResult.Output)-join "`n")|ConvertFrom-Json
+    $primaryContractAllowlist=@($primaryContract.commitBoundary.taskCommitAllowlist|ForEach-Object{Normalize-Path([string]$_)})
+    $primaryEvidenceAllowlist=@((Invoke-Git @('show',"$primaryCommit`:$primaryAllowlistRelative")).Output|ForEach-Object{Normalize-Path([string]$_)}|Where-Object{$_ -ne ''})
+    $primaryCompletionResult=Invoke-Git @('show',"$primaryCommit`:$primaryCompletionRelative")
+    $primaryCompletion=(@($primaryCompletionResult.Output)-join "`n")|ConvertFrom-Json
+    $primaryCompletionAllowlist=@($primaryCompletion.commitAllowlist|ForEach-Object{Normalize-Path([string]$_)})
+    $primaryCommitted=@((Invoke-Git @('diff-tree','--no-renames','--no-commit-id','--name-only','-r',$primaryCommit)).Output|ForEach-Object{Normalize-Path([string]$_)}|Where-Object{$_ -ne ''})
+    Compare-Set $primaryContractAllowlist $allowlist 'primary/current contract allowlist'
+    Compare-Set $primaryEvidenceAllowlist $allowlist 'primary evidence/current contract allowlist'
+    Compare-Set $primaryCompletionAllowlist $allowlist 'primary completion/current contract allowlist'
+    Compare-Set $primaryCommitted $allowlist 'primary commit/current contract allowlist'
 }
 
 foreach($required in @($cargoExe,$cargoDenyExe,$nodeExe,$npmExe,$previousLockedPath,$previousCompletionPath,$sharedDenyPath)){
@@ -169,10 +219,10 @@ $previousRust=@($previousRows|Where-Object{$_.ecosystem -eq 'rust' -and $_.sourc
 $currentRust=@($cargoMetadata.packages|Where-Object{$null -ne $_.source}|ForEach-Object{"$($_.name)@$($_.version)"}|Sort-Object -Unique)
 Compare-Set $currentRust $previousRust 'third-party Rust closure'
 $previousCompletion=Read-Json $previousCompletionPath
-$cargoLockHash=Get-Sha256 (Join-Path $repo 'Cargo.lock')
+$cargoLockHash=Get-CanonicalTextSha256 (Join-Path $repo 'Cargo.lock')
 $previousCargoLockHash=[string]$previousCompletion.lockHashes.cargoSha256
 if($cargoLockHash -eq $previousCargoLockHash){throw 'Cargo.lock was expected to change when the workspace expanded from one package to fifteen'}
-$npmLockHash=Get-Sha256 (Join-Path $repo 'frontend\package-lock.json')
+$npmLockHash=Get-CanonicalTextSha256 (Join-Path $repo 'frontend\package-lock.json')
 if($npmLockHash -ne [string]$previousCompletion.lockHashes.frontendNpmSha256){throw 'frontend package-lock changed during graph-only task'}
 $dependencyDelta=[ordered]@{schemaVersion=1;taskId='P7.1-003';state='PASS';scope='THIRD_PARTY_IDENTITIES_AND_LOCK_ARTIFACTS';rustPrevious=$previousRust.Count;rustCurrent=$currentRust.Count;rustAdded=0;rustRemoved=0;previousCargoLockSha256=$previousCargoLockHash;currentCargoLockSha256=$cargoLockHash;cargoLockChanged=$true;npmLockChanged=$false;npmLockSha256=$npmLockHash;workspacePrevious=1;workspaceCurrent=15}
 $gateRecords.Add([ordered]@{id='dependency-closure-delta';binaryId='builder';arguments=@();exitCode=0;normalizedResult='PASS'})
@@ -215,7 +265,7 @@ try{
     )
     Write-Utf8 (Join-Path $outputEvidence 'legacy-active-graph-disposition.tsv') (($legacy -join "`n")+"`n")
     $evidenceHashes=[ordered]@{}
-    foreach($name in @('commit-allowlist.txt','rust-workspace-graph.json','frontend-import-graph.json','quality-gates.json','dependency-closure-delta.json','p4-source-coverage.tsv','legacy-active-graph-disposition.tsv')){$evidenceHashes[$name]=Get-Sha256 (Join-Path $outputEvidence $name)}
+    foreach($name in @('commit-allowlist.txt','rust-workspace-graph.json','frontend-import-graph.json','quality-gates.json','dependency-closure-delta.json','p4-source-coverage.tsv','legacy-active-graph-disposition.tsv')){$evidenceHashes[$name]=Get-CanonicalTextSha256 (Join-Path $outputEvidence $name)}
     $completionMd=@'
 # P7.1-003 completion record
 
@@ -243,16 +293,16 @@ The task becomes complete only after PreCommit, dedicated commit, PostCommit, pu
 '@
     $completionMdPath=Join-Path $outputRecords 'p7-1-003-completion.md'
     Write-Utf8 $completionMdPath ($completionMd.TrimStart()+"`n")
-    $completion=[ordered]@{schemaVersion=1;recordId='P7-1-003-COMPLETION-2026-07-13-001';taskId='P7.1-003';state='P7_1_003_PASS_COMMIT_ELIGIBLE';branch='codex/p7-implementation';expectedParent='1d997f6d3cca70ef54ec5b7adb2124f0b5905fa3';commitAllowlist=$allowlist;rustWorkspacePackages=15;rustPublicSourcePackages=12;rustPublicSourceFiles=[int]$rustGraph.publicSourceDeny.scannedFileCount;frontendEntries=2;p4SourceRows=18;rustP4SourceRows=18;frontendP4SourceRows=18;p4SourceMarkers=212;p4RemainingRowsOwner='P7.1-013';protectedBaselineRows=167;protectedWorktreeValidationProfiles=@('EXACT_PRESERVED_167','CLEAN_CHECKOUT_0');zeroConsumerScope='ACTIVE_P7_TARGET_GRAPH_ONLY';repositoryWideZeroConsumerClaim=$false;legacyGraphDisposition='FROZEN_EXCLUDED_PENDING_SEMANTIC_MIGRATION';lockHashes=[ordered]@{cargoSha256=$cargoLockHash;frontendNpmSha256=$npmLockHash};qualityGateIds=@($gateRecords|ForEach-Object{$_.id});evidenceSha256=$evidenceHashes;completionMarkdownSha256=(Get-Sha256 $completionMdPath);negativeSideEffects=[ordered]@{rutgersRequests=0;databaseMutations=0;packageBuilds=0;vultrMutations=0;releasePublications=0;productionMutations=0};actualCommitExcludedToAvoidSelfReference=$true;commitEligible=$true;nextTask='P7.1-004';nextTaskBlockedUntil='P7_1_003_PASS_POST_PUSH'}
+    $completion=[ordered]@{schemaVersion=1;recordId='P7-1-003-COMPLETION-2026-07-13-001';taskId='P7.1-003';state='P7_1_003_PASS_COMMIT_ELIGIBLE';branch='codex/p7-implementation';expectedParent='1d997f6d3cca70ef54ec5b7adb2124f0b5905fa3';commitAllowlist=$allowlist;rustWorkspacePackages=15;rustPublicSourcePackages=12;rustPublicSourceFiles=[int]$rustGraph.publicSourceDeny.scannedFileCount;frontendEntries=2;p4SourceRows=18;rustP4SourceRows=18;frontendP4SourceRows=18;p4SourceMarkers=212;p4RemainingRowsOwner='P7.1-013';protectedBaselineRows=167;protectedWorktreeValidationProfiles=@('EXACT_PRESERVED_167','CLEAN_CHECKOUT_0');zeroConsumerScope='ACTIVE_P7_TARGET_GRAPH_ONLY';repositoryWideZeroConsumerClaim=$false;legacyGraphDisposition='FROZEN_EXCLUDED_PENDING_SEMANTIC_MIGRATION';lockHashes=[ordered]@{cargoSha256=$cargoLockHash;frontendNpmSha256=$npmLockHash};qualityGateIds=@($gateRecords|ForEach-Object{$_.id});evidenceSha256=$evidenceHashes;completionMarkdownSha256=(Get-CanonicalTextSha256 $completionMdPath);negativeSideEffects=[ordered]@{rutgersRequests=0;databaseMutations=0;packageBuilds=0;vultrMutations=0;releasePublications=0;productionMutations=0};actualCommitExcludedToAvoidSelfReference=$true;commitEligible=$true;nextTask='P7.1-004';nextTaskBlockedUntil='P7_1_003_PASS_POST_PUSH'}
     Write-Json (Join-Path $outputRecords 'p7-1-003-completion.json') $completion
     if($VerifyOnly){
         foreach($name in @('commit-allowlist.txt','rust-workspace-graph.json','frontend-import-graph.json','quality-gates.json','dependency-closure-delta.json','p4-source-coverage.tsv','legacy-active-graph-disposition.tsv')){
             $actual=Join-Path $canonicalEvidence $name;$expected=Join-Path $outputEvidence $name
-            if(-not(Test-Path -LiteralPath $actual -PathType Leaf) -or (Get-Sha256 $actual) -ne (Get-Sha256 $expected)){throw "canonical evidence drift: $name"}
+            if(-not(Test-Path -LiteralPath $actual -PathType Leaf) -or (Get-CanonicalTextSha256 $actual) -ne (Get-CanonicalTextSha256 $expected)){throw "canonical evidence drift: $name"}
         }
         foreach($name in @('p7-1-003-completion.md','p7-1-003-completion.json')){
             $actual=Join-Path $canonicalRecords $name;$expected=Join-Path $outputRecords $name
-            if(-not(Test-Path -LiteralPath $actual -PathType Leaf) -or (Get-Sha256 $actual) -ne (Get-Sha256 $expected)){throw "canonical completion drift: $name"}
+            if(-not(Test-Path -LiteralPath $actual -PathType Leaf) -or (Get-CanonicalTextSha256 $actual) -ne (Get-CanonicalTextSha256 $expected)){throw "canonical completion drift: $name"}
         }
     }
 }finally{
