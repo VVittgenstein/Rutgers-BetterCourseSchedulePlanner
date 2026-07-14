@@ -109,28 +109,24 @@ pub struct ExtensionResponse {
 }
 
 impl ExtensionResponse {
-    pub fn json_bytes(status: u16, body: impl Into<Vec<u8>>) -> Self {
+    pub fn bytes(status: u16, content_type: &'static str, body: impl Into<Vec<u8>>) -> Self {
         Self {
             status,
-            content_type: "application/json; charset=utf-8",
+            content_type,
             body: body.into(),
         }
     }
 
+    pub fn json_bytes(status: u16, body: impl Into<Vec<u8>>) -> Self {
+        Self::bytes(status, "application/json; charset=utf-8", body)
+    }
+
     pub fn html(status: u16, value: impl Into<Vec<u8>>) -> Self {
-        Self {
-            status,
-            content_type: "text/html; charset=utf-8",
-            body: value.into(),
-        }
+        Self::bytes(status, "text/html; charset=utf-8", value)
     }
 
     pub fn text(status: u16, value: impl Into<Vec<u8>>) -> Self {
-        Self {
-            status,
-            content_type: "text/plain; charset=utf-8",
-            body: value.into(),
-        }
+        Self::bytes(status, "text/plain; charset=utf-8", value)
     }
 
     pub const fn no_content() -> Self {
@@ -540,7 +536,7 @@ fn extension_response(value: ExtensionResponse) -> Response {
     headers.insert(
         CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'",
+            "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; connect-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'none'; form-action 'none'",
         ),
     );
     response
@@ -635,6 +631,15 @@ mod tests {
             !response
                 .headers()
                 .contains_key("access-control-allow-origin")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_SECURITY_POLICY)
+                .and_then(|value| value.to_str().ok()),
+            Some(
+                "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; connect-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'none'; form-action 'none'"
+            )
         );
         assert_eq!(extension.calls.load(Ordering::SeqCst), 1);
 

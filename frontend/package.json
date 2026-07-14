@@ -1,7 +1,7 @@
 {
   "name": "better-course-schedule-planner-frontend",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "license": "ISC",
   "packageManager": "npm@11.16.0",
   "engines": {

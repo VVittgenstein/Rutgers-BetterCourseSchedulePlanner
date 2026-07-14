@@ -23,7 +23,7 @@ function internalDependency(name) {
   return {
     name,
     source: null,
-    req: '=0.0.0',
+    req: '=0.1.0',
     kind: null,
     rename: null,
     optional: false,
@@ -53,11 +53,11 @@ function externalDependency(name, kind = 'normal') {
 
 function fixture() {
   const packages = Object.entries(GRAPH_SPEC).map(([name, spec]) => {
-    const id = `${name} 0.0.0 (path+file:///repo/${spec.dir})`;
+    const id = `${name} 0.1.0 (path+file:///repo/${spec.dir})`;
     return {
       id,
       name,
-      version: '0.0.0',
+      version: '0.1.0',
       edition: '2024',
       rust_version: '1.97.0',
       license: 'ISC',
@@ -76,7 +76,14 @@ function fixture() {
         required_features: [],
         src_path: `${REPO_ROOT}/${spec.dir}/src/${spec.kind === 'bin' ? 'main.rs' : 'lib.rs'}`,
         edition: '2024',
-      }],
+      }, ...(['bcsp-local-runtime', 'bcsp-public-runtime'].includes(name) ? [{
+        name: 'build-script-build',
+        kind: ['custom-build'],
+        crate_types: ['bin'],
+        required_features: [],
+        src_path: `${REPO_ROOT}/${spec.dir}/build.rs`,
+        edition: '2024',
+      }] : [])],
     };
   });
   return {
@@ -223,7 +230,11 @@ expectFailure((metadata) => {
 
 expectFailure((metadata) => {
   dependencyByName(metadata, 'bcsp-domain', 'bcsp-contracts').req = '*';
-}, /internal version requirement must be =0\.0\.0/);
+}, /internal version requirement must be =0\.1\.0/);
+
+expectFailure((metadata) => {
+  packageByName(metadata, 'bcsp-domain').version = '0.2.0';
+}, /workspace packages must share one version/);
 
 expectFailure((metadata) => {
   dependencyByName(metadata, 'bcsp-contracts', 'serde').req = '*';
@@ -309,14 +320,14 @@ expectFailure((metadata) => {
     ...integrationTarget('example_target'),
     kind: ['example'],
   });
-}, /only its primary lib target and explicit integration-test targets/);
+}, /may expose only its primary lib target/);
 
 expectFailure((metadata) => {
   packageByName(metadata, 'bcsp-contracts').targets.push({
     ...integrationTarget('bench_target'),
     kind: ['bench'],
   });
-}, /only its primary lib target and explicit integration-test targets/);
+}, /may expose only its primary lib target/);
 
 expectFailure((metadata) => {
   packageByName(metadata, 'bcsp-contracts').targets.push({
@@ -399,6 +410,18 @@ for (const macroName of ['include_str', 'include_bytes', 'include_dir']) {
   ]), DENY_DOCUMENT);
   assert.ok(macroAudit.errors.some((error) => error.includes(`${macroName}! is forbidden`)));
 }
+
+const approvedPublicEmbedAudit = auditRustSourceFiles(new Map([[
+  'crates/bcsp-public-runtime/src/host.rs',
+  'use include_dir::{Dir, include_dir};\nstatic ASSETS: Dir<\'_> = include_dir!("$OUT_DIR/web-assets");',
+]]), DENY_DOCUMENT);
+assert.equal(approvedPublicEmbedAudit.sourceEscapeCount, 0);
+
+const expandedPublicEmbedAudit = auditRustSourceFiles(new Map([[
+  'crates/bcsp-public-runtime/src/host.rs',
+  'use include_dir::{Dir, include_dir};\nstatic ASSETS: Dir<\'_> = include_dir!("$OUT_DIR/web-assets");\nstatic OTHER: Dir<\'_> = include_dir!("../outside");',
+]]), DENY_DOCUMENT);
+assert.ok(expandedPublicEmbedAudit.errors.some((error) => /include_dir! is forbidden/.test(error)));
 
 const includeAliasAudit = auditRustSourceFiles(new Map([
   ['crates/shared/src/lib.rs', 'use std::include_str as load_text;\nconst VALUE: &str = load_text!("../outside");'],

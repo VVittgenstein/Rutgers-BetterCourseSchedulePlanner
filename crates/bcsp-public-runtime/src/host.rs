@@ -26,6 +26,7 @@ use bcsp_contracts::{
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_public_operations::{PublicOperationalStore, PublicOperationsError};
+use include_dir::{Dir, include_dir};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -66,19 +67,8 @@ pub static PUBLIC_RUNTIME_ROUTE_INVENTORY: &[ExtensionRoute] = &[
     ExtensionRoute::new(RequestMethod::Head, PUBLIC_METRICS_PATH),
     ExtensionRoute::new(RequestMethod::Get, PUBLIC_WATCH_PATH),
 ];
-const SHELL_TEMPLATE: &str = r#"<!doctype html>
-<html lang="__BCSP_LANG__">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Rutgers Better Course Schedule Planner</title>
-  </head>
-  <body>
-    <main id="root" aria-live="polite"></main>
-    <script id="bcsp-bootstrap" type="application/json" nonce="__BCSP_NONCE__">__BCSP_BOOTSTRAP__</script>
-  </body>
-</html>
-"#;
+static PUBLIC_WEB_ASSETS: Dir<'_> = include_dir!("$OUT_DIR/web-assets");
+const PUBLIC_HTML: &str = "public.html";
 
 #[derive(Clone)]
 struct PublicHostState {
@@ -156,6 +146,8 @@ pub struct PublicRuntime {
     shutdown: Option<oneshot::Sender<()>>,
     server_task: Option<JoinHandle<Result<(), std::io::Error>>>,
     maintenance_task: Option<JoinHandle<()>>,
+    #[cfg(test)]
+    sessions: Arc<DocumentSessionRegistry>,
 }
 
 impl PublicRuntime {
@@ -230,9 +222,10 @@ impl PublicRuntime {
         let address = listener
             .local_addr()
             .map_err(|_| PublicRuntimeError::Bind)?;
+        let sessions = Arc::new(DocumentSessionRegistry::default());
         let state = PublicHostState {
             config: Arc::new(config),
-            sessions: Arc::new(DocumentSessionRegistry::default()),
+            sessions: sessions.clone(),
             service,
             product_routes,
             watch: watch.clone(),
@@ -264,6 +257,8 @@ impl PublicRuntime {
             shutdown: Some(shutdown),
             server_task: Some(server_task),
             maintenance_task: Some(maintenance_task),
+            #[cfg(test)]
+            sessions,
         })
     }
 
@@ -281,6 +276,11 @@ impl PublicRuntime {
 
     pub fn watch_socket(&self) -> Arc<SharedWatchSocket> {
         self.watch.clone()
+    }
+
+    #[cfg(test)]
+    fn document_session_count(&self) -> usize {
+        self.sessions.len()
     }
 
     pub async fn shutdown(mut self) -> Result<(), PublicRuntimeError> {
@@ -499,8 +499,13 @@ async fn handle_fallback(State(state): State<PublicHostState>, request: Request)
     }
     let method = RequestMethod::from_http(request.method());
     let path = request.uri().path().to_owned();
-    if method == RequestMethod::Get && !path.starts_with("/api/") {
-        return document_response(&state, request.headers());
+    if method == RequestMethod::Get {
+        if let Some(asset_path) = public_asset_path(&path) {
+            return public_asset_response(asset_path);
+        }
+        if is_public_document_path(&path) {
+            return document_response(&state, request.headers());
+        }
     }
     if !path.starts_with("/api/")
         || !state
@@ -565,11 +570,132 @@ fn document_response(state: &PublicHostState, headers: &HeaderMap) -> Response {
             );
         }
     };
-    let html = SHELL_TEMPLATE
-        .replace("__BCSP_LANG__", locale.html_lang())
-        .replace("__BCSP_NONCE__", nonce.as_str())
-        .replace("__BCSP_BOOTSTRAP__", &bootstrap);
+    let Some(template) = PUBLIC_WEB_ASSETS
+        .get_file(PUBLIC_HTML)
+        .and_then(|file| file.contents_utf8())
+    else {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+        );
+    };
+    let Some(html) =
+        render_public_document(template, locale.html_lang(), nonce.as_str(), &bootstrap)
+    else {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+        );
+    };
     html_response(StatusCode::OK, html, nonce.as_str())
+}
+
+fn is_public_document_path(path: &str) -> bool {
+    if matches!(path, "/" | "/sections" | "/watch") {
+        return true;
+    }
+    let Some(rest) = path.strip_prefix("/sections/") else {
+        return false;
+    };
+    let mut segments = rest.split('/');
+    let (Some(term), Some(campus), Some(index), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return false;
+    };
+    SectionKey::try_new(term, campus, index).is_ok()
+}
+
+fn public_asset_path(path: &str) -> Option<&str> {
+    let asset = path.strip_prefix("/assets/")?;
+    if asset.is_empty() {
+        return None;
+    }
+    let relative = path.strip_prefix('/')?;
+    safe_embedded_path(relative).then_some(relative)
+}
+
+fn safe_embedded_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains(['\\', '%', '\0'])
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."))
+}
+
+fn public_asset_response(path: &str) -> Response {
+    let Some(file) = PUBLIC_WEB_ASSETS.get_file(path) else {
+        return extension_response(ExtensionResponse::not_found());
+    };
+    secured_response(
+        StatusCode::OK,
+        public_asset_content_type(path),
+        file.contents().to_vec(),
+        None,
+    )
+}
+
+fn public_asset_content_type(path: &str) -> &'static str {
+    match path.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("avif") => "image/avif",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("mp3") => "audio/mpeg",
+        Some("ogg") => "audio/ogg",
+        Some("wav") => "audio/wav",
+        Some("wasm") => "application/wasm",
+        _ => "application/octet-stream",
+    }
+}
+
+fn render_public_document(
+    template: &str,
+    html_lang: &str,
+    nonce: &str,
+    bootstrap: &str,
+) -> Option<String> {
+    if template.contains("id=\"bcsp-bootstrap\"") {
+        return None;
+    }
+    let mut html = replace_html_language(template, html_lang)?;
+    html = html
+        .replace("=\"./assets/", "=\"/assets/")
+        .replace("='./assets/", "='/assets/");
+    let body_end = html.rfind("</body>")?;
+    let bootstrap_script = format!(
+        "    <script id=\"bcsp-bootstrap\" type=\"application/json\" nonce=\"{nonce}\">{bootstrap}</script>\n"
+    );
+    html.insert_str(body_end, &bootstrap_script);
+    (html.matches("id=\"bcsp-bootstrap\"").count() == 1).then_some(html)
+}
+
+fn replace_html_language(template: &str, html_lang: &str) -> Option<String> {
+    let html_start = template.find("<html")?;
+    let tag_end_offset = template[html_start..].find('>')?;
+    let tag_end = html_start + tag_end_offset;
+    let opening_tag = &template[html_start..=tag_end];
+    let mut output = template.to_owned();
+    if let Some(lang_offset) = opening_tag.find(" lang=\"") {
+        let value_start = html_start + lang_offset + " lang=\"".len();
+        let value_end = value_start + template[value_start..].find('"')?;
+        output.replace_range(value_start..value_end, html_lang);
+    } else {
+        output.insert_str(tag_end, &format!(" lang=\"{html_lang}\""));
+    }
+    Some(output)
 }
 
 fn authenticated_mutation(headers: &HeaderMap, state: &PublicHostState) -> bool {
@@ -770,7 +896,7 @@ fn secured_response(
         },
         |nonce| {
             format!(
-                "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; connect-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self'; script-src 'self' 'nonce-{nonce}'; worker-src 'none'; form-action 'none'"
+                "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; connect-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-{nonce}'; worker-src 'none'; form-action 'none'"
             )
         },
     );
@@ -946,6 +1072,20 @@ mod tests {
         value.get("data").expect("success data")
     }
 
+    fn module_script_path(html: &str) -> &str {
+        let script_start = html.find("<script type=\"module\"").expect("module script");
+        let script = &html[script_start..];
+        let tag_end = script.find('>').expect("module script end");
+        let opening_tag = &script[..tag_end];
+        let source_start =
+            opening_tag.find("src=\"").expect("module script source") + "src=\"".len();
+        let source_end = source_start
+            + opening_tag[source_start..]
+                .find('"')
+                .expect("module script source end");
+        &opening_tag[source_start..source_end]
+    }
+
     #[test]
     fn production_router_uses_an_explicit_builtin_inventory() {
         assert_eq!(
@@ -968,6 +1108,32 @@ mod tests {
             }));
         }
         assert!(NoPublicProductRoutes.route_inventory().is_empty());
+    }
+
+    #[test]
+    fn embedded_public_asset_mime_types_cover_the_frontend_runtime_allowlist() {
+        for (path, expected) in [
+            ("assets/app.avif", "image/avif"),
+            ("assets/app.css", "text/css; charset=utf-8"),
+            ("assets/app.gif", "image/gif"),
+            ("assets/app.ico", "image/x-icon"),
+            ("assets/app.jpeg", "image/jpeg"),
+            ("assets/app.jpg", "image/jpeg"),
+            ("assets/app.js", "text/javascript; charset=utf-8"),
+            ("assets/app.json", "application/json; charset=utf-8"),
+            ("assets/app.mp3", "audio/mpeg"),
+            ("assets/app.ogg", "audio/ogg"),
+            ("assets/app.png", "image/png"),
+            ("assets/app.svg", "image/svg+xml"),
+            ("assets/app.ttf", "font/ttf"),
+            ("assets/app.wasm", "application/wasm"),
+            ("assets/app.wav", "audio/wav"),
+            ("assets/app.webp", "image/webp"),
+            ("assets/app.woff", "font/woff"),
+            ("assets/app.woff2", "font/woff2"),
+        ] {
+            assert_eq!(public_asset_content_type(path), expected, "{path}");
+        }
     }
 
     #[tokio::test]
@@ -1149,7 +1315,7 @@ mod tests {
         let (direct_headers, direct_html, direct) = document(
             &client,
             &runtime,
-            "/course/TERM_2026_FALL/CAMPUS_A/01:198:111?filters=ignored",
+            "/sections/TERM_2026_FALL/CAMPUS_A/12345?filters=ignored",
             "en-US",
         )
         .await;
@@ -1200,8 +1366,140 @@ mod tests {
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|policy| policy.contains(&format!("'nonce-{nonce}'")))
         );
+        assert!(
+            first_headers
+                .get(CONTENT_SECURITY_POLICY)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|policy| policy.contains("style-src 'self' 'unsafe-inline'"))
+        );
         assert_eq!(routes.calls.load(Ordering::SeqCst), 0);
         assert_eq!(routes.origin_starts.load(Ordering::SeqCst), 0);
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    #[tokio::test]
+    async fn embedded_vite_ui_serves_only_runtime_assets_without_static_sessions_or_local_surface()
+    {
+        let routes = Arc::new(CountingProductRoutes::default());
+        let (_temp, runtime, _store) = spawn_runtime(routes.clone()).await;
+        let client = client();
+        assert_eq!(runtime.document_session_count(), 0);
+
+        let (first_headers, first_html, first_bootstrap) =
+            document(&client, &runtime, "/", "en-US").await;
+        assert_eq!(runtime.document_session_count(), 1);
+        assert_eq!(first_html.matches("id=\"bcsp-bootstrap\"").count(), 1);
+        assert!(first_html.contains("<html lang=\"en-US\">"));
+        let first_nonce = bootstrap_data(&first_bootstrap)["sessionNonce"]
+            .as_str()
+            .expect("first document nonce");
+        assert!(first_html.contains(&format!("nonce=\"{first_nonce}\"")));
+        let content_security_policy = first_headers
+            .get(CONTENT_SECURITY_POLICY)
+            .and_then(|value| value.to_str().ok())
+            .expect("document CSP");
+        assert!(
+            content_security_policy.contains(&format!("script-src 'self' 'nonce-{first_nonce}'"))
+        );
+        assert!(content_security_policy.contains("style-src 'self' 'unsafe-inline'"));
+
+        let module_path = module_script_path(&first_html).to_owned();
+        assert!(module_path.starts_with("/assets/"));
+        assert!(module_path.ends_with(".js"));
+        assert!(!module_path.contains("./assets/"));
+        let expected_module = PUBLIC_WEB_ASSETS
+            .get_file(module_path.trim_start_matches('/'))
+            .expect("embedded Vite module")
+            .contents();
+        let module = client
+            .get(request_url(&runtime, &module_path))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .send()
+            .await
+            .expect("Vite module response");
+        assert_eq!(module.status(), StatusCode::OK);
+        assert_eq!(
+            module
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/javascript; charset=utf-8")
+        );
+        let module_bytes = module.bytes().await.expect("Vite module bytes");
+        assert_eq!(module_bytes.as_ref(), expected_module);
+        assert!(!module_bytes.is_empty());
+        assert!(
+            !module_bytes
+                .windows(b"sourceMappingURL=".len())
+                .any(|window| window == b"sourceMappingURL=")
+        );
+        assert_eq!(runtime.document_session_count(), 1);
+
+        let (_, second_html, second_bootstrap) = document(
+            &client,
+            &runtime,
+            "/sections/TERM_2026_FALL/CAMPUS_A/12345",
+            "zh-Hans",
+        )
+        .await;
+        assert_eq!(runtime.document_session_count(), 2);
+        assert!(second_html.contains("<html lang=\"zh-CN\">"));
+        assert_eq!(module_script_path(&second_html), module_path);
+        assert_ne!(
+            bootstrap_data(&first_bootstrap)["sessionNonce"],
+            bootstrap_data(&second_bootstrap)["sessionNonce"]
+        );
+        assert_eq!(routes.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(routes.origin_starts.load(Ordering::SeqCst), 0);
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    #[tokio::test]
+    async fn document_and_static_allowlists_reject_unknown_traversal_metadata_and_source_maps() {
+        let (_temp, runtime, _store) = spawn_runtime(Arc::new(NoPublicProductRoutes)).await;
+        let client = client();
+
+        for path in [
+            "/",
+            "/sections",
+            "/watch",
+            "/sections/TERM_2026_FALL/CAMPUS_A/12345",
+        ] {
+            let response = client
+                .get(request_url(&runtime, path))
+                .header(HOST.as_str(), TEST_AUTHORITY)
+                .send()
+                .await
+                .expect("allowed document route");
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+        }
+        assert_eq!(runtime.document_session_count(), 4);
+
+        for path in [
+            "/unknown",
+            "/sections/term/CAMPUS_A/12345",
+            "/sections/TERM_2026_FALL/CAMPUS-A/12345",
+            "/sections/TERM_2026_FALL/CAMPUS_A/1234",
+            "/sections/TERM_2026_FALL/CAMPUS_A/12345/extra",
+            "/sections/TERM_2026_FALL/CAMPUS_A/%2e%2e",
+            "/assets/%2e%2e/public.html",
+            "/assets/missing.js",
+            "/assets/missing.js.map",
+            "/asset-manifest.json",
+            "/capability-manifest.json",
+            "/module-manifest.json",
+        ] {
+            let response = client
+                .get(request_url(&runtime, path))
+                .header(HOST.as_str(), TEST_AUTHORITY)
+                .send()
+                .await
+                .expect("rejected public path");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        assert_eq!(runtime.document_session_count(), 4);
 
         runtime.shutdown().await.expect("clean shutdown");
     }
@@ -1494,7 +1792,13 @@ mod tests {
         let routes = Arc::new(CountingProductRoutes::default());
         let (_temp, runtime, _store) = spawn_runtime(routes.clone()).await;
         let client = client();
-        let (_, _, bootstrap) = document(&client, &runtime, "/section/direct", "en-US").await;
+        let (_, _, bootstrap) = document(
+            &client,
+            &runtime,
+            "/sections/TERM_2026_FALL/CAMPUS_A/12345",
+            "en-US",
+        )
+        .await;
         let nonce = bootstrap_data(&bootstrap)["sessionNonce"]
             .as_str()
             .expect("document nonce")

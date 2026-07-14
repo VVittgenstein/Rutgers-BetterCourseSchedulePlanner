@@ -113,7 +113,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-local-runtime',
     kind: 'lib',
     internal: ['bcsp-application', 'bcsp-contracts', 'bcsp-local-user-state', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-watch'],
-    external: [['include_dir', NORMAL], ['open', NORMAL], ['rusqlite', DEV], ['serde', NORMAL], ['serde_json', NORMAL], ['thiserror', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL], ['tracing-subscriber', NORMAL]],
+    external: [['include_dir', NORMAL], ['open', NORMAL], ['rusqlite', DEV], ['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL], ['tracing-subscriber', NORMAL]],
   },
   'bcsp-public-operations': {
     dir: 'crates/bcsp-public-operations',
@@ -183,6 +183,7 @@ const SHARED = new Set([
 ]);
 const LOCAL_ONLY = new Set(['bcsp-local-user-state', 'bcsp-local-runtime']);
 const PUBLIC_ONLY = new Set(['bcsp-public-operations', 'bcsp-public-runtime']);
+const EMBEDDED_WEB_BUILD_PACKAGES = new Set(['bcsp-local-runtime', 'bcsp-public-runtime']);
 
 function normalizedPath(value) {
   return path.resolve(value).replaceAll('\\', '/');
@@ -284,11 +285,14 @@ function validateDependencyCommon(packageName, dependency, expectedKind, expecte
   }
 }
 
-function validateInternalDependency(packageName, dependency, repoRoot, errors) {
+function validateInternalDependency(packageName, dependency, repoRoot, workspaceVersion, errors) {
   const targetSpec = GRAPH_SPEC[dependency.name];
   validateDependencyCommon(packageName, dependency, NORMAL, [], true, errors);
   if (dependency.source !== null) errors.push(`${packageName} -> ${dependency.name} internal source must be null`);
-  if (dependency.req !== '=0.0.0') errors.push(`${packageName} -> ${dependency.name} internal version requirement must be =0.0.0`);
+  const expectedRequirement = `=${workspaceVersion}`;
+  if (dependency.req !== expectedRequirement) {
+    errors.push(`${packageName} -> ${dependency.name} internal version requirement must be ${expectedRequirement}`);
+  }
   const expectedPath = normalizedPath(path.join(repoRoot, targetSpec.dir));
   if (typeof dependency.path !== 'string' || normalizedPath(dependency.path) !== expectedPath) {
     errors.push(`${packageName} -> ${dependency.name} internal path mismatch`);
@@ -320,6 +324,8 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
   const packagesById = new Map((metadata.packages ?? []).map((pkg) => [pkg.id, pkg]));
   const workspacePackages = (metadata.workspace_members ?? []).map((id) => packagesById.get(id)).filter(Boolean);
   const actualNames = new Set(workspacePackages.map((pkg) => pkg.name));
+  const workspaceVersions = new Set(workspacePackages.map((pkg) => pkg.version));
+  const workspaceVersion = workspaceVersions.size === 1 ? [...workspaceVersions][0] : undefined;
 
   if ((metadata.workspace_members ?? []).length !== workspacePackages.length) {
     errors.push('workspace_members contains an ID absent from packages');
@@ -329,6 +335,9 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
   }
   if (workspacePackages.length !== MEMBER_NAMES.length) {
     errors.push(`workspace must contain exactly ${MEMBER_NAMES.length} members, got ${workspacePackages.length}`);
+  }
+  if (workspaceVersion === undefined) {
+    errors.push(`workspace packages must share one version, got ${[...workspaceVersions].sort().join(', ')}`);
   }
   if (!sameStringArrayAsSet(metadata.workspace_default_members, metadata.workspace_members ?? [])) {
     errors.push('workspace_default_members must exactly equal workspace_members');
@@ -344,7 +353,7 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
     if (normalizedPath(pkg.manifest_path) !== expectedManifest) {
       errors.push(`${pkg.name} manifest path mismatch`);
     }
-    if (pkg.version !== '0.0.0' || pkg.edition !== '2024' || pkg.rust_version !== '1.97.0' || pkg.license !== 'ISC') {
+    if (pkg.edition !== '2024' || pkg.rust_version !== '1.97.0' || pkg.license !== 'ISC') {
       errors.push(`${pkg.name} workspace package metadata mismatch`);
     }
     if (pkg.source !== null || !Array.isArray(pkg.publish) || pkg.publish.length !== 0) {
@@ -366,8 +375,16 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
       sameStringArrayAsSet(target.kind, ['test'])
       && sameStringArrayAsSet(target.crate_types, ['bin'])
     ));
-    if (targets.length !== primaryTargets.length + integrationTestTargets.length) {
-      errors.push(`${pkg.name} may expose only its primary ${spec.kind} target and explicit integration-test targets`);
+    const customBuildTargets = targets.filter((target) => (
+      sameStringArrayAsSet(target.kind, ['custom-build'])
+      && sameStringArrayAsSet(target.crate_types, ['bin'])
+    ));
+    const expectedCustomBuildCount = EMBEDDED_WEB_BUILD_PACKAGES.has(pkg.name) ? 1 : 0;
+    if (customBuildTargets.length !== expectedCustomBuildCount) {
+      errors.push(`${pkg.name} must expose exactly ${expectedCustomBuildCount} approved custom-build target(s)`);
+    }
+    if (targets.length !== primaryTargets.length + integrationTestTargets.length + customBuildTargets.length) {
+      errors.push(`${pkg.name} may expose only its primary ${spec.kind} target, explicit integration-test targets, and its approved custom-build target`);
     }
     for (const target of targets) {
       if ((target.required_features ?? []).length !== 0) {
@@ -382,6 +399,13 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
         errors.push(`${pkg.name}/${target.name} integration-test source path mismatch`);
       }
       if (target.edition !== '2024') errors.push(`${pkg.name}/${target.name} integration-test edition mismatch`);
+    }
+    for (const target of customBuildTargets) {
+      const expectedSource = `${root}/${spec.dir}/build.rs`;
+      if (target.name !== 'build-script-build' || normalizedPath(target.src_path) !== expectedSource) {
+        errors.push(`${pkg.name} custom-build target must be exactly ${expectedSource}`);
+      }
+      if (target.edition !== '2024') errors.push(`${pkg.name} custom-build target edition mismatch`);
     }
     const target = primaryTargets[0];
     if (target) {
@@ -406,7 +430,9 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
       if (MEMBER_SET.has(dependency.name)) {
         actualInternal.push(dependency.name);
         edges.get(pkg.name).add(dependency.name);
-        if (expectedInternal.has(dependency.name)) validateInternalDependency(pkg.name, dependency, root, errors);
+        if (expectedInternal.has(dependency.name) && workspaceVersion !== undefined) {
+          validateInternalDependency(pkg.name, dependency, root, workspaceVersion, errors);
+        }
       } else {
         actualExternal.push(pairKey(dependency.name, kind ?? `invalid(${dependency.kind})`));
         const expectedKind = expectedExternal.get(dependency.name);
@@ -838,6 +864,7 @@ export function auditRustSourceFiles(files, denyDocument) {
     for (const [file, source] of [...files.entries()].sort(([left], [right]) => left.localeCompare(right, 'en-US'))) {
       const codeOnly = maskRust(source, true);
       for (const macroName of ['include', 'include_str', 'include_bytes', 'include_dir', 'concat', 'concat_bytes', 'concat_idents']) {
+        if (macroName === 'include_dir' && approvedPublicWebAssetEmbed(file, source, codeOnly)) continue;
         const pattern = new RegExp(`(^|[^A-Za-z0-9_])${macroName}\\s*!`, 'u');
         const referencePattern = new RegExp(`\\b${macroName}\\b`, 'u');
         const referenceSurface = macroName === 'include_dir'
@@ -880,6 +907,25 @@ export function auditRustSourceFiles(files, denyDocument) {
     violationCount: violations.length,
     violations,
   };
+}
+
+function approvedPublicWebAssetEmbed(file, source, codeOnly) {
+  if (file !== 'crates/bcsp-public-runtime/src/host.rs') return false;
+  if ([...codeOnly.matchAll(/include_dir\s*!\s*\(/gu)].length !== 1) return false;
+  const approvedArguments = [...source.matchAll(
+    /include_dir\s*!\s*\(\s*"\$OUT_DIR\/web-assets"\s*\)/gu,
+  )];
+  if (approvedArguments.length !== 1) return false;
+  const withoutMacro = codeOnly.replace(
+    /include_dir\s*!\s*\([^)]*\)/gu,
+    '',
+  );
+  if (withoutMacro === codeOnly) return false;
+  const withoutImport = withoutMacro.replace(
+    /use\s+include_dir\s*::\s*\{\s*Dir\s*,\s*include_dir\s*\}\s*;/gu,
+    '',
+  );
+  return !/\binclude_dir\b/u.test(withoutImport);
 }
 
 function enumerateRustSources(directory, repoRoot, files, errors) {

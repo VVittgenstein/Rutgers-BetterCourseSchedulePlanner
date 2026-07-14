@@ -11,7 +11,8 @@ use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-static SHELL_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/shell");
+static WEB_ASSETS: Dir<'_> = include_dir!("$OUT_DIR/web-assets");
+static RUNTIME_TEXT: &[u8] = include_bytes!("../assets/shell/runtime.txt");
 
 pub trait LocalSurfaceState: Send + 'static {
     fn bootstrap(&mut self, nonce: &SessionNonce) -> Result<Vec<u8>, LocalSurfaceFailure>;
@@ -271,11 +272,12 @@ impl LocalRouteExtension {
 impl RouteExtension for LocalRouteExtension {
     fn handle(&self, request: ExtensionRequest) -> ExtensionResponse {
         match (request.method(), request.path()) {
-            (RequestMethod::Get, "/") => shell_asset("index.html", true),
-            (RequestMethod::Get, path) if is_local_spa_shell_path(path) => {
-                shell_asset("index.html", true)
+            (RequestMethod::Get, "/") => web_asset("local.html"),
+            (RequestMethod::Get, path) if is_local_spa_shell_path(path) => web_asset("local.html"),
+            (RequestMethod::Get, "/runtime.txt") => {
+                ExtensionResponse::text(200, RUNTIME_TEXT.to_vec())
             }
-            (RequestMethod::Get, "/runtime.txt") => shell_asset("runtime.txt", false),
+            (RequestMethod::Get, path) if is_static_web_asset_path(path) => static_web_asset(path),
             (RequestMethod::Get, "/api/v1/local/bootstrap") => {
                 self.surface_response(|surface| surface.bootstrap(&self.nonce))
             }
@@ -405,14 +407,58 @@ impl RouteExtension for NoLocalProductRoutes {
     }
 }
 
-fn shell_asset(name: &str, html: bool) -> ExtensionResponse {
-    let Some(file) = SHELL_ASSETS.get_file(name) else {
+fn is_static_web_asset_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/local.html"
+            | "/asset-manifest.json"
+            | "/capability-manifest.json"
+            | "/module-manifest.json"
+            | "/runtime.txt"
+    ) || path.starts_with("/assets/")
+}
+
+fn static_web_asset(path: &str) -> ExtensionResponse {
+    let Some(name) = safe_asset_name(path) else {
         return ExtensionResponse::not_found();
     };
-    if html {
-        ExtensionResponse::html(200, file.contents().to_vec())
-    } else {
-        ExtensionResponse::text(200, file.contents().to_vec())
+    web_asset(name)
+}
+
+fn safe_asset_name(path: &str) -> Option<&str> {
+    let name = path.strip_prefix('/')?;
+    if name.is_empty() || name.contains('\\') || name.contains('\0') {
+        return None;
+    }
+    name.split('/')
+        .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."))
+        .then_some(name)
+}
+
+fn web_asset(name: &str) -> ExtensionResponse {
+    let Some(file) = WEB_ASSETS.get_file(name) else {
+        return ExtensionResponse::not_found();
+    };
+    ExtensionResponse::bytes(200, asset_content_type(name), file.contents().to_vec())
+}
+
+fn asset_content_type(name: &str) -> &'static str {
+    match name.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "application/javascript; charset=utf-8",
+        Some("json" | "map") => "application/json; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("wasm") => "application/wasm",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
     }
 }
 

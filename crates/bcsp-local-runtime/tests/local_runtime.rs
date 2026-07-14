@@ -342,6 +342,82 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loopback_server_serves_the_embedded_vite_local_application() {
+    let temp = TestDirectory::new("embedded-vite-ui");
+    let (_root, executable) = package(&temp);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let nonce = running.nonce().as_str();
+
+    let root = request(authority, "GET /", &origin, nonce, "");
+    assert_eq!(status(&root), 200, "{root}");
+    assert!(
+        root.to_ascii_lowercase()
+            .contains("content-type: text/html; charset=utf-8")
+    );
+    let root_body = body(&root);
+    assert!(root_body.contains("<script type=\"module\""), "{root_body}");
+    assert!(
+        !root_body.to_ascii_lowercase().contains("<base "),
+        "the embedded shell must remain compatible with CSP base-uri 'none'"
+    );
+    assert!(
+        !root_body.contains("product interface will be installed in a later task")
+            && !root_body.contains("Final visual UI is intentionally deferred"),
+        "the embedded root must not be the retired placeholder shell"
+    );
+
+    let module_src = module_script_src(root_body);
+    let module_path = module_src.to_owned();
+    assert!(
+        module_path.starts_with("/assets/") && module_path.ends_with(".js"),
+        "unexpected Vite module path: {module_path}"
+    );
+    let module = request(authority, &format!("GET {module_path}"), &origin, nonce, "");
+    assert_eq!(status(&module), 200, "{module_path}: {module}");
+    assert!(
+        module
+            .to_ascii_lowercase()
+            .contains("content-type: application/javascript; charset=utf-8"),
+        "{module_path} must use the JavaScript MIME type"
+    );
+    assert!(
+        !body(&module).trim().is_empty(),
+        "the embedded Vite entry module must not be empty"
+    );
+
+    let section = request(
+        authority,
+        "GET /sections/TERM_2026_FALL/CAMPUS_A/12345",
+        &origin,
+        nonce,
+        "",
+    );
+    assert_eq!(status(&section), 200, "{section}");
+    assert_eq!(body(&section), root_body);
+
+    for path in [
+        "/assets/definitely-missing.js",
+        "/assets/../local.html",
+        "/assets/%2e%2e/local.html",
+        "/assets//local.js",
+        "/asset-manifest.json",
+        "/capability-manifest.json",
+        "/module-manifest.json",
+    ] {
+        let response = request(authority, &format!("GET {path}"), &origin, nonce, "");
+        assert_eq!(status(&response), 404, "{path}: {response}");
+    }
+
+    running.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_application_reloads_serve_only_the_safe_spa_shell_routes() {
     let temp = TestDirectory::new("section-direct-reload");
     let (_root, executable) = package(&temp);
@@ -1194,6 +1270,19 @@ fn request(authority: &str, request_line: &str, origin: &str, nonce: &str, body:
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
+}
+
+fn module_script_src(html: &str) -> &str {
+    let module = html
+        .find("<script type=\"module\"")
+        .map(|start| &html[start..])
+        .expect("Vite HTML must contain a module script");
+    let src = module
+        .find("src=\"")
+        .map(|start| &module[start + 5..])
+        .expect("Vite module script must contain src");
+    let end = src.find('"').expect("Vite module src must be quoted");
+    &src[..end]
 }
 
 fn raw_api(

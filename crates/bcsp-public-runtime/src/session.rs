@@ -152,6 +152,14 @@ impl DocumentSessionRegistry {
         self.locale_at(nonce, Instant::now())
     }
 
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.sessions
+            .lock()
+            .map(|sessions| sessions.len())
+            .unwrap_or_default()
+    }
+
     fn locale_at(
         &self,
         nonce: &str,

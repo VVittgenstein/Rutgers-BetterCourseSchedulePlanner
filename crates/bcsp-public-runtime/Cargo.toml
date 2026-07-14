@@ -11,12 +11,12 @@ path = "src/lib.rs"
 
 [dependencies]
 axum.workspace = true
-bcsp-application = { version = "=0.0.0", path = "../bcsp-application" }
-bcsp-contracts = { version = "=0.0.0", path = "../bcsp-contracts" }
-bcsp-open = { version = "=0.0.0", path = "../bcsp-open" }
-bcsp-operational-storage = { version = "=0.0.0", path = "../bcsp-operational-storage" }
-bcsp-public-operations = { version = "=0.0.0", path = "../bcsp-public-operations" }
-bcsp-watch = { version = "=0.0.0", path = "../bcsp-watch" }
+bcsp-application = { version = "=0.1.0", path = "../bcsp-application" }
+bcsp-contracts = { version = "=0.1.0", path = "../bcsp-contracts" }
+bcsp-open = { version = "=0.1.0", path = "../bcsp-open" }
+bcsp-operational-storage = { version = "=0.1.0", path = "../bcsp-operational-storage" }
+bcsp-public-operations = { version = "=0.1.0", path = "../bcsp-public-operations" }
+bcsp-watch = { version = "=0.1.0", path = "../bcsp-watch" }
 include_dir.workspace = true
 serde.workspace = true
 serde_json.workspace = true

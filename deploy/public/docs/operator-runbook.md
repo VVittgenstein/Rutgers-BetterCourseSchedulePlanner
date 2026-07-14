@@ -7,14 +7,15 @@ Vultr, or send production traffic.
 
 ## Package and host contract
 
-The assembled candidate root contains `bin/bcsp-server`, the public web build
-at `share/bcsp`, and the `systemd`, `caddy`, `config`, `ops`, and `docs`
-directories. The Linux host needs
+The assembled candidate root contains `bin/bcsp-server`, release metadata, and
+the `systemd`, `caddy`, `config`, `ops`, and `docs` directories. The public web
+UI is embedded in `bcsp-server`; no external web-assets directory is installed
+or served. The Linux host needs
 systemd, `curl`, and the `sqlite3` CLI. The fixed filesystem layout is:
 
 | Path | Purpose |
 | --- | --- |
-| `/opt/bcsp/releases/<version>` | Immutable binary, public build, and matching support assets |
+| `/opt/bcsp/releases/<version>` | Immutable binary, release metadata, and matching support assets |
 | `/opt/bcsp/current` | Active-release symlink |
 | `/etc/bcsp` | Service environment and operator examples |
 | `/var/lib/bcsp/rbcsp.sqlite` | Service-owned operational database |
@@ -96,4 +97,6 @@ PATH` on a clean systemd Ubuntu host. That destructive test requires
 `BCSP_DISPOSABLE_HOST_CONFIRM=YES`, installs the real service at the real FHS
 paths, and adds a temporary systemd IP deny/loopback allow drop-in before first
 start. The service therefore cannot contact Rutgers or any external host during
-this packaging test. The trap removes the service, user, paths, and drop-in.
+this packaging test. It also loads the embedded HTML document and its hashed
+JavaScript asset from the real service, without installing an external web
+directory. The trap removes the service, user, paths, and drop-in.

@@ -35,12 +35,18 @@ main() {
   esac
   [[ -x "$release_path/bin/bcsp-server" ]] || bcsp_die "current bcsp-server is not executable"
   [[ -f "$unit_path" && -f "$environment_file" ]] || bcsp_die "service configuration is incomplete"
-  for support_file in share systemd caddy config ops docs; do
+  for support_file in systemd caddy config ops docs; do
     [[ -d "$release_path/$support_file" ]] || bcsp_die "current release is missing $support_file/"
     bcsp_assert_mode 755 "$release_path/$support_file"
     bcsp_assert_owner root:root "$release_path/$support_file"
   done
-  [[ -d "$release_path/share/bcsp" ]] || bcsp_die "current release is missing share/bcsp/"
+  for support_file in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
+    SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
+    [[ -f "$release_path/$support_file" ]] || bcsp_die "current release is missing $support_file"
+    bcsp_assert_mode 644 "$release_path/$support_file"
+    bcsp_assert_owner root:root "$release_path/$support_file"
+  done
+  [[ ! -e "$release_path/share" ]] || bcsp_die "current release contains forbidden external web assets"
 
   bcsp_assert_mode 755 "$opt_root"
   bcsp_assert_mode 755 "$releases_root"

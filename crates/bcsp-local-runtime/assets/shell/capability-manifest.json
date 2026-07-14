@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "kind": "TARGET_BUILD_ALLOWLIST",
+  "target": "local",
+  "readiness": "DEBUG_ASSET_FALLBACK",
+  "allowedCapabilities": [],
+  "allowedRoutes": ["/"],
+  "allowedI18nCatalogs": []
+}

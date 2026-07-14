@@ -10,6 +10,8 @@ on:
       - 'frontend/**'
       - 'Cargo.lock'
       - 'Cargo.toml'
+      - 'LICENSE'
+      - 'packaging/release-inputs.json'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
   pull_request:
@@ -21,6 +23,8 @@ on:
       - 'frontend/**'
       - 'Cargo.lock'
       - 'Cargo.toml'
+      - 'LICENSE'
+      - 'packaging/release-inputs.json'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
   workflow_dispatch:
@@ -81,12 +85,28 @@ jobs:
         id: candidate
         run: |
           candidate="$RUNNER_TEMP/bcsp-public-candidate"
-          install -d "$candidate/bin" "$candidate/share/bcsp"
+          install -d "$candidate/bin"
           install -m 0755 target/release/bcsp-server "$candidate/bin/bcsp-server"
-          cp -a frontend/dist/public/. "$candidate/share/bcsp/"
           for directory in systemd caddy config ops docs; do
             cp -a "deploy/public/$directory" "$candidate/"
           done
+          # These are disposable rehearsal inputs, not a release artifact. The
+          # canonical package builder owns their final P7.4-003 content.
+          release_version="$(jq -er '.releaseVersion' packaging/release-inputs.json)"
+          install -m 0644 LICENSE "$candidate/LICENSE"
+          printf '%s\n' "$release_version" > "$candidate/VERSION"
+          printf '%s\n' '{"kind":"bcsp-disposable-operations-rehearsal"}' > \
+            "$candidate/BUILD-PROVENANCE.json"
+          printf '%s\n' '{"kind":"bcsp-disposable-operations-rehearsal","files":[]}' > \
+            "$candidate/MANIFEST.json"
+          printf '%s\n' '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[]}' > \
+            "$candidate/SBOM.cdx.json"
+          printf '%s\n' 'Generated only for the disposable operations rehearsal.' > \
+            "$candidate/THIRD-PARTY-NOTICES.txt"
+          (
+            cd "$candidate"
+            find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+          ) > "$candidate/SHA256SUMS"
           printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
 
       - name: Validate public package inputs

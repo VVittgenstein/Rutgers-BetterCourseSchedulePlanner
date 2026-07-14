@@ -1,0 +1,8 @@
+{
+  "public.html": {
+    "file": "assets/public-debug-fallback.js",
+    "name": "public",
+    "src": "public.html",
+    "isEntry": true
+  }
+}

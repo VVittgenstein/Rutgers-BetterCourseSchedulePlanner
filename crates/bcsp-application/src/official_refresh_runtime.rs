@@ -26,6 +26,7 @@ use crate::{
 pub const DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 pub const DISCOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TARGET_DEMAND_SCAN_INTERVAL: Duration = Duration::from_millis(250);
+const CI_NO_RUTGERS_ENVIRONMENT: &str = "BCSP_CI_NO_RUTGERS";
 
 /// Production lifecycle for dynamic discovery plus the shared Catalog/Open coordinator.
 pub struct OfficialRefreshRuntime {
@@ -75,6 +76,14 @@ impl OfficialRefreshRuntime {
         S: ProductStorageAccess + Clone + Send + 'static,
         P: RefreshPolicyProvider + Clone + Send + 'static,
     {
+        if ci_network_disabled() {
+            status.mark_stopped();
+            let (shutdown, _) = watch::channel(false);
+            return Ok(Self {
+                shutdown,
+                task: None,
+            });
+        }
         let discovery = RutgersDiscoveryClient::new_official()
             .map_err(OfficialRefreshRuntimeBuildError::Discovery)?;
         let membership = Arc::new(SelectorTargetMembership::new());
@@ -234,6 +243,11 @@ impl OfficialRefreshRuntime {
             let _ = task.await;
         }
     }
+}
+
+fn ci_network_disabled() -> bool {
+    std::env::var_os(CI_NO_RUTGERS_ENVIRONMENT)
+        .is_some_and(|value| value == std::ffi::OsStr::new("1"))
 }
 
 impl Drop for OfficialRefreshRuntime {

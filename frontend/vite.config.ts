@@ -56,7 +56,7 @@ export function createTargetConfig(target: FrontendTarget): UserConfig {
 
   return {
     appType: 'spa',
-    base: './',
+    base: '/',
     plugins: [react(), targetManifestPlugin(target)],
     publicDir: false,
     root: frontendRoot,

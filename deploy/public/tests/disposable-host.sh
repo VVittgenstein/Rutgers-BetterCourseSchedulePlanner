@@ -32,9 +32,16 @@ CANDIDATE_ROOT="$(cd -- "$CANDIDATE_ROOT" && pwd)"
   printf 'disposable-host: candidate is missing executable bin/bcsp-server\n' >&2
   exit 1
 }
-for required in share/bcsp systemd caddy config ops docs; do
+for required in systemd caddy config ops docs; do
   [[ -d "$CANDIDATE_ROOT/$required" ]] || {
     printf 'disposable-host: candidate is missing %s/\n' "$required" >&2
+    exit 1
+  }
+done
+for required in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
+  SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
+  [[ -f "$CANDIDATE_ROOT/$required" ]] || {
+    printf 'disposable-host: candidate is missing %s\n' "$required" >&2
     exit 1
   }
 done
@@ -42,8 +49,8 @@ done
   printf 'disposable-host: final candidate must not contain tests/\n' >&2
   exit 1
 }
-expected_top_level=$'bin\ncaddy\nconfig\ndocs\nops\nshare\nsystemd'
-actual_top_level="$(find "$CANDIDATE_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
+expected_top_level=$'BUILD-PROVENANCE.json\nLICENSE\nMANIFEST.json\nSBOM.cdx.json\nSHA256SUMS\nTHIRD-PARTY-NOTICES.txt\nVERSION\nbin\ncaddy\nconfig\ndocs\nops\nsystemd'
+actual_top_level="$(find "$CANDIDATE_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
 [[ "$actual_top_level" == "$expected_top_level" ]] || {
   printf 'disposable-host: candidate top-level allowlist mismatch\n' >&2
   exit 1
@@ -119,6 +126,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+UNEXPECTED_WEB_ROOT="$TEST_TMP/unexpected-external-web"
+cp -a -- "$CANDIDATE_ROOT" "$UNEXPECTED_WEB_ROOT"
+mkdir -p "$UNEXPECTED_WEB_ROOT/share/bcsp"
+if bash -c 'source "$1"; bcsp_validate_candidate_root "$2"' _ \
+  "$CANDIDATE_ROOT/ops/lib.sh" "$UNEXPECTED_WEB_ROOT" >/dev/null 2>&1; then
+  printf 'disposable-host: candidate validator accepted external web assets\n' >&2
+  exit 1
+fi
+
 install -d -m 0755 "$DROP_IN_ROOT"
 cat > "$DROP_IN_ROOT/90-disposable-network.conf" <<'DROPIN'
 [Service]
@@ -139,6 +155,11 @@ bash "$OPS_ROOT/install.sh" ci-v1 "$CANDIDATE_ROOT"
 systemd-analyze verify /etc/systemd/system/bcsp.service
 systemd-analyze security --no-pager bcsp.service > "$TEST_TMP/systemd-security.txt"
 bash "$OPS_ROOT/verify.sh"
+for metadata in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
+  SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
+  cmp -s -- "$CANDIDATE_ROOT/$metadata" "/opt/bcsp/releases/ci-v1/$metadata"
+done
+[[ ! -e /opt/bcsp/releases/ci-v1/share ]]
 
 live_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --header 'Host: planner.invalid' http://127.0.0.1:8080/health/live)"
@@ -146,6 +167,24 @@ ready_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --header 'Host: planner.invalid' http://127.0.0.1:8080/health/ready)"
 [[ "$live_status" == "200" ]]
 [[ "$ready_status" == "503" ]]
+
+DOCUMENT_BODY="$TEST_TMP/public.html"
+document_status="$(curl --silent --show-error --output "$DOCUMENT_BODY" \
+  --write-out '%{http_code}' --header 'Host: planner.invalid' http://127.0.0.1:8080/)"
+[[ "$document_status" == "200" ]]
+grep -q 'id="root"' "$DOCUMENT_BODY"
+grep -q 'id="bcsp-bootstrap"' "$DOCUMENT_BODY"
+asset_path="$(grep -m 1 -oE 'src="(\./)?assets/[A-Za-z0-9._-]+\.js"' \
+  "$DOCUMENT_BODY" | cut -d '"' -f 2)"
+asset_path="${asset_path#./}"
+[[ "$asset_path" == assets/*.js ]]
+ASSET_BODY="$TEST_TMP/public.js"
+ASSET_HEADERS="$TEST_TMP/public-js.headers"
+asset_status="$(curl --silent --show-error --dump-header "$ASSET_HEADERS" \
+  --output "$ASSET_BODY" --write-out '%{http_code}' --header 'Host: planner.invalid' \
+  "http://127.0.0.1:8080/$asset_path")"
+[[ "$asset_status" == "200" && -s "$ASSET_BODY" ]]
+grep -Eqi '^content-type: (application|text)/(javascript|x-javascript)' "$ASSET_HEADERS"
 
 DATABASE=/var/lib/bcsp/rbcsp.sqlite
 [[ -f "$DATABASE" ]]
@@ -208,8 +247,12 @@ bash "$OPS_ROOT/upgrade.sh" ci-v2 "$CANDIDATE_ROOT"
 sqlite3 "$DATABASE" 'UPDATE ops_disposable_proof SET value = "before-bad";'
 BAD_CANDIDATE="$TEST_TMP/bad-candidate"
 mkdir -p "$BAD_CANDIDATE/bin"
-for required in share systemd caddy config ops docs; do
+for required in systemd caddy config ops docs; do
   cp -R -- "$CANDIDATE_ROOT/$required" "$BAD_CANDIDATE/$required"
+done
+for required in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
+  SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
+  cp -- "$CANDIDATE_ROOT/$required" "$BAD_CANDIDATE/$required"
 done
 cat > "$BAD_CANDIDATE/bin/bcsp-server" <<'BAD_BINARY'
 #!/usr/bin/env bash

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "kind": "TARGET_BUILD_ALLOWLIST",
+  "target": "public",
+  "readiness": "DEBUG_TEST_FALLBACK",
+  "allowedCapabilities": [],
+  "allowedRoutes": ["/", "/sections", "/sections/:term/:campus/:index", "/watch"],
+  "allowedI18nCatalogs": ["shared"]
+}
