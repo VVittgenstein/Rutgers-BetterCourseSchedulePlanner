@@ -174,9 +174,10 @@ document_status="$(curl --silent --show-error --output "$DOCUMENT_BODY" \
 [[ "$document_status" == "200" ]]
 grep -q 'id="root"' "$DOCUMENT_BODY"
 grep -q 'id="bcsp-bootstrap"' "$DOCUMENT_BODY"
-asset_path="$(grep -m 1 -oE 'src="(\./)?assets/[A-Za-z0-9._-]+\.js"' \
+asset_path="$(grep -m 1 -oE 'src="(\./|/)?assets/[A-Za-z0-9._-]+\.js"' \
   "$DOCUMENT_BODY" | cut -d '"' -f 2)"
 asset_path="${asset_path#./}"
+asset_path="${asset_path#/}"
 [[ "$asset_path" == assets/*.js ]]
 ASSET_BODY="$TEST_TMP/public.js"
 ASSET_HEADERS="$TEST_TMP/public-js.headers"
