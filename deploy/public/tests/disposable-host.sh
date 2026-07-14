@@ -157,6 +157,7 @@ mapfile -t business_tables < <(sqlite3 "$DATABASE" \
      WHERE type='table'
        AND name NOT LIKE 'sqlite_%'
        AND name <> 'bcsp_operational_migrations'
+       AND name <> 'catalog_discovery_state'
      ORDER BY name;")
 [[ "${#business_tables[@]}" -gt 0 ]]
 for table in "${business_tables[@]}"; do
@@ -164,6 +165,16 @@ for table in "${business_tables[@]}"; do
   table_rows="$(sqlite3 "$DATABASE" "SELECT count(*) FROM \"$table\";")"
   [[ "$table_rows" -eq 0 ]]
 done
+discovery_sentinel="$(sqlite3 "$DATABASE" \
+  'SELECT count(*) FROM catalog_discovery_state
+    WHERE singleton = 1
+      AND content_version = 0
+      AND semantic_sha256 IS NULL
+      AND last_attempt_observation_id IS NULL
+      AND last_success_observation_id IS NULL
+      AND last_published_observation_id IS NULL
+      AND last_nonempty_observation_id IS NULL;')"
+[[ "$discovery_sentinel" -eq 1 ]]
 
 sqlite3 "$DATABASE" \
   'CREATE TABLE ops_disposable_proof(value TEXT NOT NULL); INSERT INTO ops_disposable_proof VALUES ("baseline");'
