@@ -18,6 +18,13 @@ import {
 import { SearchWorkspace } from './search';
 import { AppRouterProvider, RouterLink, useAppRouter } from './routing';
 import { useShellDataState, type ShellDataState } from './shell';
+import {
+  LiveWatchProvider,
+  WatchToastRegion,
+  WatchWorkspace,
+  WatchWorkspaceStyles,
+  useLiveWatch,
+} from './watch';
 
 function retryBootstrap() {
   globalThis.location?.reload();
@@ -56,14 +63,19 @@ function ShellFrame({
 }) {
   const { pathname } = useAppRouter();
   const sectionWorkspace = pathname.startsWith('/sections');
+  const watchWorkspace = pathname === '/watch';
   const directSection = sectionWorkspace && pathname !== '/sections';
-  const sequence = sectionWorkspace ? '02' : '01';
-  const workspaceTitle = directSection
+  const sequence = watchWorkspace ? '03' : sectionWorkspace ? '02' : '01';
+  const workspaceTitle = watchWorkspace
+    ? i18n.t('app.nav_watch')
+    : directSection
     ? i18n.t('search.section_detail_title')
     : sectionWorkspace
       ? i18n.t('search.section_workspace')
       : i18n.t('search.course_workspace');
-  const workspaceIntro = sectionWorkspace
+  const workspaceIntro = watchWorkspace
+    ? i18n.t('watch.alert.open')
+    : sectionWorkspace
     ? i18n.t('search.section_intro')
     : i18n.t('search.course_intro');
   return (
@@ -93,7 +105,7 @@ function ShellFrame({
         <span className="bcsp-navigation__label">[ {i18n.t('app.catalog_workspace')} ]</span>
         <RouterLink
           className="bcsp-navigation__link"
-          data-active={!sectionWorkspace || undefined}
+          data-active={!sectionWorkspace && !watchWorkspace || undefined}
           to="/"
         >
           <span>01</span>{i18n.t('app.nav_courses')}
@@ -104,6 +116,13 @@ function ShellFrame({
           to="/sections"
         >
           <span>02</span>{i18n.t('app.nav_sections')}
+        </RouterLink>
+        <RouterLink
+          className="bcsp-navigation__link"
+          data-active={watchWorkspace || undefined}
+          to="/watch"
+        >
+          <span>03</span>{i18n.t('app.nav_watch')}
         </RouterLink>
       </nav>
       <main className="bcsp-main" id="bcsp-workspace" tabIndex={-1}>
@@ -170,7 +189,7 @@ function statusTime(discovery: CatalogDiscoveryResponseV1, i18n: BcspI18nRuntime
   return i18n.formatDate(value, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-function ReadyCatalog({
+function ReadyCatalogContent({
   runtime,
   state,
 }: {
@@ -182,6 +201,17 @@ function ReadyCatalog({
     ? i18n.t('app.data_current')
     : i18n.t('app.data_stale');
   const discoverySignal = state.discoveryState === 'CURRENT' ? 'ready' : 'stale';
+  const { pathname } = useAppRouter();
+  const watch = useLiveWatch();
+  const openStatus = watch.batchStatuses[0];
+  const openSignal = openStatus === undefined
+    ? 'unknown'
+    : openStatus.freshness.state === 'FRESH'
+      ? 'ready'
+      : 'stale';
+  const openDetail = openStatus === undefined
+    ? i18n.t('freshness.never_observed')
+    : `${openStatus.scheduler.schedulerLagMilliseconds}ms / ${openStatus.scheduler.requestedEffectiveIntervalSeconds}s`;
 
   return (
     <>
@@ -207,14 +237,32 @@ function ReadyCatalog({
         />
         <div>
           <StatusSignal
-            detail={i18n.t('freshness.never_observed')}
-            label={i18n.t('freshness.lag')}
-            state="unknown"
+            detail={openDetail}
+            label={openStatus === undefined ? i18n.t('freshness.lag') : openStatus.freshness.state}
+            state={openSignal}
           />
         </div>
       </section>
-      <SearchWorkspace runtime={runtime} shellState={state} />
+      {pathname === '/watch'
+        ? <WatchWorkspace />
+        : <SearchWorkspace runtime={runtime} shellState={state} />}
+      <WatchToastRegion />
     </>
+  );
+}
+
+function ReadyCatalog({
+  runtime,
+  state,
+}: {
+  readonly runtime: ProductRuntimePort;
+  readonly state: Extract<ShellDataState, { status: 'READY' }>;
+}) {
+  return (
+    <LiveWatchProvider runtime={runtime}>
+      <WatchWorkspaceStyles />
+      <ReadyCatalogContent runtime={runtime} state={state} />
+    </LiveWatchProvider>
   );
 }
 

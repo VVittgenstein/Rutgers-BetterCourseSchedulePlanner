@@ -53,10 +53,30 @@ class FakeSocket implements WatchSocket {
 }
 
 describe('WatchClient', () => {
-  it('uses the session query, bcsp.v1 subprotocol, and Rust envelopes', () => {
+  it('uses the session query, accepts same-message sibling events, and rejects exact replays', () => {
     const command = readGolden<WatchClientCommandV1>('watch-client-start-v1.json');
     const event = readGolden<WatchServerEventV1>('watch-server-start-result-v1.json');
+    const episode = readGolden<WatchServerEventV1>('watch-server-episode-v1.json');
     const observation = readGolden<WatchServerEventV1>('watch-server-observation-v1.json');
+    if (episode.type !== 'EPISODE_UPDATED') throw new Error('episode golden has the wrong type');
+    const alert: WatchServerEventV1 = {
+      type: 'ALERT_UPDATED',
+      alert: {
+        contractVersion: 1,
+        alertId: '00000000-0000-4000-8000-000000000006',
+        disposition: 'OPENED',
+        visible: true,
+        episode: episode.episode,
+      },
+    };
+    const audio: WatchServerEventV1 = {
+      type: 'AUDIO_DISPOSITION',
+      audio: {
+        disposition: 'CONTINUOUS_MIXER_ACTIVE',
+        episodeIds: [episode.episode.episodeId],
+        emittedAt: '1970-01-01T00:00:01Z',
+      },
+    };
     const socket = new FakeSocket();
     const socketFactory = vi.fn(() => socket);
     const messageId: WatchMessageIdSource = () => '00000000-0000-4000-8000-000000000001';
@@ -90,6 +110,15 @@ describe('WatchClient', () => {
     };
     socket.message(JSON.stringify(envelope));
     socket.message(JSON.stringify(envelope));
+    const siblingEnvelopes: WsServerEnvelope<WatchServerEventV1>[] = [episode, alert, audio].map(
+      (payload) => ({
+        protocolVersion: 1,
+        messageId: envelope.messageId,
+        payload,
+      }),
+    );
+    siblingEnvelopes.forEach((sibling) => socket.message(JSON.stringify(sibling)));
+    siblingEnvelopes.forEach((sibling) => socket.message(JSON.stringify(sibling)));
     const observationEnvelope: WsServerEnvelope<WatchServerEventV1> = {
       protocolVersion: 1,
       messageId: '00000000-0000-4000-8000-000000000004',
@@ -101,7 +130,7 @@ describe('WatchClient', () => {
       messageId: '00000000-0000-4000-8000-000000000005',
     }));
     socket.message('{bad json');
-    expect(received).toEqual([envelope, observationEnvelope]);
+    expect(received).toEqual([envelope, ...siblingEnvelopes, observationEnvelope]);
   });
 
   it('does not open implicitly and fails closed without a session', () => {

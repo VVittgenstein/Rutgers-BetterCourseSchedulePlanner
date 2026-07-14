@@ -17,6 +17,7 @@ import type {
   SectionQueryItemV1,
   SectionQueryResponseV1,
 } from '../../product';
+import { SectionSelectionAction } from '../../watch';
 import { SearchResultsStyles } from './styles';
 
 export interface ResultNavigationProps {
@@ -251,6 +252,7 @@ function SectionResult({
             <OutcomeBadge explanation={item.explanation} />
             <LiveBadge section={item} />
           </div>
+          <SectionSelectionAction sectionKey={item.section.key} />
           <SectionLink
             onSectionNavigate={onSectionNavigate}
             section={item.section.key}

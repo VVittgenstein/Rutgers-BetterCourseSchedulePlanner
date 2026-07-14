@@ -342,7 +342,7 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn local_section_direct_reloads_serve_only_the_safe_spa_shell_routes() {
+async fn local_application_reloads_serve_only_the_safe_spa_shell_routes() {
     let temp = TestDirectory::new("section-direct-reload");
     let (_root, executable) = package(&temp);
     let running = PreparedLocalRuntime::from_executable(executable)
@@ -358,6 +358,8 @@ async fn local_section_direct_reloads_serve_only_the_safe_spa_shell_routes() {
     for path in [
         "/sections",
         "/sections?sort=course",
+        "/watch",
+        "/watch?focus=alerts",
         "/sections/2026FA/NB/12345",
         "/sections/not-semantic/still-safe/index",
     ] {
@@ -378,6 +380,7 @@ async fn local_section_direct_reloads_serve_only_the_safe_spa_shell_routes() {
 
     for path in [
         "/sections/",
+        "/watch/",
         "/sections/2026FA/NB",
         "/sections/2026FA/NB/12345/extra",
         "/sections//NB/12345",

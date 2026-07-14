@@ -107,6 +107,17 @@ function normalizeToken(value) {
   return value.toLocaleLowerCase('en-US').replace(/[^a-z0-9]/gu, '');
 }
 
+function containsMarker(value, marker) {
+  const normalizedMarker = normalizeToken(marker);
+  if (normalizedMarker.length === 0) return false;
+  const text = artifactBytesAsText(value).toLocaleLowerCase('en-US');
+  // Very short platform/protocol tokens must be contiguous. Collapsing JS
+  // punctuation made unrelated minified identifiers such as `o,s),Xo` spell `osx`.
+  return normalizedMarker.length <= 4
+    ? text.includes(normalizedMarker)
+    : normalizeToken(text).includes(normalizedMarker);
+}
+
 function artifactBytesAsText(contents) {
   if (typeof contents === 'string') return contents;
   if (ArrayBuffer.isView(contents)) {
@@ -299,14 +310,13 @@ export function verifyTargetArtifacts({
     for (const surface of SCANNED_SURFACES) {
       for (const row of denyCapabilities) {
         for (const marker of markersFor(row)) {
-          const normalizedMarker = normalizeToken(marker);
-          if (normalizedMarker.length === 0) continue;
           for (const [filePath, contents] of normalizedContents) {
             const scansBytes = surface === 'BUNDLE';
             const scansTextAsset = SURFACE_EXTENSIONS[surface]?.has(
               extname(filePath).toLocaleLowerCase('en-US'),
             ) === true;
-            if ((!scansBytes && !scansTextAsset) || !contents.includes(normalizedMarker)) continue;
+            if ((!scansBytes && !scansTextAsset)
+              || !containsMarker(normalizedFiles.get(filePath), marker)) continue;
             violations.push({
               capability: row.capability,
               denyId: row.denyId.replace(/-SOURCE$/u, `-${surface}`),
@@ -320,9 +330,8 @@ export function verifyTargetArtifacts({
         if (surface === 'BUNDLE') {
           const pathMarkers = [...(row.markers ?? []), ...(ADDITIONAL_PRODUCT_MARKERS[row.capability] ?? [])];
           for (const marker of pathMarkers) {
-            const normalizedMarker = normalizeToken(marker);
             for (const filePath of normalizedFiles.keys()) {
-              if (normalizedMarker.length === 0 || !normalizeToken(filePath).includes(normalizedMarker)) continue;
+              if (!containsMarker(filePath, marker)) continue;
               violations.push({
                 capability: row.capability,
                 denyId: row.denyId.replace(/-SOURCE$/u, '-BUNDLE'),

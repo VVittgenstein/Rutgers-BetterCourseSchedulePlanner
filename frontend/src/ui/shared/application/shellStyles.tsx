@@ -147,7 +147,7 @@ export const BCSP_SHELL_CSS = String.raw`
 
 .bcsp-navigation {
   display: grid;
-  grid-template-columns: minmax(12rem, 0.45fr) repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(12rem, 0.45fr) repeat(3, minmax(0, 1fr));
   min-height: 3.5rem;
   border-bottom: 1px solid var(--bcsp-line);
   font-family: var(--bcsp-font-data);
@@ -499,7 +499,7 @@ export const BCSP_SHELL_CSS = String.raw`
   }
 
   .bcsp-navigation {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .bcsp-navigation__label {
@@ -545,6 +545,19 @@ export const BCSP_SHELL_CSS = String.raw`
 }
 
 @media (max-width: 31.999rem) {
+  .bcsp-navigation {
+    grid-template-columns: 1fr;
+  }
+
+  .bcsp-navigation__label {
+    grid-column: auto;
+  }
+
+  .bcsp-navigation__link {
+    border-top: 1px solid var(--bcsp-line);
+    border-left: 0;
+  }
+
   .bcsp-masthead__mark {
     font-size: clamp(2.8rem, 18vw, 4.5rem);
   }

@@ -152,7 +152,9 @@ export class WatchClient implements WatchClientPort {
   }
 
   #acceptServerEnvelope(envelope: WsServerEnvelope<WatchServerEventV1>): boolean {
-    if (!this.#rememberServerEvent(`message:${envelope.messageId}`)) return false;
+    if (!this.#rememberServerEvent(
+      `message:${envelope.messageId}:payload:${JSON.stringify(envelope.payload)}`,
+    )) return false;
     if (envelope.payload.type !== 'OPEN_OBSERVATION') return true;
     const { activeWatchId, observation } = envelope.payload.fanout;
     return this.#rememberServerEvent(`observation:${activeWatchId}:${observation.observationId}`);

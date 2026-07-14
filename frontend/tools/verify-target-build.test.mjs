@@ -100,6 +100,20 @@ test('rejects a hidden local-only DOM control in the public compiled assets', ()
   assert.ok(report.publicZeroSurface.violations.some(({ surface }) => surface === 'BUNDLE'));
 });
 
+test('does not combine unrelated minified identifiers into a short deny token', () => {
+  const input = fixture('public');
+  input.files.set('assets/public.js', 'function update(o,s,Xo){return Xo(o,s)}');
+  const report = verifyTargetArtifacts(input);
+  assert.equal(report.state, 'PASS', report.errors.join('\n'));
+
+  input.files.set('assets/public.js', 'const unsupportedPlatform = "osx";');
+  const denied = verifyTargetArtifacts(input);
+  assert.equal(denied.state, 'FAIL');
+  assert.ok(denied.publicZeroSurface.violations.some(
+    ({ capability, marker }) => capability === 'MACOS' && marker === 'osx',
+  ));
+});
+
 test('rejects local-only public route and i18n strings after bundling', () => {
   const input = fixture('public');
   input.files.set(

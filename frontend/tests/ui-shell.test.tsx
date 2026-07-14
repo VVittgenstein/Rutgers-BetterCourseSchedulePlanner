@@ -110,7 +110,14 @@ function runtimeWith(
       searchSections: uncalled,
       sectionDetail: uncalled,
     } as ProductApiPort,
-    watch: {} as ProductRuntimePort['watch'],
+    watch: {
+      state: 'IDLE',
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      send: vi.fn(() => '00000000-0000-4000-8000-000000000001'),
+      subscribe: vi.fn(() => () => undefined),
+      subscribeState: vi.fn(() => () => undefined),
+    },
   };
 }
 
