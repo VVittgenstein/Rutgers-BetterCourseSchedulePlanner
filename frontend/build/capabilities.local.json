@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "TARGET_BUILD_ALLOWLIST",
   "target": "local",
-  "readiness": "PRE_UI_INTEGRATION",
+  "readiness": "UI_INTEGRATION_COMPLETE",
   "allowedCapabilities": [
     "configurable-refresh-intervals",
     "course-search",
@@ -31,7 +31,8 @@
     "/saved-views",
     "/sections",
     "/sections/:term/:campus/:index",
-    "/settings"
+    "/settings",
+    "/watch"
   ],
   "allowedI18nCatalogs": [
     "shared",

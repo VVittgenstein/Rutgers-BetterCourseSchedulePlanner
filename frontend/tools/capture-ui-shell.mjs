@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { chromium } from 'playwright';
+import { localBootstrapFixture } from './local-bootstrap-fixture.mjs';
 
 const baseUrl = process.env.BCSP_VISUAL_BASE_URL ?? 'http://127.0.0.1:4173';
 const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
@@ -84,7 +85,7 @@ try {
     });
     await page.route('**/api/v1/local/bootstrap', async (route) => {
       await route.fulfill({
-        body: JSON.stringify(success({ sessionNonce: '10000000-0000-4000-8000-000000000001' })),
+        body: JSON.stringify(success(localBootstrapFixture())),
         contentType: 'application/json',
       });
     });

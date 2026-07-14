@@ -13,6 +13,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BcspI18nProvider } from '../src/ui/shared/i18n/runtime';
+import type { SupportedLocale } from '../src/ui/shared/i18n/contract';
 import type {
   OpenCircuitReason,
   OpenCircuitState,
@@ -310,9 +311,10 @@ function renderWatch(
   sections: readonly SectionKey[],
   watch = new FakeWatchClient(),
   audio = new FakeAudioController(),
+  locale: SupportedLocale = 'en-US',
 ) {
   const result = render(
-    <BcspI18nProvider initialLocale="en-US">
+    <BcspI18nProvider initialLocale={locale}>
       <LiveWatchProvider audio={audio} runtime={runtime(watch)}>
         <SelectionActions sections={sections} />
         <WatchWorkspace />
@@ -392,6 +394,25 @@ afterEach(() => {
 });
 
 describe('Watch workspace product flow', () => {
+  it('translates the Chinese Watch chrome while preserving Section identifiers', () => {
+    const sectionKey = section(1);
+    renderWatch(
+      [sectionKey],
+      new FakeWatchClient(),
+      new FakeAudioController(),
+      'zh-CN',
+    );
+
+    expect(screen.getByRole('heading', { name: '监看台' })).toBeTruthy();
+    expect(screen.getByText('提醒方式')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', {
+      name: '选择课节 00001 以进行监看',
+    }));
+    expect(screen.getByLabelText('已选 1 / 9')).toBeTruthy();
+    expect(screen.getByText('00001')).toBeTruthy();
+    expect(screen.getByText('2026-9 / NB')).toBeTruthy();
+  });
+
   it('selects the first nine Sections and explicitly rejects the tenth without replacement', async () => {
     const sections = Array.from({ length: 10 }, (_, index) => section(index + 1));
     renderWatch(sections);
@@ -422,12 +443,12 @@ describe('Watch workspace product flow', () => {
 
   it('keeps selection inactive until START_RESULT and sends the default one-shot policy', async () => {
     const sectionKey = section(1);
-    const { audio, watch } = renderWatch([sectionKey]);
+    const { audio, container, watch } = renderWatch([sectionKey]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Select Section 00001 for watch' }));
     expect(metricValue('Selected')).toBe('1');
     expect(metricValue('Active')).toBe('0');
-    expect(screen.getByText('SELECTED')).toBeTruthy();
+    expect(container.querySelector('[data-state="SELECTED"]')?.textContent).toBe('Selected');
 
     fireEvent.click(screen.getByRole('button', { name: /Start selected/u }));
     expect(watch.commands).toEqual([{
@@ -444,13 +465,15 @@ describe('Watch workspace product flow', () => {
     expect(audio.unlockCalls).toHaveBeenCalledOnce();
     expect(metricValue('Selected')).toBe('1');
     expect(metricValue('Active')).toBe('0');
-    expect(screen.getByText('STARTING')).toBeTruthy();
+    expect(container.querySelector('.watch-workspace__item [data-state="SELECTED"]')?.textContent)
+      .toBe('Starting');
 
     act(() => watch.emit(activeStart(sectionKey, 1)));
     await waitFor(() => expect(metricValue('Active')).toBe('1'));
     expect(metricValue('Selected')).toBe('1');
-    expect(screen.getByText('WATCHING')).toBeTruthy();
-    expect(screen.getByText(/ONE_SHOT .* max 3 .* 600s/u)).toBeTruthy();
+    expect(container.querySelector('.watch-workspace__item [data-state="READY"]')?.textContent)
+      .toBe('Watching');
+    expect(screen.getByText(/One-shot .* max 3 .* 600s/u)).toBeTruthy();
   });
 
   it('plays a real preview when the sound-test control is used', async () => {
@@ -542,11 +565,11 @@ describe('Watch workspace product flow', () => {
     expect(within(telemetry).getAllByText(/Rutgers day/u)).toHaveLength(3);
 
     expect(within(telemetry).getAllByText('30s')).toHaveLength(3);
-    expect(within(telemetry).getAllByText(/10s .* ACTIVE_WATCH/u)).toHaveLength(3);
+    expect(within(telemetry).getAllByText(/10s .* Active watch/u)).toHaveLength(3);
     expect(within(telemetry).getAllByText('12.50s')).toHaveLength(2);
     expect(within(telemetry).getByText('487ms')).toBeTruthy();
-    expect(within(telemetry).getByText(/RETRY_AFTER .* RATE_LIMITED/u)).toBeTruthy();
-    expect(within(telemetry).getByText(/FATAL_DIAGNOSTIC .* NON_JSON/u)).toBeTruthy();
+    expect(within(telemetry).getByText(/Retry after .* RATE_LIMITED/u)).toBeTruthy();
+    expect(within(telemetry).getByText(/Fatal diagnostic .* NON_JSON/u)).toBeTruthy();
     expect(within(telemetry).getAllByText(
       '12 attempted / 9 succeeded / 2 failed / 1 empty',
     )).toHaveLength(3);

@@ -39,6 +39,9 @@ function RuntimeProbe({ id }: { readonly id: string }) {
     <div>
       <output data-testid={`${id}-locale`}>{locale}</output>
       <output data-testid={`${id}-message`}>{t(key)}</output>
+      <output data-testid={`${id}-interpolation`}>
+        {t('watch.selected_count', { count: 2, max: 9 })}
+      </output>
       <output data-testid={`${id}-number`}>{formatNumber(12_345.6)}</output>
       <output data-testid={`${id}-date`}>
         {formatDate(date, { dateStyle: 'medium', timeZone: 'UTC' })}
@@ -117,6 +120,7 @@ describe('locale runtime', () => {
     expect(screen.getByTestId('runtime-number').textContent).toBe(
       new Intl.NumberFormat('en-US').format(12_345.6),
     );
+    expect(screen.getByTestId('runtime-interpolation').textContent).toBe('2 of 9 selected');
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'change-runtime' }));
@@ -130,6 +134,7 @@ describe('locale runtime', () => {
     expect(screen.getByTestId('runtime-number').textContent).toBe(
       new Intl.NumberFormat('zh-CN').format(12_345.6),
     );
+    expect(screen.getByTestId('runtime-interpolation').textContent).toBe('已选 2 / 9');
     expect(screen.getByTestId('runtime-date').textContent).toBe(
       new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeZone: 'UTC' }).format(
         Date.UTC(2026, 6, 14, 12),

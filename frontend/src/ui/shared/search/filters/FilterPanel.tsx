@@ -9,7 +9,11 @@ import {
 } from 'react';
 
 import { isMessageKey } from '../../i18n/contract';
-import { useBcspI18n } from '../../i18n/runtime';
+import {
+  filterOptionMessageKey,
+  filterSerializationIssueMessageKeys,
+} from '../../i18n/presenter';
+import { useBcspI18n, type BcspI18nRuntime } from '../../i18n/runtime';
 import type {
   CatalogDiscoveryResponseV1,
   CatalogFieldKnowledge,
@@ -81,12 +85,9 @@ function knownText(knowledge: CatalogFieldKnowledge<string>): string | null {
   return knowledge.presence.value;
 }
 
-function humanize(value: string): string {
-  return value
-    .toLocaleLowerCase('en-US')
-    .split('_')
-    .map((part) => `${part.slice(0, 1).toLocaleUpperCase('en-US')}${part.slice(1)}`)
-    .join(' ');
+function optionText(value: string, i18n: BcspI18nRuntime): string {
+  const key = filterOptionMessageKey(value);
+  return key === undefined ? value : i18n.t(key);
 }
 
 function unique<T>(values: readonly T[]): T[] {
@@ -120,7 +121,11 @@ function timeFromMinute(value: number): string {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
-function fieldSummary(field: FilterFieldSchemaV1, state: FilterStateV1): string | null {
+function fieldSummary(
+  field: FilterFieldSchemaV1,
+  state: FilterStateV1,
+  i18n: BcspI18nRuntime,
+): string | null {
   switch (field.requestField) {
     case 'term': return state.term;
     case 'campuses': return state.campuses.length > 0 ? state.campuses.join(', ') : null;
@@ -141,19 +146,23 @@ function fieldSummary(field: FilterFieldSchemaV1, state: FilterStateV1): string 
     case 'core': return state.core.codes.length > 0
       ? `${state.core.mode}: ${state.core.codes.join(', ')}`
       : null;
-    case 'prerequisite': return state.prerequisite === 'ANY' ? null : humanize(state.prerequisite);
+    case 'prerequisite': return state.prerequisite === 'ANY' ? null : optionText(state.prerequisite, i18n);
     case 'courseLocations': return state.courseLocations.length > 0 ? state.courseLocations.join(', ') : null;
     case 'sectionIndexes': return state.sectionIndexes.length > 0 ? state.sectionIndexes.join(', ') : null;
     case 'sectionNumbers': return state.sectionNumbers.length > 0 ? state.sectionNumbers.join(', ') : null;
-    case 'openStatuses': return state.openStatuses.length > 0 ? state.openStatuses.map(humanize).join(', ') : null;
-    case 'modalities': return state.modalities.length > 0 ? state.modalities.map(humanize).join(', ') : null;
+    case 'openStatuses': return state.openStatuses.length > 0
+      ? state.openStatuses.map((entry) => optionText(entry, i18n)).join(', ')
+      : null;
+    case 'modalities': return state.modalities.length > 0
+      ? state.modalities.map((entry) => optionText(entry, i18n)).join(', ')
+      : null;
     case 'synchronicities': return state.synchronicities.length > 0
-      ? state.synchronicities.map(humanize).join(', ')
+      ? state.synchronicities.map((entry) => optionText(entry, i18n)).join(', ')
       : null;
     case 'instructors': return state.instructors.length > 0 ? state.instructors.join(', ') : null;
     case 'availability': return state.availability.length > 0
       ? state.availability
-        .map((window) => `${humanize(window.weekday)} ${timeFromMinute(window.startMinute)}–${timeFromMinute(window.endMinute)}`)
+        .map((window) => `${optionText(window.weekday, i18n)} ${timeFromMinute(window.startMinute)}–${timeFromMinute(window.endMinute)}`)
         .join(', ')
       : null;
     case 'meetingLocations': return state.meetingLocations.length > 0 ? state.meetingLocations.join(', ') : null;
@@ -165,7 +174,7 @@ function fieldSummary(field: FilterFieldSchemaV1, state: FilterStateV1): string 
       return values.length > 0 ? values.join(', ') : null;
     }
     case 'examCodes': return state.examCodes.length > 0 ? state.examCodes.join(', ') : null;
-    case 'permission': return state.permission === 'ANY' ? null : humanize(state.permission);
+    case 'permission': return state.permission === 'ANY' ? null : optionText(state.permission, i18n);
     case 'eligibility': {
       const values = [
         ...state.eligibility.majorCodes.map((value) => `MAJOR ${value}`),
@@ -184,7 +193,7 @@ function TokenListControl({
   values,
   onChange,
   disabled,
-  placeholder = 'Type a value',
+  placeholder,
 }: {
   readonly label: string;
   readonly values: readonly string[];
@@ -192,6 +201,7 @@ function TokenListControl({
   readonly disabled: boolean;
   readonly placeholder?: string;
 }) {
+  const i18n = useBcspI18n();
   const id = useId();
   const [draft, setDraft] = useState('');
 
@@ -210,7 +220,7 @@ function TokenListControl({
           id={id}
           className="filter-panel__input"
           value={draft}
-          placeholder={placeholder}
+          placeholder={placeholder ?? i18n.t('filter.type_value')}
           disabled={disabled}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -223,21 +233,21 @@ function TokenListControl({
           className="filter-panel__minor-action"
           type="button"
           disabled={disabled || draft.trim().length === 0}
-          aria-label={`Add ${label}`}
+          aria-label={i18n.t('filter.add_value', { label })}
           onClick={add}
         >
-          Add
+          {i18n.t('common.add')}
         </button>
       </div>
       {values.length > 0 ? (
-        <ul className="filter-panel__token-list" aria-label={`${label} values`}>
+        <ul className="filter-panel__token-list" aria-label={i18n.t('filter.values', { label })}>
           {values.map((value) => (
             <li key={value} className="filter-panel__token">
               <samp>{value}</samp>
               <button
                 type="button"
                 disabled={disabled}
-                aria-label={`Remove ${value} from ${label}`}
+                aria-label={i18n.t('filter.remove_value', { label, value })}
                 onClick={() => onChange(values.filter((candidate) => candidate !== value))}
               >
                 ×
@@ -263,6 +273,7 @@ function CheckboxSet<T extends string>({
   readonly onChange: (values: readonly T[]) => void;
   readonly disabled: boolean;
 }) {
+  const i18n = useBcspI18n();
   return (
     <div className="filter-panel__checks" role="group" aria-label={label}>
       {options.map((option) => (
@@ -274,7 +285,7 @@ function CheckboxSet<T extends string>({
             disabled={disabled}
             onChange={(event) => onChange(toggleValue(values, option, event.target.checked))}
           />
-          <span>{humanize(option)}</span>
+          <span>{optionText(option, i18n)}</span>
         </label>
       ))}
     </div>
@@ -294,6 +305,7 @@ function EnumSelect<T extends string>({
   readonly onChange: (value: T) => void;
   readonly disabled: boolean;
 }) {
+  const i18n = useBcspI18n();
   const id = useId();
   return (
     <div className="filter-panel__select-control">
@@ -305,7 +317,7 @@ function EnumSelect<T extends string>({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value as T)}
       >
-        {options.map((option) => <option key={option} value={option}>{humanize(option)}</option>)}
+        {options.map((option) => <option key={option} value={option}>{optionText(option, i18n)}</option>)}
       </select>
     </div>
   );
@@ -320,6 +332,7 @@ function AvailabilityControl({
   readonly onChange: (value: FilterStateV1['availability']) => void;
   readonly disabled: boolean;
 }) {
+  const i18n = useBcspI18n();
   const [weekday, setWeekday] = useState<WeekdayV1>('MONDAY');
   const [start, setStart] = useState('09:00');
   const [end, setEnd] = useState('17:00');
@@ -329,7 +342,7 @@ function AvailabilityControl({
     const startMinute = minuteFromTime(start);
     const endMinute = minuteFromTime(end);
     if (startMinute === null || endMinute === null || startMinute >= endMinute) {
-      setError('End time must be later than start time.');
+      setError(i18n.t('filter.availability.invalid'));
       return;
     }
     setError(null);
@@ -343,18 +356,18 @@ function AvailabilityControl({
     <div className="filter-panel__availability">
       <div className="filter-panel__availability-editor">
         <label>
-          <span className="filter-panel__sub-label">Weekday</span>
+          <span className="filter-panel__sub-label">{i18n.t('filter.availability.weekday')}</span>
           <select
             className="filter-panel__select"
             value={weekday}
             disabled={disabled}
             onChange={(event) => setWeekday(event.target.value as WeekdayV1)}
           >
-            {WEEKDAYS.map((day) => <option key={day} value={day}>{humanize(day)}</option>)}
+            {WEEKDAYS.map((day) => <option key={day} value={day}>{optionText(day, i18n)}</option>)}
           </select>
         </label>
         <label>
-          <span className="filter-panel__sub-label">Start</span>
+          <span className="filter-panel__sub-label">{i18n.t('filter.availability.start')}</span>
           <input
             className="filter-panel__input"
             type="time"
@@ -364,7 +377,7 @@ function AvailabilityControl({
           />
         </label>
         <label>
-          <span className="filter-panel__sub-label">End</span>
+          <span className="filter-panel__sub-label">{i18n.t('filter.availability.end')}</span>
           <input
             className="filter-panel__input"
             type="time"
@@ -379,30 +392,30 @@ function AvailabilityControl({
           disabled={disabled}
           onClick={add}
         >
-          Add window
+          {i18n.t('filter.availability.add')}
         </button>
       </div>
       {error === null ? null : <p className="bcsp-field__error" role="alert">{error}</p>}
       {value.length > 0 ? (
-        <ol className="filter-panel__window-list" aria-label="Availability windows">
+        <ol className="filter-panel__window-list" aria-label={i18n.t('filter.availability.list')}>
           {value.map((window, index) => (
             <li key={`${window.weekday}:${window.startMinute}:${window.endMinute}`}>
               <samp>
-                {humanize(window.weekday)} {timeFromMinute(window.startMinute)}–{timeFromMinute(window.endMinute)}
+                {optionText(window.weekday, i18n)} {timeFromMinute(window.startMinute)}–{timeFromMinute(window.endMinute)}
               </samp>
               <button
                 type="button"
                 disabled={disabled}
-                aria-label={`Remove availability window ${index + 1}`}
+                aria-label={i18n.t('filter.availability.remove', { number: index + 1 })}
                 onClick={() => onChange(value.filter((_, candidateIndex) => candidateIndex !== index))}
               >
-                Remove
+                {i18n.t('common.remove')}
               </button>
             </li>
           ))}
         </ol>
       ) : null}
-      <p className="bcsp-field__helper">Every added window must match the same Section.</p>
+      <p className="bcsp-field__helper">{i18n.t('filter.availability.helper')}</p>
     </div>
   );
 }
@@ -416,6 +429,7 @@ function EligibilityControl({
   readonly onChange: (value: FilterStateV1['eligibility']) => void;
   readonly disabled: boolean;
 }) {
+  const i18n = useBcspI18n();
   const [unitDraft, setUnitDraft] = useState('');
   const [majorDraft, setMajorDraft] = useState('');
 
@@ -435,40 +449,40 @@ function EligibilityControl({
 
   return (
     <div className="filter-panel__eligibility">
-      <TokenListControl label="Major codes" values={value.majorCodes} disabled={disabled}
+      <TokenListControl label={i18n.t('filter.eligibility.major_codes')} values={value.majorCodes} disabled={disabled}
         onChange={(next) => update('majorCodes', next)} />
-      <TokenListControl label="Minor codes" values={value.minorCodes} disabled={disabled}
+      <TokenListControl label={i18n.t('filter.eligibility.minor_codes')} values={value.minorCodes} disabled={disabled}
         onChange={(next) => update('minorCodes', next)} />
-      <TokenListControl label="Honors program codes" values={value.honorProgramCodes} disabled={disabled}
+      <TokenListControl label={i18n.t('filter.eligibility.honors_codes')} values={value.honorProgramCodes} disabled={disabled}
         onChange={(next) => update('honorProgramCodes', next)} />
-      <TokenListControl label="Unit codes" values={value.unitCodes} disabled={disabled}
+      <TokenListControl label={i18n.t('filter.eligibility.unit_codes')} values={value.unitCodes} disabled={disabled}
         onChange={(next) => update('unitCodes', next)} />
       <div className="filter-panel__token-control filter-panel__unit-major">
-        <span className="filter-panel__sub-label">Unit + major pairs</span>
+        <span className="filter-panel__sub-label">{i18n.t('filter.eligibility.unit_major_pairs')}</span>
         <div className="filter-panel__input-action filter-panel__input-action--pair">
           <label>
-            <span className="bcsp-visually-hidden">Unit code for pair</span>
-            <input className="filter-panel__input" value={unitDraft} placeholder="Unit code"
+            <span className="bcsp-visually-hidden">{i18n.t('filter.eligibility.unit_code_for_pair')}</span>
+            <input className="filter-panel__input" value={unitDraft} placeholder={i18n.t('filter.eligibility.unit_code')}
               disabled={disabled} onChange={(event) => setUnitDraft(event.target.value)} />
           </label>
           <label>
-            <span className="bcsp-visually-hidden">Major code for pair</span>
-            <input className="filter-panel__input" value={majorDraft} placeholder="Major code"
+            <span className="bcsp-visually-hidden">{i18n.t('filter.eligibility.major_code_for_pair')}</span>
+            <input className="filter-panel__input" value={majorDraft} placeholder={i18n.t('filter.eligibility.major_code')}
               disabled={disabled} onChange={(event) => setMajorDraft(event.target.value)} />
           </label>
           <button className="filter-panel__minor-action" type="button"
             disabled={disabled || unitDraft.trim() === '' || majorDraft.trim() === ''}
             onClick={addUnitMajor}>
-            Add pair
+            {i18n.t('filter.eligibility.add_pair')}
           </button>
         </div>
         {value.unitMajors.length > 0 ? (
-          <ul className="filter-panel__token-list" aria-label="Unit and major pairs">
+          <ul className="filter-panel__token-list" aria-label={i18n.t('filter.eligibility.unit_major_pairs')}>
             {value.unitMajors.map(({ unitCode, majorCode }, index) => (
               <li className="filter-panel__token" key={`${unitCode}:${majorCode}`}>
                 <samp>{unitCode} / {majorCode}</samp>
                 <button type="button" disabled={disabled}
-                  aria-label={`Remove ${unitCode} ${majorCode} pair`}
+                  aria-label={i18n.t('filter.eligibility.remove_pair', { major: majorCode, unit: unitCode })}
                   onClick={() => update('unitMajors', value.unitMajors.filter((_, item) => item !== index))}>
                   ×
                 </button>
@@ -513,7 +527,7 @@ export const FILTER_PANEL_CSS = String.raw`
   text-transform: uppercase;
 }
 
-.filter-panel__kicker { margin: 0 0 var(--bcsp-space-1); color: var(--bcsp-accent); }
+.filter-panel__kicker { margin: 0 0 var(--bcsp-space-1); color: var(--bcsp-ink-muted); }
 .filter-panel__title { margin: 0; font-size: clamp(1.75rem, 4vw, 3.75rem); letter-spacing: -0.055em; line-height: 0.9; text-transform: uppercase; }
 .filter-panel__head-note { max-width: 28ch; margin: 0; color: var(--bcsp-ink-muted); font-size: 0.8rem; }
 
@@ -535,7 +549,7 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__chip button, .filter-panel__token button, .filter-panel__window-list button { min-width: 2.2rem; border: 0; border-left: 1px solid var(--bcsp-line); border-radius: 0; color: inherit; background: transparent; cursor: pointer; }
 .filter-panel__chip button:hover:not(:disabled), .filter-panel__token button:hover:not(:disabled), .filter-panel__window-list button:hover:not(:disabled) { color: var(--bcsp-accent-ink); background: var(--bcsp-accent); }
 .filter-panel__chip--target { border-color: var(--bcsp-accent); }
-.filter-panel__chip-pin { padding: 0.45rem; color: var(--bcsp-accent); border-left: 1px solid var(--bcsp-accent); }
+.filter-panel__chip-pin { padding: 0.45rem; color: var(--bcsp-ink); border-left: 1px solid var(--bcsp-accent); font-weight: 800; }
 .filter-panel__empty { margin: 0.3rem 0 0; color: var(--bcsp-ink-muted); font-size: 0.8rem; }
 
 .filter-panel__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -571,7 +585,7 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__row:nth-child(odd) { border-right: 1px solid var(--bcsp-line); }
 .filter-panel__row--wide { grid-column: 1 / -1; border-right: 0 !important; }
 .filter-panel__legend { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--bcsp-space-2); align-items: baseline; padding: 0 0 var(--bcsp-space-2); }
-.filter-panel__ordinal { color: var(--bcsp-accent); }
+.filter-panel__ordinal { color: var(--bcsp-ink-muted); }
 .filter-panel__label { font-weight: 800; letter-spacing: -0.02em; }
 .filter-panel__scope { color: var(--bcsp-ink-muted); }
 .filter-panel__control { display: grid; gap: var(--bcsp-space-2); }
@@ -750,7 +764,7 @@ export function FilterPanel({
       || label.toLocaleLowerCase(i18n.locale).includes(query));
   }, [discovery.subjects, i18n.locale, subjectQuery, value.campuses, value.term]);
 
-  const summaries = fields.map((field) => ({ field, summary: fieldSummary(field, value) }))
+  const summaries = fields.map((field) => ({ field, summary: fieldSummary(field, value, i18n) }))
     .filter((entry): entry is { field: FilterFieldSchemaV1; summary: string } => entry.summary !== null);
   const clearable = summaries.filter(({ field }) => field.requestField !== 'term' && field.requestField !== 'campuses');
 
@@ -791,13 +805,13 @@ export function FilterPanel({
               });
             }}
           >
-            <option value="">Select a published term</option>
+            <option value="">{i18n.t('filter.term_placeholder')}</option>
             {termOptions.map(([term, termLabel]) => <option key={term} value={term}>{termLabel} / {term}</option>)}
           </select>
         );
       case 'campuses':
         return campusOptions.length === 0
-          ? <p className="bcsp-field__helper">No campus target is published for this term.</p>
+          ? <p className="bcsp-field__helper">{i18n.t('filter.no_campus')}</p>
           : (
             <div className="filter-panel__checks" role="group" aria-label={label}>
               {campusOptions.map(([campus, campusLabel]) => (
@@ -821,25 +835,25 @@ export function FilterPanel({
           <div className="filter-panel__subject-picker">
             <div className="filter-panel__subject-search">
               <label>
-                <span className="filter-panel__sub-label">Search subject dictionary</span>
+                <span className="filter-panel__sub-label">{i18n.t('filter.subject_search')}</span>
                 <input
                   className="filter-panel__input"
                   type="search"
                   value={subjectQuery}
                   disabled={disabled}
-                  placeholder="Code or published subject name"
+                  placeholder={i18n.t('filter.subject_placeholder')}
                   onChange={(event) => setSubjectQuery(event.target.value)}
                 />
               </label>
               <output className="filter-panel__subject-count" aria-live="polite">
-                {subjectOptions.length} subjects shown
+                {i18n.t('filter.subject_count', { count: i18n.formatNumber(subjectOptions.length) })}
               </output>
             </div>
             <div className="filter-panel__subject-list">
               {subjectOptions.length === 0 ? (
-                <p className="bcsp-field__helper">No published subject matches this target and search.</p>
+                <p className="bcsp-field__helper">{i18n.t('filter.subject_empty')}</p>
               ) : (
-                <div className="filter-panel__checks" role="group" aria-label="Published subjects">
+                <div className="filter-panel__checks" role="group" aria-label={i18n.t('filter.subject_list')}>
                   {subjectOptions.map(([code, subjectLabel]) => (
                     <label className="filter-panel__check" key={code}>
                       <input
@@ -861,15 +875,15 @@ export function FilterPanel({
           disabled={disabled} placeholder={i18n.t('search.placeholder')}
           onChange={(event) => update('text', event.target.value || null)} />;
       case 'courseNumbers':
-        return <TokenListControl label="Course numbers" values={value.courseNumbers}
-          onChange={(next) => update('courseNumbers', next)} disabled={disabled} placeholder="e.g. 111" />;
+        return <TokenListControl label={i18n.t('filter.course_numbers')} values={value.courseNumbers}
+          onChange={(next) => update('courseNumbers', next)} disabled={disabled} placeholder={i18n.t('filter.course_number_placeholder')} />;
       case 'levels':
-        return <TokenListControl label="Course levels" values={value.levels}
-          onChange={(next) => update('levels', next)} disabled={disabled} placeholder="Published level code" />;
+        return <TokenListControl label={i18n.t('filter.course_levels')} values={value.levels}
+          onChange={(next) => update('levels', next)} disabled={disabled} placeholder={i18n.t('filter.level_placeholder')} />;
       case 'credits':
         return (
           <div className="filter-panel__credit-range">
-            <label><span className="filter-panel__sub-label">Minimum credits</span>
+            <label><span className="filter-panel__sub-label">{i18n.t('filter.minimum_credits')}</span>
               <input className="filter-panel__input" type="number" min="0" step="0.01"
                 value={formatCredit(value.credits?.minimumHundredths ?? null)} disabled={disabled}
                 onChange={(event) => {
@@ -879,7 +893,7 @@ export function FilterPanel({
                     ? null : { minimumHundredths, maximumHundredths });
                 }} />
             </label>
-            <label><span className="filter-panel__sub-label">Maximum credits</span>
+            <label><span className="filter-panel__sub-label">{i18n.t('filter.maximum_credits')}</span>
               <input className="filter-panel__input" type="number" min="0" step="0.01"
                 value={formatCredit(value.credits?.maximumHundredths ?? null)} disabled={disabled}
                 onChange={(event) => {
@@ -894,11 +908,11 @@ export function FilterPanel({
       case 'core':
         return (
           <div className="filter-panel__control">
-            <EnumSelect label="Core code match mode" value={value.core.mode}
+            <EnumSelect label={i18n.t('filter.core_mode')} value={value.core.mode}
               options={['ANY', 'ALL']} disabled={disabled}
               onChange={(mode) => update('core', { ...value.core, mode })} />
-            <TokenListControl label="Core codes" values={value.core.codes} disabled={disabled}
-              onChange={(codes) => update('core', { ...value.core, codes })} placeholder="Published Core code" />
+            <TokenListControl label={i18n.t('filter.core_codes')} values={value.core.codes} disabled={disabled}
+              onChange={(codes) => update('core', { ...value.core, codes })} placeholder={i18n.t('filter.core_placeholder')} />
           </div>
         );
       case 'prerequisite':
@@ -906,13 +920,13 @@ export function FilterPanel({
           options={['ANY', 'HAS', 'NONE_REPORTED']} disabled={disabled}
           onChange={(next) => update('prerequisite', next)} />;
       case 'courseLocations':
-        return <TokenListControl label="Course locations" values={value.courseLocations}
+        return <TokenListControl label={i18n.t('filter.course_locations')} values={value.courseLocations}
           onChange={(next) => update('courseLocations', next)} disabled={disabled} />;
       case 'sectionIndexes':
-        return <TokenListControl label="Section indexes" values={value.sectionIndexes}
-          onChange={(next) => update('sectionIndexes', next)} disabled={disabled} placeholder="Five digits" />;
+        return <TokenListControl label={i18n.t('filter.section_indexes')} values={value.sectionIndexes}
+          onChange={(next) => update('sectionIndexes', next)} disabled={disabled} placeholder={i18n.t('filter.five_digits')} />;
       case 'sectionNumbers':
-        return <TokenListControl label="Section numbers" values={value.sectionNumbers}
+        return <TokenListControl label={i18n.t('filter.section_numbers')} values={value.sectionNumbers}
           onChange={(next) => update('sectionNumbers', next)} disabled={disabled} />;
       case 'openStatuses':
         return <CheckboxSet label={label} options={OPEN_STATES} values={value.openStatuses}
@@ -924,27 +938,27 @@ export function FilterPanel({
         return <CheckboxSet label={label} options={SYNCHRONICITIES} values={value.synchronicities}
           onChange={(next) => update('synchronicities', next)} disabled={disabled} />;
       case 'instructors':
-        return <TokenListControl label="Instructor names" values={value.instructors}
+        return <TokenListControl label={i18n.t('filter.instructor_names')} values={value.instructors}
           onChange={(next) => update('instructors', next)} disabled={disabled} />;
       case 'availability':
         return <AvailabilityControl value={value.availability}
           onChange={(next) => update('availability', next)} disabled={disabled} />;
       case 'meetingLocations':
-        return <TokenListControl label="Meeting locations" values={value.meetingLocations}
+        return <TokenListControl label={i18n.t('filter.meeting_locations')} values={value.meetingLocations}
           onChange={(next) => update('meetingLocations', next)} disabled={disabled} />;
       case 'buildingRoom':
         return (
           <div className="filter-panel__building">
-            <TokenListControl label="Building codes" values={value.buildingRoom.buildingCodes}
+            <TokenListControl label={i18n.t('filter.building_codes')} values={value.buildingRoom.buildingCodes}
               onChange={(buildingCodes) => update('buildingRoom', { ...value.buildingRoom, buildingCodes })}
               disabled={disabled} />
-            <TokenListControl label="Room numbers" values={value.buildingRoom.roomNumbers}
+            <TokenListControl label={i18n.t('filter.room_numbers')} values={value.buildingRoom.roomNumbers}
               onChange={(roomNumbers) => update('buildingRoom', { ...value.buildingRoom, roomNumbers })}
               disabled={disabled} />
           </div>
         );
       case 'examCodes':
-        return <TokenListControl label="Exam codes" values={value.examCodes}
+        return <TokenListControl label={i18n.t('filter.exam_codes')} values={value.examCodes}
           onChange={(next) => update('examCodes', next)} disabled={disabled} />;
       case 'permission':
         return <EnumSelect<PermissionFilterV1> label={label} value={value.permission}
@@ -984,13 +998,17 @@ export function FilterPanel({
         <legend className="filter-panel__legend">
           <span className="filter-panel__ordinal">{String(index + 1).padStart(2, '0')}</span>
           <span className="filter-panel__label">{labelFor(field)}</span>
-          <span className="filter-panel__scope">{field.scope}</span>
+          <span className="filter-panel__scope">
+            {i18n.t(field.scope === 'COURSE' ? 'filter.scope.course' : 'filter.scope.section')}
+          </span>
         </legend>
         <div className="filter-panel__control">
           {controlFor(field)}
           {invalid ? (
             <p className="filter-panel__validation-error" id={errorId} role="alert">
-              {validationIssue?.message}
+              {validationIssue === undefined
+                ? i18n.t('search.validation_body')
+                : i18n.t(filterSerializationIssueMessageKeys[validationIssue.issue])}
             </p>
           ) : null}
         </div>
@@ -1007,14 +1025,16 @@ export function FilterPanel({
   return (
     <>
       <style data-bcsp-filter-panel="">{FILTER_PANEL_CSS}</style>
-      <form ref={formRef} className="filter-panel" aria-label="Course and Section filters" onSubmit={submit}>
+      <form ref={formRef} className="filter-panel" aria-label={i18n.t('filter.form_label')} onSubmit={submit}>
         <header className="filter-panel__head">
           <div>
-            <p className="filter-panel__kicker">Query matrix / 22 channels</p>
-            <h2 className="filter-panel__title">Build a precise search</h2>
+            <p className="filter-panel__kicker">
+              {i18n.t('filter.matrix_kicker', { count: i18n.formatNumber(fields.length) })}
+            </p>
+            <h2 className="filter-panel__title">{i18n.t('filter.matrix_title')}</h2>
           </div>
           <p className="filter-panel__head-note">
-            Course and Section constraints are combined. Unknown source values remain explicit.
+            {i18n.t('filter.matrix_note')}
           </p>
           <button className="bcsp-action bcsp-action--accent" type="submit"
             disabled={disabled || value.term === null || value.campuses.length === 0}>
@@ -1023,8 +1043,8 @@ export function FilterPanel({
         </header>
 
         <section className="filter-panel__active" aria-labelledby="active-filter-title">
-          <h3 className="filter-panel__active-title" id="active-filter-title">Active filters</h3>
-          {summaries.length === 0 ? <p className="filter-panel__empty">No target or filter is selected.</p> : (
+          <h3 className="filter-panel__active-title" id="active-filter-title">{i18n.t('filter.active_title')}</h3>
+          {summaries.length === 0 ? <p className="filter-panel__empty">{i18n.t('filter.active_empty')}</p> : (
             <ul className="filter-panel__chips">
               {summaries.map(({ field, summary }) => {
                 const target = field.requestField === 'term' || field.requestField === 'campuses';
@@ -1032,9 +1052,11 @@ export function FilterPanel({
                   <li className={`filter-panel__chip${target ? ' filter-panel__chip--target' : ''}`}
                     key={field.stableId} data-filter-chip={field.stableId}>
                     <span className="filter-panel__chip-label"><strong>{labelFor(field)}</strong>{summary}</span>
-                    {target ? <span className="filter-panel__chip-pin" aria-label="Search target preserved">TARGET</span> : (
+                    {target ? <span className="filter-panel__chip-pin" aria-label={i18n.t('filter.target_preserved')}>
+                      {i18n.t('filter.target_tag')}
+                    </span> : (
                       <button type="button" disabled={disabled}
-                        aria-label={`Clear ${labelFor(field)}`} onClick={() => clearField(field)}>
+                        aria-label={i18n.t('filter.clear_one', { label: labelFor(field) })} onClick={() => clearField(field)}>
                         ×
                       </button>
                     )}
@@ -1058,7 +1080,7 @@ export function FilterPanel({
           }}>
           <summary className="filter-panel__group-summary">
             <span>03–10</span>
-            <span>Course constraints</span>
+            <span>{i18n.t('filter.course_constraints')}</span>
             <span className="filter-panel__group-count">{courseFields.length}</span>
           </summary>
           <div className="filter-panel__grid">{courseFields.map(renderRow)}</div>
@@ -1071,7 +1093,7 @@ export function FilterPanel({
           }}>
           <summary className="filter-panel__group-summary">
             <span>11–22</span>
-            <span>Same-Section constraints</span>
+            <span>{i18n.t('filter.section_constraints')}</span>
             <span className="filter-panel__group-count">{sectionFields.length}</span>
           </summary>
           <div className="filter-panel__grid">{sectionFields.map(renderRow)}</div>
@@ -1079,7 +1101,7 @@ export function FilterPanel({
 
         <footer className="filter-panel__footer">
           <p className="filter-panel__footer-note">
-            The selected term and campus remain fixed when filters are cleared.
+            {i18n.t('filter.footer_note')}
           </p>
         </footer>
       </form>

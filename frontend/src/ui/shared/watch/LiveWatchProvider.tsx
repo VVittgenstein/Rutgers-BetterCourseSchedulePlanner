@@ -173,11 +173,24 @@ export interface LiveWatchProviderProps {
   readonly children: ReactNode;
   readonly runtime: ProductRuntimePort;
   readonly audio?: WatchAudioController | undefined;
+  readonly initialSelected?: readonly SectionKey[] | undefined;
+  readonly initialVolume?: number | undefined;
+  readonly onSelectedChange?: ((selected: readonly SectionKey[]) => void) | undefined;
+  readonly onVolumeChange?: ((volume: number) => void) | undefined;
 }
 
-export function LiveWatchProvider({ children, runtime, audio }: LiveWatchProviderProps) {
+export function LiveWatchProvider({
+  audio,
+  children,
+  initialSelected = [],
+  initialVolume = 70,
+  onSelectedChange,
+  onVolumeChange,
+  runtime,
+}: LiveWatchProviderProps) {
   const [audioController] = useState(() => audio ?? new WatchAudioController());
-  const [selected, setSelected] = useState<readonly SectionKey[]>([]);
+  const [selected, setSelected] = useState<readonly SectionKey[]>(() =>
+    initialSelected.slice(0, MAX_SELECTED_SECTIONS));
   const [pending, setPending] = useState<readonly SectionKey[]>([]);
   const [active, setActive] = useState<readonly ActiveWatchView[]>([]);
   const [observations, setObservations] = useState<readonly OpenObservationV1[]>([]);
@@ -187,7 +200,8 @@ export function LiveWatchProvider({ children, runtime, audio }: LiveWatchProvide
   const [connection, setConnection] = useState<WatchConnectionState>(runtime.watch.state);
   const [audioState, setAudioState] = useState<WatchAudioState>('MUTED');
   const [muted, setMutedState] = useState(true);
-  const [volume, setVolumeState] = useState(70);
+  const [volume, setVolumeState] = useState(() =>
+    Math.min(100, Math.max(0, Number.isFinite(initialVolume) ? initialVolume : 70)));
   const [continuousEpisodeIds, setContinuousEpisodeIds] = useState<readonly string[]>([]);
   const [batchStatuses, setBatchStatuses] = useState<readonly OpenRefreshStatusV1[]>([]);
   const [sectionStatuses, setSectionStatuses] = useState<readonly OpenSectionStatusV1[]>([]);
@@ -287,6 +301,19 @@ export function LiveWatchProvider({ children, runtime, audio }: LiveWatchProvide
     }
     return outcome;
   }, [addNotice, audioController]);
+
+  useEffect(() => {
+    const normalized = Math.min(
+      100,
+      Math.max(0, Number.isFinite(initialVolume) ? initialVolume : 70),
+    );
+    if (normalized === volumeRef.current) return;
+    volumeRef.current = normalized;
+    setVolumeState(normalized);
+    if (continuousEpisodeIdsRef.current.length > 0) {
+      startContinuousAudio(normalized, mutedRef.current);
+    }
+  }, [initialVolume, startContinuousAudio]);
 
   const handleServerEvent = useCallback((
     envelope: WsServerEnvelope<WatchServerEventV1>,
@@ -475,7 +502,8 @@ export function LiveWatchProvider({ children, runtime, audio }: LiveWatchProvide
     const next = [...selectedRef.current, sectionKey];
     selectedRef.current = next;
     setSelected(next);
-  }, [addNotice]);
+    onSelectedChange?.(next);
+  }, [addNotice, onSelectedChange]);
 
   const remove = useCallback((sectionKey: SectionKey) => {
     if (activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey))) return;
@@ -486,7 +514,8 @@ export function LiveWatchProvider({ children, runtime, audio }: LiveWatchProvide
     sectionRequestRevisions.current.clear();
     telemetryAbort.current?.abort();
     setSelected(next);
-  }, []);
+    onSelectedChange?.(next);
+  }, [onSelectedChange]);
 
   const enableSound = useCallback(async () => {
     setAudioState('UNLOCKING');
@@ -615,10 +644,11 @@ export function LiveWatchProvider({ children, runtime, audio }: LiveWatchProvide
     const normalized = Math.min(100, Math.max(0, next));
     volumeRef.current = normalized;
     setVolumeState(normalized);
+    onVolumeChange?.(normalized);
     if (continuousEpisodeIdsRef.current.length > 0) {
       startContinuousAudio(normalized, mutedRef.current);
     }
-  }, [startContinuousAudio]);
+  }, [onVolumeChange, startContinuousAudio]);
 
   const refreshTelemetry = useCallback(async () => {
     telemetryAbort.current?.abort();

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ActionButton, StatePanel } from '../design-system';
+import { filterSerializationIssueMessageKeys } from '../i18n/presenter';
 import { useBcspI18n } from '../i18n/runtime';
 import {
   FilterSerializationError,
@@ -36,7 +37,6 @@ type QueryState =
   | {
     readonly kind: 'VALIDATION_ERROR';
     readonly issue: FilterSerializationIssue;
-    readonly message: string;
   }
   | { readonly kind: 'ERROR' }
   | { readonly kind: 'COURSES'; readonly response: CourseQueryResponseV1 }
@@ -54,6 +54,8 @@ type SectionDetailState =
   | { readonly kind: 'READY'; readonly response: SectionDetailResponseV1 };
 
 export interface SearchWorkspaceProps {
+  readonly initialFilters?: FilterStateV1 | undefined;
+  readonly onFiltersChange?: ((filters: FilterStateV1) => void) | undefined;
   readonly runtime: ProductRuntimePort;
   readonly shellState: Extract<ShellDataState, { status: 'READY' }>;
 }
@@ -193,14 +195,20 @@ function DirectSectionRoute({
   );
 }
 
-export function SearchWorkspace({ runtime, shellState }: SearchWorkspaceProps) {
+export function SearchWorkspace({
+  initialFilters,
+  onFiltersChange,
+  runtime,
+  shellState,
+}: SearchWorkspaceProps) {
   const i18n = useBcspI18n();
   const { navigate, pathname } = useAppRouter();
   const directSection = useMemo(() => parseSectionRoute(pathname), [pathname]);
   const mode: SearchMode = pathname === '/sections' || directSection !== null
     ? 'SECTIONS'
     : 'COURSES';
-  const [filters, setFilters] = useState<FilterStateV1>(() => createInitialFilters(shellState));
+  const [filters, setFilters] = useState<FilterStateV1>(() =>
+    initialFilters ?? createInitialFilters(shellState));
   const [query, setQuery] = useState<QueryState>({ kind: 'IDLE' });
   const [courseDetail, setCourseDetail] = useState<CourseDetailState>({ kind: 'CLOSED' });
   const searchAbort = useRef<AbortController | null>(null);
@@ -243,7 +251,7 @@ export function SearchWorkspace({ runtime, shellState }: SearchWorkspaceProps) {
     } catch (error) {
       if (abort.signal.aborted) return;
       setQuery(error instanceof FilterSerializationError
-        ? { kind: 'VALIDATION_ERROR', issue: error.issue, message: error.message }
+        ? { kind: 'VALIDATION_ERROR', issue: error.issue }
         : { kind: 'ERROR' });
     }
   }, [filters, mode, runtime]);
@@ -317,7 +325,9 @@ export function SearchWorkspace({ runtime, shellState }: SearchWorkspaceProps) {
     results = (
       <SearchState
         kind={query.kind}
-        message={query.kind === 'VALIDATION_ERROR' ? query.message : undefined}
+        message={query.kind === 'VALIDATION_ERROR'
+          ? i18n.t(filterSerializationIssueMessageKeys[query.issue])
+          : undefined}
       />
     );
   }
@@ -336,13 +346,17 @@ export function SearchWorkspace({ runtime, shellState }: SearchWorkspaceProps) {
           mode={mode}
           onChange={(next) => {
             setFilters(next);
+            onFiltersChange?.(next);
             setQuery({ kind: 'IDLE' });
             setCourseDetail({ kind: 'CLOSED' });
           }}
           onSubmit={() => void runSearch(1)}
           schema={shellState.filterSchema}
           validationIssue={query.kind === 'VALIDATION_ERROR'
-            ? { issue: query.issue, message: query.message }
+            ? {
+              issue: query.issue,
+              message: i18n.t(filterSerializationIssueMessageKeys[query.issue]),
+            }
             : undefined}
           value={filters}
         />

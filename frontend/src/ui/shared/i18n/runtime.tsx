@@ -29,7 +29,10 @@ export interface BcspI18nProviderProps {
 export interface BcspI18nRuntime {
   readonly locale: SupportedLocale;
   readonly changeLocale: (locale: SupportedLocale) => Promise<void>;
-  readonly t: (key: MessageKey) => string;
+  readonly t: (
+    key: MessageKey,
+    values?: Readonly<Record<string, string | number>>,
+  ) => string;
   readonly formatNumber: (
     value: number | bigint,
     options?: Intl.NumberFormatOptions,
@@ -114,7 +117,10 @@ export function BcspI18nProvider({
       formatDate: (date, options) => new Intl.DateTimeFormat(locale, options).format(date),
       formatNumber: (number, options) => new Intl.NumberFormat(locale, options).format(number),
       locale,
-      t: (key) => instance.t(key, { defaultValue: lookupMessage(locale, key) }),
+      t: (key, values) => instance.t(key, {
+        defaultValue: lookupMessage(locale, key),
+        ...values,
+      }),
     }),
     [changeLocale, instance, locale],
   );

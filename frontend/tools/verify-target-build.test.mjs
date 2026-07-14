@@ -60,17 +60,29 @@ test('accepts both closed manifests and proves local capabilities survive as bui
   const local = verifyTargetArtifacts(fixture('local'));
   assert.equal(local.state, 'PASS', local.errors.join('\n'));
   assert.equal(expectedManifestFor('local').kind, 'TARGET_BUILD_ALLOWLIST');
-  assert.equal(expectedManifestFor('local').readiness, 'PRE_UI_INTEGRATION');
+  assert.equal(expectedManifestFor('local').readiness, 'UI_INTEGRATION_COMPLETE');
   assert.ok(expectedManifestFor('local').allowedCapabilities.includes('saved-views'));
   assert.ok(expectedManifestFor('local').allowedCapabilities.includes('reset-local-user-data'));
+  assert.ok(expectedManifestFor('local').allowedRoutes.includes('/watch'));
 
   const publicReport = verifyTargetArtifacts(fixture('public'));
   assert.equal(publicReport.state, 'PASS', publicReport.errors.join('\n'));
+  assert.equal(expectedManifestFor('public').readiness, 'UI_INTEGRATION_COMPLETE');
+  assert.ok(expectedManifestFor('public').allowedRoutes.includes('/watch'));
   assert.equal(publicReport.publicZeroSurface.assertionCount, 72);
   assert.equal(new Set(publicReport.publicZeroSurface.denyIds).size, 72);
   assert.equal(new Set(publicReport.publicZeroSurface.validationIds).size, 72);
   assert.ok(publicReport.publicZeroSurface.denyIds.includes('P4-D-SAVED_VIEWS-DOM'));
   assert.ok(publicReport.publicZeroSurface.validationIds.includes('P4-Z-SAVED_VIEWS-BUNDLE'));
+});
+
+test('rejects stale pre-integration readiness after the UI integration gate', () => {
+  const input = fixture('local');
+  input.sourceManifest.readiness = 'PRE_UI_INTEGRATION';
+  input.builtManifest.readiness = 'PRE_UI_INTEGRATION';
+  const report = verifyTargetArtifacts(input);
+  assert.equal(report.state, 'FAIL');
+  assert.match(report.errors.join('\n'), /UI_INTEGRATION_COMPLETE/u);
 });
 
 test('rejects false placeholders in public and missing local capabilities', () => {

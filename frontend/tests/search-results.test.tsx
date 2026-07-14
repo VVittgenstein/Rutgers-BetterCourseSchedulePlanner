@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render as renderLibrary, screen, within } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -20,10 +21,16 @@ import type {
   SectionQueryItemV1,
   SectionQueryResponseV1,
 } from '../src/ui/shared/product';
+import type { SupportedLocale } from '../src/ui/shared/i18n/contract';
+import { BcspI18nProvider } from '../src/ui/shared/i18n/runtime';
 
 const GROUP_KEY = { campus: 'NB', courseString: '01:198:211', term: '2026-9' } as const;
 const SECTION_KEY = { campus: 'NB', index: '12345', term: '2026-9' } as const;
 const SECOND_SECTION_KEY = { campus: 'NB', index: '54321', term: '2026-9' } as const;
+
+function render(ui: ReactElement, locale: SupportedLocale = 'en-US') {
+  return renderLibrary(<BcspI18nProvider initialLocale={locale}>{ui}</BcspI18nProvider>);
+}
 
 function known<T>(value: T): CatalogFieldKnowledge<T> {
   return { knowledge: 'KNOWN', presence: { presence: 'PRESENT', value } };
@@ -204,10 +211,32 @@ describe('typed search result and detail views', () => {
     expect(screen.getAllByText('MATCH').length).toBeGreaterThan(0);
     expect(screen.getAllByText('UNCERTAIN').length).toBeGreaterThan(0);
     expect(screen.getByText('Live OPEN')).toBeTruthy();
-    expect(screen.getAllByText(/Fresh until 2026-07-15/u).length).toBeGreaterThan(0);
+    const freshUntil = new Intl.DateTimeFormat('en-US', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(Date.parse('2026-07-15T03:10:00.000Z'));
+    expect(screen.getAllByText(`Fresh until ${freshUntil}`).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/MONDAY, WEDNESDAY · 10:20–11:40 · HLL 116/u).length).toBe(2);
     expect(screen.getByText('FLT-S06 · MATCH')).toBeTruthy();
     expect(screen.getByText('instructors: UNKNOWN_VALUE')).toBeTruthy();
+  });
+
+  it('translates Chinese result chrome while preserving Rutgers course and Section data', () => {
+    render(
+      <CourseResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={COURSE_RESPONSE}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+      'zh-CN',
+    );
+
+    expect(screen.getByRole('heading', { name: '课程结果' })).toBeTruthy();
+    expect(screen.getAllByRole('link', { name: '打开课节' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: 'Data Structures' })).toBeTruthy();
+    expect(screen.getByText('实时状态：OPEN')).toBeTruthy();
+    expect(screen.getAllByText(/MONDAY, WEDNESDAY · 10:20–11:40 · HLL 116/u).length).toBe(2);
   });
 
   it('keeps a direct Section URL, delegates unmodified primary navigation, and pages with one-based callbacks', () => {

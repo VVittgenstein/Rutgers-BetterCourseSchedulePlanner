@@ -7,6 +7,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BcspI18nProvider } from '../src/ui/shared/i18n/runtime';
+import type { SupportedLocale } from '../src/ui/shared/i18n/contract';
 import type {
   CatalogDiscoveryResponseV1,
   FilterSchemaV1,
@@ -81,13 +82,15 @@ function discovery(subjectCount = 300): CatalogDiscoveryResponseV1 {
 function Harness({
   initial = { ...createNeutralFilterState('T2026F'), campuses: ['NB'] },
   onSubmit = vi.fn(),
+  locale = 'en-US',
 }: {
   readonly initial?: FilterStateV1;
   readonly onSubmit?: () => void;
+  readonly locale?: SupportedLocale;
 }) {
   const [value, setValue] = useState(initial);
   return (
-    <BcspI18nProvider initialLocale="en-US">
+    <BcspI18nProvider initialLocale={locale}>
       <FilterPanel
         schema={SCHEMA}
         discovery={discovery()}
@@ -123,6 +126,20 @@ describe('controlled 22-field FilterPanel', () => {
     }
     expect(screen.getByRole('form', { name: 'Course and Section filters' })).toBeTruthy();
     expect(screen.getByText('Query matrix / 22 channels')).toBeTruthy();
+  });
+
+  it('translates the Chinese filter chrome without translating Rutgers catalog values', () => {
+    render(<Harness locale="zh-CN" />);
+
+    expect(screen.getByRole('form', { name: '课程与课节筛选条件' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '建立精确搜索' })).toBeTruthy();
+    expect(screen.getByLabelText('学期')).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Fall 2026 / T2026F' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('搜索学科目录'), {
+      target: { value: 'Subject 299' },
+    });
+    expect(screen.getByRole('checkbox', { name: 'S299 · Subject 299' })).toBeTruthy();
   });
 
   it('interacts with and serializes every one of the 22 schema fields', () => {

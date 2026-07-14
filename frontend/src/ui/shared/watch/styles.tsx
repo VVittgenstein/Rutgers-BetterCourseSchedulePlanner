@@ -3,7 +3,7 @@ export const WATCH_WORKSPACE_CSS = String.raw`
 .watch-workspace__command-grid { display: grid; grid-template-columns: minmax(17rem, 0.72fr) minmax(0, 1.28fr); border: 1px solid var(--bcsp-line); background: var(--bcsp-paper-raised); }
 .watch-workspace__panel { min-width: 0; padding: var(--bcsp-space-4); }
 .watch-workspace__panel + .watch-workspace__panel { border-left: 1px solid var(--bcsp-line); }
-.watch-workspace__kicker { margin: 0 0 var(--bcsp-space-1); color: var(--bcsp-accent); font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+.watch-workspace__kicker { margin: 0 0 var(--bcsp-space-1); color: var(--bcsp-ink-muted); font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
 .watch-workspace__title { margin: 0; font-size: clamp(1.65rem, 4vw, 3.2rem); font-weight: 850; letter-spacing: -0.055em; line-height: 0.92; text-transform: uppercase; }
 .watch-workspace__lede { max-width: 60ch; margin: var(--bcsp-space-2) 0 0; color: var(--bcsp-ink-muted); }
 .watch-workspace__status-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: var(--bcsp-space-4); border-top: 1px solid var(--bcsp-line); border-left: 1px solid var(--bcsp-line); }

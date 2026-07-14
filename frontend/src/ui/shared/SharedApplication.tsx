@@ -8,12 +8,17 @@ import {
   StatePanel,
   StatusSignal,
 } from './design-system';
+import type { SupportedLocale } from './i18n/contract';
+import { freshnessMessageKeys } from './i18n/presenter';
 import { useBcspI18n, type BcspI18nRuntime } from './i18n/runtime';
 import {
   PRODUCT_PROTOCOL_VERSION,
   useProductRuntimeState,
   type CatalogDiscoveryResponseV1,
+  type FilterStateV1,
   type ProductRuntimePort,
+  type SectionKey,
+  type WatchPolicyV1,
 } from './product';
 import { SearchWorkspace } from './search';
 import { AppRouterProvider, RouterLink, useAppRouter } from './routing';
@@ -30,14 +35,56 @@ function retryBootstrap() {
   globalThis.location?.reload();
 }
 
-function LanguageControl({ i18n }: { readonly i18n: BcspI18nRuntime }) {
+export interface SharedWorkspaceExtension {
+  readonly content: ReactNode;
+  readonly intro: string;
+  readonly navigationLabel: string;
+  readonly path: string;
+  readonly sequence: string;
+  readonly title: string;
+}
+
+export interface SharedExperienceConfiguration {
+  readonly initialFilters?: FilterStateV1 | undefined;
+  readonly initialSelectedSections?: readonly SectionKey[] | undefined;
+  readonly initialVolume?: number | undefined;
+  readonly initialWatchPolicy?: WatchPolicyV1 | undefined;
+  readonly onFiltersChange?: ((filters: FilterStateV1) => void) | undefined;
+  readonly onSelectedSectionsChange?: ((selected: readonly SectionKey[]) => void) | undefined;
+  readonly onVolumeChange?: ((volume: number) => void) | undefined;
+  readonly onWatchPolicyChange?: ((policy: WatchPolicyV1) => void) | undefined;
+}
+
+export interface SharedApplicationProps {
+  readonly experience?: SharedExperienceConfiguration | undefined;
+  readonly onLocaleChange?: ((locale: SupportedLocale) => void) | undefined;
+  readonly workspaceExtensions?: readonly SharedWorkspaceExtension[] | undefined;
+}
+
+function activeExtension(
+  pathname: string,
+  extensions: readonly SharedWorkspaceExtension[],
+): SharedWorkspaceExtension | undefined {
+  return extensions.find((extension) => extension.path === pathname);
+}
+
+function LanguageControl({
+  i18n,
+  onLocaleChange,
+}: {
+  readonly i18n: BcspI18nRuntime;
+  readonly onLocaleChange?: ((locale: SupportedLocale) => void) | undefined;
+}) {
+  const changeLocale = (locale: SupportedLocale) => {
+    void i18n.changeLocale(locale).then(() => onLocaleChange?.(locale));
+  };
   return (
     <fieldset className="bcsp-language">
       <legend className="bcsp-visually-hidden">{i18n.t('app.locale_control')}</legend>
       <button
         aria-pressed={i18n.locale === 'en-US'}
         className="bcsp-language__button"
-        onClick={() => void i18n.changeLocale('en-US')}
+        onClick={() => changeLocale('en-US')}
         type="button"
       >
         EN / US
@@ -45,7 +92,7 @@ function LanguageControl({ i18n }: { readonly i18n: BcspI18nRuntime }) {
       <button
         aria-pressed={i18n.locale === 'zh-CN'}
         className="bcsp-language__button"
-        onClick={() => void i18n.changeLocale('zh-CN')}
+        onClick={() => changeLocale('zh-CN')}
         type="button"
       >
         中文 / CN
@@ -57,27 +104,32 @@ function LanguageControl({ i18n }: { readonly i18n: BcspI18nRuntime }) {
 function ShellFrame({
   children,
   i18n,
+  onLocaleChange,
+  workspaceExtensions,
 }: {
   readonly children: ReactNode;
   readonly i18n: BcspI18nRuntime;
+  readonly onLocaleChange?: ((locale: SupportedLocale) => void) | undefined;
+  readonly workspaceExtensions: readonly SharedWorkspaceExtension[];
 }) {
   const { pathname } = useAppRouter();
+  const extension = activeExtension(pathname, workspaceExtensions);
   const sectionWorkspace = pathname.startsWith('/sections');
   const watchWorkspace = pathname === '/watch';
   const directSection = sectionWorkspace && pathname !== '/sections';
-  const sequence = watchWorkspace ? '03' : sectionWorkspace ? '02' : '01';
-  const workspaceTitle = watchWorkspace
+  const sequence = extension?.sequence ?? (watchWorkspace ? '03' : sectionWorkspace ? '02' : '01');
+  const workspaceTitle = extension?.title ?? (watchWorkspace
     ? i18n.t('app.nav_watch')
     : directSection
     ? i18n.t('search.section_detail_title')
     : sectionWorkspace
       ? i18n.t('search.section_workspace')
-      : i18n.t('search.course_workspace');
-  const workspaceIntro = watchWorkspace
+      : i18n.t('search.course_workspace'));
+  const workspaceIntro = extension?.intro ?? (watchWorkspace
     ? i18n.t('watch.alert.open')
     : sectionWorkspace
     ? i18n.t('search.section_intro')
-    : i18n.t('search.course_intro');
+    : i18n.t('search.course_intro'));
   return (
     <>
       <DesignSystemStyles />
@@ -98,14 +150,18 @@ function ShellFrame({
             <span>{i18n.t('app.interface_revision')}</span>
             <strong>RU / SOC</strong>
           </div>
-          <LanguageControl i18n={i18n} />
+          <LanguageControl i18n={i18n} onLocaleChange={onLocaleChange} />
         </div>
       </header>
-      <nav aria-label={i18n.t('app.navigation')} className="bcsp-navigation">
+      <nav
+        aria-label={i18n.t('app.navigation')}
+        className="bcsp-navigation"
+        data-extended={workspaceExtensions.length > 0 || undefined}
+      >
         <span className="bcsp-navigation__label">[ {i18n.t('app.catalog_workspace')} ]</span>
         <RouterLink
           className="bcsp-navigation__link"
-          data-active={!sectionWorkspace && !watchWorkspace || undefined}
+          data-active={!sectionWorkspace && !watchWorkspace && extension === undefined || undefined}
           to="/"
         >
           <span>01</span>{i18n.t('app.nav_courses')}
@@ -124,6 +180,16 @@ function ShellFrame({
         >
           <span>03</span>{i18n.t('app.nav_watch')}
         </RouterLink>
+        {workspaceExtensions.map((workspace) => (
+          <RouterLink
+            className="bcsp-navigation__link"
+            data-active={extension?.path === workspace.path || undefined}
+            key={workspace.path}
+            to={workspace.path}
+          >
+            <span>{workspace.sequence}</span>{workspace.navigationLabel}
+          </RouterLink>
+        ))}
       </nav>
       <main className="bcsp-main" id="bcsp-workspace" tabIndex={-1}>
         <aside className="bcsp-rail">
@@ -190,9 +256,11 @@ function statusTime(discovery: CatalogDiscoveryResponseV1, i18n: BcspI18nRuntime
 }
 
 function ReadyCatalogContent({
+  experience,
   runtime,
   state,
 }: {
+  readonly experience: SharedExperienceConfiguration;
   readonly runtime: ProductRuntimePort;
   readonly state: Extract<ShellDataState, { status: 'READY' }>;
 }) {
@@ -238,35 +306,53 @@ function ReadyCatalogContent({
         <div>
           <StatusSignal
             detail={openDetail}
-            label={openStatus === undefined ? i18n.t('freshness.lag') : openStatus.freshness.state}
+            label={openStatus === undefined
+              ? i18n.t('freshness.lag')
+              : i18n.t(freshnessMessageKeys[openStatus.freshness.state])}
             state={openSignal}
           />
         </div>
       </section>
       {pathname === '/watch'
-        ? <WatchWorkspace />
-        : <SearchWorkspace runtime={runtime} shellState={state} />}
-      <WatchToastRegion />
+        ? (
+          <WatchWorkspace
+            initialPolicy={experience.initialWatchPolicy}
+            onPolicyChange={experience.onWatchPolicyChange}
+          />
+        )
+        : (
+          <SearchWorkspace
+            initialFilters={experience.initialFilters}
+            onFiltersChange={experience.onFiltersChange}
+            runtime={runtime}
+            shellState={state}
+          />
+        )}
     </>
   );
 }
 
 function ReadyCatalog({
+  experience,
   runtime,
   state,
 }: {
   readonly runtime: ProductRuntimePort;
+  readonly experience: SharedExperienceConfiguration;
   readonly state: Extract<ShellDataState, { status: 'READY' }>;
 }) {
   return (
-    <LiveWatchProvider runtime={runtime}>
-      <WatchWorkspaceStyles />
-      <ReadyCatalogContent runtime={runtime} state={state} />
-    </LiveWatchProvider>
+    <ReadyCatalogContent experience={experience} runtime={runtime} state={state} />
   );
 }
 
-function ReadyRuntime({ runtime }: { readonly runtime: ProductRuntimePort }) {
+function ReadyRuntime({
+  experience,
+  runtime,
+}: {
+  readonly experience: SharedExperienceConfiguration;
+  readonly runtime: ProductRuntimePort;
+}) {
   const { t } = useBcspI18n();
   const { retry, state } = useShellDataState(runtime);
   if (state.status === 'LOADING') {
@@ -292,10 +378,40 @@ function ReadyRuntime({ runtime }: { readonly runtime: ProductRuntimePort }) {
       />
     );
   }
-  return <ReadyCatalog runtime={runtime} state={state} />;
+  return <ReadyCatalog experience={experience} runtime={runtime} state={state} />;
 }
 
-export function SharedApplication() {
+function ReadyProduct({
+  experience,
+  runtime,
+  workspaceExtensions,
+}: {
+  readonly experience: SharedExperienceConfiguration;
+  readonly runtime: ProductRuntimePort;
+  readonly workspaceExtensions: readonly SharedWorkspaceExtension[];
+}) {
+  const { pathname } = useAppRouter();
+  const extension = activeExtension(pathname, workspaceExtensions);
+  return (
+    <LiveWatchProvider
+      initialSelected={experience.initialSelectedSections}
+      initialVolume={experience.initialVolume}
+      onSelectedChange={experience.onSelectedSectionsChange}
+      onVolumeChange={experience.onVolumeChange}
+      runtime={runtime}
+    >
+      <WatchWorkspaceStyles />
+      {extension?.content ?? <ReadyRuntime experience={experience} runtime={runtime} />}
+      <WatchToastRegion />
+    </LiveWatchProvider>
+  );
+}
+
+export function SharedApplication({
+  experience = {},
+  onLocaleChange,
+  workspaceExtensions = [],
+}: SharedApplicationProps = {}) {
   const i18n = useBcspI18n();
   const productRuntime = useProductRuntimeState();
   return (
@@ -310,7 +426,11 @@ export function SharedApplication() {
         data-bcsp-product-state={productRuntime.status}
         data-bcsp-shared-application=""
       >
-        <ShellFrame i18n={i18n}>
+        <ShellFrame
+          i18n={i18n}
+          onLocaleChange={onLocaleChange}
+          workspaceExtensions={workspaceExtensions}
+        >
           {productRuntime.status === 'LOADING' ? (
             <InitialState
               detail={i18n.t('app.loading_body')}
@@ -325,7 +445,11 @@ export function SharedApplication() {
               retry={retryBootstrap}
             />
           ) : (
-            <ReadyRuntime runtime={productRuntime.runtime} />
+            <ReadyProduct
+              experience={experience}
+              runtime={productRuntime.runtime}
+              workspaceExtensions={workspaceExtensions}
+            />
           )}
         </ShellFrame>
       </div>

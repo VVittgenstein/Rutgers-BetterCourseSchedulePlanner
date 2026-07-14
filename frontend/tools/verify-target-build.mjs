@@ -25,7 +25,7 @@ const EXPECTED_MANIFESTS = Object.freeze({
     schemaVersion: 1,
     kind: 'TARGET_BUILD_ALLOWLIST',
     target: 'local',
-    readiness: 'PRE_UI_INTEGRATION',
+    readiness: 'UI_INTEGRATION_COMPLETE',
     allowedCapabilities: Object.freeze([
       'configurable-refresh-intervals',
       ...SHARED_CAPABILITIES,
@@ -45,6 +45,7 @@ const EXPECTED_MANIFESTS = Object.freeze({
       '/sections',
       '/sections/:term/:campus/:index',
       '/settings',
+      '/watch',
     ]),
     allowedI18nCatalogs: Object.freeze(['shared', 'local']),
   }),
@@ -52,7 +53,7 @@ const EXPECTED_MANIFESTS = Object.freeze({
     schemaVersion: 1,
     kind: 'TARGET_BUILD_ALLOWLIST',
     target: 'public',
-    readiness: 'PRE_UI_INTEGRATION',
+    readiness: 'UI_INTEGRATION_COMPLETE',
     allowedCapabilities: Object.freeze([
       ...SHARED_CAPABILITIES,
       'ephemeral-document-session',
@@ -63,6 +64,7 @@ const EXPECTED_MANIFESTS = Object.freeze({
       '/',
       '/sections',
       '/sections/:term/:campus/:index',
+      '/watch',
     ]),
     allowedI18nCatalogs: Object.freeze(['shared']),
   }),
@@ -159,8 +161,8 @@ function validateManifest(manifest, target, label) {
   if (manifest.schemaVersion !== 1) errors.push(`${label}: unsupported schemaVersion`);
   if (manifest.kind !== 'TARGET_BUILD_ALLOWLIST') errors.push(`${label}: kind must be TARGET_BUILD_ALLOWLIST`);
   if (manifest.target !== target) errors.push(`${label}: target must be ${target}`);
-  if (manifest.readiness !== 'PRE_UI_INTEGRATION') {
-    errors.push(`${label}: readiness must be PRE_UI_INTEGRATION until the UI integration gate`);
+  if (manifest.readiness !== 'UI_INTEGRATION_COMPLETE') {
+    errors.push(`${label}: readiness must be UI_INTEGRATION_COMPLETE after the UI integration gate`);
   }
 
   for (const field of ['allowedCapabilities', 'allowedRoutes', 'allowedI18nCatalogs']) {

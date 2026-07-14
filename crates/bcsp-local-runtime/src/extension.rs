@@ -359,7 +359,10 @@ impl RouteExtension for LocalRouteExtension {
 }
 
 fn is_local_spa_shell_path(path: &str) -> bool {
-    if matches!(path, "/sections" | "/watch") {
+    if matches!(
+        path,
+        "/history" | "/saved-views" | "/sections" | "/settings" | "/watch"
+    ) {
         return true;
     }
 

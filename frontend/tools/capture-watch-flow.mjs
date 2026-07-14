@@ -2,6 +2,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { chromium } from 'playwright';
+import { localBootstrapFixture } from './local-bootstrap-fixture.mjs';
 
 const baseUrl = process.env.BCSP_VISUAL_BASE_URL ?? 'http://127.0.0.1:4173';
 const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
@@ -270,7 +271,7 @@ function sectionStatus(sectionKey, profile) {
 
 async function installApi(page, scenario) {
   const routes = new Map([
-    ['/api/v1/local/bootstrap', { sessionNonce: '10000000-0000-4000-8000-000000000001' }],
+    ['/api/v1/local/bootstrap', localBootstrapFixture()],
     ['/api/v1/query/filter-schema', filterSchema],
     ['/api/v1/catalog/discovery', discovery],
     ['/api/v1/query/courses', courseResponse],

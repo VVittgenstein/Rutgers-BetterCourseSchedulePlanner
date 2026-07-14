@@ -109,7 +109,9 @@ class FakeAudio {
 
 interface Harness {
   readonly audio: FakeAudio;
+  readonly onVolumeChange: ReturnType<typeof vi.fn>;
   readonly watch: FakeWatch;
+  rerenderVolume(volume: number): void;
   value(): LiveWatchValue;
 }
 
@@ -194,6 +196,7 @@ function createHarness(
   initialState: WatchConnectionState = 'OPEN',
   strictMode = false,
   productOverrides: Partial<ProductApiPort> = {},
+  initialVolume = 70,
 ): Harness {
   const watch = new FakeWatch();
   watch.state = initialState;
@@ -215,17 +218,27 @@ function createHarness(
     dispose: vi.fn(),
   };
   let current: LiveWatchValue | null = null;
-  const provider = (
+  const onVolumeChange = vi.fn();
+  const provider = (volume: number) => (
     <LiveWatchProvider
       audio={audio as unknown as WatchAudioController}
+      initialVolume={volume}
+      onVolumeChange={onVolumeChange}
       runtime={runtime}
     >
       <Probe publish={(value) => { current = value; }} />
     </LiveWatchProvider>
   );
-  render(strictMode ? <StrictMode>{provider}</StrictMode> : provider);
+  const renderProvider = (volume: number) => strictMode
+    ? <StrictMode>{provider(volume)}</StrictMode>
+    : provider(volume);
+  const view = render(renderProvider(initialVolume));
   return {
     audio,
+    onVolumeChange,
+    rerenderVolume(volume) {
+      view.rerender(renderProvider(volume));
+    },
     watch,
     value() {
       if (current === null) throw new Error('LiveWatch context was not published');
@@ -357,6 +370,16 @@ afterEach(() => {
 });
 
 describe('LiveWatchProvider', () => {
+  it('applies a persisted settings volume without remounting or writing it back', async () => {
+    const harness = createHarness('OPEN', false, {}, 70);
+    expect(harness.value().volume).toBe(70);
+
+    await act(async () => harness.rerenderVolume(35));
+
+    expect(harness.value().volume).toBe(35);
+    expect(harness.onVolumeChange).not.toHaveBeenCalled();
+  });
+
   it('keeps browser audio usable through React StrictMode effect replay', async () => {
     const harness = createHarness('OPEN', true);
     await selectAndStart(harness, [SECTION_A]);

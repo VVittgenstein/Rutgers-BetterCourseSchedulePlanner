@@ -157,6 +157,10 @@ export const BCSP_SHELL_CSS = String.raw`
   text-transform: uppercase;
 }
 
+.bcsp-navigation[data-extended='true'] {
+  grid-template-columns: minmax(12rem, 0.45fr) repeat(6, minmax(0, 1fr));
+}
+
 .bcsp-navigation__label,
 .bcsp-navigation__link {
   display: flex;
@@ -180,7 +184,7 @@ export const BCSP_SHELL_CSS = String.raw`
 }
 
 .bcsp-navigation__link span {
-  color: var(--bcsp-accent);
+  color: var(--bcsp-ink-muted);
 }
 
 .bcsp-navigation__link:hover {
@@ -198,7 +202,7 @@ export const BCSP_SHELL_CSS = String.raw`
 }
 
 .bcsp-navigation__link[data-active='true'] span {
-  color: var(--bcsp-accent);
+  color: var(--bcsp-paper-raised);
 }
 
 .bcsp-main {
@@ -502,6 +506,10 @@ export const BCSP_SHELL_CSS = String.raw`
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .bcsp-navigation[data-extended='true'] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .bcsp-navigation__label {
     grid-column: 1 / -1;
   }
@@ -546,6 +554,10 @@ export const BCSP_SHELL_CSS = String.raw`
 
 @media (max-width: 31.999rem) {
   .bcsp-navigation {
+    grid-template-columns: 1fr;
+  }
+
+  .bcsp-navigation[data-extended='true'] {
     grid-template-columns: 1fr;
   }
 

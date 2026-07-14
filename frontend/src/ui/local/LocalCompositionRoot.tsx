@@ -9,12 +9,18 @@ import {
   LocalProductBootstrap,
   type LocalProductBootstrapConfiguration,
 } from './product/LocalProductBootstrap';
+import { LocalApplication } from './LocalApplication';
+import { useLocalPersonalOptional } from './personal';
 
 export interface LocalCompositionRootProps {
   readonly onLocaleChange?: ((locale: SupportedLocale) => void) | undefined;
   readonly product?: LocalProductBootstrapConfiguration;
   readonly savedLocale?: string | null | undefined;
   readonly systemLanguages?: readonly string[];
+}
+
+function LocalComposition() {
+  return useLocalPersonalOptional() === null ? <SharedApplication /> : <LocalApplication />;
 }
 
 export function LocalCompositionRoot({
@@ -30,7 +36,7 @@ export function LocalCompositionRoot({
   return (
     <BcspI18nProvider initialLocale={initialLocale} onLocaleChange={onLocaleChange}>
       <LocalProductBootstrap {...product}>
-        <SharedApplication />
+        <LocalComposition />
       </LocalProductBootstrap>
     </BcspI18nProvider>
   );

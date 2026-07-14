@@ -356,8 +356,14 @@ async fn local_application_reloads_serve_only_the_safe_spa_shell_routes() {
     let root = request(authority, "GET /", &origin, nonce, "");
 
     for path in [
+        "/history",
+        "/history?focus=latest",
+        "/saved-views",
+        "/saved-views?focus=current",
         "/sections",
         "/sections?sort=course",
+        "/settings",
+        "/settings?focus=sound",
         "/watch",
         "/watch?focus=alerts",
         "/sections/2026FA/NB/12345",
@@ -379,7 +385,10 @@ async fn local_application_reloads_serve_only_the_safe_spa_shell_routes() {
     }
 
     for path in [
+        "/history/",
+        "/saved-views/",
         "/sections/",
+        "/settings/",
         "/watch/",
         "/sections/2026FA/NB",
         "/sections/2026FA/NB/12345/extra",
@@ -393,8 +402,16 @@ async fn local_application_reloads_serve_only_the_safe_spa_shell_routes() {
         assert_eq!(status(&response), 404, "{path}: {response}");
     }
 
-    let post = request(authority, "POST /sections", &origin, nonce, "{}");
-    assert_eq!(status(&post), 404, "{post}");
+    for path in [
+        "/history",
+        "/saved-views",
+        "/sections",
+        "/settings",
+        "/watch",
+    ] {
+        let post = request(authority, &format!("POST {path}"), &origin, nonce, "{}");
+        assert_eq!(status(&post), 404, "{path}: {post}");
+    }
 
     running.shutdown().await.unwrap();
 }

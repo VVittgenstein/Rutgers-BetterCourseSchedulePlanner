@@ -12,6 +12,13 @@ import {
   type WatchMessageIdSource,
   type WatchSocketFactory,
 } from '../../shared/product';
+import {
+  createLocalPersonalApi,
+  LocalPersonalProvider,
+  parseLocalBootstrapEnvelope,
+  type LocalBootstrapData,
+  type LocalPersonalApiPort,
+} from '../personal';
 
 const BOOTSTRAP_PATH = '/api/v1/local/bootstrap';
 
@@ -37,12 +44,17 @@ export function LocalProductBootstrap({
   socket,
 }: LocalProductBootstrapProps) {
   const [state, setState] = useState<ProductRuntimeState>(PRODUCT_RUNTIME_LOADING);
+  const [personal, setPersonal] = useState<{
+    readonly api: LocalPersonalApiPort;
+    readonly bootstrap: LocalBootstrapData;
+  } | null>(null);
 
   useEffect(() => {
     const abort = new AbortController();
     let active = true;
     let runtime: ProductRuntimePort | null = null;
     setState(PRODUCT_RUNTIME_LOADING);
+    setPersonal(null);
 
     void (async () => {
       try {
@@ -62,19 +74,26 @@ export function LocalProductBootstrap({
         } catch {
           throw new ProductBootstrapError('BOOTSTRAP_INVALID');
         }
-        const bootstrap = parseProductSessionBootstrap(rawBootstrap);
+        const sessionBootstrap = parseProductSessionBootstrap(rawBootstrap);
+        const localBootstrap = parseLocalBootstrapEnvelope(rawBootstrap);
         if (!active) return;
         try {
           runtime = runtimeFactory({
             ...(baseUrl === undefined ? {} : { baseUrl }),
             fetch: request,
             ...(messageId === undefined ? {} : { messageId }),
-            session: () => bootstrap.sessionNonce,
+            session: () => sessionBootstrap.sessionNonce,
             ...(socket === undefined ? {} : { socket }),
           });
         } catch {
           throw new ProductBootstrapError('RUNTIME_FAILED');
         }
+        const api = createLocalPersonalApi({
+          ...(baseUrl === undefined ? {} : { baseUrl }),
+          fetch: request,
+          session: () => sessionBootstrap.sessionNonce,
+        });
+        setPersonal({ api, bootstrap: localBootstrap });
         setState({ status: 'READY', runtime });
       } catch (error) {
         if (!active) return;
@@ -92,5 +111,15 @@ export function LocalProductBootstrap({
     };
   }, [baseUrl, fetchImplementation, messageId, runtimeFactory, socket]);
 
-  return <ProductRuntimeProvider state={state}>{children}</ProductRuntimeProvider>;
+  return (
+    <ProductRuntimeProvider state={state}>
+      {personal === null
+        ? children
+        : (
+          <LocalPersonalProvider api={personal.api} initialBootstrap={personal.bootstrap}>
+            {children}
+          </LocalPersonalProvider>
+        )}
+    </ProductRuntimeProvider>
+  );
 }

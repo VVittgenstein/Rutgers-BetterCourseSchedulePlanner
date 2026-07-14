@@ -28,6 +28,38 @@ function bootstrapEnvelope(sessionNonce: string): unknown {
   };
 }
 
+function localBootstrapEnvelope(sessionNonce: string): unknown {
+  return {
+    protocolVersion: 1,
+    data: {
+      mode: 'LOCAL',
+      sessionNonce,
+      state: {
+        stateRevision: 0,
+        settings: {
+          revision: 0,
+          value: {
+            localeOverride: 'system',
+            catalogRefreshMinutes: 60,
+            openRefreshSeconds: 30,
+            volumePercent: 70,
+            soundPolicy: {
+              notificationMode: 'ONE_SHOT',
+              maxAudible: 3,
+              continuousDuration: { kind: 'FINITE', seconds: 600 },
+            },
+          },
+        },
+        currentFilters: { stateRevision: 0, revision: 0, value: null },
+        savedViews: [],
+        selectedSections: [],
+        episodeHistory: { items: [], total: 0, offset: 0, limit: 50 },
+        activeWatchCount: 0,
+      },
+    },
+  };
+}
+
 class FakeSocket implements WatchSocket {
   readyState = 0;
   closeCount = 0;
@@ -98,7 +130,7 @@ describe('product bootstrap contract', () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       requests.push({ ...(init === undefined ? {} : { init }), url: String(input) });
       return requests.length === 1
-        ? Response.json(bootstrapEnvelope(FIRST_SESSION))
+        ? Response.json(localBootstrapEnvelope(FIRST_SESSION))
         : Response.json({ protocolVersion: 1, data: { accepted: true } });
     });
     const socket = new FakeSocket();
@@ -130,7 +162,8 @@ describe('product bootstrap contract', () => {
         createCourseQueryRequestV1(createNeutralFilterState('T2026F')),
       );
     });
-    expect(new Headers(requests[1]?.init?.headers).get('x-bcsp-session')).toBe(FIRST_SESSION);
+    const courseSearch = requests.find(({ url }) => url.endsWith('/api/v1/query/courses'));
+    expect(new Headers(courseSearch?.init?.headers).get('x-bcsp-session')).toBe(FIRST_SESSION);
     (runtime as ProductRuntimePort).watch.connect();
     expect(socketFactory).toHaveBeenCalledWith(
       `wss://planner.invalid/api/v1/watch?session=${FIRST_SESSION}`,

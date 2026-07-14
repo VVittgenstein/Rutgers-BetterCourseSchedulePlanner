@@ -160,7 +160,7 @@ describe('Course and Section workspace controller', () => {
       expect(searchSections).not.toHaveBeenCalled();
       expect(row?.dataset.filterError).toBe('true');
       expect(row?.getAttribute('aria-invalid')).toBe('true');
-      expect(within(row as HTMLElement).getByText('section index must contain five digits')).toBeTruthy();
+      expect(within(row as HTMLElement).getByText('A Section index must contain five digits.')).toBeTruthy();
       expect(document.activeElement).toBe(sectionIndexInput);
     });
   });
@@ -180,7 +180,7 @@ describe('Course and Section workspace controller', () => {
       expect(searchCourses).not.toHaveBeenCalled();
       expect(row?.dataset.filterError).toBe('true');
       expect(row?.getAttribute('aria-invalid')).toBe('true');
-      expect(within(row as HTMLElement).getByText('credits must be a nonempty ordered range')).toBeTruthy();
+      expect(within(row as HTMLElement).getByText('Credits must form a nonempty ordered range.')).toBeTruthy();
       expect(document.activeElement).toBe(minimumInput);
     });
   });
