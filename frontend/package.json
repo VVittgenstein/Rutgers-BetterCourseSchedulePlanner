@@ -14,6 +14,7 @@
     "guard:imports": "node ./tools/verify-import-graph.mjs",
     "test:guard": "node --test ./tools/verify-import-graph.test.mjs ./tools/verify-target-build.test.mjs",
     "test:i18n": "vitest run --config vitest.config.ts",
+    "test:visual:shell": "node ./tools/capture-ui-shell.mjs",
     "typecheck": "tsc --build tsconfig.json --pretty false",
     "typecheck:shared": "tsc --build tsconfig.shared.json --pretty false",
     "typecheck:local": "tsc --build tsconfig.local.json --pretty false",
