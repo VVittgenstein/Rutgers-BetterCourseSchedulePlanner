@@ -11,8 +11,11 @@ use crate::{
     CatalogPrerequisiteState, CatalogRefreshClassification, CatalogRefreshErrorClass,
     CatalogRequiredness, CatalogSourceKind, CatalogSynchronicity, CatalogUnknownReason,
     FilterFieldId, MatchOutcome, MatchReasonCode, OpenAppliedClassification, OpenCircuitReason,
-    OpenCircuitState, OpenFailureClass, OpenFreshnessState, OpenRefreshClassification,
-    OpenSchedulerLane, OpenState, OpenUncertaintyReason, RutgersDayTimezone, WS_PROTOCOL_VERSION,
+    OpenCircuitState, OpenEpisodeState, OpenFailureClass, OpenFreshnessState,
+    OpenRefreshClassification, OpenSchedulerLane, OpenState, OpenUncertaintyReason,
+    RutgersDayTimezone, WS_PROTOCOL_VERSION, WatchAlertDisposition, WatchContinuousMixerStopReason,
+    WatchCueCancellationReason, WatchCueOutcome, WatchNotificationMode, WatchStartRejectionReason,
+    WatchStopReason,
 };
 
 pub const CONTRACT_SCHEMA_VERSION: u16 = 1;
@@ -356,6 +359,22 @@ pub fn contract_manifest() -> ContractManifest {
                 max_bytes: None,
                 pattern: None,
                 semantic: Some("only integer 1 is accepted".to_owned()),
+            },
+            ScalarConstraint {
+                id: "watch-contract-version".to_owned(),
+                wire_type: "u16".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some("only integer 1 is accepted".to_owned()),
+            },
+            ScalarConstraint {
+                id: "watch-positive-u64".to_owned(),
+                wire_type: "u64".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some("positive integer with no product upper limit".to_owned()),
             },
             ScalarConstraint {
                 id: "open-sequence".to_owned(),
@@ -1988,6 +2007,435 @@ pub fn contract_manifest() -> ContractManifest {
                         "$schema:bcsp.catalog.normalized-course-variant.v1",
                     ),
                     ("section", "$schema:bcsp.query.section-query-item.v1"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.watch.notification-mode.v1",
+                WatchNotificationMode::ALL.iter().map(|value| {
+                    serde_json::to_value(value)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            ),
+            tagged_union_schema(
+                "bcsp.watch.continuous-duration.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                "kind",
+                &[
+                    ("FINITE", &[("seconds", "$scalar:watch-positive-u64")]),
+                    ("UNLIMITED", &[]),
+                ],
+            ),
+            schema(
+                "bcsp.watch.policy.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    (
+                        "notificationMode",
+                        "$schema:bcsp.watch.notification-mode.v1",
+                    ),
+                    ("maxAudible", "$scalar:watch-positive-u64"),
+                    (
+                        "continuousDuration",
+                        "$schema:bcsp.watch.continuous-duration.v1",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.watch.start-item.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                    ("policy", "$schema:bcsp.watch.policy.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.watch.active-target.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("activeWatchId", "$scalar:trace-id"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.watch.episode-target.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("activeWatchId", "$scalar:trace-id"),
+                    ("episodeId", "$scalar:trace-id"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.watch.alert-target.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("activeWatchId", "$scalar:trace-id"),
+                    ("episodeId", "$scalar:trace-id"),
+                    ("alertId", "$scalar:trace-id"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.watch.cue-outcome.v1",
+                WatchCueOutcome::ALL.iter().map(|value| {
+                    serde_json::to_value(value)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            ),
+            schema(
+                "bcsp.watch.cue-outcome-report.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("cueId", "$scalar:trace-id"),
+                    ("activeWatchId", "$scalar:trace-id"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                    ("outcome", "$schema:bcsp.watch.cue-outcome.v1"),
+                    ("reportedAt", "$primitive:rfc3339-timestamp"),
+                ],
+            ),
+            tagged_union_schema(
+                "bcsp.watch.client-command.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                "type",
+                &[
+                    (
+                        "START_WATCH",
+                        &[("items", "$array:$schema:bcsp.watch.start-item.v1")],
+                    ),
+                    (
+                        "STOP_WATCH",
+                        &[("watch", "$schema:bcsp.watch.active-target.v1")],
+                    ),
+                    (
+                        "UPDATE_POLICY",
+                        &[
+                            ("watch", "$schema:bcsp.watch.active-target.v1"),
+                            ("policy", "$schema:bcsp.watch.policy.v1"),
+                        ],
+                    ),
+                    (
+                        "ACKNOWLEDGE_EPISODE",
+                        &[("episode", "$schema:bcsp.watch.episode-target.v1")],
+                    ),
+                    ("ACKNOWLEDGE_ALL_EPISODES", &[]),
+                    (
+                        "RESUME_TIMED_OUT_EPISODE",
+                        &[("episode", "$schema:bcsp.watch.episode-target.v1")],
+                    ),
+                    (
+                        "RESET_AUDIBLE_COUNT",
+                        &[("watch", "$schema:bcsp.watch.active-target.v1")],
+                    ),
+                    (
+                        "REPORT_CUE_OUTCOME",
+                        &[("report", "$schema:bcsp.watch.cue-outcome-report.v1")],
+                    ),
+                    (
+                        "DISMISS_ALERT",
+                        &[("alert", "$schema:bcsp.watch.alert-target.v1")],
+                    ),
+                ],
+            ),
+            enum_schema(
+                "bcsp.watch.start-rejection-reason.v1",
+                WatchStartRejectionReason::ALL.iter().map(|value| {
+                    serde_json::to_value(value)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            ),
+            tagged_union_schema(
+                "bcsp.watch.start-item-result.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                "status",
+                &[
+                    (
+                        "ACTIVE",
+                        &[
+                            ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                            ("activeWatchId", "$scalar:trace-id"),
+                            ("startedAt", "$primitive:rfc3339-timestamp"),
+                        ],
+                    ),
+                    (
+                        "REJECTED",
+                        &[
+                            ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                            ("reason", "$schema:bcsp.watch.start-rejection-reason.v1"),
+                        ],
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.watch.start-result.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:watch-contract-version"),
+                    ("items", "$array:$schema:bcsp.watch.start-item-result.v1"),
+                    ("activeWatchCount", "$primitive:u8"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.watch.stop-reason.v1",
+                WatchStopReason::ALL.iter().map(|value| {
+                    serde_json::to_value(value)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            ),
+            schema(
+                "bcsp.watch.stopped.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:watch-contract-version"),
+                    ("activeWatchId", "$scalar:trace-id"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                    ("reason", "$schema:bcsp.watch.stop-reason.v1"),
+                    ("stoppedAt", "$primitive:rfc3339-timestamp"),
+                ],
+            ),
+            schema(
+                "bcsp.watch.open-observation-fanout.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:watch-contract-version"),
+                    ("activeWatchId", "$scalar:trace-id"),
+                    ("observation", "$schema:bcsp.open.observation.v1"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.watch.episode-state.v1",
+                OpenEpisodeState::ALL.iter().map(|value| {
+                    serde_json::to_value(value)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            ),
+            schema_with_optional_fields(
+                "bcsp.watch.open-episode.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:watch-contract-version"),
+                    ("episodeId", "$scalar:trace-id"),
+                    ("activeWatchId", "$scalar:trace-id"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                    ("state", "$schema:bcsp.watch.episode-state.v1"),
+                    (
+                        "notificationMode",
+                        "$schema:bcsp.watch.notification-mode.v1",
+                    ),
+                    (
+                        "continuousDuration",
+                        "$schema:bcsp.watch.continuous-duration.v1",
+                    ),
+                    ("maxAudible", "$scalar:watch-positive-u64"),
+                    ("audibleCount", "$primitive:u64"),
+                    ("firstObservedAt", "$primitive:rfc3339-timestamp"),
+                    ("lastObservedAt", "$primitive:rfc3339-timestamp"),
+                    ("observationCount", "$scalar:watch-positive-u64"),
+                    ("latestObservationId", "$scalar:trace-id"),
+                    ("stateChangedAt", "$primitive:rfc3339-timestamp"),
+                ],
+                &[("closedAt", "$primitive:rfc3339-timestamp")],
+            ),
+            enum_schema(
+                "bcsp.watch.alert-disposition.v1",
+                WatchAlertDisposition::ALL.iter().map(|value| {
+                    serde_json::to_value(value)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            ),
+            schema(
+                "bcsp.watch.alert.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:watch-contract-version"),
+                    ("alertId", "$scalar:trace-id"),
+                    ("disposition", "$schema:bcsp.watch.alert-disposition.v1"),
+                    ("visible", "$primitive:bool"),
+                    ("episode", "$schema:bcsp.watch.open-episode.v1"),
+                ],
+            ),
+            tagged_union_schema(
+                "bcsp.watch.audio-trigger.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                "kind",
+                &[
+                    (
+                        "ONE_SHOT_OBSERVATION",
+                        &[("observationId", "$scalar:trace-id")],
+                    ),
+                    ("CONTINUOUS_EPISODE", &[("episodeId", "$scalar:trace-id")]),
+                ],
+            ),
+            schema(
+                "bcsp.watch.audio-cue.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("cueId", "$scalar:trace-id"),
+                    ("activeWatchId", "$scalar:trace-id"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                    ("trigger", "$schema:bcsp.watch.audio-trigger.v1"),
+                    ("emittedAt", "$primitive:rfc3339-timestamp"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.watch.continuous-mixer-stop-reason.v1",
+                WatchContinuousMixerStopReason::ALL.iter().map(|value| {
+                    serde_json::to_value(value)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            ),
+            enum_schema(
+                "bcsp.watch.cue-cancellation-reason.v1",
+                WatchCueCancellationReason::ALL.iter().map(|value| {
+                    serde_json::to_value(value)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            ),
+            tagged_union_schema(
+                "bcsp.watch.audio-disposition.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                "disposition",
+                &[
+                    (
+                        "CUE_REQUESTED",
+                        &[("cue", "$schema:bcsp.watch.audio-cue.v1")],
+                    ),
+                    (
+                        "CUE_QUEUED",
+                        &[
+                            ("activeWatchId", "$scalar:trace-id"),
+                            ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                            ("observationId", "$scalar:trace-id"),
+                            ("queuedAt", "$primitive:rfc3339-timestamp"),
+                        ],
+                    ),
+                    (
+                        "CUE_CANCELLED",
+                        &[
+                            ("activeWatchId", "$scalar:trace-id"),
+                            ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                            ("observationId", "$scalar:trace-id"),
+                            ("cueId", "$optional:$scalar:trace-id"),
+                            ("reason", "$schema:bcsp.watch.cue-cancellation-reason.v1"),
+                            ("cancelledAt", "$primitive:rfc3339-timestamp"),
+                        ],
+                    ),
+                    (
+                        "SILENT_MAX_AUDIBLE",
+                        &[
+                            ("activeWatchId", "$scalar:trace-id"),
+                            ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                            ("observationId", "$scalar:trace-id"),
+                            ("audibleCount", "$primitive:u64"),
+                            ("maxAudible", "$scalar:watch-positive-u64"),
+                            ("emittedAt", "$primitive:rfc3339-timestamp"),
+                        ],
+                    ),
+                    (
+                        "CONTINUOUS_MIXER_ACTIVE",
+                        &[
+                            ("episodeIds", "$array:$scalar:trace-id"),
+                            ("emittedAt", "$primitive:rfc3339-timestamp"),
+                        ],
+                    ),
+                    (
+                        "CONTINUOUS_MIXER_STOPPED",
+                        &[
+                            (
+                                "reason",
+                                "$schema:bcsp.watch.continuous-mixer-stop-reason.v1",
+                            ),
+                            ("emittedAt", "$primitive:rfc3339-timestamp"),
+                        ],
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.watch.cue-outcome-receipt.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:watch-contract-version"),
+                    ("cueId", "$scalar:trace-id"),
+                    ("activeWatchId", "$scalar:trace-id"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                    ("outcome", "$schema:bcsp.watch.cue-outcome.v1"),
+                    ("audibleCountConsumed", "$primitive:bool"),
+                    ("audibleCount", "$primitive:u64"),
+                    ("recordedAt", "$primitive:rfc3339-timestamp"),
+                ],
+            ),
+            tagged_union_schema(
+                "bcsp.watch.server-event.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                "type",
+                &[
+                    (
+                        "START_RESULT",
+                        &[("result", "$schema:bcsp.watch.start-result.v1")],
+                    ),
+                    (
+                        "WATCH_STOPPED",
+                        &[("stopped", "$schema:bcsp.watch.stopped.v1")],
+                    ),
+                    (
+                        "OPEN_OBSERVATION",
+                        &[("fanout", "$schema:bcsp.watch.open-observation-fanout.v1")],
+                    ),
+                    (
+                        "EPISODE_UPDATED",
+                        &[("episode", "$schema:bcsp.watch.open-episode.v1")],
+                    ),
+                    ("ALERT_UPDATED", &[("alert", "$schema:bcsp.watch.alert.v1")]),
+                    (
+                        "AUDIO_DISPOSITION",
+                        &[("audio", "$schema:bcsp.watch.audio-disposition.v1")],
+                    ),
+                    (
+                        "CUE_OUTCOME_RECORDED",
+                        &[("receipt", "$schema:bcsp.watch.cue-outcome-receipt.v1")],
+                    ),
                 ],
             ),
             enum_schema("bcsp.match.outcome.v1", match_outcomes),

@@ -216,6 +216,18 @@ pub struct OpenCommitOutcome {
     pub body_changed: bool,
     pub state_changed: bool,
     pub retained_lkg_attempt_id: Option<TraceId>,
+    /// Present only for a valid atomically applied target observation.
+    pub observation_commit: Option<OpenObservationCommit>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenObservationCommit {
+    pub rutgers_day: String,
+    pub effective_interval_seconds: u64,
+    pub run_counts: OpenAttemptCounters,
+    pub target_day_counts: OpenAttemptCounters,
+    pub service_day_counts: OpenAttemptCounters,
+    pub section_events: Vec<OpenSectionEvent>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -396,6 +408,7 @@ struct StartedOpenAttempt {
     rutgers_day: String,
     captured_catalog_content_version: u64,
     started_at: String,
+    effective_interval_seconds: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -671,6 +684,7 @@ impl OperationalStorage {
                 body_changed,
                 state_changed: false,
                 retained_lkg_attempt_id,
+                observation_commit: None,
             });
         }
 
@@ -742,8 +756,13 @@ impl OperationalStorage {
                 body_changed,
                 state_changed,
                 retained_lkg_attempt_id,
+                observation_commit: None,
             });
         }
+
+        let effective_interval_seconds = attempt
+            .effective_interval_seconds
+            .ok_or_else(|| invalid_stored("open_pull_attempts", "effective_interval_seconds"))?;
 
         let watched_indices = canonicalize_watched_sections(
             &attempt.target,
@@ -829,6 +848,7 @@ impl OperationalStorage {
                 ],
             )?;
         }
+        let mut section_events = Vec::with_capacity(watched_indices.len());
         for index in watched_indices {
             let state = intended_states
                 .get(&index)
@@ -839,11 +859,12 @@ impl OperationalStorage {
                 command.attempt_id,
                 Some(&index),
             )?;
-            transaction.execute(
+            let event_id = transaction.query_row(
                 "INSERT INTO open_section_events(
                     observation_id, refresh_observation_id, attempt_id, target_id,
                     section_index, state, catalog_content_version, observation_sequence, observed_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 RETURNING event_id",
                 params![
                     observation_id.to_string(),
                     refresh_observation_id.to_string(),
@@ -855,7 +876,23 @@ impl OperationalStorage {
                     observation_sequence,
                     command.completed_at,
                 ],
+                |row| row.get::<_, i64>(0),
             )?;
+            section_events.push(OpenSectionEvent {
+                event_id: stored_u64(event_id)?,
+                observation_id,
+                refresh_observation_id,
+                attempt_id: command.attempt_id,
+                section: SectionKey::try_new(
+                    attempt.target.term().as_str(),
+                    attempt.target.campus().as_str(),
+                    &index,
+                )?,
+                state,
+                catalog_content_version: attempt.captured_catalog_content_version,
+                observation_sequence: observation_sequence_u64,
+                observed_at: command.completed_at.clone(),
+            });
         }
         let attempt_updated = transaction.execute(
             "UPDATE open_pull_attempts
@@ -937,6 +974,12 @@ impl OperationalStorage {
             true,
             response.canonical_indices.is_empty(),
         )?;
+        let committed_counters = load_committed_open_counters(
+            &transaction,
+            &target_id,
+            &attempt.run_id.to_string(),
+            &attempt.rutgers_day,
+        )?;
         prune_open_diagnostics_transaction(
             &transaction,
             &target_id,
@@ -960,6 +1003,14 @@ impl OperationalStorage {
             body_changed,
             state_changed,
             retained_lkg_attempt_id: Some(command.attempt_id),
+            observation_commit: Some(OpenObservationCommit {
+                rutgers_day: attempt.rutgers_day,
+                effective_interval_seconds,
+                run_counts: committed_counters.0,
+                target_day_counts: committed_counters.1,
+                service_day_counts: committed_counters.2,
+                section_events,
+            }),
         })
     }
 
@@ -1022,6 +1073,7 @@ impl OperationalStorage {
             body_changed: false,
             state_changed: false,
             retained_lkg_attempt_id,
+            observation_commit: None,
         })
     }
 
@@ -1500,26 +1552,7 @@ impl OperationalStorage {
         rutgers_day: &str,
     ) -> StorageResult<OpenAttemptCounters> {
         validate_rutgers_day(rutgers_day)?;
-        let row = self.connection.query_row(
-            "SELECT COALESCE(sum(attempted), 0), COALESCE(sum(succeeded), 0),
-                    COALESCE(sum(failed), 0), COALESCE(sum(empty), 0)
-             FROM open_daily_counters WHERE rutgers_day = ?1",
-            [rutgers_day],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            },
-        )?;
-        Ok(OpenAttemptCounters {
-            attempted: stored_u64(row.0)?,
-            succeeded: stored_u64(row.1)?,
-            failed: stored_u64(row.2)?,
-            empty: stored_u64(row.3)?,
-        })
+        load_open_service_day_counters(&self.connection, rutgers_day)
     }
 
     pub fn open_run_counters(
@@ -1736,7 +1769,7 @@ fn load_started_open_attempt(
         .query_row(
             "SELECT t.term_id, t.campus_code, a.run_id, a.attempt_sequence,
                     a.rutgers_day, a.captured_catalog_content_version,
-                    a.started_at, a.classification
+                    a.started_at, a.effective_interval_seconds, a.classification
              FROM open_pull_attempts a
              JOIN catalog_targets t ON t.target_id = a.target_id
              WHERE a.attempt_id = ?1",
@@ -1750,13 +1783,14 @@ fn load_started_open_attempt(
                     row.get::<_, String>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, String>(8)?,
                 ))
             },
         )
         .optional()?
         .ok_or(StorageError::OpenAttemptNotFound(attempt_id))?;
-    if row.7 != OpenAttemptClassification::Started.as_str() {
+    if row.8 != OpenAttemptClassification::Started.as_str() {
         return Err(StorageError::OpenAttemptNotStarted(attempt_id));
     }
     Ok(StartedOpenAttempt {
@@ -1766,6 +1800,7 @@ fn load_started_open_attempt(
         rutgers_day: row.4,
         captured_catalog_content_version: stored_u64(row.5)?,
         started_at: row.6,
+        effective_interval_seconds: row.7.map(stored_u64).transpose()?,
     })
 }
 
@@ -2145,6 +2180,60 @@ fn load_open_counters(
         })
         .transpose()
         .map(Option::unwrap_or_default)
+}
+
+fn load_open_service_day_counters(
+    connection: &Connection,
+    rutgers_day: &str,
+) -> StorageResult<OpenAttemptCounters> {
+    let row = connection.query_row(
+        "SELECT COALESCE(sum(attempted), 0), COALESCE(sum(succeeded), 0),
+                COALESCE(sum(failed), 0), COALESCE(sum(empty), 0)
+         FROM open_daily_counters WHERE rutgers_day = ?1",
+        [rutgers_day],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        },
+    )?;
+    Ok(OpenAttemptCounters {
+        attempted: stored_u64(row.0)?,
+        succeeded: stored_u64(row.1)?,
+        failed: stored_u64(row.2)?,
+        empty: stored_u64(row.3)?,
+    })
+}
+
+fn load_committed_open_counters(
+    transaction: &Transaction<'_>,
+    target_id: &str,
+    run_id: &str,
+    rutgers_day: &str,
+) -> StorageResult<(
+    OpenAttemptCounters,
+    OpenAttemptCounters,
+    OpenAttemptCounters,
+)> {
+    let run_counts = load_open_counters(
+        transaction,
+        "SELECT attempted, succeeded, failed, empty
+         FROM open_run_counters WHERE target_id = ?1 AND run_id = ?2",
+        target_id,
+        run_id,
+    )?;
+    let target_day_counts = load_open_counters(
+        transaction,
+        "SELECT attempted, succeeded, failed, empty
+         FROM open_daily_counters WHERE target_id = ?1 AND rutgers_day = ?2",
+        target_id,
+        rutgers_day,
+    )?;
+    let service_day_counts = load_open_service_day_counters(transaction, rutgers_day)?;
+    Ok((run_counts, target_day_counts, service_day_counts))
 }
 
 fn prune_open_diagnostics_transaction(

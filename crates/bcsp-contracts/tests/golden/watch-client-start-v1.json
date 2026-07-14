@@ -1,0 +1,20 @@
+{
+  "type": "START_WATCH",
+  "items": [
+    {
+      "sectionKey": {
+        "term": "T2026F",
+        "campus": "CAMPUS_A",
+        "index": "00001"
+      },
+      "policy": {
+        "notificationMode": "ONE_SHOT",
+        "maxAudible": 3,
+        "continuousDuration": {
+          "kind": "FINITE",
+          "seconds": 600
+        }
+      }
+    }
+  ]
+}

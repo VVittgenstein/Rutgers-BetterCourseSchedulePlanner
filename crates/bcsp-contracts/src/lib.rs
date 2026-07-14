@@ -17,6 +17,7 @@ mod open;
 mod protocol;
 mod query;
 mod schema;
+mod watch;
 
 pub use catalog::{
     CATALOG_CONTRACT_VERSION, CatalogCommentV1, CatalogContentVersion, CatalogContentVersionError,
@@ -88,6 +89,20 @@ pub use query::{
 pub use schema::{
     CONTRACT_SCHEMA_VERSION, ContractField, ContractManifest, ContractSchema, ContractVariant,
     ScalarConstraint, SchemaDirection, UnknownFieldPolicy, contract_manifest,
+};
+pub use watch::{
+    ACTIVE_WATCH_STATE_PERSISTENT, ActiveWatchId, ActiveWatchTargetV1,
+    DEFAULT_CONTINUOUS_DURATION_SECONDS, DEFAULT_MAX_AUDIBLE, MAX_ACTIVE_WATCHES, OpenEpisodeId,
+    OpenEpisodeState, OpenEpisodeV1, OpenEpisodeValidationError, WATCH_CONTRACT_VERSION,
+    WatchAlertDisposition, WatchAlertId, WatchAlertTargetV1, WatchAlertV1, WatchAudioCueV1,
+    WatchAudioDispositionV1, WatchAudioTriggerV1, WatchClientCommandV1, WatchContinuousDurationV1,
+    WatchContinuousMixerStopReason, WatchContractVersion, WatchContractVersionError,
+    WatchCueCancellationReason, WatchCueId, WatchCueOutcome, WatchCueOutcomeReceiptV1,
+    WatchCueOutcomeReportV1, WatchEpisodeTargetV1, WatchMaxAudible, WatchNotificationMode,
+    WatchOpenObservationFanoutV1, WatchPolicyV1, WatchPositiveValueError, WatchServerEventV1,
+    WatchStartItemResultV1, WatchStartItemV1, WatchStartItemsError, WatchStartItemsV1,
+    WatchStartRejectionReason, WatchStartResultError, WatchStartResultV1, WatchStopReason,
+    WatchStoppedV1,
 };
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-contracts";

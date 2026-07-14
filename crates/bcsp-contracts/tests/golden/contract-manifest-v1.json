@@ -119,6 +119,16 @@
       "semantic": "only integer 1 is accepted"
     },
     {
+      "id": "watch-contract-version",
+      "wireType": "u16",
+      "semantic": "only integer 1 is accepted"
+    },
+    {
+      "id": "watch-positive-u64",
+      "wireType": "u64",
+      "semantic": "positive integer with no product upper limit"
+    },
+    {
       "id": "open-sequence",
       "wireType": "u64",
       "semantic": "nonzero target-scoped attempt or observation sequence"
@@ -3479,6 +3489,925 @@
           "name": "section",
           "typeRef": "$schema:bcsp.query.section-query-item.v1",
           "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.notification-mode.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ONE_SHOT",
+        "CONTINUOUS"
+      ]
+    },
+    {
+      "id": "bcsp.watch.continuous-duration.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "FINITE",
+          "fields": [
+            {
+              "name": "seconds",
+              "typeRef": "$scalar:watch-positive-u64",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "UNLIMITED",
+          "fields": []
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.policy.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "notificationMode",
+          "typeRef": "$schema:bcsp.watch.notification-mode.v1",
+          "required": true
+        },
+        {
+          "name": "maxAudible",
+          "typeRef": "$scalar:watch-positive-u64",
+          "required": true
+        },
+        {
+          "name": "continuousDuration",
+          "typeRef": "$schema:bcsp.watch.continuous-duration.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.start-item.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "policy",
+          "typeRef": "$schema:bcsp.watch.policy.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.active-target.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.episode-target.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "episodeId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.alert-target.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "episodeId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "alertId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.cue-outcome.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "STARTED",
+        "MUTED",
+        "AUTOPLAY_BLOCKED",
+        "FAILED"
+      ]
+    },
+    {
+      "id": "bcsp.watch.cue-outcome-report.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "cueId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "outcome",
+          "typeRef": "$schema:bcsp.watch.cue-outcome.v1",
+          "required": true
+        },
+        {
+          "name": "reportedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.client-command.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "discriminator": "type",
+      "variants": [
+        {
+          "tagValue": "START_WATCH",
+          "fields": [
+            {
+              "name": "items",
+              "typeRef": "$array:$schema:bcsp.watch.start-item.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "STOP_WATCH",
+          "fields": [
+            {
+              "name": "watch",
+              "typeRef": "$schema:bcsp.watch.active-target.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "UPDATE_POLICY",
+          "fields": [
+            {
+              "name": "watch",
+              "typeRef": "$schema:bcsp.watch.active-target.v1",
+              "required": true
+            },
+            {
+              "name": "policy",
+              "typeRef": "$schema:bcsp.watch.policy.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "ACKNOWLEDGE_EPISODE",
+          "fields": [
+            {
+              "name": "episode",
+              "typeRef": "$schema:bcsp.watch.episode-target.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "ACKNOWLEDGE_ALL_EPISODES",
+          "fields": []
+        },
+        {
+          "tagValue": "RESUME_TIMED_OUT_EPISODE",
+          "fields": [
+            {
+              "name": "episode",
+              "typeRef": "$schema:bcsp.watch.episode-target.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "RESET_AUDIBLE_COUNT",
+          "fields": [
+            {
+              "name": "watch",
+              "typeRef": "$schema:bcsp.watch.active-target.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "REPORT_CUE_OUTCOME",
+          "fields": [
+            {
+              "name": "report",
+              "typeRef": "$schema:bcsp.watch.cue-outcome-report.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "DISMISS_ALERT",
+          "fields": [
+            {
+              "name": "alert",
+              "typeRef": "$schema:bcsp.watch.alert-target.v1",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.start-rejection-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "MAX_ACTIVE_WATCHES",
+        "ALREADY_ACTIVE",
+        "SECTION_NOT_FOUND",
+        "TARGET_UNAVAILABLE",
+        "CONNECTION_CLOSING"
+      ]
+    },
+    {
+      "id": "bcsp.watch.start-item-result.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "status",
+      "variants": [
+        {
+          "tagValue": "ACTIVE",
+          "fields": [
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "activeWatchId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "startedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "REJECTED",
+          "fields": [
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "typeRef": "$schema:bcsp.watch.start-rejection-reason.v1",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.start-result.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "items",
+          "typeRef": "$array:$schema:bcsp.watch.start-item-result.v1",
+          "required": true
+        },
+        {
+          "name": "activeWatchCount",
+          "typeRef": "$primitive:u8",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.stop-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "USER_REQUESTED",
+        "CONNECTION_CLOSED",
+        "HEARTBEAT_TIMEOUT",
+        "SERVICE_STOPPING",
+        "LOCAL_USER_DATA_RESET"
+      ]
+    },
+    {
+      "id": "bcsp.watch.stopped.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "typeRef": "$schema:bcsp.watch.stop-reason.v1",
+          "required": true
+        },
+        {
+          "name": "stoppedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.open-observation-fanout.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "observation",
+          "typeRef": "$schema:bcsp.open.observation.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.episode-state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "UNACKNOWLEDGED",
+        "ACKNOWLEDGED",
+        "TIMED_OUT",
+        "CLOSED"
+      ]
+    },
+    {
+      "id": "bcsp.watch.open-episode.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "episodeId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.watch.episode-state.v1",
+          "required": true
+        },
+        {
+          "name": "notificationMode",
+          "typeRef": "$schema:bcsp.watch.notification-mode.v1",
+          "required": true
+        },
+        {
+          "name": "continuousDuration",
+          "typeRef": "$schema:bcsp.watch.continuous-duration.v1",
+          "required": true
+        },
+        {
+          "name": "maxAudible",
+          "typeRef": "$scalar:watch-positive-u64",
+          "required": true
+        },
+        {
+          "name": "audibleCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "firstObservedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "lastObservedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "observationCount",
+          "typeRef": "$scalar:watch-positive-u64",
+          "required": true
+        },
+        {
+          "name": "latestObservationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "stateChangedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "closedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.alert-disposition.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "OPENED",
+        "UPDATED",
+        "DISMISSED",
+        "CLOSED"
+      ]
+    },
+    {
+      "id": "bcsp.watch.alert.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "alertId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "disposition",
+          "typeRef": "$schema:bcsp.watch.alert-disposition.v1",
+          "required": true
+        },
+        {
+          "name": "visible",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "episode",
+          "typeRef": "$schema:bcsp.watch.open-episode.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.audio-trigger.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "ONE_SHOT_OBSERVATION",
+          "fields": [
+            {
+              "name": "observationId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CONTINUOUS_EPISODE",
+          "fields": [
+            {
+              "name": "episodeId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.audio-cue.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "cueId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "trigger",
+          "typeRef": "$schema:bcsp.watch.audio-trigger.v1",
+          "required": true
+        },
+        {
+          "name": "emittedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.continuous-mixer-stop-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "NO_UNACKNOWLEDGED_EPISODES",
+        "NOTIFICATION_MODE_CHANGED",
+        "CONNECTION_CLOSED",
+        "SERVICE_STOPPING"
+      ]
+    },
+    {
+      "id": "bcsp.watch.cue-cancellation-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "WATCH_STOPPED",
+        "WATCH_RESTARTED",
+        "NOTIFICATION_MODE_CHANGED",
+        "CONNECTION_CLOSED"
+      ]
+    },
+    {
+      "id": "bcsp.watch.audio-disposition.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "disposition",
+      "variants": [
+        {
+          "tagValue": "CUE_REQUESTED",
+          "fields": [
+            {
+              "name": "cue",
+              "typeRef": "$schema:bcsp.watch.audio-cue.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CUE_QUEUED",
+          "fields": [
+            {
+              "name": "activeWatchId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "observationId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "queuedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CUE_CANCELLED",
+          "fields": [
+            {
+              "name": "activeWatchId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "observationId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "cueId",
+              "typeRef": "$optional:$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "typeRef": "$schema:bcsp.watch.cue-cancellation-reason.v1",
+              "required": true
+            },
+            {
+              "name": "cancelledAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "SILENT_MAX_AUDIBLE",
+          "fields": [
+            {
+              "name": "activeWatchId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "observationId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "audibleCount",
+              "typeRef": "$primitive:u64",
+              "required": true
+            },
+            {
+              "name": "maxAudible",
+              "typeRef": "$scalar:watch-positive-u64",
+              "required": true
+            },
+            {
+              "name": "emittedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CONTINUOUS_MIXER_ACTIVE",
+          "fields": [
+            {
+              "name": "episodeIds",
+              "typeRef": "$array:$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "emittedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CONTINUOUS_MIXER_STOPPED",
+          "fields": [
+            {
+              "name": "reason",
+              "typeRef": "$schema:bcsp.watch.continuous-mixer-stop-reason.v1",
+              "required": true
+            },
+            {
+              "name": "emittedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.cue-outcome-receipt.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "cueId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "outcome",
+          "typeRef": "$schema:bcsp.watch.cue-outcome.v1",
+          "required": true
+        },
+        {
+          "name": "audibleCountConsumed",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "audibleCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "recordedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.server-event.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "type",
+      "variants": [
+        {
+          "tagValue": "START_RESULT",
+          "fields": [
+            {
+              "name": "result",
+              "typeRef": "$schema:bcsp.watch.start-result.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "WATCH_STOPPED",
+          "fields": [
+            {
+              "name": "stopped",
+              "typeRef": "$schema:bcsp.watch.stopped.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "OPEN_OBSERVATION",
+          "fields": [
+            {
+              "name": "fanout",
+              "typeRef": "$schema:bcsp.watch.open-observation-fanout.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "EPISODE_UPDATED",
+          "fields": [
+            {
+              "name": "episode",
+              "typeRef": "$schema:bcsp.watch.open-episode.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "ALERT_UPDATED",
+          "fields": [
+            {
+              "name": "alert",
+              "typeRef": "$schema:bcsp.watch.alert.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "AUDIO_DISPOSITION",
+          "fields": [
+            {
+              "name": "audio",
+              "typeRef": "$schema:bcsp.watch.audio-disposition.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CUE_OUTCOME_RECORDED",
+          "fields": [
+            {
+              "name": "receipt",
+              "typeRef": "$schema:bcsp.watch.cue-outcome-receipt.v1",
+              "required": true
+            }
+          ]
         }
       ]
     },

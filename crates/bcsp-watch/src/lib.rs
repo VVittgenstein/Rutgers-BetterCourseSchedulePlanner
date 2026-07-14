@@ -1,9 +1,24 @@
-//! Shared watch and episode boundary; WebSocket behavior is absent.
+//! Shared, in-memory watch and episode product core.
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-watch";
+
+mod clock;
+mod effect;
+mod facade;
+mod manager;
+mod selection;
+mod state;
+
+pub use clock::{WatchClock, WatchInstant};
+pub use facade::{
+    WatchAction, WatchActionKind, WatchCleanupReason, WatchCleanupReport, WatchDispatch,
+    WatchManager, WatchManagerError, WatchPublishOutcome, WatchStartAdmission, WatchStartOutcome,
+    WatchTickOutcome,
+};
+pub use selection::{MAX_SELECTED_SECTIONS, SectionSelection, SelectionChange, SelectionError};
 
 pub fn boundary_marker() -> &'static str {
     let _ = (

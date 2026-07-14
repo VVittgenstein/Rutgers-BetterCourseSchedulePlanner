@@ -95,7 +95,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-watch',
     kind: 'lib',
     internal: ['bcsp-contracts', 'bcsp-domain', 'bcsp-open'],
-    external: [['proptest', DEV], ['serde', NORMAL], ['serde_json', NORMAL], ['thiserror', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL], ['uuid', NORMAL]],
+    external: [['proptest', DEV], ['serde', NORMAL], ['serde_json', NORMAL], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL], ['uuid', NORMAL]],
   },
   'bcsp-application': {
     dir: 'crates/bcsp-application',

@@ -300,6 +300,16 @@ fn applied_lkg_survives_failure_unsafe_empty_zero_intersection_race_and_restart(
     assert_eq!((applied.duplicate_count, applied.orphan_count), (1, 1));
     assert!(applied.body_changed);
     assert!(applied.state_changed);
+    let observation_commit = applied
+        .observation_commit
+        .as_ref()
+        .expect("valid observation commit");
+    assert_eq!(observation_commit.rutgers_day, "2026-07-14");
+    assert_eq!(observation_commit.effective_interval_seconds, 45);
+    assert_eq!(observation_commit.section_events.len(), 2);
+    assert_eq!(observation_commit.run_counts.succeeded, 1);
+    assert_eq!(observation_commit.target_day_counts.succeeded, 1);
+    assert_eq!(observation_commit.service_day_counts.succeeded, 1);
     let refresh_observation_id = applied
         .refresh_observation_id
         .expect("refresh observation ID");
@@ -375,6 +385,7 @@ fn applied_lkg_survives_failure_unsafe_empty_zero_intersection_race_and_restart(
         unsafe_empty.classification,
         OpenAttemptClassification::UnsafeEmpty
     );
+    assert!(unsafe_empty.observation_commit.is_none());
     begin(&mut storage, &scope, "open-lkg-4", run, v1, "2026-07-14");
     let zero = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
@@ -408,6 +419,7 @@ fn applied_lkg_survives_failure_unsafe_empty_zero_intersection_race_and_restart(
         race.classification,
         OpenAttemptClassification::StaleCatalogRace
     );
+    assert!(race.observation_commit.is_none());
     assert_eq!(
         storage
             .open_batch_state(&scope)

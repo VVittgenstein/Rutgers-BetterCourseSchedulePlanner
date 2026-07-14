@@ -34,8 +34,8 @@ pub use open::{
     BeginOpenPullAttemptCommand, FinishOpenPullFailureCommand, FinishOpenPullSuccessCommand,
     OpenAttemptClassification, OpenAttemptCounters, OpenAttemptRecord, OpenBatchObservation,
     OpenBatchState, OpenCacheStatus, OpenCatalogSnapshot, OpenCircuitState, OpenCommitOutcome,
-    OpenHttpAuditMetadata, OpenOriginState, OpenRequestLane, OpenRetentionReport,
-    OpenScheduleState, OpenSectionCurrent, OpenSectionEvent, OpenSectionState,
+    OpenHttpAuditMetadata, OpenObservationCommit, OpenOriginState, OpenRequestLane,
+    OpenRetentionReport, OpenScheduleState, OpenSectionCurrent, OpenSectionEvent, OpenSectionState,
 };
 pub use storage::{OperationalStorage, catalog_content_sha256_v1};
 

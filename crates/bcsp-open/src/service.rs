@@ -1,13 +1,18 @@
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::time::Duration;
 
 use bcsp_contracts::{
-    CatalogContentVersion, CatalogContentVersionError, SectionKey, TermCampusKey, TraceId,
+    CatalogContentVersion, CatalogContentVersionError, OPEN_CONTRACT_VERSION, OpenBatchKey,
+    OpenCounterSnapshotV1, OpenObservationTargetMismatchError, OpenObservationV1, OpenPullCountsV1,
+    OpenSequence, OpenSequenceError, OpenState, RutgersDay, RutgersDayTimezone, SectionKey,
+    TermCampusKey, TraceId,
 };
 use bcsp_operational_storage::{
     BeginOpenPullAttemptCommand, FinishOpenPullFailureCommand, FinishOpenPullSuccessCommand,
-    OpenAttemptClassification, OpenCacheStatus, OpenCatalogSnapshot, OpenCommitOutcome,
-    OpenHttpAuditMetadata, OpenRequestLane, OperationalStorage, StorageError, StorageResult,
+    OpenAttemptClassification, OpenAttemptCounters, OpenCacheStatus, OpenCatalogSnapshot,
+    OpenCommitOutcome, OpenHttpAuditMetadata, OpenObservationCommit, OpenRequestLane,
+    OpenSectionEvent, OpenSectionState, OperationalStorage, StorageError, StorageResult,
 };
 use bcsp_rutgers_client::{
     OpenResponseMetadata, OpenSectionsError, OpenSectionsFailure, OpenSectionsRequest,
@@ -20,9 +25,9 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    CatalogOpenBatch, CompletionSchedule, GeneralOpenInterval, OpenFailureKind,
-    OpenReconcileClassification, OpenReconcilePlan, OpenSetEvidence, OriginSchedulerLane,
-    ReconcileInputError, reconcile_open_set, retry_directive,
+    CatalogOpenBatch, CompletionSchedule, GeneralOpenInterval, OpenCounterAudience,
+    OpenFailureKind, OpenReconcileClassification, OpenReconcilePlan, OpenSetEvidence,
+    OriginSchedulerLane, ReconcileInputError, reconcile_open_set, retry_directive,
 };
 
 const RUTGERS_TIME_ZONE: &str = "America/New_York";
@@ -105,6 +110,7 @@ pub struct OpenPullCommand {
     pub lane: OriginSchedulerLane,
     pub scheduler_lag: Duration,
     pub current_failure_streak: u32,
+    pub counter_audience: OpenCounterAudience,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -129,6 +135,8 @@ pub struct OpenPullExecution {
     pub scheduler_completion: CompletionSchedule,
     pub terminal: OpenPullTerminal,
     pub reconcile: Option<OpenReconcilePlan>,
+    /// Committed per-watch observations ready for fanout; non-valid pulls are empty.
+    pub observations: Vec<OpenObservationV1>,
 }
 
 #[derive(Debug, Error)]
@@ -153,6 +161,16 @@ pub enum SharedOpenServiceError {
     UnexpectedClassification,
     #[error("a Catalog scheduler lane cannot execute an Open pull")]
     CatalogSchedulerLane,
+    #[error("local Open counter audience must use the command run ID")]
+    CounterAudienceRunMismatch,
+    #[error("committed Open observation sequence was invalid")]
+    ObservationSequence(#[from] OpenSequenceError),
+    #[error("committed Open observation target was inconsistent")]
+    ObservationTarget(#[from] OpenObservationTargetMismatchError),
+    #[error("committed Open observation handoff was inconsistent: {reason}")]
+    ObservationCommit { reason: &'static str },
+    #[error("Open observation freshness deadline overflowed")]
+    FreshUntilOverflow,
 }
 
 pub struct SharedOpenService<'storage, P = OperationalStorage> {
@@ -183,6 +201,7 @@ where
         Fut: Future<Output = Result<OpenSectionsResponse, OpenSectionsFailure>>,
         W: FnOnce(&TermCampusKey) -> Vec<SectionKey>,
     {
+        validate_counter_audience(&command)?;
         let target = command.source_request.target().target();
         let captured_catalog = self
             .persistence
@@ -320,6 +339,7 @@ where
         // the request boundary: a newly added watch receives this valid observation,
         // while a removed watch does not receive a stale event.
         let watched_sections = current_watched_sections(&target);
+        let expected_watched_sections = watched_sections.iter().cloned().collect::<BTreeSet<_>>();
         let outcome = self
             .persistence
             .finish_open_pull_success(FinishOpenPullSuccessCommand {
@@ -346,6 +366,16 @@ where
         if !outcome_matches_reconcile(&outcome, &reconcile) {
             return Err(SharedOpenServiceError::ReconcileDivergence);
         }
+        let observations = if outcome.classification.is_success() {
+            build_committed_observations(&command, &outcome, &expected_watched_sections)?
+        } else {
+            if outcome.observation_commit.is_some() {
+                return Err(SharedOpenServiceError::ObservationCommit {
+                    reason: "a non-valid pull returned an observation commit",
+                });
+            }
+            Vec::new()
+        };
         let (scheduler_completion, terminal) = match outcome.classification {
             OpenAttemptClassification::ValidApplied
             | OpenAttemptClassification::ValidEmptyNoRows => (
@@ -385,6 +415,7 @@ where
             scheduler_completion,
             terminal,
             reconcile: Some(reconcile),
+            observations,
         })
     }
 
@@ -412,6 +443,11 @@ where
         if outcome.classification != OpenAttemptClassification::Failed {
             return Err(SharedOpenServiceError::UnexpectedClassification);
         }
+        if outcome.observation_commit.is_some() {
+            return Err(SharedOpenServiceError::ObservationCommit {
+                reason: "a failed pull returned an observation commit",
+            });
+        }
         Ok(OpenPullExecution {
             outcome,
             scheduler_completion: CompletionSchedule::Retry(retry_directive(
@@ -422,6 +458,7 @@ where
             )),
             terminal: OpenPullTerminal::Failed(failure),
             reconcile: None,
+            observations: Vec::new(),
         })
     }
 }
@@ -444,6 +481,157 @@ impl SharedOpenService<'_, OperationalStorage> {
             current_watched_sections,
         )
         .await
+    }
+}
+
+fn validate_counter_audience(command: &OpenPullCommand) -> Result<(), SharedOpenServiceError> {
+    if let OpenCounterAudience::Local { run_id } = command.counter_audience
+        && run_id != command.run_id
+    {
+        return Err(SharedOpenServiceError::CounterAudienceRunMismatch);
+    }
+    Ok(())
+}
+
+fn build_committed_observations(
+    command: &OpenPullCommand,
+    outcome: &OpenCommitOutcome,
+    expected_watched_sections: &BTreeSet<SectionKey>,
+) -> Result<Vec<OpenObservationV1>, SharedOpenServiceError> {
+    let commit =
+        outcome
+            .observation_commit
+            .as_ref()
+            .ok_or(SharedOpenServiceError::ObservationCommit {
+                reason: "a valid pull omitted its observation commit",
+            })?;
+    let refresh_observation_id =
+        outcome
+            .refresh_observation_id
+            .ok_or(SharedOpenServiceError::ObservationCommit {
+                reason: "a valid pull omitted its refresh observation ID",
+            })?;
+    let observation_sequence =
+        outcome
+            .observation_sequence
+            .ok_or(SharedOpenServiceError::ObservationCommit {
+                reason: "a valid pull omitted its observation sequence",
+            })?;
+    let pull_sequence = OpenSequence::try_from(outcome.attempt_sequence)?;
+    let catalog_content_version = CatalogContentVersion::try_from(outcome.catalog_content_version)?;
+    let counter_snapshot = committed_counter_snapshot(commit, command.counter_audience)?;
+    if commit.effective_interval_seconds == 0 {
+        return Err(SharedOpenServiceError::ObservationCommit {
+            reason: "a valid pull returned a zero effective interval",
+        });
+    }
+    let freshness_seconds = commit
+        .effective_interval_seconds
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(15))
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or(SharedOpenServiceError::FreshUntilOverflow)?;
+    let batch = OpenBatchKey::from(command.source_request.target().target());
+    let scheduler_lag_milliseconds = duration_millis(command.scheduler_lag);
+    let mut observation_ids = BTreeSet::new();
+    let mut section_keys = BTreeSet::new();
+    let mut observations = Vec::with_capacity(commit.section_events.len());
+    for event in &commit.section_events {
+        validate_committed_section_event(
+            event,
+            command.attempt_id,
+            refresh_observation_id,
+            observation_sequence,
+            outcome.catalog_content_version,
+        )?;
+        if !observation_ids.insert(event.observation_id) {
+            return Err(SharedOpenServiceError::ObservationCommit {
+                reason: "committed Section observation IDs are duplicated",
+            });
+        }
+        if !section_keys.insert(event.section.clone()) {
+            return Err(SharedOpenServiceError::ObservationCommit {
+                reason: "committed watched Section identities are duplicated",
+            });
+        }
+        let observed_at = OffsetDateTime::parse(&event.observed_at, &Rfc3339)
+            .map_err(|_| SharedOpenServiceError::TimestampFormat)?;
+        let fresh_until = observed_at
+            .checked_add(time::Duration::seconds(freshness_seconds))
+            .ok_or(SharedOpenServiceError::FreshUntilOverflow)?;
+        let state = match event.state {
+            OpenSectionState::Open => OpenState::Open,
+            OpenSectionState::Closed => OpenState::Closed,
+        };
+        observations.push(OpenObservationV1::try_new(
+            OPEN_CONTRACT_VERSION,
+            event.observation_id,
+            event.refresh_observation_id,
+            batch.clone(),
+            event.section.clone(),
+            pull_sequence,
+            catalog_content_version,
+            state,
+            observed_at,
+            fresh_until,
+            scheduler_lag_milliseconds,
+            counter_snapshot.clone(),
+        )?);
+    }
+    if section_keys != *expected_watched_sections {
+        return Err(SharedOpenServiceError::ObservationCommit {
+            reason: "committed Section events differ from the sampled watch set",
+        });
+    }
+    Ok(observations)
+}
+
+fn validate_committed_section_event(
+    event: &OpenSectionEvent,
+    attempt_id: TraceId,
+    refresh_observation_id: TraceId,
+    observation_sequence: u64,
+    catalog_content_version: u64,
+) -> Result<(), SharedOpenServiceError> {
+    if event.event_id == 0
+        || event.attempt_id != attempt_id
+        || event.refresh_observation_id != refresh_observation_id
+        || event.observation_sequence != observation_sequence
+        || event.catalog_content_version != catalog_content_version
+    {
+        return Err(SharedOpenServiceError::ObservationCommit {
+            reason: "committed Section event disagrees with its target commit",
+        });
+    }
+    Ok(())
+}
+
+fn committed_counter_snapshot(
+    commit: &OpenObservationCommit,
+    audience: OpenCounterAudience,
+) -> Result<OpenCounterSnapshotV1, SharedOpenServiceError> {
+    let (run_counts, today_counts) = match audience {
+        OpenCounterAudience::Local { .. } => (
+            Some(pull_counts(commit.run_counts)),
+            pull_counts(commit.target_day_counts),
+        ),
+        OpenCounterAudience::Public => (None, pull_counts(commit.service_day_counts)),
+    };
+    Ok(OpenCounterSnapshotV1 {
+        run_counts,
+        today_counts,
+        rutgers_day: RutgersDay::try_from(commit.rutgers_day.clone())
+            .map_err(|_| SharedOpenServiceError::RutgersDay)?,
+        day_timezone: RutgersDayTimezone::AmericaNewYork,
+    })
+}
+
+const fn pull_counts(value: OpenAttemptCounters) -> OpenPullCountsV1 {
+    OpenPullCountsV1 {
+        attempted: value.attempted,
+        succeeded: value.succeeded,
+        failed: value.failed,
+        empty: value.empty,
     }
 }
 
@@ -781,11 +969,64 @@ mod tests {
 
         fn outcome(&self, classification: OpenAttemptClassification) -> OpenCommitOutcome {
             let unsafe_empty = classification == OpenAttemptClassification::UnsafeEmpty;
+            let refresh_observation_id = trace(10);
+            let observation_commit = classification.is_success().then(|| {
+                let section_events = self
+                    .success
+                    .as_ref()
+                    .expect("success command before outcome")
+                    .watched_sections
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, section)| OpenSectionEvent {
+                        event_id: u64::try_from(ordinal + 1).expect("event ID"),
+                        observation_id: trace(
+                            u8::try_from(ordinal + 20).expect("observation ID suffix"),
+                        ),
+                        refresh_observation_id,
+                        attempt_id: trace(1),
+                        section: section.clone(),
+                        state: if section.index().as_str() == "00001" {
+                            OpenSectionState::Open
+                        } else {
+                            OpenSectionState::Closed
+                        },
+                        catalog_content_version: 7,
+                        observation_sequence: 1,
+                        observed_at: "2026-07-14T04:00:00Z".to_owned(),
+                    })
+                    .collect();
+                OpenObservationCommit {
+                    rutgers_day: "2026-07-13".to_owned(),
+                    effective_interval_seconds: 10,
+                    run_counts: OpenAttemptCounters {
+                        attempted: 1,
+                        succeeded: 1,
+                        failed: 0,
+                        empty: 0,
+                    },
+                    target_day_counts: OpenAttemptCounters {
+                        attempted: 2,
+                        succeeded: 1,
+                        failed: 1,
+                        empty: 0,
+                    },
+                    service_day_counts: OpenAttemptCounters {
+                        attempted: 9,
+                        succeeded: 7,
+                        failed: 2,
+                        empty: 0,
+                    },
+                    section_events,
+                }
+            });
             OpenCommitOutcome {
                 attempt_id: trace(1),
                 attempt_sequence: 1,
                 classification,
-                refresh_observation_id: classification.is_success().then_some(trace(1)),
+                refresh_observation_id: classification
+                    .is_success()
+                    .then_some(refresh_observation_id),
                 observation_sequence: classification.is_success().then_some(1),
                 catalog_content_version: 7,
                 source_value_count: if unsafe_empty { 0 } else { 3 },
@@ -797,6 +1038,7 @@ mod tests {
                 body_changed: classification.is_success(),
                 state_changed: classification.is_success(),
                 retained_lkg_attempt_id: classification.is_success().then_some(trace(1)),
+                observation_commit,
             }
         }
     }
@@ -901,15 +1143,22 @@ mod tests {
     }
 
     fn command(active_watch_count: u64) -> OpenPullCommand {
+        command_for(1, 2, active_watch_count)
+    }
+
+    fn command_for(attempt_suffix: u8, run_suffix: u8, active_watch_count: u64) -> OpenPullCommand {
         OpenPullCommand {
-            attempt_id: trace(1),
-            run_id: trace(2),
+            attempt_id: trace(attempt_suffix),
+            run_id: trace(run_suffix),
             source_request: source_request(),
             general_interval: GeneralOpenInterval::local(30).expect("interval"),
             active_watch_count,
             lane: OriginSchedulerLane::OpenActiveWatch,
             scheduler_lag: Duration::from_millis(250),
             current_failure_streak: 0,
+            counter_audience: OpenCounterAudience::Local {
+                run_id: trace(run_suffix),
+            },
         }
     }
 
@@ -1255,26 +1504,105 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fake_fetch_runs_through_real_sqlite_reconcile_and_observation_pipeline() {
+    async fn local_counter_audience_must_match_the_pull_run_before_any_side_effect() {
+        let mut persistence = FakePersistence::new(OpenAttemptClassification::ValidApplied);
+        let began = Arc::clone(&persistence.began);
+        let mut mismatched = command(0);
+        mismatched.counter_audience = OpenCounterAudience::Local { run_id: trace(99) };
+        let result = SharedOpenService::new(&mut persistence)
+            .execute_with(
+                mismatched,
+                &mut clock(),
+                |_| async { Ok(response()) },
+                |_| Vec::new(),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(SharedOpenServiceError::CounterAudienceRunMismatch)
+        ));
+        assert!(!began.load(Ordering::SeqCst));
+        assert!(persistence.success.is_none());
+        assert!(persistence.failure.is_none());
+    }
+
+    #[tokio::test]
+    async fn real_sqlite_handoff_has_exact_watch_cardinality_shared_ids_and_unchanged_events() {
         let mut storage = OperationalStorage::open_in_memory().expect("storage");
         publish_catalog(&mut storage);
-        let watched = SectionKey::try_new("92026", "NB", "00001").expect("watched Section");
-        let execution = SharedOpenService::new(&mut storage)
+        let watched_open = SectionKey::try_new("92026", "NB", "00001").expect("open watch");
+        let watched_closed = SectionKey::try_new("92026", "NB", "00002").expect("closed watch");
+        let watched = vec![watched_open.clone(), watched_closed.clone()];
+        let first = SharedOpenService::new(&mut storage)
             .execute_with(
                 command(1),
                 &mut clock(),
                 |_| async { Ok(response()) },
-                |_| vec![watched.clone()],
+                |_| watched.clone(),
             )
             .await
             .expect("real storage execution");
 
         assert_eq!(
-            execution.outcome.classification,
+            first.outcome.classification,
             OpenAttemptClassification::ValidApplied
         );
-        assert_eq!(execution.outcome.duplicate_count, 1);
-        assert_eq!(execution.outcome.orphan_count, 1);
+        assert_eq!(first.outcome.duplicate_count, 1);
+        assert_eq!(first.outcome.orphan_count, 1);
+        assert_eq!(first.observations.len(), 2);
+        let first_refresh_id = first
+            .outcome
+            .refresh_observation_id
+            .expect("refresh observation ID");
+        assert!(
+            first
+                .observations
+                .iter()
+                .all(|value| value.refresh_observation_id == first_refresh_id)
+        );
+        assert_ne!(
+            first.observations[0].observation_id,
+            first.observations[1].observation_id
+        );
+        assert_eq!(first.observations[0].section_key(), &watched_open);
+        assert_eq!(first.observations[0].state, OpenState::Open);
+        assert_eq!(first.observations[1].section_key(), &watched_closed);
+        assert_eq!(first.observations[1].state, OpenState::Closed);
+        assert_eq!(first.observations[0].pull_sequence.get(), 1);
+        assert_eq!(first.observations[0].catalog_content_version.get(), 1);
+        assert_eq!(
+            first.observations[0].observed_at,
+            datetime!(2026-07-14 04:00:00 UTC)
+        );
+        assert_eq!(
+            first.observations[0].fresh_until,
+            datetime!(2026-07-14 04:00:35 UTC)
+        );
+        assert_eq!(first.observations[0].scheduler_lag_milliseconds, 250);
+        assert_eq!(
+            first.observations[0].counter_snapshot,
+            first.observations[1].counter_snapshot
+        );
+        assert_eq!(
+            first.observations[0]
+                .counter_snapshot
+                .run_counts
+                .as_ref()
+                .expect("local run counters")
+                .succeeded,
+            1
+        );
+        assert_eq!(
+            first.observations[0]
+                .counter_snapshot
+                .today_counts
+                .succeeded,
+            1
+        );
+        assert_eq!(
+            first.observations[0].counter_snapshot.rutgers_day.as_str(),
+            "2026-07-13"
+        );
         let attempt = storage
             .open_attempt(&trace(1))
             .expect("attempt read")
@@ -1301,18 +1629,118 @@ mod tests {
         assert_eq!(current.len(), 2);
         assert_eq!(current[0].state, OpenSectionState::Open);
         assert_eq!(current[1].state, OpenSectionState::Closed);
-        let events = storage
+        let first_events = storage
             .read_open_section_events(0, 10)
             .expect("Section events");
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].section, watched);
-        assert_ne!(events[0].observation_id, events[0].refresh_observation_id);
+        assert_eq!(first_events.len(), 2);
+        for (event, observation) in first_events.iter().zip(&first.observations) {
+            assert_eq!(event.observation_id, observation.observation_id);
+            assert_eq!(
+                event.refresh_observation_id,
+                observation.refresh_observation_id
+            );
+            assert_eq!(&event.section, observation.section_key());
+        }
+
+        let mut public_command = command_for(3, 2, 1);
+        public_command.counter_audience = OpenCounterAudience::Public;
+        let second = SharedOpenService::new(&mut storage)
+            .execute_with(
+                public_command,
+                &mut clock(),
+                |_| async { Ok(response()) },
+                |_| vec![watched_closed.clone(), watched_open.clone()],
+            )
+            .await
+            .expect("unchanged real storage execution");
+        assert!(!second.outcome.body_changed);
+        assert!(!second.outcome.state_changed);
+        assert_eq!(second.outcome.changed_section_count, 0);
+        assert_eq!(second.observations.len(), 2);
+        assert!(
+            second
+                .observations
+                .iter()
+                .all(|value| value.pull_sequence.get() == 2)
+        );
+        assert_eq!(
+            second.observations[0].counter_snapshot,
+            second.observations[1].counter_snapshot
+        );
+        assert_eq!(second.observations[0].counter_snapshot.run_counts, None);
+        assert_eq!(
+            second.observations[0]
+                .counter_snapshot
+                .today_counts
+                .succeeded,
+            2
+        );
+        let all_events = storage
+            .read_open_section_events(0, 10)
+            .expect("all Section events");
+        assert_eq!(all_events.len(), 4);
+        for (event, observation) in all_events[2..].iter().zip(&second.observations) {
+            assert_eq!(event.observation_id, observation.observation_id);
+            assert_eq!(
+                event.refresh_observation_id,
+                observation.refresh_observation_id
+            );
+            assert_eq!(&event.section, observation.section_key());
+        }
         assert_eq!(
             storage
                 .open_day_counters(&batch().target(), "2026-07-13")
                 .expect("day counters")
                 .succeeded,
-            1
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn real_sqlite_unsafe_and_failure_produce_no_observation_handoff_or_event() {
+        let mut storage = OperationalStorage::open_in_memory().expect("storage");
+        publish_catalog(&mut storage);
+        let watched = SectionKey::try_new("92026", "NB", "00001").expect("watched Section");
+        let unsafe_execution = SharedOpenService::new(&mut storage)
+            .execute_with(
+                command_for(4, 5, 1),
+                &mut clock(),
+                |_| async { Ok(empty_response()) },
+                |_| vec![watched.clone()],
+            )
+            .await
+            .expect("unsafe response recorded");
+        assert_eq!(
+            unsafe_execution.outcome.classification,
+            OpenAttemptClassification::UnsafeEmpty
+        );
+        assert!(unsafe_execution.observations.is_empty());
+        assert!(unsafe_execution.outcome.observation_commit.is_none());
+
+        let failed_execution = SharedOpenService::new(&mut storage)
+            .execute_with(
+                command_for(6, 5, 1),
+                &mut clock(),
+                |_| async {
+                    let mut value = response();
+                    value.metadata.duplicate_value_count = 0;
+                    Ok(value)
+                },
+                |_| vec![watched],
+            )
+            .await
+            .expect("failed response recorded");
+        assert!(matches!(
+            failed_execution.terminal,
+            OpenPullTerminal::Failed(OpenPullFailure::ResponseMetadataMismatch(_))
+        ));
+        assert!(failed_execution.observations.is_empty());
+        assert!(failed_execution.outcome.observation_commit.is_none());
+        assert!(
+            storage
+                .read_open_section_events(0, 10)
+                .expect("Section events")
+                .is_empty()
         );
     }
 

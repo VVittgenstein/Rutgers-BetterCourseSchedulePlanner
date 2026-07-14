@@ -1,0 +1,28 @@
+{
+  "type": "START_RESULT",
+  "result": {
+    "contractVersion": 1,
+    "items": [
+      {
+        "status": "ACTIVE",
+        "sectionKey": {
+          "term": "T2026F",
+          "campus": "CAMPUS_A",
+          "index": "00001"
+        },
+        "activeWatchId": "00000000-0000-4000-8000-000000000002",
+        "startedAt": "1970-01-01T00:00:00Z"
+      },
+      {
+        "status": "REJECTED",
+        "sectionKey": {
+          "term": "T2026F",
+          "campus": "CAMPUS_A",
+          "index": "00010"
+        },
+        "reason": "MAX_ACTIVE_WATCHES"
+      }
+    ],
+    "activeWatchCount": 9
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "task": "P7.1-008",
+  "parentCommit": "62a5d45dda7804b44f8aa5de787ddd5375c8a92e",
+  "branch": "codex/p7-implementation",
+  "verifiedAtUtc": "2026-07-14T11:57:25.9129560Z",
+  "productState": "COMPLETE",
+  "qualityState": "PASS",
+  "tests": {
+    "contracts": 86,
+    "sharedWatch": 18,
+    "sharedOpen": 46,
+    "operationalStorage": 45,
+    "workspace": "PASS"
+  },
+  "qualityGates": {
+    "format": "PASS",
+    "check": "PASS",
+    "test": "PASS",
+    "clippyDenyWarnings": "PASS",
+    "architectureGraph": "PASS",
+    "architectureSelfTest": "PASS",
+    "cargoDeny": "PASS",
+    "productReview": "PASS"
+  },
+  "scope": {
+    "taskPathCount": 33,
+    "protectedWorktreePathCount": 167,
+    "publishedRawCourseContent": false,
+    "seededCourseDatabase": false,
+    "persistedActiveWatchState": false
+  },
+  "postPushMarker": "P7_1_008_PASS_POST_PUSH"
+}
