@@ -182,6 +182,7 @@ const EXPECTED_PACKAGE_SCRIPTS = Object.freeze({
   guard: 'npm run guard:imports && npm run test:guard',
   'guard:imports': 'node ./tools/verify-import-graph.mjs',
   'test:guard': 'node --test ./tools/verify-import-graph.test.mjs',
+  'test:i18n': 'vitest run --config vitest.config.ts',
   typecheck: 'tsc --build tsconfig.json --pretty false',
   'typecheck:shared': 'tsc --build tsconfig.shared.json --pretty false',
   'typecheck:local': 'tsc --build tsconfig.local.json --pretty false',
@@ -192,7 +193,7 @@ const EXPECTED_PACKAGE_SCRIPTS = Object.freeze({
   'build:public': 'vite build --config vite.public.config.ts',
   'dev:local': 'vite --config vite.local.config.ts --open /local.html',
   'dev:public': 'vite --config vite.public.config.ts --open /public.html',
-  verify: 'npm run guard && npm run typecheck && npm run build',
+  verify: 'npm run guard && npm run test:i18n && npm run typecheck && npm run build',
   'preview:local': 'vite preview --config vite.local.config.ts',
   'preview:public': 'vite preview --config vite.public.config.ts',
 });

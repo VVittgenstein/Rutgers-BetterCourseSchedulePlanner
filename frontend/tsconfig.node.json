@@ -12,6 +12,7 @@
   },
   "include": [
     "build/**/*.ts",
+    "vitest.config.ts",
     "vite.config.ts",
     "vite.local.config.ts",
     "vite.public.config.ts"

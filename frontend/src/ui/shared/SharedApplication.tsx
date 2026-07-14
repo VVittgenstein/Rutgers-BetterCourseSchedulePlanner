@@ -1,3 +1,6 @@
+import { useBcspI18n } from './i18n/runtime';
+
 export function SharedApplication() {
-  return <div data-bcsp-shared-application="" />;
+  const { locale } = useBcspI18n();
+  return <div data-bcsp-locale={locale} data-bcsp-shared-application="" />;
 }

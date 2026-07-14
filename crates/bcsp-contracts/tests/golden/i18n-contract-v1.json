@@ -1,0 +1,83 @@
+{
+  "canonicalLocales": [
+    "en-US",
+    "zh-CN"
+  ],
+  "fallback": "en-US",
+  "apiErrors": [
+    {
+      "wire": "MALFORMED_REQUEST",
+      "messageKey": "error.malformed_request"
+    },
+    {
+      "wire": "UNSUPPORTED_PROTOCOL_VERSION",
+      "messageKey": "error.unsupported_protocol_version"
+    },
+    {
+      "wire": "INVALID_SECTION_KEY",
+      "messageKey": "error.invalid_section_key"
+    },
+    {
+      "wire": "INVALID_COURSE_GROUP_KEY",
+      "messageKey": "error.invalid_course_group_key"
+    },
+    {
+      "wire": "INVALID_COURSE_VARIANT_KEY",
+      "messageKey": "error.invalid_course_variant_key"
+    },
+    {
+      "wire": "INVALID_FILTER",
+      "messageKey": "error.invalid_filter"
+    },
+    {
+      "wire": "SECTION_NOT_FOUND",
+      "messageKey": "error.section_not_found"
+    },
+    {
+      "wire": "SELECTION_LIMIT_EXCEEDED",
+      "messageKey": "error.selection_limit_exceeded"
+    },
+    {
+      "wire": "UPSTREAM_UNAVAILABLE",
+      "messageKey": "error.upstream_unavailable"
+    },
+    {
+      "wire": "AUDIO_BLOCKED",
+      "messageKey": "error.audio_blocked"
+    },
+    {
+      "wire": "INTERNAL_ERROR",
+      "messageKey": "error.internal"
+    }
+  ],
+  "matchReasons": [
+    {
+      "wire": "KNOWN_MISMATCH",
+      "messageKey": "match.reason.known_mismatch"
+    },
+    {
+      "wire": "MISSING_RELIABLE_DATA",
+      "messageKey": "match.reason.missing_reliable_data"
+    },
+    {
+      "wire": "UNKNOWN_VALUE",
+      "messageKey": "match.reason.unknown_value"
+    },
+    {
+      "wire": "TBA",
+      "messageKey": "match.reason.tba"
+    },
+    {
+      "wire": "CONFLICTING_EVIDENCE",
+      "messageKey": "match.reason.conflicting_evidence"
+    },
+    {
+      "wire": "INVALID_VALUE",
+      "messageKey": "match.reason.invalid_value"
+    },
+    {
+      "wire": "SOURCE_UNAVAILABLE",
+      "messageKey": "match.reason.source_unavailable"
+    }
+  ]
+}

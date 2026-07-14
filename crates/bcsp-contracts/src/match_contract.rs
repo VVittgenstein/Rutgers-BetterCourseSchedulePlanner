@@ -57,6 +57,18 @@ impl MatchReasonCode {
         }
     }
 
+    pub const fn message_key(self) -> &'static str {
+        match self {
+            Self::KnownMismatch => "match.reason.known_mismatch",
+            Self::MissingReliableData => "match.reason.missing_reliable_data",
+            Self::UnknownValue => "match.reason.unknown_value",
+            Self::Tba => "match.reason.tba",
+            Self::ConflictingEvidence => "match.reason.conflicting_evidence",
+            Self::InvalidValue => "match.reason.invalid_value",
+            Self::SourceUnavailable => "match.reason.source_unavailable",
+        }
+    }
+
     pub const fn is_known_mismatch(self) -> bool {
         matches!(self, Self::KnownMismatch)
     }

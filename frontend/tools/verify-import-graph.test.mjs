@@ -497,6 +497,8 @@ test('HTML, Vite target configs, and descriptor are frozen against extra roots a
 
   const packageJson = JSON.parse(readFileSync(resolve(repositoryRoot, 'frontend/package.json'), 'utf8'));
   assert.deepEqual(validatePackageScripts(packageJson.scripts), []);
+  assert.equal(packageJson.scripts['test:i18n'], 'vitest run --config vitest.config.ts');
+  assert.match(packageJson.scripts.verify, /npm run test:i18n/u);
   const extraScripts = { ...packageJson.scripts, 'build:alternate': 'vite --config sub/vite.config.ts' };
   assert.match(validatePackageScripts(extraScripts).join('\n'), /script universe/u);
 });
