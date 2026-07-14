@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import axe from 'axe-core';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +10,6 @@ import { PublicCompositionRoot } from '../src/ui/public/PublicCompositionRoot';
 import { BCSP_DESIGN_SYSTEM_CSS } from '../src/ui/shared/design-system';
 import type {
   CatalogDiscoveryResponseV1,
-  FilterFieldSchemaV1,
   FilterSchemaV1,
   ProductApiPort,
   ProductRuntimePort,
@@ -20,10 +21,10 @@ const BOOTSTRAP = {
 };
 const OBSERVED_AT = '2026-07-14T16:30:00.000Z';
 
-const filterSchema: FilterSchemaV1 = {
-  contractVersion: 1,
-  fields: Array.from({ length: 22 }, () => ({} as FilterFieldSchemaV1)),
-};
+const filterSchema = JSON.parse(readFileSync(
+  resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
+  'utf8',
+)) as FilterSchemaV1;
 
 function known(value: string) {
   return { knowledge: 'KNOWN', presence: { presence: 'PRESENT', value } } as const;
@@ -137,17 +138,20 @@ describe('P7.2 responsive product shell', () => {
     expect(screen.getByRole('heading', { name: 'Opening the catalog console' })).toBeTruthy();
   });
 
-  it('renders current data metrics and lets keyboard-grade buttons select a real target', async () => {
+  it('renders current metrics and lets native controls select published targets', async () => {
     const view = renderShell(runtimeWith(async () => discovery()));
 
-    const newark = await screen.findByRole('button', { name: /Fall 2026 Newark \/ NK/i });
-    const newBrunswick = screen.getByRole('button', { name: /Fall 2026 New Brunswick \/ NB/i });
-    expect(newBrunswick.getAttribute('aria-pressed')).toBe('true');
+    const term = await screen.findByRole('combobox', { name: 'Term' }) as HTMLSelectElement;
+    const newark = screen.getByRole('checkbox', { name: /Newark \/ NK/i }) as HTMLInputElement;
+    const newBrunswick = screen.getByRole('checkbox', { name: /New Brunswick \/ NB/i }) as HTMLInputElement;
+    expect(term.value).toBe('2026-9');
+    expect(newBrunswick.checked).toBe(true);
+    expect(newark.checked).toBe(false);
     fireEvent.click(newark);
-    expect(newark.getAttribute('aria-pressed')).toBe('true');
-    expect(newBrunswick.getAttribute('aria-pressed')).toBe('false');
+    expect(newark.checked).toBe(true);
+    expect(newBrunswick.checked).toBe(true);
 
-    expect(screen.getByText('22')).toBeTruthy();
+    expect(screen.getAllByText('22').length).toBeGreaterThan(0);
     expect(screen.getByText('Catalog current')).toBeTruthy();
     expect(screen.getByText('Not observed yet')).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Interface language' })).toBeTruthy();

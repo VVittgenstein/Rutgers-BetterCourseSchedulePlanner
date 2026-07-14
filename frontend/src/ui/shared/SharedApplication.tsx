@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { ShellStyles } from './application';
 import {
@@ -13,27 +13,11 @@ import {
   PRODUCT_PROTOCOL_VERSION,
   useProductRuntimeState,
   type CatalogDiscoveryResponseV1,
-  type CatalogFieldKnowledge,
-  type CatalogTargetV1,
   type ProductRuntimePort,
 } from './product';
+import { SearchWorkspace } from './search';
+import { AppRouterProvider, RouterLink, useAppRouter } from './routing';
 import { useShellDataState, type ShellDataState } from './shell';
-
-function fieldValue(field: CatalogFieldKnowledge<string>): string | null {
-  if (field.knowledge !== 'KNOWN' || field.presence.presence !== 'PRESENT') return null;
-  return field.presence.value;
-}
-
-function targetId(target: CatalogTargetV1): string {
-  return `${target.key.term}\u0000${target.key.campus}`;
-}
-
-function targetLabels(target: CatalogTargetV1) {
-  return {
-    campus: fieldValue(target.campusLabel) ?? target.key.campus,
-    term: fieldValue(target.termLabel) ?? target.key.term,
-  };
-}
 
 function retryBootstrap() {
   globalThis.location?.reload();
@@ -70,6 +54,18 @@ function ShellFrame({
   readonly children: ReactNode;
   readonly i18n: BcspI18nRuntime;
 }) {
+  const { pathname } = useAppRouter();
+  const sectionWorkspace = pathname.startsWith('/sections');
+  const directSection = sectionWorkspace && pathname !== '/sections';
+  const sequence = sectionWorkspace ? '02' : '01';
+  const workspaceTitle = directSection
+    ? i18n.t('search.section_detail_title')
+    : sectionWorkspace
+      ? i18n.t('search.section_workspace')
+      : i18n.t('search.course_workspace');
+  const workspaceIntro = sectionWorkspace
+    ? i18n.t('search.section_intro')
+    : i18n.t('search.course_intro');
   return (
     <>
       <DesignSystemStyles />
@@ -95,30 +91,38 @@ function ShellFrame({
       </header>
       <nav aria-label={i18n.t('app.navigation')} className="bcsp-navigation">
         <span className="bcsp-navigation__label">[ {i18n.t('app.catalog_workspace')} ]</span>
-        <a className="bcsp-navigation__link" href="#bcsp-workspace">
+        <RouterLink
+          className="bcsp-navigation__link"
+          data-active={!sectionWorkspace || undefined}
+          to="/"
+        >
           <span>01</span>{i18n.t('app.nav_courses')}
-        </a>
-        <a className="bcsp-navigation__link" href="#bcsp-system-status">
-          <span>02</span>{i18n.t('app.system_status')}
-        </a>
+        </RouterLink>
+        <RouterLink
+          className="bcsp-navigation__link"
+          data-active={sectionWorkspace || undefined}
+          to="/sections"
+        >
+          <span>02</span>{i18n.t('app.nav_sections')}
+        </RouterLink>
       </nav>
       <main className="bcsp-main" id="bcsp-workspace" tabIndex={-1}>
         <aside className="bcsp-rail">
           <div className="bcsp-rail__section">
-            <p aria-hidden="true" className="bcsp-rail__sequence">01</p>
+            <p aria-hidden="true" className="bcsp-rail__sequence">{sequence}</p>
             <div>
               <p className="bcsp-section-label">{i18n.t('app.catalog_index')}</p>
-              <p className="bcsp-rail__note">{i18n.t('app.ready_body')}</p>
+              <p className="bcsp-rail__note">{workspaceIntro}</p>
             </div>
           </div>
-          <div className="bcsp-rail__footer">Copyright © 2026 VVittgenstein</div>
+          <div className="bcsp-rail__footer">Copyright (c) 2026 VVittgenstein</div>
         </aside>
         <section className="bcsp-workspace" aria-labelledby="bcsp-workspace-title">
           <header className="bcsp-workspace__heading">
             <div>
-              <p className="bcsp-section-label">[ 01 / {i18n.t('app.catalog_workspace')} ]</p>
+              <p className="bcsp-section-label">[ {sequence} / {i18n.t('app.catalog_workspace')} ]</p>
               <h2 className="bcsp-workspace__title" id="bcsp-workspace-title">
-                {i18n.t('app.select_target')}
+                {workspaceTitle}
               </h2>
             </div>
             <p className="bcsp-workspace__protocol">
@@ -166,13 +170,14 @@ function statusTime(discovery: CatalogDiscoveryResponseV1, i18n: BcspI18nRuntime
   return i18n.formatDate(value, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-function ReadyCatalog({ state }: { readonly state: Extract<ShellDataState, { status: 'READY' }> }) {
+function ReadyCatalog({
+  runtime,
+  state,
+}: {
+  readonly runtime: ProductRuntimePort;
+  readonly state: Extract<ShellDataState, { status: 'READY' }>;
+}) {
   const i18n = useBcspI18n();
-  const firstTarget = state.discovery.targets[0];
-  const [selectedId, setSelectedId] = useState(() => firstTarget === undefined ? '' : targetId(firstTarget));
-  const selected = state.discovery.targets.find((target) => targetId(target) === selectedId)
-    ?? firstTarget;
-  const selectedLabels = selected === undefined ? null : targetLabels(selected);
   const discoveryLabel = state.discoveryState === 'CURRENT'
     ? i18n.t('app.data_current')
     : i18n.t('app.data_stale');
@@ -208,56 +213,7 @@ function ReadyCatalog({ state }: { readonly state: Extract<ShellDataState, { sta
           />
         </div>
       </section>
-      <div className="bcsp-catalog-grid">
-        <section className="bcsp-targets" aria-labelledby="bcsp-target-list-title">
-          <header className="bcsp-targets__header">
-            <h3 className="bcsp-section-label" id="bcsp-target-list-title">
-              {i18n.t('app.targets')}
-            </h3>
-            <span className="bcsp-targets__count">{state.discovery.targets.length}</span>
-          </header>
-          <ul className="bcsp-targets__list">
-            {state.discovery.targets.map((target) => {
-              const id = targetId(target);
-              const labels = targetLabels(target);
-              return (
-                <li key={id}>
-                  <button
-                    aria-pressed={id === targetId(selected ?? target)}
-                    className="bcsp-target-button"
-                    onClick={() => setSelectedId(id)}
-                    type="button"
-                  >
-                    <span>
-                      <span className="bcsp-target-button__label">{labels.term}</span>
-                      <span className="bcsp-target-button__code">
-                        {labels.campus} / {target.key.campus}
-                      </span>
-                    </span>
-                    <span aria-hidden="true" className="bcsp-target-button__arrow">&gt;&gt;</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-        <section className="bcsp-ready-plane" aria-live="polite">
-          <div>
-            <p className="bcsp-ready-plane__eyebrow">[ {i18n.t('app.runtime_online')} ]</p>
-            <h3 className="bcsp-ready-plane__title">{i18n.t('app.ready_title')}</h3>
-            <p className="bcsp-ready-plane__body">{i18n.t('app.ready_body')}</p>
-          </div>
-          {selected === undefined || selectedLabels === null ? null : (
-            <div className="bcsp-ready-plane__target">
-              <div>
-                <strong>{selectedLabels.term}</strong>
-                <code>{selected.key.term} / {selectedLabels.campus} / {selected.key.campus}</code>
-              </div>
-              <span aria-hidden="true" className="bcsp-ready-plane__registration">+</span>
-            </div>
-          )}
-        </section>
-      </div>
+      <SearchWorkspace runtime={runtime} shellState={state} />
     </>
   );
 }
@@ -288,41 +244,43 @@ function ReadyRuntime({ runtime }: { readonly runtime: ProductRuntimePort }) {
       />
     );
   }
-  return <ReadyCatalog state={state} />;
+  return <ReadyCatalog runtime={runtime} state={state} />;
 }
 
 export function SharedApplication() {
   const i18n = useBcspI18n();
   const productRuntime = useProductRuntimeState();
   return (
-    <div
-      className="bcsp-shell"
-      data-bcsp-locale={i18n.locale}
-      data-bcsp-product-error={
-        productRuntime.status === 'ERROR' ? productRuntime.reason : undefined
-      }
-      data-bcsp-product-protocol={PRODUCT_PROTOCOL_VERSION}
-      data-bcsp-product-state={productRuntime.status}
-      data-bcsp-shared-application=""
-    >
-      <ShellFrame i18n={i18n}>
-        {productRuntime.status === 'LOADING' ? (
-          <InitialState
-            detail={i18n.t('app.loading_body')}
-            heading={i18n.t('app.loading_title')}
-            kind="loading"
-          />
-        ) : productRuntime.status === 'ERROR' ? (
-          <InitialState
-            detail={i18n.t('app.bootstrap_error_body')}
-            heading={i18n.t('app.bootstrap_error_title')}
-            kind="error"
-            retry={retryBootstrap}
-          />
-        ) : (
-          <ReadyRuntime runtime={productRuntime.runtime} />
-        )}
-      </ShellFrame>
-    </div>
+    <AppRouterProvider>
+      <div
+        className="bcsp-shell"
+        data-bcsp-locale={i18n.locale}
+        data-bcsp-product-error={
+          productRuntime.status === 'ERROR' ? productRuntime.reason : undefined
+        }
+        data-bcsp-product-protocol={PRODUCT_PROTOCOL_VERSION}
+        data-bcsp-product-state={productRuntime.status}
+        data-bcsp-shared-application=""
+      >
+        <ShellFrame i18n={i18n}>
+          {productRuntime.status === 'LOADING' ? (
+            <InitialState
+              detail={i18n.t('app.loading_body')}
+              heading={i18n.t('app.loading_title')}
+              kind="loading"
+            />
+          ) : productRuntime.status === 'ERROR' ? (
+            <InitialState
+              detail={i18n.t('app.bootstrap_error_body')}
+              heading={i18n.t('app.bootstrap_error_title')}
+              kind="error"
+              retry={retryBootstrap}
+            />
+          ) : (
+            <ReadyRuntime runtime={productRuntime.runtime} />
+          )}
+        </ShellFrame>
+      </div>
+    </AppRouterProvider>
   );
 }

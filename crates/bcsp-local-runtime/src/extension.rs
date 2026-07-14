@@ -272,6 +272,9 @@ impl RouteExtension for LocalRouteExtension {
     fn handle(&self, request: ExtensionRequest) -> ExtensionResponse {
         match (request.method(), request.path()) {
             (RequestMethod::Get, "/") => shell_asset("index.html", true),
+            (RequestMethod::Get, path) if is_local_spa_shell_path(path) => {
+                shell_asset("index.html", true)
+            }
             (RequestMethod::Get, "/runtime.txt") => shell_asset("runtime.txt", false),
             (RequestMethod::Get, "/api/v1/local/bootstrap") => {
                 self.surface_response(|surface| surface.bootstrap(&self.nonce))
@@ -353,6 +356,41 @@ impl RouteExtension for LocalRouteExtension {
             _ => self.product_routes.handle(request),
         }
     }
+}
+
+fn is_local_spa_shell_path(path: &str) -> bool {
+    if path == "/sections" {
+        return true;
+    }
+
+    let Some(identity) = path.strip_prefix("/sections/") else {
+        return false;
+    };
+    let mut segments = identity.split('/');
+    let Some(term) = segments.next() else {
+        return false;
+    };
+    let Some(campus) = segments.next() else {
+        return false;
+    };
+    let Some(index) = segments.next() else {
+        return false;
+    };
+
+    segments.next().is_none()
+        && [term, campus, index]
+            .into_iter()
+            .all(is_safe_spa_route_segment)
+}
+
+fn is_safe_spa_route_segment(segment: &str) -> bool {
+    const MAX_ROUTE_SEGMENT_BYTES: usize = 64;
+
+    !segment.is_empty()
+        && segment.len() <= MAX_ROUTE_SEGMENT_BYTES
+        && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 #[derive(Clone, Copy, Debug, Default)]

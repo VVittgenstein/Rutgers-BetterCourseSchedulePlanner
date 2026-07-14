@@ -188,8 +188,17 @@ export const BCSP_SHELL_CSS = String.raw`
   background: var(--bcsp-ink);
 }
 
+.bcsp-navigation__link[data-active='true'] {
+  color: var(--bcsp-paper-raised);
+  background: var(--bcsp-ink);
+}
+
 .bcsp-navigation__link:hover span {
   color: var(--bcsp-paper-raised);
+}
+
+.bcsp-navigation__link[data-active='true'] span {
+  color: var(--bcsp-accent);
 }
 
 .bcsp-main {

@@ -342,6 +342,61 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_section_direct_reloads_serve_only_the_safe_spa_shell_routes() {
+    let temp = TestDirectory::new("section-direct-reload");
+    let (_root, executable) = package(&temp);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let nonce = running.nonce().as_str();
+    let root = request(authority, "GET /", &origin, nonce, "");
+
+    for path in [
+        "/sections",
+        "/sections?sort=course",
+        "/sections/2026FA/NB/12345",
+        "/sections/not-semantic/still-safe/index",
+    ] {
+        let response = request(authority, &format!("GET {path}"), &origin, nonce, "");
+        assert_eq!(status(&response), 200, "{path}: {response}");
+        assert_eq!(
+            body(&response),
+            body(&root),
+            "{path} must serve the root shell"
+        );
+        assert!(
+            response
+                .to_ascii_lowercase()
+                .contains("content-type: text/html; charset=utf-8"),
+            "{path} must remain an HTML shell response",
+        );
+    }
+
+    for path in [
+        "/sections/",
+        "/sections/2026FA/NB",
+        "/sections/2026FA/NB/12345/extra",
+        "/sections//NB/12345",
+        "/sections/2026FA/NB/12%2f345",
+        "/sections/2026FA/NB/12345%3fignored",
+        "/api",
+        "/api/v1/local/bootstrap/extra",
+    ] {
+        let response = request(authority, &format!("GET {path}"), &origin, nonce, "");
+        assert_eq!(status(&response), 404, "{path}: {response}");
+    }
+
+    let post = request(authority, "POST /sections", &origin, nonce, "{}");
+    assert_eq!(status(&post), 404, "{post}");
+
+    running.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_host_composes_shared_product_routes_without_replacing_local_routes() {
     let temp = TestDirectory::new("shared-product-routes");
     let (_root, executable) = package(&temp);
