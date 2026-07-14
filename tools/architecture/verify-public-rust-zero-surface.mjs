@@ -33,7 +33,10 @@ const LOCAL_ONLY_PACKAGES = Object.freeze(['bcsp-local-user-state', 'bcsp-local-
 const SUPPLEMENTAL_MARKERS = Object.freeze({
   LOCAL_RESET: Object.freeze(['local_user_data_reset']),
 });
-const OPTIONAL_PUBLIC_INPUT_ROOTS = Object.freeze(['deploy/public']);
+const OPTIONAL_PUBLIC_INPUT_ROOTS = Object.freeze([
+  'crates/bcsp-public-runtime/assets',
+  'deploy/public',
+]);
 
 function normalizedToken(value) {
   return String(value).toLocaleLowerCase('en-US').replace(/[^a-z0-9]/gu, '');
@@ -209,7 +212,6 @@ export function collectSurfaceFiles(metadata, repoRoot) {
       return directory ? [`${directory}/src`, `${directory}/Cargo.toml`] : [];
     }),
     'crates/bcsp-operational-storage/migrations',
-    'crates/bcsp-public-runtime/assets',
     'Cargo.lock',
   ];
   for (const packageName of closure) {
@@ -256,13 +258,6 @@ export function collectSurfaceFiles(metadata, repoRoot) {
 
   const packageFiles = new Map([...rustFiles, ...storageFiles, ...manifests]);
   readInput(path.join(repoRoot, 'Cargo.lock'), repoRoot, packageFiles, errors);
-  collectTree(
-    path.join(repoRoot, 'crates/bcsp-public-runtime/assets'),
-    repoRoot,
-    packageFiles,
-    errors,
-    () => true,
-  );
   for (const optionalRoot of OPTIONAL_PUBLIC_INPUT_ROOTS) {
     const absolute = path.join(repoRoot, optionalRoot);
     if (!existsSync(absolute)) continue;
