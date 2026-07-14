@@ -14,8 +14,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::{any, get};
 use bcsp_application::{
-    ExtensionRequest, ExtensionResponse, RequestMethod, RouteExtension, SharedWatchSocket,
-    WebSocketExtension, serve_websocket,
+    ExtensionRequest, ExtensionResponse, ExtensionRoute, RequestMethod, RouteExtension,
+    SharedWatchSocket, WebSocketExtension, serve_websocket,
 };
 use bcsp_contracts::{
     ActiveWatchTargetV1, ApiErrorBody, ApiErrorCode, ApiErrorEnvelope, FilterRequestV1,
@@ -49,6 +49,19 @@ pub const PUBLIC_WS_SUBPROTOCOL: &str = "bcsp.v1";
 const WATCH_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(250);
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_VOLUME_PERCENT: u8 = 100;
+pub const PUBLIC_LIVENESS_PATH: &str = "/health/live";
+pub const PUBLIC_READINESS_PATH: &str = "/health/ready";
+pub const PUBLIC_METRICS_PATH: &str = "/metrics";
+pub const PUBLIC_WATCH_PATH: &str = "/api/v1/watch";
+pub static PUBLIC_RUNTIME_ROUTE_INVENTORY: &[ExtensionRoute] = &[
+    ExtensionRoute::new(RequestMethod::Get, PUBLIC_LIVENESS_PATH),
+    ExtensionRoute::new(RequestMethod::Head, PUBLIC_LIVENESS_PATH),
+    ExtensionRoute::new(RequestMethod::Get, PUBLIC_READINESS_PATH),
+    ExtensionRoute::new(RequestMethod::Head, PUBLIC_READINESS_PATH),
+    ExtensionRoute::new(RequestMethod::Get, PUBLIC_METRICS_PATH),
+    ExtensionRoute::new(RequestMethod::Head, PUBLIC_METRICS_PATH),
+    ExtensionRoute::new(RequestMethod::Get, PUBLIC_WATCH_PATH),
+];
 const SHELL_TEMPLATE: &str = r#"<!doctype html>
 <html lang="__BCSP_LANG__">
   <head>
@@ -303,13 +316,25 @@ async fn wait_for_shutdown_signal() -> Result<(), PublicRuntimeError> {
 }
 
 fn public_router(state: PublicHostState) -> Router {
-    Router::new()
-        .route("/health/live", get(handle_liveness))
-        .route("/health/ready", get(handle_readiness))
-        .route("/metrics", get(handle_metrics))
-        .route("/api/v1/watch", get(handle_watch_socket))
+    PUBLIC_RUNTIME_ROUTE_INVENTORY
+        .iter()
+        .filter(|route| route.method() == &RequestMethod::Get)
+        .fold(Router::<PublicHostState>::new(), register_builtin_get_route)
         .fallback(any(handle_fallback))
         .with_state(state)
+}
+
+fn register_builtin_get_route(
+    router: Router<PublicHostState>,
+    route: &ExtensionRoute,
+) -> Router<PublicHostState> {
+    match route.path() {
+        PUBLIC_LIVENESS_PATH => router.route(route.path(), get(handle_liveness)),
+        PUBLIC_READINESS_PATH => router.route(route.path(), get(handle_readiness)),
+        PUBLIC_METRICS_PATH => router.route(route.path(), get(handle_metrics)),
+        PUBLIC_WATCH_PATH => router.route(route.path(), get(handle_watch_socket)),
+        _ => panic!("unknown public built-in route inventory entry"),
+    }
 }
 
 async fn handle_liveness(State(state): State<PublicHostState>, request: Request) -> Response {
@@ -393,6 +418,15 @@ async fn handle_fallback(State(state): State<PublicHostState>, request: Request)
     let path = request.uri().path().to_owned();
     if method == RequestMethod::Get && !path.starts_with("/api/") {
         return document_response(&state, request.headers());
+    }
+    if !path.starts_with("/api/")
+        || !state
+            .product_routes
+            .route_inventory()
+            .iter()
+            .any(|route| route.matches(&method, &path))
+    {
+        return extension_response(ExtensionResponse::not_found());
     }
     if method.changes_state() && !authenticated_mutation(request.headers(), &state) {
         return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
@@ -717,6 +751,10 @@ mod tests {
 
     const TEST_ORIGIN: &str = "https://planner.example.test";
     const TEST_AUTHORITY: &str = "planner.example.test";
+    static TEST_PRODUCT_ROUTE_INVENTORY: &[ExtensionRoute] = &[
+        ExtensionRoute::new(RequestMethod::Get, "/api/v1/query/courses"),
+        ExtensionRoute::new(RequestMethod::Post, "/api/v1/query/courses"),
+    ];
 
     #[derive(Default)]
     struct CountingProductRoutes {
@@ -726,6 +764,10 @@ mod tests {
     }
 
     impl RouteExtension for CountingProductRoutes {
+        fn route_inventory(&self) -> &'static [ExtensionRoute] {
+            TEST_PRODUCT_ROUTE_INVENTORY
+        }
+
         fn handle(&self, request: ExtensionRequest) -> ExtensionResponse {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.paths.lock().expect("route paths").push(format!(
@@ -813,6 +855,90 @@ mod tests {
 
     fn bootstrap_data(value: &Value) -> &Value {
         value.get("data").expect("success data")
+    }
+
+    #[test]
+    fn production_router_uses_an_explicit_builtin_inventory() {
+        assert_eq!(
+            PUBLIC_RUNTIME_ROUTE_INVENTORY,
+            &[
+                ExtensionRoute::new(RequestMethod::Get, PUBLIC_LIVENESS_PATH),
+                ExtensionRoute::new(RequestMethod::Head, PUBLIC_LIVENESS_PATH),
+                ExtensionRoute::new(RequestMethod::Get, PUBLIC_READINESS_PATH),
+                ExtensionRoute::new(RequestMethod::Head, PUBLIC_READINESS_PATH),
+                ExtensionRoute::new(RequestMethod::Get, PUBLIC_METRICS_PATH),
+                ExtensionRoute::new(RequestMethod::Head, PUBLIC_METRICS_PATH),
+                ExtensionRoute::new(RequestMethod::Get, PUBLIC_WATCH_PATH),
+            ]
+        );
+        for get_route in PUBLIC_RUNTIME_ROUTE_INVENTORY.iter().filter(|route| {
+            route.method() == &RequestMethod::Get && route.path() != PUBLIC_WATCH_PATH
+        }) {
+            assert!(PUBLIC_RUNTIME_ROUTE_INVENTORY.iter().any(|route| {
+                route.method() == &RequestMethod::Head && route.path() == get_route.path()
+            }));
+        }
+        assert!(NoPublicProductRoutes.route_inventory().is_empty());
+    }
+
+    #[tokio::test]
+    async fn registered_builtin_method_surface_matches_the_inventory() {
+        let (_temp, runtime, _store) = spawn_runtime(Arc::new(NoPublicProductRoutes)).await;
+        let client = client();
+
+        for route in PUBLIC_RUNTIME_ROUTE_INVENTORY {
+            let request = match route.method() {
+                RequestMethod::Get => client.get(request_url(&runtime, route.path())),
+                RequestMethod::Head => client.head(request_url(&runtime, route.path())),
+                method => panic!("unexpected built-in method: {method:?}"),
+            };
+            let response = request
+                .header(HOST.as_str(), TEST_AUTHORITY)
+                .send()
+                .await
+                .expect("inventory request");
+            assert_ne!(response.status(), StatusCode::NOT_FOUND, "{route:?}");
+            assert_ne!(
+                response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{route:?}"
+            );
+            if route.method() == &RequestMethod::Head {
+                assert!(response.bytes().await.expect("HEAD body").is_empty());
+            }
+        }
+
+        let unsupported_watch_head = client
+            .head(request_url(&runtime, PUBLIC_WATCH_PATH))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .send()
+            .await
+            .expect("unsupported WebSocket HEAD");
+        assert_eq!(
+            unsupported_watch_head.status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+
+        for path in [
+            PUBLIC_LIVENESS_PATH,
+            PUBLIC_READINESS_PATH,
+            PUBLIC_METRICS_PATH,
+            PUBLIC_WATCH_PATH,
+        ] {
+            let response = client
+                .post(request_url(&runtime, path))
+                .header(HOST.as_str(), TEST_AUTHORITY)
+                .send()
+                .await
+                .expect("unregistered method");
+            assert_eq!(
+                response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "POST {path}"
+            );
+        }
+
+        runtime.shutdown().await.expect("clean shutdown");
     }
 
     #[tokio::test]
@@ -951,6 +1077,20 @@ mod tests {
             .await
             .expect("shared-state read");
         assert_eq!(read.status(), StatusCode::OK);
+        let unlisted_read = client
+            .get(request_url(&runtime, "/api/v1/query/unlisted"))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .send()
+            .await
+            .expect("unlisted API read");
+        assert_eq!(unlisted_read.status(), StatusCode::NOT_FOUND);
+        let unlisted_mutation = client
+            .post(request_url(&runtime, "/api/v1/query/unlisted"))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .send()
+            .await
+            .expect("unlisted API mutation");
+        assert_eq!(unlisted_mutation.status(), StatusCode::NOT_FOUND);
         assert_eq!(routes.calls.load(Ordering::SeqCst), 2);
         assert_eq!(routes.origin_starts.load(Ordering::SeqCst), 0);
         assert_eq!(

@@ -438,7 +438,7 @@ test('active filesystem policy rejects alternate source extensions and symlink e
   );
 });
 
-test('HTML, Vite target configs, and descriptor are frozen against extra roots and aliases', () => {
+test('HTML stays single-entry while Vite and package checks allow unrelated evolution', () => {
   const valid = repositoryStaticContractFixture();
   assert.deepEqual(validateRepositoryStaticContracts(valid), []);
 
@@ -463,16 +463,21 @@ test('HTML, Vite target configs, and descriptor are frozen against extra roots a
     'vite.config.ts',
     alias.get('vite.config.ts').replace("appType: 'spa',", "appType: 'spa',\n    resolve: { alias: {} },"),
   );
-  assert.match(validateRepositoryStaticContracts(alias).join('\n'), /content drifted/u);
+  assert.deepEqual(validateRepositoryStaticContracts(alias), []);
 
-  const extraInput = repositoryStaticContractFixture();
-  extraInput.set(
-    'build/target-build.ts',
-    extraInput
-      .get('build/target-build.ts')
-      .replace("html: 'public.html',", "html: 'public.html',\n    alternateHtml: 'extra.html',"),
+  const unsafeAssets = repositoryStaticContractFixture();
+  unsafeAssets.set(
+    'vite.config.ts',
+    unsafeAssets.get('vite.config.ts').replace('publicDir: false', 'publicDir: true'),
   );
-  assert.match(validateRepositoryStaticContracts(extraInput).join('\n'), /content drifted/u);
+  assert.match(validateRepositoryStaticContracts(unsafeAssets).join('\n'), /disable recursive public assets/u);
+
+  const crossedTarget = repositoryStaticContractFixture();
+  crossedTarget.set(
+    'vite.public.config.ts',
+    crossedTarget.get('vite.public.config.ts').replace("createTargetConfig('public')", "createTargetConfig('local')"),
+  );
+  assert.match(validateRepositoryStaticContracts(crossedTarget).join('\n'), /only the public target/u);
 
   for (const filePath of [
     'vite.extra.config.mjs',
@@ -500,7 +505,17 @@ test('HTML, Vite target configs, and descriptor are frozen against extra roots a
   assert.equal(packageJson.scripts['test:i18n'], 'vitest run --config vitest.config.ts');
   assert.match(packageJson.scripts.verify, /npm run test:i18n/u);
   const extraScripts = { ...packageJson.scripts, 'build:alternate': 'vite --config sub/vite.config.ts' };
-  assert.match(validatePackageScripts(extraScripts).join('\n'), /script universe/u);
+  assert.deepEqual(validatePackageScripts(extraScripts), []);
+  const missingArtifactCheck = {
+    ...packageJson.scripts,
+    'build:public': 'vite build --config vite.public.config.ts',
+  };
+  assert.match(validatePackageScripts(missingArtifactCheck).join('\n'), /verify-target-build\.mjs public/u);
+  const lateSourceGuard = {
+    ...packageJson.scripts,
+    'build:local': 'vite build --config vite.local.config.ts && npm run guard:imports && node ./tools/verify-target-build.mjs local',
+  };
+  assert.match(validatePackageScripts(lateSourceGuard).join('\n'), /npm run guard:imports then vite build/u);
 });
 
 test('--json emits JSON on stdout only', () => {

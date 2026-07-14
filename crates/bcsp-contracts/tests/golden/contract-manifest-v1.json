@@ -3888,8 +3888,7 @@
         "USER_REQUESTED",
         "CONNECTION_CLOSED",
         "HEARTBEAT_TIMEOUT",
-        "SERVICE_STOPPING",
-        "LOCAL_USER_DATA_RESET"
+        "SERVICE_STOPPING"
       ]
     },
     {

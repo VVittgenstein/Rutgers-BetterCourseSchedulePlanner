@@ -505,7 +505,6 @@ pub enum WatchStopReason {
     ConnectionClosed,
     HeartbeatTimeout,
     ServiceStopping,
-    LocalUserDataReset,
 }
 
 impl WatchStopReason {
@@ -514,7 +513,6 @@ impl WatchStopReason {
         Self::ConnectionClosed,
         Self::HeartbeatTimeout,
         Self::ServiceStopping,
-        Self::LocalUserDataReset,
     ];
 }
 

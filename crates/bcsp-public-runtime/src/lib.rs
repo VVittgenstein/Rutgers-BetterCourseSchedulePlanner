@@ -15,8 +15,9 @@ pub use config::{
     fixed_public_refresh_policy,
 };
 pub use host::{
-    NoPublicProductRoutes, PUBLIC_WS_SUBPROTOCOL, PublicRuntime, PublicRuntimeError,
-    build_production_runtime, run_production,
+    NoPublicProductRoutes, PUBLIC_LIVENESS_PATH, PUBLIC_METRICS_PATH, PUBLIC_READINESS_PATH,
+    PUBLIC_RUNTIME_ROUTE_INVENTORY, PUBLIC_WATCH_PATH, PUBLIC_WS_SUBPROTOCOL, PublicRuntime,
+    PublicRuntimeError, build_production_runtime, run_production,
 };
 pub use session::{PublicLocale, negotiate_locale};
 pub use status::{

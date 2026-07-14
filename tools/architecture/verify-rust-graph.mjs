@@ -780,13 +780,17 @@ function maskRust(source, maskLiterals) {
   return output;
 }
 
-function rustAuditTokens(source) {
+export function rustAuditTokens(source) {
   const withoutComments = maskRust(source, false);
   const tokens = new Set();
-  const addTokens = (value) => {
+  const addTokens = (value, includeComposite = false) => {
     for (const match of value.matchAll(/[A-Za-z][A-Za-z0-9_]*/gu)) {
       const normalized = normalizeAuditToken(match[0]);
       if (normalized) tokens.add(normalized);
+    }
+    if (includeComposite) {
+      const composite = normalizeAuditToken(value);
+      if (composite) tokens.add(composite);
     }
   };
   addTokens(withoutComments);
@@ -817,7 +821,10 @@ function rustAuditTokens(source) {
     ]);
     decoded = decoded.replace(/\\([0nrt"'\\])/gu, (_whole, escape) => simpleEscapes.get(escape));
     if (decoded.includes('\\')) valid = false;
-    if (valid) addTokens(decoded.replaceAll('\u0000', '\\'));
+    if (valid) addTokens(decoded.replaceAll('\u0000', '\\'), true);
+  }
+  for (const match of withoutComments.matchAll(/b?r(#{0,255})"([\s\S]*?)"\1/gu)) {
+    addTokens(match[2], true);
   }
   return tokens;
 }

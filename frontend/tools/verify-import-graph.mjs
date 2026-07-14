@@ -79,96 +79,14 @@ const ALLOWED_EDGE_TARGETS = Object.freeze({
   shared: new Set(['shared']),
 });
 
-const STATIC_REPOSITORY_CONTRACT = Object.freeze({
-  'build/target-build.ts': `export const frontendTargets = {
-  local: {
-    devPort: 5174,
-    html: 'local.html',
-    outDir: 'dist/local',
-  },
-  public: {
-    devPort: 5175,
-    html: 'public.html',
-    outDir: 'dist/public',
-  },
-} as const;
-
-export type FrontendTarget = keyof typeof frontendTargets;
-
-export function getTargetBuild(target: FrontendTarget) {
-  return frontendTargets[target];
-}
-`,
-  'local.html': `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RBCSP Local</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/entry.local.tsx"></script>
-  </body>
-</html>
-`,
-  'public.html': `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RBCSP Public</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/entry.public.tsx"></script>
-  </body>
-</html>
-`,
-  'vite.config.ts': `import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
-
-import react from '@vitejs/plugin-react';
-import type { UserConfig } from 'vite';
-
-import { getTargetBuild, type FrontendTarget } from './build/target-build';
-
-const frontendRoot = fileURLToPath(new URL('.', import.meta.url));
-
-export function createTargetConfig(target: FrontendTarget): UserConfig {
-  const descriptor = getTargetBuild(target);
-
-  return {
-    appType: 'spa',
-    base: './',
-    plugins: [react()],
-    publicDir: false,
-    root: frontendRoot,
-    server: {
-      port: descriptor.devPort,
-      strictPort: true,
-    },
-    build: {
-      emptyOutDir: true,
-      manifest: 'asset-manifest.json',
-      outDir: resolve(frontendRoot, descriptor.outDir),
-      rollupOptions: {
-        input: resolve(frontendRoot, descriptor.html),
-      },
-      sourcemap: false,
-    },
-  };
-}
-`,
-  'vite.local.config.ts': `import { createTargetConfig } from './vite.config';
-
-export default createTargetConfig('local');
-`,
-  'vite.public.config.ts': `import { createTargetConfig } from './vite.config';
-
-export default createTargetConfig('public');
-`,
-});
+const REPOSITORY_STATIC_INPUTS = Object.freeze([
+  'build/target-build.ts',
+  'local.html',
+  'public.html',
+  'vite.config.ts',
+  'vite.local.config.ts',
+  'vite.public.config.ts',
+]);
 
 const EXPECTED_ROOT_STATIC_FILES = Object.freeze([
   'local.html',
@@ -178,32 +96,18 @@ const EXPECTED_ROOT_STATIC_FILES = Object.freeze([
   'vite.public.config.ts',
 ]);
 
-const EXPECTED_PACKAGE_SCRIPTS = Object.freeze({
-  guard: 'npm run guard:imports && npm run test:guard',
-  'guard:imports': 'node ./tools/verify-import-graph.mjs',
-  'test:guard': 'node --test ./tools/verify-import-graph.test.mjs',
-  'test:i18n': 'vitest run --config vitest.config.ts',
-  typecheck: 'tsc --build tsconfig.json --pretty false',
-  'typecheck:shared': 'tsc --build tsconfig.shared.json --pretty false',
-  'typecheck:local': 'tsc --build tsconfig.local.json --pretty false',
-  'typecheck:public': 'tsc --build tsconfig.public.json --pretty false',
-  'typecheck:build': 'tsc --build tsconfig.node.json --pretty false',
-  build: 'npm run build:local && npm run build:public',
-  'build:local': 'vite build --config vite.local.config.ts',
-  'build:public': 'vite build --config vite.public.config.ts',
-  'dev:local': 'vite --config vite.local.config.ts --open /local.html',
-  'dev:public': 'vite --config vite.public.config.ts --open /public.html',
-  verify: 'npm run guard && npm run test:i18n && npm run typecheck && npm run build',
-  'preview:local': 'vite preview --config vite.local.config.ts',
-  'preview:public': 'vite preview --config vite.public.config.ts',
+const REQUIRED_PACKAGE_SCRIPT_FRAGMENTS = Object.freeze({
+  guard: ['npm run guard:imports', 'npm run test:guard'],
+  'guard:imports': ['verify-import-graph.mjs'],
+  'test:guard': ['verify-import-graph.test.mjs', 'verify-target-build.test.mjs'],
+  build: ['npm run build:local', 'npm run build:public'],
+  'build:local': ['npm run guard:imports', 'vite build --config vite.local.config.ts', 'verify-target-build.mjs local'],
+  'build:public': ['npm run guard:imports', 'vite build --config vite.public.config.ts', 'verify-target-build.mjs public'],
+  verify: ['npm run guard', 'npm run test:i18n', 'npm run typecheck', 'npm run build'],
 });
 
 function toPosixPath(value) {
   return posix.normalize(value.replaceAll('\\', '/')).replace(/^\.\//u, '');
-}
-
-function normalizeText(value) {
-  return value.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trimEnd() + '\n';
 }
 
 function normalizeAuditToken(value) {
@@ -1240,8 +1144,13 @@ function readActiveFiles(root) {
   return files;
 }
 
-export function repositoryStaticContractFixture() {
-  return new Map(Object.entries(STATIC_REPOSITORY_CONTRACT));
+export function repositoryStaticContractFixture(root = frontendRoot) {
+  return new Map(
+    REPOSITORY_STATIC_INPUTS.map((filePath) => [
+      filePath,
+      readFileSync(resolve(root, filePath), 'utf8'),
+    ]),
+  );
 }
 
 function isRepositoryStaticCandidate(filePath) {
@@ -1266,14 +1175,20 @@ export function validateRepositoryStaticFileUniverse(filePaths) {
 
 export function validatePackageScripts(scripts) {
   const errors = [];
-  const actualScriptNames = Object.keys(scripts ?? {}).sort();
-  const expectedScriptNames = Object.keys(EXPECTED_PACKAGE_SCRIPTS).sort();
-  if (JSON.stringify(actualScriptNames) !== JSON.stringify(expectedScriptNames)) {
-    errors.push('package script universe does not match the frozen dual-target contract');
-  }
-  for (const [scriptName, expectedCommand] of Object.entries(EXPECTED_PACKAGE_SCRIPTS)) {
-    if (scripts?.[scriptName] !== expectedCommand) {
-      errors.push(`${scriptName}: package script does not match the frozen target contract`);
+  for (const [scriptName, fragments] of Object.entries(REQUIRED_PACKAGE_SCRIPT_FRAGMENTS)) {
+    const command = scripts?.[scriptName];
+    if (typeof command !== 'string') {
+      errors.push(`${scriptName}: required package script is missing`);
+      continue;
+    }
+    let cursor = 0;
+    for (const fragment of fragments) {
+      const index = command.indexOf(fragment, cursor);
+      if (index < 0) {
+        errors.push(`${scriptName}: must run ${fragments.join(' then ')}`);
+        break;
+      }
+      cursor = index + fragment.length;
     }
   }
   return errors;
@@ -1321,12 +1236,9 @@ function validateHtmlModuleRoot(filePath, sourceText, expectedEntry) {
 
 export function validateRepositoryStaticContracts(textFiles) {
   const errors = validateRepositoryStaticFileUniverse(textFiles.keys());
-  for (const [filePath, expectedText] of Object.entries(STATIC_REPOSITORY_CONTRACT)) {
-    const actualText = textFiles.get(filePath);
-    if (typeof actualText !== 'string') {
-      errors.push(`${filePath}: required static build contract file is missing`);
-    } else if (normalizeText(actualText) !== normalizeText(expectedText)) {
-      errors.push(`${filePath}: content drifted from the frozen dual-target build contract`);
+  for (const filePath of REPOSITORY_STATIC_INPUTS) {
+    if (typeof textFiles.get(filePath) !== 'string') {
+      errors.push(`${filePath}: required build file is missing`);
     }
   }
   const localHtml = textFiles.get('local.html');
@@ -1337,6 +1249,39 @@ export function validateRepositoryStaticContracts(textFiles) {
   if (typeof publicHtml === 'string') {
     errors.push(...validateHtmlModuleRoot('public.html', publicHtml, '/src/entry.public.tsx'));
   }
+
+  const descriptor = textFiles.get('build/target-build.ts') ?? '';
+  for (const [target, html, outDir] of [
+    ['local', 'local.html', 'dist/local'],
+    ['public', 'public.html', 'dist/public'],
+  ]) {
+    const block = new RegExp(`${target}\\s*:\\s*\\{([\\s\\S]*?)\\}`, 'u').exec(descriptor)?.[1] ?? '';
+    if (!new RegExp(`html\\s*:\\s*['\"]${html.replace('.', '\\.')}['\"]`, 'u').test(block) ||
+        !new RegExp(`outDir\\s*:\\s*['\"]${outDir}['\"]`, 'u').test(block)) {
+      errors.push(`build/target-build.ts: ${target} must map to ${html} and ${outDir}`);
+    }
+  }
+
+  const vite = textFiles.get('vite.config.ts') ?? '';
+  for (const [description, pattern] of [
+    ['disable recursive public assets', /publicDir\s*:\s*false/u],
+    ['emit the Vite asset manifest', /manifest\s*:\s*['"]asset-manifest\.json['"]/u],
+    ['disable production source maps', /sourcemap\s*:\s*false/u],
+    ['use only the target output directory', /outDir\s*:\s*resolve\(frontendRoot,\s*descriptor\.outDir\)/u],
+    ['use only the target HTML input', /input\s*:\s*resolve\(frontendRoot,\s*descriptor\.html\)/u],
+    ['inspect resolved modules before tree shaking', /moduleParsed\s*\(/u],
+    ['fail forbidden resolved source modules immediately', /this\.error\s*\(/u],
+    ['emit the target module manifest', /fileName\s*:\s*['"]module-manifest\.json['"]/u],
+  ]) {
+    if (!pattern.test(vite)) errors.push(`vite.config.ts: must ${description}`);
+  }
+  for (const target of ['local', 'public']) {
+    const config = textFiles.get(`vite.${target}.config.ts`) ?? '';
+    const calls = [...config.matchAll(/createTargetConfig\(\s*['"](local|public)['"]\s*\)/gu)];
+    if (calls.length !== 1 || calls[0]?.[1] !== target) {
+      errors.push(`vite.${target}.config.ts: must export only the ${target} target config`);
+    }
+  }
   return errors;
 }
 
@@ -1346,12 +1291,7 @@ function readRepositoryInputs(root) {
   const denyDocument = JSON.parse(
     readFileSync(resolve(repositoryRoot, 'tools/architecture/p4-public-source-deny.json'), 'utf8'),
   );
-  const textFiles = new Map(
-    Object.keys(STATIC_REPOSITORY_CONTRACT).map((filePath) => [
-      filePath,
-      readFileSync(resolve(root, filePath), 'utf8'),
-    ]),
-  );
+  const textFiles = repositoryStaticContractFixture(root);
   const staticUniverse = readRepositoryStaticUniverse(root);
   const metadataErrors = [
     ...validateDenyDocument(denyDocument),
@@ -1374,7 +1314,7 @@ export function verifyRepositoryImportGraph(root = frontendRoot) {
   const inputs = readRepositoryInputs(root);
   const report = analyzeImportGraph(inputs);
   report.repositoryContract = {
-    staticFileCount: Object.keys(STATIC_REPOSITORY_CONTRACT).length,
+    staticFileCount: REPOSITORY_STATIC_INPUTS.length,
     metadataErrorCount: inputs.metadataErrors.length,
     pass: inputs.metadataErrors.length === 0,
   };

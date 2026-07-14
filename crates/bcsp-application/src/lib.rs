@@ -11,9 +11,9 @@ mod runtime_core;
 mod watch_socket;
 
 pub use host::{
-    ExtensionRequest, ExtensionResponse, LoopbackServer, LoopbackServerError, RequestMethod,
-    RouteExtension, SessionNonce, WebSocketExtension, serve_websocket, spawn_loopback_server,
-    spawn_loopback_server_with_socket,
+    ExtensionRequest, ExtensionResponse, ExtensionRoute, LoopbackServer, LoopbackServerError,
+    RequestMethod, RouteExtension, SessionNonce, WebSocketExtension, serve_websocket,
+    spawn_loopback_server, spawn_loopback_server_with_socket,
 };
 pub use query_service::{SharedQueryError, SharedQueryService};
 pub use runtime_core::{

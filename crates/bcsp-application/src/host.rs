@@ -157,7 +157,35 @@ impl ExtensionResponse {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionRoute {
+    method: RequestMethod,
+    path: &'static str,
+}
+
+impl ExtensionRoute {
+    pub const fn new(method: RequestMethod, path: &'static str) -> Self {
+        Self { method, path }
+    }
+
+    pub fn matches(&self, method: &RequestMethod, path: &str) -> bool {
+        self.method == *method && self.path == path
+    }
+
+    pub const fn method(&self) -> &RequestMethod {
+        &self.method
+    }
+
+    pub const fn path(&self) -> &'static str {
+        self.path
+    }
+}
+
 pub trait RouteExtension: Send + Sync + 'static {
+    fn route_inventory(&self) -> &'static [ExtensionRoute] {
+        &[]
+    }
+
     fn handle(&self, request: ExtensionRequest) -> ExtensionResponse;
 }
 
