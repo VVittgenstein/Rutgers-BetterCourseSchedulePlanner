@@ -160,6 +160,18 @@ pub trait TraceIdSource {
     fn next_trace_id(&mut self) -> TraceId;
 }
 
+/// Operating-system-backed UUID v4 source for runtime correlation IDs.
+///
+/// Deterministic tests should continue to inject their own [`TraceIdSource`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemTraceIdSource;
+
+impl TraceIdSource for SystemTraceIdSource {
+    fn next_trace_id(&mut self) -> TraceId {
+        TraceId(Uuid::new_v4())
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DetailName(String);
 

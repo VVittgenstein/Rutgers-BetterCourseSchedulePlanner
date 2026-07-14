@@ -42,8 +42,8 @@ pub use catalog::{
 pub use envelope::{HttpRequestEnvelope, HttpSuccessEnvelope, WsClientEnvelope, WsServerEnvelope};
 pub use error::{
     ApiErrorBody, ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope, ContractDecodeError, DetailName,
-    StableErrorCode, StableErrorCodeSet, TraceId, TraceIdError, TraceIdSource, TypedApiErrorBody,
-    TypedApiErrorEnvelope, decode_versioned_envelope_json,
+    StableErrorCode, StableErrorCodeSet, SystemTraceIdSource, TraceId, TraceIdError, TraceIdSource,
+    TypedApiErrorBody, TypedApiErrorEnvelope, decode_versioned_envelope_json,
 };
 pub use identity::{
     CampusCode, CourseGroupKey, CourseString, CourseVariantKey, IdentityError, IdentityErrorCode,

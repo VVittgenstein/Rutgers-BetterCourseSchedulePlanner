@@ -1,13 +1,30 @@
-//! Shared application composition boundary; routes and runtime behavior are absent.
+//! Shared application composition, loopback hosting, query/Open projection, and watch transport.
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-application";
 
+mod host;
 mod query_service;
+mod runtime_core;
+mod watch_socket;
 
+pub use host::{
+    ExtensionRequest, ExtensionResponse, LoopbackServer, LoopbackServerError, RequestMethod,
+    RouteExtension, SessionNonce, WebSocketExtension, spawn_loopback_server,
+    spawn_loopback_server_with_socket,
+};
 pub use query_service::{SharedQueryError, SharedQueryService};
+pub use runtime_core::{
+    ApplicationClock, FixedRefreshPolicyProvider, OpenRuntimeSnapshot, RefreshPolicy,
+    RefreshPolicyError, RefreshPolicyProvider, RefreshPolicyReadError, SharedRuntimeContext,
+    SharedRuntimeError, SystemApplicationClock,
+};
+pub use watch_socket::{
+    NoopWatchDispatchSink, SharedWatchSocket, SystemWatchClock, WatchAdmissionSource,
+    WatchDispatchSink,
+};
 
 pub fn boundary_marker() -> &'static str {
     let _ = (

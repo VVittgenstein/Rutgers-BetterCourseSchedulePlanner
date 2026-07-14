@@ -11,11 +11,19 @@ path = "src/lib.rs"
 
 [dependencies]
 bcsp-application = { version = "=0.0.0", path = "../bcsp-application" }
+bcsp-contracts = { version = "=0.0.0", path = "../bcsp-contracts" }
 bcsp-local-user-state = { version = "=0.0.0", path = "../bcsp-local-user-state" }
+bcsp-open = { version = "=0.0.0", path = "../bcsp-open" }
 bcsp-operational-storage = { version = "=0.0.0", path = "../bcsp-operational-storage" }
+bcsp-watch = { version = "=0.0.0", path = "../bcsp-watch" }
 include_dir.workspace = true
 open.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
