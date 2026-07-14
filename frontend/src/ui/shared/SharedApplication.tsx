@@ -117,6 +117,7 @@ function ShellFrame({
   const sectionWorkspace = pathname.startsWith('/sections');
   const watchWorkspace = pathname === '/watch';
   const directSection = sectionWorkspace && pathname !== '/sections';
+  const courseWorkspace = !sectionWorkspace && !watchWorkspace && extension === undefined;
   const sequence = extension?.sequence ?? (watchWorkspace ? '03' : sectionWorkspace ? '02' : '01');
   const workspaceTitle = extension?.title ?? (watchWorkspace
     ? i18n.t('app.nav_watch')
@@ -126,7 +127,7 @@ function ShellFrame({
       ? i18n.t('search.section_workspace')
       : i18n.t('search.course_workspace'));
   const workspaceIntro = extension?.intro ?? (watchWorkspace
-    ? i18n.t('watch.alert.open')
+    ? i18n.t('watch.desk_lede')
     : sectionWorkspace
     ? i18n.t('search.section_intro')
     : i18n.t('search.course_intro'));
@@ -160,13 +161,15 @@ function ShellFrame({
       >
         <span className="bcsp-navigation__label">[ {i18n.t('app.catalog_workspace')} ]</span>
         <RouterLink
+          aria-current={courseWorkspace ? 'page' : undefined}
           className="bcsp-navigation__link"
-          data-active={!sectionWorkspace && !watchWorkspace && extension === undefined || undefined}
+          data-active={courseWorkspace || undefined}
           to="/"
         >
           <span>01</span>{i18n.t('app.nav_courses')}
         </RouterLink>
         <RouterLink
+          aria-current={sectionWorkspace ? 'page' : undefined}
           className="bcsp-navigation__link"
           data-active={sectionWorkspace || undefined}
           to="/sections"
@@ -174,6 +177,7 @@ function ShellFrame({
           <span>02</span>{i18n.t('app.nav_sections')}
         </RouterLink>
         <RouterLink
+          aria-current={watchWorkspace ? 'page' : undefined}
           className="bcsp-navigation__link"
           data-active={watchWorkspace || undefined}
           to="/watch"
@@ -182,6 +186,7 @@ function ShellFrame({
         </RouterLink>
         {workspaceExtensions.map((workspace) => (
           <RouterLink
+            aria-current={extension?.path === workspace.path ? 'page' : undefined}
             className="bcsp-navigation__link"
             data-active={extension?.path === workspace.path || undefined}
             key={workspace.path}
@@ -217,6 +222,14 @@ function ShellFrame({
           {children}
         </section>
       </main>
+      <footer className="bcsp-mobile-footer">
+        <span className="bcsp-mobile-footer__copyright">
+          Copyright (c) 2026 VVittgenstein
+        </span>
+        <span className="bcsp-mobile-footer__protocol">
+          {i18n.t('app.protocol')} / BCSP.V{PRODUCT_PROTOCOL_VERSION}
+        </span>
+      </footer>
     </>
   );
 }

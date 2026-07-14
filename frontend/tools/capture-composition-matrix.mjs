@@ -11,9 +11,10 @@ const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
   ?? (process.platform === 'win32'
     ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
     : undefined);
+const evidenceTask = process.env.BCSP_EVIDENCE_TASK ?? 'p7-2-004';
 const outputDirectory = resolve(
   process.cwd(),
-  '../project-governance/current/p7/evidence/p7-2-004',
+  `../project-governance/current/p7/evidence/${evidenceTask}`,
 );
 const [filterSchema, axeSource] = await Promise.all([
   readFile(resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'), 'utf8')
@@ -283,6 +284,73 @@ async function assertNoOverflow(page, name) {
   }
 }
 
+async function assertPolishState(page, scenario) {
+  const currentLinks = await page.locator('.bcsp-navigation a[aria-current="page"]').count();
+  if (currentLinks !== 1) {
+    throw new Error(`${scenario.name}: expected exactly one aria-current page link, received ${currentLinks}`);
+  }
+
+  if (scenario.target === 'local') {
+    const savedState = page.locator('.local-page__settings-actions [data-state]');
+    if (await savedState.getAttribute('data-state') !== 'UNCHANGED'
+      || !await page.getByRole('button', { name: /Save settings|保存设置/u }).isDisabled()) {
+      throw new Error(`${scenario.name}: unchanged Settings state was not truthful`);
+    }
+    if (await page.locator('.local-personal__hero').count() !== 0) {
+      throw new Error(`${scenario.name}: duplicate local page hero remains`);
+    }
+    const localeControl = page.locator('.local-personal select').first();
+    await localeControl.focus();
+    const focus = await localeControl.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        color: style.outlineColor,
+        style: style.outlineStyle,
+        width: Number.parseFloat(style.outlineWidth),
+      };
+    });
+    if (focus.style !== 'solid' || focus.width < 3 || focus.color === 'rgba(0, 0, 0, 0)') {
+      throw new Error(`${scenario.name}: local form focus indicator is not visibly rendered ${JSON.stringify(focus)}`);
+    }
+  } else {
+    const rail = await page.locator('.bcsp-rail__note').innerText();
+    if (/A watched Section is open|监看的课节已有开放名额/u.test(rail)) {
+      throw new Error(`${scenario.name}: empty Watch rail still reports an Open episode`);
+    }
+    const unavailableBatchActions = await page.getByRole('button', {
+      name: /Start selected|Apply policy to active|Acknowledge all|开始监看所选课节|将策略应用到正在监看的课节|全部确认/u,
+    }).count();
+    if (unavailableBatchActions !== 0) {
+      throw new Error(`${scenario.name}: empty Watch path exposes unavailable batch actions`);
+    }
+  }
+
+  if (scenario.viewport.width <= 390) {
+    const expectedColumns = scenario.viewport.width <= 336 ? 2 : 3;
+    const navColumns = await page.locator('.bcsp-navigation').evaluate((element) =>
+      getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean).length);
+    if (navColumns !== expectedColumns) {
+      throw new Error(`${scenario.name}: navigation columns ${navColumns}/${expectedColumns}`);
+    }
+    const headingVisible = await page.locator('.bcsp-workspace__title').evaluate((element) => {
+      const rectangle = element.getBoundingClientRect();
+      return rectangle.top < globalThis.innerHeight && rectangle.bottom > 0;
+    });
+    if (!headingVisible) throw new Error(`${scenario.name}: current task title is outside the first viewport`);
+
+    if (scenario.target === 'public') {
+      const expectedStatusColumns = scenario.viewport.width <= 336 ? 1 : 2;
+      for (const selector of ['.bcsp-status-grid', '.watch-workspace__status-strip']) {
+        const columns = await page.locator(selector).evaluate((element) =>
+          getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean).length);
+        if (columns !== expectedStatusColumns) {
+          throw new Error(`${scenario.name}: ${selector} columns ${columns}/${expectedStatusColumns}`);
+        }
+      }
+    }
+  }
+}
+
 async function settle(page) {
   await page.evaluate(async () => {
     globalThis.scrollTo(0, 0);
@@ -391,6 +459,12 @@ const scenarios = ['local', 'public'].flatMap((target) =>
     ...scenario,
     name: `${target}-${locale}-${scenario.viewport.name}`,
   }))));
+const narrowScenarios = ['local', 'public'].map((target) => ({
+  target,
+  locale: 'en-US',
+  viewport: { name: 'narrow', width: 320, height: 568 },
+  name: `${target}-en-US-narrow`,
+}));
 
 await mkdir(outputDirectory, { recursive: true });
 const browser = await chromium.launch({
@@ -413,8 +487,16 @@ try {
       await installApi(page, scenario);
       if (scenario.target === 'local') await exerciseLocal(page, scenario);
       else await exercisePublic(page, scenario);
+      await assertPolishState(page, scenario);
       await settle(page);
       await assertNoOverflow(page, scenario.name);
+      if (scenario.locale === 'en-US' && scenario.viewport.name === 'mobile') {
+        await page.screenshot({
+          animations: 'disabled',
+          fullPage: false,
+          path: resolve(outputDirectory, `${scenario.target}-en-US-390-first-view.png`),
+        });
+      }
       await page.screenshot({
         animations: 'disabled',
         fullPage: scenario.viewport.name === 'mobile',
@@ -425,8 +507,35 @@ try {
       await page.close();
     }
   }
+  for (const scenario of narrowScenarios) {
+    const page = await browser.newPage({
+      colorScheme: 'light',
+      locale: scenario.locale,
+      reducedMotion: 'reduce',
+      viewport: { height: scenario.viewport.height, width: scenario.viewport.width },
+    });
+    try {
+      await page.addInitScript({ content: axeSource });
+      if (scenario.target === 'public') await installPublicDocuments(page);
+      await installApi(page, scenario);
+      if (scenario.target === 'local') await exerciseLocal(page, scenario);
+      else await exercisePublic(page, scenario);
+      await assertPolishState(page, scenario);
+      await settle(page);
+      await assertNoOverflow(page, scenario.name);
+      await page.screenshot({
+        animations: 'disabled',
+        fullPage: false,
+        path: resolve(outputDirectory, `${scenario.target}-en-US-320-first-view.png`),
+      });
+      await assertKeyboardFlow(page, scenario.name);
+    } finally {
+      await page.close();
+    }
+  }
 } finally {
   await browser.close();
 }
 
-process.stdout.write(`P7.2-004 composition matrix: PASS (${scenarios.length}/${scenarios.length})\n`);
+const totalScenarios = scenarios.length + narrowScenarios.length;
+process.stdout.write(`${evidenceTask} composition matrix: PASS (${totalScenarios}/${totalScenarios})\n`);

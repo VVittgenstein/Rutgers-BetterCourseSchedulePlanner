@@ -29,6 +29,7 @@ function pathnameFrom(to: string): string {
 export function AppRouterProvider({ children, initialPath }: AppRouterProviderProps) {
   const [pathname, setPathname] = useState(() =>
     pathnameFrom(initialPath ?? globalThis.location?.pathname ?? '/'));
+  const [workspaceFocusRequest, setWorkspaceFocusRequest] = useState(0);
 
   useEffect(() => {
     if (initialPath !== undefined) return undefined;
@@ -37,6 +38,14 @@ export function AppRouterProvider({ children, initialPath }: AppRouterProviderPr
     return () => globalThis.removeEventListener('popstate', syncFromBrowser);
   }, [initialPath]);
 
+  useEffect(() => {
+    if (workspaceFocusRequest === 0) return;
+    const workspace = globalThis.document?.getElementById('bcsp-workspace');
+    if (workspace === null || workspace === undefined) return;
+    workspace.focus({ preventScroll: true });
+    workspace.scrollIntoView?.({ behavior: 'auto', block: 'start' });
+  }, [workspaceFocusRequest]);
+
   const navigate = useCallback((to: string, options?: { readonly replace?: boolean }) => {
     const nextPathname = pathnameFrom(to);
     if (initialPath === undefined) {
@@ -44,6 +53,7 @@ export function AppRouterProvider({ children, initialPath }: AppRouterProviderPr
       else globalThis.history.pushState(null, '', to);
     }
     setPathname(nextPathname);
+    setWorkspaceFocusRequest((request) => request + 1);
   }, [initialPath]);
 
   const value = useMemo<AppRouterRuntime>(() => ({ navigate, pathname }), [navigate, pathname]);

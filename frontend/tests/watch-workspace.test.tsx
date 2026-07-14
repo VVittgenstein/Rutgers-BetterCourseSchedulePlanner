@@ -341,6 +341,19 @@ function activeStart(sectionKey: SectionKey, ordinal: number): WatchServerEventV
   };
 }
 
+function watchStopped(sectionKey: SectionKey): WatchServerEventV1 {
+  return {
+    type: 'WATCH_STOPPED',
+    stopped: {
+      contractVersion: 1,
+      activeWatchId: 'active-watch-status-toast',
+      sectionKey,
+      reason: 'USER_REQUESTED',
+      stoppedAt: NOW,
+    },
+  };
+}
+
 function continuousEpisode(
   sectionKey: SectionKey,
   ordinal: number,
@@ -403,7 +416,7 @@ describe('Watch workspace product flow', () => {
       'zh-CN',
     );
 
-    expect(screen.getByRole('heading', { name: '监看台' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '实时监看控制台' })).toBeTruthy();
     expect(screen.getByText('提醒方式')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', {
       name: '选择课节 00001 以进行监看',
@@ -481,6 +494,15 @@ describe('Watch workspace product flow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Enable / test sound' }));
     await waitFor(() => expect(audio.unlockCalls).toHaveBeenCalledOnce());
     expect(audio.previewCalls).toHaveBeenCalledWith(70);
+  });
+
+  it('keeps the empty Watch path compact until a Section or alert needs batch actions', () => {
+    renderWatch([]);
+
+    expect(screen.getByRole('heading', { name: 'Live watch console' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Start selected/u })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Apply policy to active' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Acknowledge all' })).toBeNull();
   });
 
   it('gates continuous starts on confirmation and supports finite ten-minute and unlimited policies', async () => {
@@ -611,6 +633,75 @@ describe('Watch workspace product flow', () => {
         sectionKey,
       },
     });
+  });
+
+  it('auto-dismisses STATUS toasts after visible time while pausing for hover, focus, and hidden documents', () => {
+    vi.useFakeTimers();
+    const hiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden');
+    const view = renderWatch([]);
+    try {
+      act(() => view.watch.emit(watchStopped(section(1))));
+      const title = screen.getByRole('heading', { name: 'Watch stopped' });
+      const toast = title.closest('.watch-toast');
+      if (!(toast instanceof HTMLElement)) throw new Error('Status toast was not rendered');
+      const dismiss = screen.getByRole('button', { name: 'Dismiss Watch stopped' });
+
+      expect(toast.getAttribute('data-state')).toBe('VISIBLE');
+      act(() => vi.advanceTimersByTime(1_000));
+
+      fireEvent.mouseEnter(toast);
+      expect(toast.getAttribute('data-paused')).toBe('true');
+      act(() => vi.advanceTimersByTime(10_000));
+      expect(toast.getAttribute('data-state')).toBe('VISIBLE');
+      fireEvent.mouseLeave(toast);
+      act(() => vi.advanceTimersByTime(1_000));
+
+      act(() => dismiss.focus());
+      expect(toast.getAttribute('data-paused')).toBe('true');
+      act(() => vi.advanceTimersByTime(10_000));
+      act(() => dismiss.blur());
+      act(() => vi.advanceTimersByTime(1_000));
+
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      fireEvent(document, new Event('visibilitychange'));
+      expect(toast.getAttribute('data-paused')).toBe('true');
+      act(() => vi.advanceTimersByTime(10_000));
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      fireEvent(document, new Event('visibilitychange'));
+
+      act(() => vi.advanceTimersByTime(1_999));
+      expect(toast.getAttribute('data-state')).toBe('VISIBLE');
+      act(() => vi.advanceTimersByTime(1));
+      expect(toast.getAttribute('data-state')).toBe('EXITING');
+      act(() => vi.advanceTimersByTime(180));
+      expect(screen.queryByRole('heading', { name: 'Watch stopped' })).toBeNull();
+    } finally {
+      view.unmount();
+      if (hiddenDescriptor === undefined) Reflect.deleteProperty(document, 'hidden');
+      else Object.defineProperty(document, 'hidden', hiddenDescriptor);
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps ALERT toasts until manual dismissal and exposes an exit state', () => {
+    vi.useFakeTimers();
+    const view = renderWatch([]);
+    try {
+      act(() => view.watch.setState('CLOSED'));
+      const title = screen.getByRole('heading', { name: 'Watch connection ended' });
+      const toast = title.closest('.watch-toast');
+      if (!(toast instanceof HTMLElement)) throw new Error('Alert toast was not rendered');
+
+      act(() => vi.advanceTimersByTime(30_000));
+      expect(toast.getAttribute('data-state')).toBe('VISIBLE');
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss Watch connection ended' }));
+      expect(toast.getAttribute('data-state')).toBe('EXITING');
+      act(() => vi.advanceTimersByTime(180));
+      expect(screen.queryByRole('heading', { name: 'Watch connection ended' })).toBeNull();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the populated Watch desk keyboard-native, named, and axe-clean', async () => {

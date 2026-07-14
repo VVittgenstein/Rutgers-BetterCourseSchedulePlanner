@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from 'react';
+
 import type { SectionKey } from '../product';
 import { useBcspI18n, type BcspI18nRuntime } from '../i18n/runtime';
 import { useLiveWatch, type WatchNotice } from './LiveWatchProvider';
@@ -29,6 +31,76 @@ function noticeText(
   return { title, detail: suffix };
 }
 
+const STATUS_VISIBLE_MILLISECONDS = 5_000;
+const EXIT_SETTLE_MILLISECONDS = 180;
+
+interface WatchToastProps {
+  readonly dismiss: (id: number) => void;
+  readonly i18n: BcspI18nRuntime;
+  readonly notice: WatchNotice;
+}
+
+function WatchToast({ dismiss, i18n, notice }: WatchToastProps) {
+  const message = noticeText(notice, i18n);
+  const [phase, setPhase] = useState<'VISIBLE' | 'EXITING'>('VISIBLE');
+  const [hovered, setHovered] = useState(false);
+  const [focusWithin, setFocusWithin] = useState(false);
+  const [documentHidden, setDocumentHidden] = useState(() => document.hidden);
+  const remaining = useRef(STATUS_VISIBLE_MILLISECONDS);
+  const paused = hovered || focusWithin || documentHidden;
+
+  useEffect(() => {
+    const onVisibilityChange = () => setDocumentHidden(document.hidden);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    if (notice.tone !== 'STATUS' || phase !== 'VISIBLE' || paused) return undefined;
+    const startedAt = Date.now();
+    const timeout = globalThis.setTimeout(() => setPhase('EXITING'), remaining.current);
+    return () => {
+      globalThis.clearTimeout(timeout);
+      remaining.current = Math.max(0, remaining.current - (Date.now() - startedAt));
+    };
+  }, [notice.tone, paused, phase]);
+
+  useEffect(() => {
+    if (phase !== 'EXITING') return undefined;
+    const timeout = globalThis.setTimeout(() => dismiss(notice.id), EXIT_SETTLE_MILLISECONDS);
+    return () => globalThis.clearTimeout(timeout);
+  }, [dismiss, notice.id, phase]);
+
+  return (
+    <article
+      className="watch-toast"
+      data-paused={paused || undefined}
+      data-state={phase}
+      data-tone={notice.tone}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocusWithin(false);
+      }}
+      onFocusCapture={() => setFocusWithin(true)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      role={notice.tone === 'ALERT' ? 'alert' : 'status'}
+    >
+      <div>
+        <h2 className="watch-toast__title">{message.title}</h2>
+        {message.detail.length === 0 ? null : <p className="watch-toast__detail">{message.detail}</p>}
+      </div>
+      <button
+        aria-label={i18n.t('watch.toast.dismiss', { title: message.title })}
+        className="watch-toast__dismiss"
+        onClick={() => setPhase('EXITING')}
+        type="button"
+      >
+        ×
+      </button>
+    </article>
+  );
+}
+
 export function WatchToastRegion() {
   const i18n = useBcspI18n();
   const watch = useLiveWatch();
@@ -36,27 +108,13 @@ export function WatchToastRegion() {
   return (
     <section aria-label={i18n.t('watch.toast.region')} className="watch-toast-region">
       {watch.notices.map((notice) => {
-        const message = noticeText(notice, i18n);
         return (
-          <article
-            className="watch-toast"
-            data-tone={notice.tone}
+          <WatchToast
+            dismiss={watch.dismissNotice}
+            i18n={i18n}
             key={notice.id}
-            role={notice.tone === 'ALERT' ? 'alert' : 'status'}
-          >
-            <div>
-              <h2 className="watch-toast__title">{message.title}</h2>
-              {message.detail.length === 0 ? null : <p className="watch-toast__detail">{message.detail}</p>}
-            </div>
-            <button
-              aria-label={i18n.t('watch.toast.dismiss', { title: message.title })}
-              className="watch-toast__dismiss"
-              onClick={() => watch.dismissNotice(notice.id)}
-              type="button"
-            >
-              ×
-            </button>
-          </article>
+            notice={notice}
+          />
         );
       })}
     </section>

@@ -105,9 +105,9 @@ export function HistoryPage({
         <header className="local-personal__section-head">
           <div>
             <p className="local-personal__kicker">[ 01 / LEDGER ]</p>
-            <h4 className="local-personal__section-title" id="local-history-ledger-title">
+            <h3 className="local-personal__section-title" id="local-history-ledger-title">
               {local.t('local.history.kicker')}
-            </h4>
+            </h3>
           </div>
           <span className="local-personal__badge" data-state="READY">
             {local.t('local.history.recent', {

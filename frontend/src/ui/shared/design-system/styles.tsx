@@ -9,6 +9,8 @@ export const BCSP_DESIGN_SYSTEM_CSS = String.raw`
   --bcsp-line-soft: #a6a49a;
   --bcsp-accent: #d42b1e;
   --bcsp-accent-ink: #ffffff;
+  --bcsp-focus: var(--bcsp-accent, #d42b1e);
+  --bcsp-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --bcsp-grid-unit: 0.5rem;
   --bcsp-space-1: 0.5rem;
   --bcsp-space-2: 0.75rem;
@@ -34,7 +36,7 @@ export const BCSP_DESIGN_SYSTEM_CSS = String.raw`
 html {
   min-width: 20rem;
   background: var(--bcsp-paper);
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 body {
@@ -58,7 +60,7 @@ a {
 }
 
 :focus-visible {
-  outline: 3px solid var(--bcsp-accent);
+  outline: 3px solid var(--bcsp-focus, #d42b1e);
   outline-offset: 3px;
 }
 
@@ -102,30 +104,17 @@ a {
   line-height: 1;
   text-transform: uppercase;
   cursor: pointer;
-  transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
-    color 160ms cubic-bezier(0.16, 1, 0.3, 1),
-    background-color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 140ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
-.bcsp-action:hover:not(:disabled) {
-  color: var(--bcsp-paper-raised);
-  background: var(--bcsp-ink);
-}
-
-.bcsp-action:active:not(:disabled) {
-  transform: translateY(1px);
+.bcsp-action:active:not(:disabled):not(:focus-visible) {
+  transform: scale(0.97);
 }
 
 .bcsp-action--accent {
   color: var(--bcsp-accent-ink);
   border-color: var(--bcsp-accent);
   background: var(--bcsp-accent);
-}
-
-.bcsp-action--accent:hover:not(:disabled) {
-  color: var(--bcsp-accent-ink);
-  border-color: var(--bcsp-ink);
-  background: var(--bcsp-ink);
 }
 
 .bcsp-action--quiet {
@@ -138,6 +127,25 @@ a {
   border-color: var(--bcsp-line-soft);
   cursor: not-allowed;
   opacity: 0.64;
+}
+
+.bcsp-action--accent:disabled {
+  color: var(--bcsp-ink-muted);
+  border-color: var(--bcsp-line-soft);
+  background: var(--bcsp-paper);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .bcsp-action:hover:not(:disabled) {
+    color: var(--bcsp-paper-raised);
+    background: var(--bcsp-ink);
+  }
+
+  .bcsp-action--accent:hover:not(:disabled) {
+    color: var(--bcsp-accent-ink);
+    border-color: var(--bcsp-ink);
+    background: var(--bcsp-ink);
+  }
 }
 
 .bcsp-state-panel {
@@ -361,6 +369,12 @@ a {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.001ms !important;
+  }
+
+  button:active:not(:disabled):not(:focus-visible),
+  a:active:not(:focus-visible),
+  summary:active:not(:focus-visible) {
+    transform: none !important;
   }
 }
 `;

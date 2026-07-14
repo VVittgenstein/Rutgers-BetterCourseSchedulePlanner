@@ -1,9 +1,7 @@
 const LOCAL_PERSONAL_CSS = String.raw`
 .local-personal { display: grid; gap: var(--bcsp-space-5); margin-top: var(--bcsp-space-5); }
-.local-personal__hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.32fr); gap: var(--bcsp-space-4); align-items: end; padding-bottom: var(--bcsp-space-4); border-bottom: 1px solid var(--bcsp-line); }
 .local-personal__kicker, .local-personal__meta, .local-personal__status, .local-personal__label { margin: 0; font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 750; letter-spacing: 0.075em; line-height: 1.45; text-transform: uppercase; }
-.local-personal__hero h3, .local-personal__section-title { margin: 0.25rem 0 0; font-size: clamp(1.6rem, 4vw, 3.5rem); font-weight: 850; letter-spacing: -0.05em; line-height: 0.95; text-transform: uppercase; }
-.local-personal__hero p:last-child { max-width: 38rem; margin: 0; color: var(--bcsp-ink-muted); line-height: 1.55; }
+.local-personal__section-title { margin: 0.25rem 0 0; font-size: clamp(1.6rem, 4vw, 3.5rem); font-weight: 850; letter-spacing: -0.05em; line-height: 0.95; text-transform: uppercase; }
 .local-personal__section { border-top: 1px solid var(--bcsp-line); border-left: 1px solid var(--bcsp-line); }
 .local-personal__section-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: var(--bcsp-space-3); padding: var(--bcsp-space-3); border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); }
 .local-personal__section-title { font-size: clamp(1.25rem, 2.6vw, 2.2rem); }
@@ -12,7 +10,7 @@ const LOCAL_PERSONAL_CSS = String.raw`
 .local-personal__field { display: grid; gap: 0.45rem; min-width: 0; padding: var(--bcsp-space-3); border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); }
 .local-personal__field > span, .local-personal__field label { font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; }
 .local-personal input, .local-personal select { min-width: 0; min-height: 2.75rem; padding: 0.65rem 0.75rem; border: 1px solid var(--bcsp-line); border-radius: 0; color: var(--bcsp-ink); background: var(--bcsp-paper-raised); font: inherit; }
-.local-personal input:focus-visible, .local-personal select:focus-visible { outline: 3px solid var(--bcsp-focus); outline-offset: 2px; }
+.local-personal input:focus-visible, .local-personal select:focus-visible { outline: 3px solid var(--bcsp-focus, var(--bcsp-accent)); outline-offset: 2px; }
 .local-personal__form > .bcsp-action { min-width: 12rem; border-bottom: 1px solid var(--bcsp-line); }
 .local-personal__list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .local-personal__card { display: grid; align-content: start; gap: var(--bcsp-space-3); min-width: 0; padding: var(--bcsp-space-3); border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); }
@@ -38,7 +36,7 @@ const LOCAL_PERSONAL_CSS = String.raw`
 .local-personal-sync:empty { display: none; }
 .local-personal-sync[data-error='true'] { color: var(--bcsp-accent-ink); border-color: var(--bcsp-accent); background: var(--bcsp-accent); }
 @media (max-width: 61.999rem) { .local-personal__reset-grid { grid-template-columns: 1fr; } }
-@media (max-width: 47.999rem) { .local-personal__hero, .local-personal__settings, .local-personal__list, .local-personal__history { grid-template-columns: 1fr; } }
+@media (max-width: 47.999rem) { .local-personal__settings, .local-personal__list, .local-personal__history { grid-template-columns: 1fr; } }
 @media (max-width: 31.999rem) { .local-personal__form { grid-template-columns: 1fr; } .local-personal__form > .bcsp-action { min-width: 0; } .local-personal__facts { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .local-personal *, .local-personal *::before, .local-personal *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; } }
 `;

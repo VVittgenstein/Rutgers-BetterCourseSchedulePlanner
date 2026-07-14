@@ -53,6 +53,14 @@ type SectionDetailState =
   | { readonly kind: 'ERROR' }
   | { readonly kind: 'READY'; readonly response: SectionDetailResponseV1 };
 
+interface CourseDetailReturnTarget {
+  readonly buttonIndex: number;
+  readonly element: HTMLElement | null;
+  readonly key: CourseGroupKey;
+}
+
+type PendingSearchFocus = 'OUTPUT' | 'COURSE_TRIGGER' | null;
+
 export interface SearchWorkspaceProps {
   readonly initialFilters?: FilterStateV1 | undefined;
   readonly onFiltersChange?: ((filters: FilterStateV1) => void) | undefined;
@@ -213,6 +221,10 @@ export function SearchWorkspace({
   const [courseDetail, setCourseDetail] = useState<CourseDetailState>({ kind: 'CLOSED' });
   const searchAbort = useRef<AbortController | null>(null);
   const detailAbort = useRef<AbortController | null>(null);
+  const resultsRef = useRef<HTMLElement | null>(null);
+  const resultsHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const pendingFocus = useRef<PendingSearchFocus>(null);
+  const courseDetailReturnTarget = useRef<CourseDetailReturnTarget | null>(null);
 
   useEffect(() => () => {
     searchAbort.current?.abort();
@@ -227,11 +239,45 @@ export function SearchWorkspace({
     setCourseDetail({ kind: 'CLOSED' });
   }, [mode, directSection]);
 
+  useEffect(() => {
+    if (pendingFocus.current === null) return;
+    if (query.kind === 'LOADING' || courseDetail.kind === 'LOADING') return;
+    if (query.kind === 'VALIDATION_ERROR') {
+      pendingFocus.current = null;
+      return;
+    }
+    const results = resultsRef.current;
+    if (results === null) return;
+    if (pendingFocus.current === 'COURSE_TRIGGER') {
+      const returnTarget = courseDetailReturnTarget.current;
+      const resultButtons = [...results.querySelectorAll<HTMLElement>('.search-results__button')];
+      const matchingGroup = returnTarget === null
+        ? undefined
+        : [...results.querySelectorAll<HTMLElement>('[data-course-group]')]
+          .find((group) => group.dataset.courseGroup === returnTarget.key.courseString);
+      const restored = returnTarget?.element?.isConnected === true
+        ? returnTarget.element
+        : matchingGroup?.querySelector<HTMLElement>('.search-results__button')
+          ?? resultButtons[returnTarget?.buttonIndex ?? -1]
+          ?? null;
+      pendingFocus.current = null;
+      if (restored !== null) {
+        restored.focus({ preventScroll: true });
+        restored.scrollIntoView?.({ behavior: 'auto', block: 'nearest' });
+        return;
+      }
+    }
+    pendingFocus.current = null;
+    resultsHeadingRef.current?.focus({ preventScroll: true });
+    results.scrollIntoView?.({ behavior: 'auto', block: 'start' });
+  }, [courseDetail.kind, query.kind]);
+
   const runSearch = useCallback(async (page = 1) => {
     searchAbort.current?.abort();
     detailAbort.current?.abort();
     const abort = new AbortController();
     searchAbort.current = abort;
+    pendingFocus.current = 'OUTPUT';
     setCourseDetail({ kind: 'CLOSED' });
     setQuery({ kind: 'LOADING' });
     try {
@@ -260,6 +306,20 @@ export function SearchWorkspace({
     detailAbort.current?.abort();
     const abort = new AbortController();
     detailAbort.current = abort;
+    const results = resultsRef.current;
+    const activeElement = globalThis.document?.activeElement;
+    const resultButtons = results === null
+      ? []
+      : [...results.querySelectorAll<HTMLElement>('.search-results__button')];
+    const trigger = activeElement instanceof HTMLElement && results?.contains(activeElement) === true
+      ? activeElement
+      : null;
+    courseDetailReturnTarget.current = {
+      buttonIndex: trigger === null ? -1 : resultButtons.indexOf(trigger),
+      element: trigger,
+      key,
+    };
+    pendingFocus.current = 'OUTPUT';
     setCourseDetail({ kind: 'LOADING' });
     void runtime.product.courseDetail(
       { contractVersion: 1, key },
@@ -287,7 +347,10 @@ export function SearchWorkspace({
     results = (
       <>
         <div className="bcsp-search-workspace__detail-actions">
-          <ActionButton onClick={() => setCourseDetail({ kind: 'CLOSED' })} tone="quiet">
+          <ActionButton onClick={() => {
+            pendingFocus.current = 'COURSE_TRIGGER';
+            setCourseDetail({ kind: 'CLOSED' });
+          }} tone="quiet">
             &lt;&lt; {i18n.t('action.back')}
           </ActionButton>
           <p className="bcsp-search-workspace__route-meta">{i18n.t('search.course_detail_title')}</p>
@@ -361,8 +424,19 @@ export function SearchWorkspace({
           value={filters}
         />
       </section>
-      <section className="bcsp-search-workspace__results" aria-labelledby="bcsp-search-results-title">
-        <h3 className="bcsp-visually-hidden" id="bcsp-search-results-title">{i18n.t('search.results_title')}</h3>
+      <section
+        aria-labelledby="bcsp-search-results-title"
+        className="bcsp-search-workspace__results"
+        ref={resultsRef}
+      >
+        <h3
+          className="bcsp-visually-hidden"
+          id="bcsp-search-results-title"
+          ref={resultsHeadingRef}
+          tabIndex={-1}
+        >
+          {i18n.t('search.results_title')}
+        </h3>
         <div className="bcsp-search-workspace__state" data-query-state={query.kind.toLowerCase()}>
           {results}
         </div>

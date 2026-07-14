@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
 import { ActionButton } from '../../shared/design-system';
 import { useBcspI18n } from '../../shared/i18n/runtime';
@@ -18,6 +18,7 @@ import {
 
 type ConfirmScope = 'FILTERS' | 'VIEWS' | null;
 type WorkingScope = 'SETTINGS' | 'FILTERS' | 'VIEWS' | 'PREPARE_ALL' | 'CONFIRM_ALL' | null;
+type SettingsSaveState = 'UNCHANGED' | 'DIRTY' | 'INVALID' | 'SAVING' | 'SAVED' | 'FAILED';
 
 export interface SettingsPageProps extends LocalPageAsyncState {
   readonly onConfirmUserDataReset: (prepared: PreparedUserDataReset) => MaybePromise<void>;
@@ -49,6 +50,20 @@ function numberValue(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function sameSettings(left: LocalSettings, right: LocalSettings): boolean {
+  return left.localeOverride === right.localeOverride
+    && left.catalogRefreshMinutes === right.catalogRefreshMinutes
+    && left.openRefreshSeconds === right.openRefreshSeconds
+    && left.volumePercent === right.volumePercent
+    && left.soundPolicy.notificationMode === right.soundPolicy.notificationMode
+    && left.soundPolicy.maxAudible === right.soundPolicy.maxAudible
+    && left.soundPolicy.continuousDuration.kind === right.soundPolicy.continuousDuration.kind
+    && (left.soundPolicy.continuousDuration.kind !== 'FINITE'
+      || (right.soundPolicy.continuousDuration.kind === 'FINITE'
+        && left.soundPolicy.continuousDuration.seconds
+          === right.soundPolicy.continuousDuration.seconds));
+}
+
 export function SettingsPage({
   error,
   onClearError,
@@ -72,27 +87,98 @@ export function SettingsPage({
   const modeId = useId();
   const maximumId = useId();
   const durationId = useId();
+  const filtersResetTriggerId = useId();
+  const filtersResetConfirmId = useId();
+  const viewsResetTriggerId = useId();
+  const viewsResetConfirmId = useId();
+  const fullResetTriggerId = useId();
+  const fullResetConfirmId = useId();
   const [draft, setDraft] = useState<LocalSettings>(settings.value);
+  const [baseline, setBaseline] = useState<LocalSettings>(settings.value);
   const [working, setWorking] = useState<WorkingScope>(null);
   const [confirmScope, setConfirmScope] = useState<ConfirmScope>(null);
   const [preparedReset, setPreparedReset] = useState<PreparedUserDataReset | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [saveOutcome, setSaveOutcome] = useState<'IDLE' | 'SAVED' | 'FAILED'>('IDLE');
+  const lastSaved = useRef<LocalSettings | null>(null);
+  const previousConfirmScope = useRef<ConfirmScope>(null);
+  const previousPreparedReset = useRef(false);
   const valid = validSettings(draft);
+  const dirty = !sameSettings(draft, baseline);
   const locked = pending || working !== null;
+  const saveState: SettingsSaveState = working === 'SETTINGS'
+    ? 'SAVING'
+    : !valid
+      ? 'INVALID'
+      : saveOutcome === 'FAILED'
+        ? 'FAILED'
+        : saveOutcome === 'SAVED' && !dirty
+          ? 'SAVED'
+          : dirty
+            ? 'DIRTY'
+            : 'UNCHANGED';
 
   useEffect(() => {
     setDraft(settings.value);
-    setSaved(false);
+    setBaseline(settings.value);
+    setSaveOutcome(lastSaved.current !== null && sameSettings(lastSaved.current, settings.value)
+      ? 'SAVED'
+      : 'IDLE');
   }, [settings.revision, settings.value]);
+
+  useEffect(() => {
+    if (confirmScope !== null) {
+      const confirmId = confirmScope === 'FILTERS' ? filtersResetConfirmId : viewsResetConfirmId;
+      document.getElementById(confirmId)?.focus();
+    } else if (previousConfirmScope.current !== null) {
+      const previousScope = previousConfirmScope.current;
+      const triggerId = previousScope === 'FILTERS'
+        ? filtersResetTriggerId
+        : viewsResetTriggerId;
+      const trigger = document.getElementById(triggerId);
+      if (trigger instanceof HTMLButtonElement && !trigger.disabled) {
+        trigger.focus();
+      } else {
+        document.getElementById(`local-settings-${previousScope.toLowerCase()}-reset-title`)?.focus();
+      }
+    }
+    previousConfirmScope.current = confirmScope;
+  }, [
+    confirmScope,
+    filtersResetConfirmId,
+    filtersResetTriggerId,
+    viewsResetConfirmId,
+    viewsResetTriggerId,
+  ]);
+
+  useEffect(() => {
+    if (preparedReset !== null) {
+      document.getElementById(fullResetConfirmId)?.focus();
+    } else if (previousPreparedReset.current) {
+      document.getElementById(fullResetTriggerId)?.focus();
+    }
+    previousPreparedReset.current = preparedReset !== null;
+  }, [fullResetConfirmId, fullResetTriggerId, preparedReset]);
+
+  function updateDraft(update: (current: LocalSettings) => LocalSettings) {
+    setSaveOutcome('IDLE');
+    setDraft(update);
+  }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!valid) return;
+    if (!valid || !dirty) return;
+    const submitted = draft;
     setWorking('SETTINGS');
-    setSaved(false);
-    const completed = await completeAction(() => onUpdateSettings(draft));
+    setSaveOutcome('IDLE');
+    const completed = await completeAction(() => onUpdateSettings(submitted));
     setWorking(null);
-    if (completed) setSaved(true);
+    if (completed) {
+      lastSaved.current = submitted;
+      setBaseline(submitted);
+      setSaveOutcome('SAVED');
+    } else {
+      setSaveOutcome('FAILED');
+    }
   }
 
   async function confirmSmallReset(scope: Exclude<ConfirmScope, null>) {
@@ -124,9 +210,17 @@ export function SettingsPage({
   }
 
   function updateLocale(localeOverride: LocalLocaleOverride) {
-    setSaved(false);
-    setDraft((current) => ({ ...current, localeOverride }));
+    updateDraft((current) => ({ ...current, localeOverride }));
   }
+
+  const saveMessage = {
+    UNCHANGED: chinese ? '没有尚未保存的更改。' : 'NO UNSAVED CHANGES',
+    DIRTY: chinese ? '更改尚未保存，可以保存。' : 'UNSAVED CHANGES / READY TO SAVE',
+    INVALID: chinese ? '请修正超出范围的设置值。' : 'CORRECT OUT-OF-RANGE VALUES',
+    SAVING: local.t('local.status.busy'),
+    SAVED: local.t('local.settings.saved'),
+    FAILED: local.t('local.status.error'),
+  }[saveState];
 
   return (
     <LocalPageFrame
@@ -142,9 +236,9 @@ export function SettingsPage({
         <header className="local-personal__section-head">
           <div>
             <p className="local-personal__kicker">[ 01 / CONTROL ]</p>
-            <h4 className="local-personal__section-title" id="local-settings-preferences-title">
+            <h3 className="local-personal__section-title" id="local-settings-preferences-title">
               {local.t('local.settings.preferences')}
-            </h4>
+            </h3>
           </div>
           <span className="local-personal__badge" data-state="READY">
             REV / {local.formatNumber(settings.revision)}
@@ -174,10 +268,10 @@ export function SettingsPage({
                 max={1440}
                 min={1}
                 onChange={(event) => {
-                  setSaved(false);
-                  setDraft((current) => ({
+                  const catalogRefreshMinutes = numberValue(event.currentTarget.value);
+                  updateDraft((current) => ({
                     ...current,
-                    catalogRefreshMinutes: numberValue(event.currentTarget.value),
+                    catalogRefreshMinutes,
                   }));
                 }}
                 required
@@ -195,10 +289,10 @@ export function SettingsPage({
                 max={3600}
                 min={3}
                 onChange={(event) => {
-                  setSaved(false);
-                  setDraft((current) => ({
+                  const openRefreshSeconds = numberValue(event.currentTarget.value);
+                  updateDraft((current) => ({
                     ...current,
-                    openRefreshSeconds: numberValue(event.currentTarget.value),
+                    openRefreshSeconds,
                   }));
                 }}
                 required
@@ -216,10 +310,10 @@ export function SettingsPage({
                   max={100}
                   min={0}
                   onChange={(event) => {
-                    setSaved(false);
-                    setDraft((current) => ({
+                    const volumePercent = numberValue(event.currentTarget.value);
+                    updateDraft((current) => ({
                       ...current,
-                      volumePercent: numberValue(event.currentTarget.value),
+                      volumePercent,
                     }));
                   }}
                   step={1}
@@ -236,8 +330,7 @@ export function SettingsPage({
                 id={modeId}
                 onChange={(event) => {
                   const notificationMode = event.currentTarget.value as LocalSettings['soundPolicy']['notificationMode'];
-                  setSaved(false);
-                  setDraft((current) => ({
+                  updateDraft((current) => ({
                     ...current,
                     soundPolicy: { ...current.soundPolicy, notificationMode },
                   }));
@@ -258,8 +351,7 @@ export function SettingsPage({
                 min={1}
                 onChange={(event) => {
                   const maxAudible = numberValue(event.currentTarget.value);
-                  setSaved(false);
-                  setDraft((current) => ({
+                  updateDraft((current) => ({
                     ...current,
                     soundPolicy: { ...current.soundPolicy, maxAudible },
                   }));
@@ -280,8 +372,7 @@ export function SettingsPage({
                     event.currentTarget.value === 'UNLIMITED'
                       ? { kind: 'UNLIMITED' }
                       : { kind: 'FINITE', seconds: 600 };
-                  setSaved(false);
-                  setDraft((current) => ({
+                  updateDraft((current) => ({
                     ...current,
                     soundPolicy: { ...current.soundPolicy, continuousDuration },
                   }));
@@ -294,22 +385,24 @@ export function SettingsPage({
             </div>
           </div>
           <div className="local-page__settings-actions">
-            <p className="local-personal__meta">
-              {valid
-                ? (chinese ? '设置值有效，可保存。' : 'VALUES VALID / READY TO SAVE')
-                : (chinese ? '请修正超出范围的设置值。' : 'CORRECT OUT-OF-RANGE VALUES')}
+            <p
+              aria-live={saveState === 'FAILED' ? 'assertive' : 'polite'}
+              className="local-personal__meta"
+              data-state={saveState}
+              role="status"
+            >
+              {saveMessage}
             </p>
             <ActionButton
               busy={working === 'SETTINGS'}
               busyLabel={local.t('local.status.busy')}
-              disabled={locked || !valid}
+              disabled={locked || !valid || !dirty}
               tone="accent"
               type="submit"
             >
               {local.t('local.settings.save')}
             </ActionButton>
           </div>
-          {saved ? <p className="local-page__success" role="status">{local.t('local.settings.saved')}</p> : null}
         </form>
       </section>
 
@@ -317,16 +410,18 @@ export function SettingsPage({
         <header className="local-personal__section-head">
           <div>
             <p className="local-personal__kicker">[ 02 / RESET ]</p>
-            <h4 className="local-personal__section-title" id="local-settings-reset-title">
+            <h3 className="local-personal__section-title" id="local-settings-reset-title">
               {local.t('local.reset.title')}
-            </h4>
+            </h3>
           </div>
           <p>{local.t('local.reset.intro')}</p>
         </header>
         <div className="local-personal__reset-grid">
           <article className="local-personal__card local-page__reset-scope" data-scope="FILTERS">
             <p className="local-personal__meta">01 / FILTERS ONLY</p>
-            <h4>{local.t('local.reset.filters_title')}</h4>
+            <h4 id="local-settings-filters-reset-title" tabIndex={-1}>
+              {local.t('local.reset.filters_title')}
+            </h4>
             <p>{local.t('local.reset.filters_body')}</p>
             {confirmScope === 'FILTERS' ? (
               <div className="local-page__inline-panel" role="group" aria-label={local.t('local.reset.filters_title')}>
@@ -335,6 +430,7 @@ export function SettingsPage({
                   <ActionButton
                     busy={working === 'FILTERS'}
                     busyLabel={local.t('local.status.busy')}
+                    id={filtersResetConfirmId}
                     onClick={() => void confirmSmallReset('FILTERS')}
                     tone="accent"
                   >
@@ -346,7 +442,12 @@ export function SettingsPage({
                 </div>
               </div>
             ) : (
-              <ActionButton disabled={locked} onClick={() => setConfirmScope('FILTERS')} tone="quiet">
+              <ActionButton
+                disabled={locked}
+                id={filtersResetTriggerId}
+                onClick={() => setConfirmScope('FILTERS')}
+                tone="quiet"
+              >
                 {local.t('local.reset.filters_action')}
               </ActionButton>
             )}
@@ -356,7 +457,9 @@ export function SettingsPage({
             <p className="local-personal__meta">
               02 / {local.t('local.saved.count', { count: local.formatNumber(savedViewCount) })}
             </p>
-            <h4>{local.t('local.reset.views_title')}</h4>
+            <h4 id="local-settings-views-reset-title" tabIndex={-1}>
+              {local.t('local.reset.views_title')}
+            </h4>
             <p>{local.t('local.reset.views_body')}</p>
             {confirmScope === 'VIEWS' ? (
               <div className="local-page__inline-panel" role="group" aria-label={local.t('local.reset.views_title')}>
@@ -365,6 +468,7 @@ export function SettingsPage({
                   <ActionButton
                     busy={working === 'VIEWS'}
                     busyLabel={local.t('local.status.busy')}
+                    id={viewsResetConfirmId}
                     onClick={() => void confirmSmallReset('VIEWS')}
                     tone="accent"
                   >
@@ -378,6 +482,7 @@ export function SettingsPage({
             ) : (
               <ActionButton
                 disabled={locked || savedViewCount === 0}
+                id={viewsResetTriggerId}
                 onClick={() => setConfirmScope('VIEWS')}
                 tone="quiet"
               >
@@ -395,6 +500,7 @@ export function SettingsPage({
                 busy={working === 'PREPARE_ALL'}
                 busyLabel={local.t('local.status.busy')}
                 disabled={locked}
+                id={fullResetTriggerId}
                 onClick={() => void prepareFullReset()}
                 tone="accent"
               >
@@ -409,6 +515,7 @@ export function SettingsPage({
                   <ActionButton
                     busy={working === 'CONFIRM_ALL'}
                     busyLabel={local.t('local.status.busy')}
+                    id={fullResetConfirmId}
                     onClick={() => void confirmFullReset()}
                     tone="accent"
                   >

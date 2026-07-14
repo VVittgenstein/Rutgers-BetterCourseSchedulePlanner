@@ -273,22 +273,24 @@ function SelectedSectionManager({
           })}
         </ul>
       )}
-      <div className="watch-workspace__actions">
-        <ActionButton
-          disabled={!policyReady || inactiveCount === 0 || watch.pending.length > 0}
-          onClick={() => watch.startSelected(policy)}
-          tone="accent"
-        >
-          {i18n.t('watch.start_selected', { count: i18n.formatNumber(inactiveCount) })}
-        </ActionButton>
-        <ActionButton
-          disabled={!policyReady || watch.active.length === 0}
-          onClick={() => watch.active.forEach((item) => watch.updatePolicy(item, policy))}
-          tone="quiet"
-        >
-          {i18n.t('watch.apply_policy')}
-        </ActionButton>
-      </div>
+      {watch.selected.length === 0 ? null : (
+        <div className="watch-workspace__actions">
+          <ActionButton
+            disabled={!policyReady || inactiveCount === 0 || watch.pending.length > 0}
+            onClick={() => watch.startSelected(policy)}
+            tone="accent"
+          >
+            {i18n.t('watch.start_selected', { count: i18n.formatNumber(inactiveCount) })}
+          </ActionButton>
+          <ActionButton
+            disabled={!policyReady || watch.active.length === 0}
+            onClick={() => watch.active.forEach((item) => watch.updatePolicy(item, policy))}
+            tone="quiet"
+          >
+            {i18n.t('watch.apply_policy')}
+          </ActionButton>
+        </div>
+      )}
     </section>
   );
 }
@@ -310,9 +312,11 @@ function AlertCenter() {
           <p className="watch-workspace__kicker">{i18n.t('watch.episodes_kicker')}</p>
           <h3 className="watch-workspace__section-title" id="watch-alerts-title">{i18n.t('watch.alert_center')}</h3>
         </div>
-        <ActionButton disabled={unacknowledged.length === 0} onClick={watch.acknowledgeAll} tone="accent">
-          {i18n.t('action.acknowledge_all')}
-        </ActionButton>
+        {unacknowledged.length === 0 ? null : (
+          <ActionButton onClick={watch.acknowledgeAll} tone="accent">
+            {i18n.t('action.acknowledge_all')}
+          </ActionButton>
+        )}
       </header>
       {watch.alerts.length === 0 && hiddenActionableEpisodes.length === 0 ? (
         <p className="watch-workspace__empty">{i18n.t('watch.no_alerts')}</p>
@@ -423,7 +427,7 @@ export function WatchWorkspace({
       <section className="watch-workspace__command-grid">
         <div className="watch-workspace__panel">
           <p className="watch-workspace__kicker">{i18n.t('watch.console_kicker')}</p>
-          <h3 className="watch-workspace__title">{i18n.t('watch.desk_title')}</h3>
+          <h3 className="watch-workspace__title">{i18n.t('watch.console_title')}</h3>
           <p className="watch-workspace__lede">{i18n.t('watch.desk_lede')}</p>
           <div className="watch-workspace__status-strip" aria-label={i18n.t('watch.session_status')}>
             <StatusSignal detail="WebSocket" label={connectionLabel(watch.connection, i18n)} state={connectionSignal} />

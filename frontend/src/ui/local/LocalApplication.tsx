@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from 'react';
 
 import {
   SharedApplication,
@@ -13,7 +20,6 @@ import {
 } from '../shared/product';
 import { currentSystemLanguages, resolveLocalLocale } from './i18n/localeBootstrap';
 import { useLocalI18n } from './i18n/runtime';
-import { HistoryPage, SavedViewsPage, SettingsPage } from './pages';
 import {
   LocalPersonalStyles,
   useLocalPersonal,
@@ -23,6 +29,25 @@ import {
 } from './personal';
 
 const PERSIST_DELAY_MS = 300;
+
+const HistoryPage = lazy(async () => ({
+  default: (await import('./pages/HistoryPage')).HistoryPage,
+}));
+const SavedViewsPage = lazy(async () => ({
+  default: (await import('./pages/SavedViewsPage')).SavedViewsPage,
+}));
+const SettingsPage = lazy(async () => ({
+  default: (await import('./pages/SettingsPage')).SettingsPage,
+}));
+
+function LocalPageFallback() {
+  const local = useLocalI18n();
+  return (
+    <p aria-live="polite" className="local-personal__notice" role="status">
+      {local.t('local.status.busy')}
+    </p>
+  );
+}
 
 function storedFilterState(
   content: ReturnType<typeof useLocalPersonal>['state']['currentFilters']['value'],
@@ -127,40 +152,46 @@ export function LocalApplication() {
   } as const;
 
   const savedPage = (
-    <SavedViewsPage
-      {...commonPageState}
-      library={personal.savedViews}
-      onApply={(view: SavedViewDefinition) => personal.applySavedView(view.id)}
-      onCreate={personal.createSavedView}
-      onDelete={(view: SavedViewDefinition) => personal.deleteSavedView(view.id)}
-      onDeleteAll={personal.deleteAllSavedViews}
-      onDuplicate={(view: SavedViewDefinition, name: string) =>
-        personal.duplicateSavedView(view.id, name)}
-      onRename={(view: SavedViewDefinition, name: string) =>
-        personal.renameSavedView(view.id, name)}
-      onUpdate={(view: SavedViewDefinition) => personal.updateSavedView(
-        view.id,
-        currentCompatibleFilters(personal.state.currentFilters.value),
-      )}
-    />
+    <Suspense fallback={<LocalPageFallback />}>
+      <SavedViewsPage
+        {...commonPageState}
+        library={personal.savedViews}
+        onApply={(view: SavedViewDefinition) => personal.applySavedView(view.id)}
+        onCreate={personal.createSavedView}
+        onDelete={(view: SavedViewDefinition) => personal.deleteSavedView(view.id)}
+        onDeleteAll={personal.deleteAllSavedViews}
+        onDuplicate={(view: SavedViewDefinition, name: string) =>
+          personal.duplicateSavedView(view.id, name)}
+        onRename={(view: SavedViewDefinition, name: string) =>
+          personal.renameSavedView(view.id, name)}
+        onUpdate={(view: SavedViewDefinition) => personal.updateSavedView(
+          view.id,
+          currentCompatibleFilters(personal.state.currentFilters.value),
+        )}
+      />
+    </Suspense>
   );
   const historyPage = (
-    <HistoryPage {...commonPageState} history={personal.state.episodeHistory} />
+    <Suspense fallback={<LocalPageFallback />}>
+      <HistoryPage {...commonPageState} history={personal.state.episodeHistory} />
+    </Suspense>
   );
   const settingsPage = (
-    <SettingsPage
-      {...commonPageState}
-      onConfirmUserDataReset={async (prepared: PreparedUserDataReset) => {
-        await personal.confirmUserDataReset(prepared.confirmationToken);
-        globalThis.location?.reload();
-      }}
-      onDeleteAllSavedViews={personal.deleteAllSavedViews}
-      onPrepareUserDataReset={personal.prepareUserDataReset}
-      onResetCurrentFilters={personal.resetCurrentFilters}
-      onUpdateSettings={persistSettingsNow}
-      savedViewCount={personal.savedViews.views.length}
-      settings={personal.state.settings}
-    />
+    <Suspense fallback={<LocalPageFallback />}>
+      <SettingsPage
+        {...commonPageState}
+        onConfirmUserDataReset={async (prepared: PreparedUserDataReset) => {
+          await personal.confirmUserDataReset(prepared.confirmationToken);
+          globalThis.location?.reload();
+        }}
+        onDeleteAllSavedViews={personal.deleteAllSavedViews}
+        onPrepareUserDataReset={personal.prepareUserDataReset}
+        onResetCurrentFilters={personal.resetCurrentFilters}
+        onUpdateSettings={persistSettingsNow}
+        savedViewCount={personal.savedViews.views.length}
+        settings={personal.state.settings}
+      />
+    </Suspense>
   );
 
   const workspaceExtensions = useMemo<readonly SharedWorkspaceExtension[]>(() => [

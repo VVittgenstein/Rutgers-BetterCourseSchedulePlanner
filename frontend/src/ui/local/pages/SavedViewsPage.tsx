@@ -1,5 +1,7 @@
 import {
+  useEffect,
   useId,
+  useRef,
   useState,
   type FormEvent,
 } from 'react';
@@ -51,6 +53,7 @@ interface SavedViewCardProps {
   readonly item: SavedViewListItem;
   readonly onApply: SavedViewsPageProps['onApply'];
   readonly onDelete: SavedViewsPageProps['onDelete'];
+  readonly onDeleteCompleted: () => void;
   readonly onDuplicate: SavedViewsPageProps['onDuplicate'];
   readonly onEdit: (editor: EditorState) => void;
   readonly onRename: SavedViewsPageProps['onRename'];
@@ -75,6 +78,7 @@ function SavedViewCard({
   item,
   onApply,
   onDelete,
+  onDeleteCompleted,
   onDuplicate,
   onEdit,
   onRename,
@@ -85,11 +89,36 @@ function SavedViewCard({
   const shared = useBcspI18n();
   const { navigate } = useAppRouter();
   const inputId = useId();
+  const renameTriggerId = useId();
+  const duplicateTriggerId = useId();
+  const deleteTriggerId = useId();
+  const deleteConfirmId = useId();
+  const focusReturnId = useRef<string | null>(null);
+  const previousActiveKind = useRef<Exclude<EditorState, null>['kind'] | null>(null);
   const [working, setWorking] = useState(false);
   const { definition, matchState } = item;
   const activeEditor = editor?.id === definition.id ? editor : null;
+  const activeKind = activeEditor?.kind ?? null;
+  const editorOpen = editor !== null;
   const disabled = pending || working;
   const compatible = definition.content.status === 'COMPATIBLE';
+
+  useEffect(() => {
+    if (activeKind !== null) {
+      document.getElementById(activeKind === 'DELETE' ? deleteConfirmId : inputId)?.focus();
+    } else if (previousActiveKind.current !== null && !editorOpen) {
+      const trigger = focusReturnId.current === null
+        ? null
+        : document.getElementById(focusReturnId.current);
+      if (trigger instanceof HTMLButtonElement && !trigger.disabled) trigger.focus();
+    }
+    previousActiveKind.current = activeKind;
+  }, [activeKind, deleteConfirmId, editorOpen, inputId]);
+
+  function openEditor(next: Exclude<EditorState, null>, triggerId: string) {
+    focusReturnId.current = triggerId;
+    onEdit(next);
+  }
 
   async function perform(action: () => MaybePromise<void>, closeEditor = false): Promise<boolean> {
     setWorking(true);
@@ -102,6 +131,13 @@ function SavedViewCard({
   async function apply() {
     const completed = await perform(() => onApply(definition));
     if (completed) navigate('/');
+  }
+
+  async function deleteView() {
+    setWorking(true);
+    const completed = await completeAction(() => onDelete(definition));
+    setWorking(false);
+    if (completed) onDeleteCompleted();
   }
 
   function submitName(event: FormEvent<HTMLFormElement>) {
@@ -153,7 +189,11 @@ function SavedViewCard({
         <ActionButton
           aria-label={`${local.t('local.saved.rename')}: ${definition.name}`}
           disabled={disabled}
-          onClick={() => onEdit({ kind: 'RENAME', id: definition.id, value: definition.name })}
+          id={renameTriggerId}
+          onClick={() => openEditor(
+            { kind: 'RENAME', id: definition.id, value: definition.name },
+            renameTriggerId,
+          )}
           tone="quiet"
         >
           {local.t('local.saved.rename')}
@@ -169,7 +209,11 @@ function SavedViewCard({
         <ActionButton
           aria-label={`${local.t('local.saved.duplicate')}: ${definition.name}`}
           disabled={disabled || !compatible}
-          onClick={() => onEdit({ kind: 'DUPLICATE', id: definition.id, value: '' })}
+          id={duplicateTriggerId}
+          onClick={() => openEditor(
+            { kind: 'DUPLICATE', id: definition.id, value: '' },
+            duplicateTriggerId,
+          )}
           tone="quiet"
         >
           {local.t('local.saved.duplicate')}
@@ -177,7 +221,11 @@ function SavedViewCard({
         <ActionButton
           aria-label={`${local.t('local.saved.delete')}: ${definition.name}`}
           disabled={disabled}
-          onClick={() => onEdit({ kind: 'DELETE', id: definition.id })}
+          id={deleteTriggerId}
+          onClick={() => openEditor(
+            { kind: 'DELETE', id: definition.id },
+            deleteTriggerId,
+          )}
           tone="quiet"
         >
           {local.t('local.saved.delete')}
@@ -190,7 +238,8 @@ function SavedViewCard({
             <ActionButton
               busy={working}
               busyLabel={local.t('local.status.busy')}
-              onClick={() => void perform(() => onDelete(definition), true)}
+              id={deleteConfirmId}
+              onClick={() => void deleteView()}
               tone="accent"
             >
               {local.t('local.saved.confirm_delete')}
@@ -258,12 +307,29 @@ export function SavedViewsPage({
   const local = useLocalI18n();
   const shared = useBcspI18n();
   const createNameId = useId();
+  const deleteAllTriggerId = useId();
+  const deleteAllConfirmId = useId();
   const [createName, setCreateName] = useState('');
   const [creating, setCreating] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
+  const previousDeleteAllConfirmation = useRef(false);
   const currentFiltersReady = library.currentFilters.value?.content.status === 'COMPATIBLE';
+
+  useEffect(() => {
+    if (confirmDeleteAll) {
+      document.getElementById(deleteAllConfirmId)?.focus();
+    } else if (previousDeleteAllConfirmation.current) {
+      const trigger = document.getElementById(deleteAllTriggerId);
+      if (trigger instanceof HTMLButtonElement && !trigger.disabled) {
+        trigger.focus();
+      } else {
+        document.getElementById('local-saved-library-title')?.focus();
+      }
+    }
+    previousDeleteAllConfirmation.current = confirmDeleteAll;
+  }, [confirmDeleteAll, deleteAllConfirmId, deleteAllTriggerId]);
 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -296,9 +362,9 @@ export function SavedViewsPage({
         <header className="local-personal__section-head">
           <div>
             <p className="local-personal__kicker">[ 01 / FILTER ]</p>
-            <h4 className="local-personal__section-title" id="local-current-filter-title">
+            <h3 className="local-personal__section-title" id="local-current-filter-title">
               {local.t('local.saved.current')}
-            </h4>
+            </h3>
           </div>
           <span className="local-personal__badge" data-state={currentFiltersReady ? 'READY' : 'DANGER'}>
             {currentFiltersReady
@@ -338,9 +404,9 @@ export function SavedViewsPage({
         <header className="local-personal__section-head">
           <div>
             <p className="local-personal__kicker">[ 02 / LIBRARY ]</p>
-            <h4 className="local-personal__section-title" id="local-saved-library-title">
+            <h3 className="local-personal__section-title" id="local-saved-library-title" tabIndex={-1}>
               {local.t('local.saved.library')}
-            </h4>
+            </h3>
           </div>
           <div className="local-personal__actions">
             <span className="local-personal__badge" data-state="READY">
@@ -349,6 +415,7 @@ export function SavedViewsPage({
             {library.views.length === 0 ? null : (
               <ActionButton
                 disabled={pending || deletingAll}
+                id={deleteAllTriggerId}
                 onClick={() => setConfirmDeleteAll(true)}
                 tone="quiet"
               >
@@ -365,6 +432,7 @@ export function SavedViewsPage({
               <ActionButton
                 busy={deletingAll}
                 busyLabel={local.t('local.status.busy')}
+                id={deleteAllConfirmId}
                 onClick={() => void deleteAll()}
                 tone="accent"
               >
@@ -388,6 +456,10 @@ export function SavedViewsPage({
                 key={item.definition.id}
                 onApply={onApply}
                 onDelete={onDelete}
+                onDeleteCompleted={() => {
+                  setEditor(null);
+                  queueMicrotask(() => document.getElementById('local-saved-library-title')?.focus());
+                }}
                 onDuplicate={onDuplicate}
                 onEdit={setEditor}
                 onRename={onRename}

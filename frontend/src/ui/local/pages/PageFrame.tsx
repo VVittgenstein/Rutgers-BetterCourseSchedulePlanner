@@ -43,7 +43,7 @@ const LOCAL_PAGE_CSS = String.raw`
   background: var(--bcsp-paper-raised);
   font: inherit;
 }
-.local-page__input:focus-visible { outline: 3px solid var(--bcsp-focus); outline-offset: 2px; }
+.local-page__input:focus-visible { outline: 3px solid var(--bcsp-focus, var(--bcsp-accent)); outline-offset: 2px; }
 .local-page__technical {
   overflow-wrap: anywhere;
   font-family: var(--bcsp-font-data);
@@ -113,12 +113,9 @@ export interface LocalPageFrameProps extends LocalPageAsyncState {
 export function LocalPageFrame({
   children,
   error = null,
-  intro,
-  kicker,
   onClearError,
   onReload,
   pending = false,
-  title,
 }: LocalPageFrameProps) {
   const local = useLocalI18n();
   const shared = useBcspI18n();
@@ -128,13 +125,6 @@ export function LocalPageFrame({
     <div className="local-personal">
       <LocalPersonalStyles />
       <style data-bcsp-local-page="">{LOCAL_PAGE_CSS}</style>
-      <header className="local-personal__hero">
-        <div>
-          <p className="local-personal__kicker">[ {kicker} ]</p>
-          <h3>{title}</h3>
-        </div>
-        <p>{intro}</p>
-      </header>
       {pending ? (
         <div aria-live="polite" className="local-page__system-state" role="status">
           <p>{local.t('local.status.busy')}</p>

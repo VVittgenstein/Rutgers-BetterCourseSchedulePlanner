@@ -156,12 +156,18 @@ describe('Course and Section workspace controller', () => {
 
     const row = view.container.querySelector<HTMLElement>('[data-filter-row="FLT-S01"]');
     expect(row).not.toBeNull();
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(row as HTMLElement, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
     await waitFor(() => {
       expect(searchSections).not.toHaveBeenCalled();
       expect(row?.dataset.filterError).toBe('true');
       expect(row?.getAttribute('aria-invalid')).toBe('true');
       expect(within(row as HTMLElement).getByText('A Section index must contain five digits.')).toBeTruthy();
       expect(document.activeElement).toBe(sectionIndexInput);
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'nearest' });
     });
   });
 

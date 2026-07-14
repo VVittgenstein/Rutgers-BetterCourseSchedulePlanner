@@ -18,7 +18,7 @@ import {
   toFilterValuesV1,
   type FilterStateV1,
 } from '../src/ui/shared/product';
-import { FilterPanel } from '../src/ui/shared/search/filters';
+import { FILTER_PANEL_CSS, FilterPanel } from '../src/ui/shared/search/filters';
 
 const SCHEMA = JSON.parse(readFileSync(
   resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
@@ -115,6 +115,13 @@ function addToken(label: string, value: string): void {
 afterEach(() => cleanup());
 
 describe('controlled 22-field FilterPanel', () => {
+  it('keeps removable chip targets touch-sized with fine-pointer hover and reduced-motion press handling', () => {
+    expect(FILTER_PANEL_CSS).toContain('min-width: 2.75rem; min-height: 2.75rem');
+    expect(FILTER_PANEL_CSS).toContain('@media (hover: hover) and (pointer: fine)');
+    expect(FILTER_PANEL_CSS).toContain('transform: scale(0.97)');
+    expect(FILTER_PANEL_CSS).toContain('@media (prefers-reduced-motion: reduce)');
+  });
+
   it('renders every stable schema row in chip order with a real form control', () => {
     const view = render(<Harness />);
     const rows = [...view.container.querySelectorAll<HTMLElement>('[data-filter-row]')];

@@ -128,7 +128,9 @@ export const SEARCH_RESULTS_CSS = String.raw`
 .search-results__variant-summary {
   cursor: pointer;
   list-style-position: inside;
+  min-height: 2.75rem;
   padding: 0.8rem 0;
+  transition: transform 140ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
 .search-results__variant-summary::marker {
@@ -209,29 +211,36 @@ export const SEARCH_RESULTS_CSS = String.raw`
   border-radius: 0;
   color: var(--result-ink);
   cursor: pointer;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-weight: 700;
+  min-height: 2.75rem;
   padding: 0.45rem 0.55rem;
   text-align: center;
   text-decoration: none;
+  transition: transform 140ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
-.search-results__button:hover,
-.search-results__section-link:hover {
-  background: var(--result-ink);
-  color: var(--result-paper);
-}
-
-.search-results__button:active,
-.search-results__section-link:active {
-  transform: translateY(1px);
+.search-results__button:active:not(:focus-visible),
+.search-results__section-link:active:not(:focus-visible),
+.search-results__variant-summary:active:not(:focus-visible) {
+  transform: scale(0.97);
 }
 
 .search-results__button:focus-visible,
 .search-results__section-link:focus-visible,
 .search-results__variant-summary:focus-visible {
-  outline: 3px solid var(--result-accent);
+  outline: 3px solid var(--bcsp-focus, var(--result-accent));
   outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .search-results__button:hover,
+  .search-results__section-link:hover {
+    background: var(--result-ink);
+    color: var(--result-paper);
+  }
 }
 
 .search-results__witness,
@@ -313,6 +322,20 @@ export const SEARCH_RESULTS_CSS = String.raw`
   .search-results__witness-item,
   .search-results__occurrence {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-results__button,
+  .search-results__section-link,
+  .search-results__variant-summary {
+    transition: none;
+  }
+
+  .search-results__button:active:not(:focus-visible),
+  .search-results__section-link:active:not(:focus-visible),
+  .search-results__variant-summary:active:not(:focus-visible) {
+    transform: none;
   }
 }
 `;
