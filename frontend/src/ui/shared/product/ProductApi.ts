@@ -1,0 +1,151 @@
+import type { CatalogDiscoveryRequestV1, CatalogDiscoveryResponseV1 } from './contracts/catalog';
+import type {
+  CourseDetailRequestV1,
+  CourseDetailResponseV1,
+  CourseQueryRequestV1,
+  CourseQueryResponseV1,
+  FilterSchemaV1,
+  SectionDetailRequestV1,
+  SectionDetailResponseV1,
+  SectionQueryRequestV1,
+  SectionQueryResponseV1,
+} from './contracts/query';
+import type {
+  OpenRefreshStatusV1,
+  OpenSectionStatusRequestV1,
+  OpenSectionStatusV1,
+  OpenStatusRequestV1,
+} from './contracts/open';
+import type { ProductClientPort } from './ProductClient';
+
+export const PRODUCT_API_ROUTES = {
+  filterSchema: { method: 'GET', path: '/api/v1/query/filter-schema' },
+  catalogDiscovery: { method: 'POST', path: '/api/v1/catalog/discovery' },
+  courseSearch: { method: 'POST', path: '/api/v1/query/courses' },
+  sectionSearch: { method: 'POST', path: '/api/v1/query/sections' },
+  courseDetail: { method: 'POST', path: '/api/v1/query/course-detail' },
+  sectionDetail: { method: 'POST', path: '/api/v1/query/section-detail' },
+  openStatus: { method: 'POST', path: '/api/v1/open/status' },
+  openSectionStatus: { method: 'POST', path: '/api/v1/open/section-status' },
+} as const;
+
+export interface ProductApiPort {
+  filterSchema(signal?: AbortSignal): Promise<FilterSchemaV1>;
+  catalogDiscovery(
+    request: CatalogDiscoveryRequestV1,
+    signal?: AbortSignal,
+  ): Promise<CatalogDiscoveryResponseV1>;
+  searchCourses(
+    request: CourseQueryRequestV1,
+    signal?: AbortSignal,
+  ): Promise<CourseQueryResponseV1>;
+  searchSections(
+    request: SectionQueryRequestV1,
+    signal?: AbortSignal,
+  ): Promise<SectionQueryResponseV1>;
+  courseDetail(
+    request: CourseDetailRequestV1,
+    signal?: AbortSignal,
+  ): Promise<CourseDetailResponseV1>;
+  sectionDetail(
+    request: SectionDetailRequestV1,
+    signal?: AbortSignal,
+  ): Promise<SectionDetailResponseV1>;
+  openStatus(
+    request: OpenStatusRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OpenRefreshStatusV1>;
+  openSectionStatus(
+    request: OpenSectionStatusRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OpenSectionStatusV1>;
+}
+
+export class ProductApi implements ProductApiPort {
+  readonly #client: ProductClientPort;
+
+  constructor(client: ProductClientPort) {
+    this.#client = client;
+  }
+
+  filterSchema(signal?: AbortSignal): Promise<FilterSchemaV1> {
+    return this.#client.get<FilterSchemaV1>(PRODUCT_API_ROUTES.filterSchema.path, signal);
+  }
+
+  catalogDiscovery(
+    request: CatalogDiscoveryRequestV1,
+    signal?: AbortSignal,
+  ): Promise<CatalogDiscoveryResponseV1> {
+    return this.#client.post<CatalogDiscoveryRequestV1, CatalogDiscoveryResponseV1>(
+      PRODUCT_API_ROUTES.catalogDiscovery.path,
+      request,
+      signal,
+    );
+  }
+
+  searchCourses(
+    request: CourseQueryRequestV1,
+    signal?: AbortSignal,
+  ): Promise<CourseQueryResponseV1> {
+    return this.#client.post<CourseQueryRequestV1, CourseQueryResponseV1>(
+      PRODUCT_API_ROUTES.courseSearch.path,
+      request,
+      signal,
+    );
+  }
+
+  searchSections(
+    request: SectionQueryRequestV1,
+    signal?: AbortSignal,
+  ): Promise<SectionQueryResponseV1> {
+    return this.#client.post<SectionQueryRequestV1, SectionQueryResponseV1>(
+      PRODUCT_API_ROUTES.sectionSearch.path,
+      request,
+      signal,
+    );
+  }
+
+  courseDetail(
+    request: CourseDetailRequestV1,
+    signal?: AbortSignal,
+  ): Promise<CourseDetailResponseV1> {
+    return this.#client.post<CourseDetailRequestV1, CourseDetailResponseV1>(
+      PRODUCT_API_ROUTES.courseDetail.path,
+      request,
+      signal,
+    );
+  }
+
+  sectionDetail(
+    request: SectionDetailRequestV1,
+    signal?: AbortSignal,
+  ): Promise<SectionDetailResponseV1> {
+    return this.#client.post<SectionDetailRequestV1, SectionDetailResponseV1>(
+      PRODUCT_API_ROUTES.sectionDetail.path,
+      request,
+      signal,
+    );
+  }
+
+  openStatus(
+    request: OpenStatusRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OpenRefreshStatusV1> {
+    return this.#client.post<OpenStatusRequestV1, OpenRefreshStatusV1>(
+      PRODUCT_API_ROUTES.openStatus.path,
+      request,
+      signal,
+    );
+  }
+
+  openSectionStatus(
+    request: OpenSectionStatusRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OpenSectionStatusV1> {
+    return this.#client.post<OpenSectionStatusRequestV1, OpenSectionStatusV1>(
+      PRODUCT_API_ROUTES.openSectionStatus.path,
+      request,
+      signal,
+    );
+  }
+}

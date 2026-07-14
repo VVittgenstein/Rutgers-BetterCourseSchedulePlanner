@@ -12,11 +12,11 @@ use bcsp_contracts::{
     CatalogProvenanceV1, CatalogRefreshCheckpointPointV1, CatalogRefreshCheckpointV1,
     CatalogRefreshClassification, CatalogRefreshErrorClass, CatalogRefreshObservationV1,
     CatalogRefreshPointV1, CatalogRefreshStatusV1, CatalogRequiredness,
-    CatalogSnapshotOpenStatusV1, CatalogSourceKind, CatalogSubjectCode, CatalogSubjectV1,
-    CatalogSynchronicity, CatalogTargetV1, CatalogTimeKnowledgeV1, CatalogUnitMajorV1,
-    CatalogUnknownReason, CourseGroupKey, CourseVariantKey, NormalizedCatalogV1,
-    NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedOccurrenceV1,
-    NormalizedSectionV1, SectionKey, TermCampusKey, TraceId,
+    CatalogSnapshotOpenStatusV1, CatalogSourceKind, CatalogSubjectCode, CatalogSubjectProvenanceV1,
+    CatalogSubjectV1, CatalogSynchronicity, CatalogTargetV1, CatalogTimeKnowledgeV1,
+    CatalogUnitMajorV1, CatalogUnknownReason, CourseGroupKey, CourseVariantKey,
+    NormalizedCatalogV1, NormalizedCourseGroupV1, NormalizedCourseVariantV1,
+    NormalizedOccurrenceV1, NormalizedSectionV1, SectionKey, TermCampusKey, TraceId,
 };
 use serde_json::json;
 use time::OffsetDateTime;
@@ -345,11 +345,15 @@ fn discovery_request_is_strict_and_response_is_additive() {
             "code": "SYN:SUBJECT",
             "label": {"knowledge": "KNOWN", "presence": {"presence": "PRESENT", "value": "Synthetic subject"}},
             "provenance": {
-                "observationId": "00000000-0000-4000-8000-000000000001",
-                "sourceId": "SYNTHETIC_SELECTOR",
-                "sourceKind": "SELECTOR",
-                "observedAt": "1970-01-01T00:00:00Z",
-                "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "kind": "DISCOVERY",
+                "discovery": {
+                    "observationId": "00000000-0000-4000-8000-000000000001",
+                    "sourceId": "SYNTHETIC_SELECTOR",
+                    "sourceKind": "SELECTOR",
+                    "observedAt": "1970-01-01T00:00:00Z",
+                    "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "futureProvenanceField": true
+                },
                 "futureProvenanceField": true
             },
             "futureSubjectField": true
@@ -364,10 +368,11 @@ fn discovery_request_is_strict_and_response_is_additive() {
     );
     assert!(decoded.status.is_stale);
     assert_eq!(decoded.subjects[0].code.as_str(), "SYN:SUBJECT");
-    assert_eq!(
-        decoded.subjects[0].provenance.source_kind,
-        CatalogDiscoverySourceKind::Selector
-    );
+    let CatalogSubjectProvenanceV1::Discovery { discovery } = &decoded.subjects[0].provenance
+    else {
+        panic!("expected discovery subject provenance");
+    };
+    assert_eq!(discovery.source_kind, CatalogDiscoverySourceKind::Selector);
 }
 
 #[test]
@@ -566,7 +571,9 @@ fn discovery_golden_includes_dynamic_subject_scope_and_provenance() {
             target: target(),
             code: CatalogSubjectCode::try_from("SYN:SUBJECT").unwrap(),
             label: CatalogFieldKnowledge::present("Synthetic subject".to_owned()),
-            provenance: discovery_provenance(),
+            provenance: CatalogSubjectProvenanceV1::Discovery {
+                discovery: discovery_provenance(),
+            },
         }],
     };
     let actual = format!("{}\n", serde_json::to_string_pretty(&value).unwrap());

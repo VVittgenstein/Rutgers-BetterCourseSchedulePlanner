@@ -1,17 +1,20 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::RwLock;
 use std::time::Duration;
 
+use bcsp_catalog::{ProjectionError, to_catalog_discovery_response_v1};
 use bcsp_contracts::{
-    CourseDetailRequestV1, CourseDetailResponseV1, CourseQueryRequestV1, CourseQueryResponseV1,
-    FilterSchemaV1, LiveOpenEvidenceV1, LiveOpenStateV1, MatchReasonCode, OpenCircuitState,
-    OpenCircuitStatusV1, OpenSchedulerLane, OpenSchedulerStatusV1, OpenState,
-    SectionDetailRequestV1, SectionDetailResponseV1, SectionQueryRequestV1, SectionQueryResponseV1,
-    TermCampusKey, filter_schema_v1,
+    CatalogDiscoveryResponseV1, CourseDetailRequestV1, CourseDetailResponseV1,
+    CourseQueryRequestV1, CourseQueryResponseV1, FilterSchemaV1, LiveOpenEvidenceV1,
+    LiveOpenStateV1, MatchReasonCode, OpenCircuitState, OpenCircuitStatusV1, OpenSchedulerLane,
+    OpenSchedulerStatusV1, OpenState, SectionDetailRequestV1, SectionDetailResponseV1,
+    SectionQueryRequestV1, SectionQueryResponseV1, TermCampusKey, filter_schema_v1,
 };
 use bcsp_open::{
     GeneralOpenInterval, OpenCounterAudience, OpenProjectionError, OpenProjectionRuntime,
     ProjectedOpenStatusV1, project_open_status,
 };
-use bcsp_operational_storage::OperationalStorage;
+use bcsp_operational_storage::{OperationalStorage, StorageError};
 use bcsp_query::OpenEvidence;
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -153,10 +156,78 @@ impl Default for OpenRuntimeSnapshot {
     }
 }
 
+/// Thread-safe ephemeral scheduler/circuit state keyed by Open target.
+///
+/// Missing targets deliberately project the neutral runtime snapshot. Durable
+/// Open observations and counters remain in [`OperationalStorage`].
+#[derive(Debug, Default)]
+pub struct OpenRuntimeSnapshotRegistry {
+    snapshots: RwLock<BTreeMap<TermCampusKey, OpenRuntimeSnapshot>>,
+}
+
+impl OpenRuntimeSnapshotRegistry {
+    pub fn snapshot(
+        &self,
+        target: &TermCampusKey,
+    ) -> Result<OpenRuntimeSnapshot, OpenRuntimeSnapshotRegistryError> {
+        self.snapshots
+            .read()
+            .map_err(|_| OpenRuntimeSnapshotRegistryError)?
+            .get(target)
+            .cloned()
+            .map_or_else(|| Ok(OpenRuntimeSnapshot::default()), Ok)
+    }
+
+    pub fn snapshots(
+        &self,
+        targets: &[TermCampusKey],
+    ) -> Result<BTreeMap<TermCampusKey, OpenRuntimeSnapshot>, OpenRuntimeSnapshotRegistryError>
+    {
+        let snapshots = self
+            .snapshots
+            .read()
+            .map_err(|_| OpenRuntimeSnapshotRegistryError)?;
+        Ok(targets
+            .iter()
+            .cloned()
+            .map(|target| {
+                let snapshot = snapshots.get(&target).cloned().unwrap_or_default();
+                (target, snapshot)
+            })
+            .collect())
+    }
+
+    pub fn replace(
+        &self,
+        target: TermCampusKey,
+        snapshot: OpenRuntimeSnapshot,
+    ) -> Result<Option<OpenRuntimeSnapshot>, OpenRuntimeSnapshotRegistryError> {
+        self.snapshots
+            .write()
+            .map_err(|_| OpenRuntimeSnapshotRegistryError)
+            .map(|mut snapshots| snapshots.insert(target, snapshot))
+    }
+
+    pub fn remove(
+        &self,
+        target: &TermCampusKey,
+    ) -> Result<Option<OpenRuntimeSnapshot>, OpenRuntimeSnapshotRegistryError> {
+        self.snapshots
+            .write()
+            .map_err(|_| OpenRuntimeSnapshotRegistryError)
+            .map(|mut snapshots| snapshots.remove(target))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("Open runtime snapshot registry is unavailable")]
+pub struct OpenRuntimeSnapshotRegistryError;
+
 /// Small target-neutral composition for both product entrypoints. The caller
 /// explicitly selects the counter audience while storage ownership,
 /// scheduling, HTTP hosting, and upstream transport remain in their existing
 /// owners.
+#[derive(Clone)]
 pub struct SharedRuntimeContext<C, P> {
     counter_audience: OpenCounterAudience,
     clock: C,
@@ -266,6 +337,32 @@ where
         filter_schema_v1()
     }
 
+    pub fn catalog_discovery(
+        &self,
+        storage: &mut OperationalStorage,
+    ) -> Result<CatalogDiscoveryResponseV1, SharedRuntimeError> {
+        let published = storage
+            .published_discovery_snapshot()
+            .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?;
+        let targets = published
+            .snapshot
+            .campuses
+            .iter()
+            .map(|campus| campus.target.clone())
+            .collect::<BTreeSet<_>>();
+        let mut catalogs = Vec::new();
+        for target in targets {
+            if let Some(catalog) = storage
+                .published_catalog_snapshot(&target)
+                .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?
+            {
+                catalogs.push(catalog);
+            }
+        }
+        to_catalog_discovery_response_v1(&published, &catalogs, self.clock.now())
+            .map_err(SharedRuntimeError::CatalogDiscoveryProjection)
+    }
+
     fn query_evidence(
         &self,
         storage: &mut OperationalStorage,
@@ -347,6 +444,10 @@ pub enum SharedRuntimeError {
         #[source]
         source: OpenProjectionError,
     },
+    #[error("Catalog discovery storage read failed")]
+    CatalogDiscoveryStorage(#[source] StorageError),
+    #[error("Catalog discovery projection failed")]
+    CatalogDiscoveryProjection(#[source] ProjectionError),
     #[error(transparent)]
     Query(#[from] SharedQueryError),
 }

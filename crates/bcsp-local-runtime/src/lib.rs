@@ -14,6 +14,7 @@ mod lifecycle;
 mod path;
 mod personal;
 mod policy;
+mod product;
 mod watch;
 
 pub use bootstrap::{

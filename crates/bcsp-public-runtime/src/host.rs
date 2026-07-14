@@ -14,14 +14,17 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::{any, get};
 use bcsp_application::{
-    ExtensionRequest, ExtensionResponse, ExtensionRoute, RequestMethod, RouteExtension,
-    SharedWatchSocket, WebSocketExtension, serve_websocket,
+    ExtensionRequest, ExtensionResponse, ExtensionRoute, FixedRefreshPolicyProvider,
+    OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError, OpenRuntimeSnapshotRegistry,
+    RefreshPolicyError, RequestMethod, RouteExtension, SHARED_WATCH_SUBPROTOCOL, SharedWatchSocket,
+    TargetRefreshDemand, WebSocketExtension, serve_websocket,
 };
 use bcsp_contracts::{
     ActiveWatchTargetV1, ApiErrorBody, ApiErrorCode, ApiErrorEnvelope, FilterRequestV1,
     FilterSchemaV1, HttpSuccessEnvelope, SectionKey, SystemTraceIdSource, TraceIdSource,
     WatchAlertV1, WatchPolicyV1, filter_schema_v1,
 };
+use bcsp_open::OpenCounterAudience;
 use bcsp_public_operations::{PublicOperationalStore, PublicOperationsError};
 use serde::Serialize;
 use thiserror::Error;
@@ -33,6 +36,7 @@ use crate::config::{
     PUBLIC_CATALOG_INTERVAL_SECONDS, PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS,
     PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS, PublicHostConfig, PublicHostConfigError,
 };
+use crate::product::create_public_product_routes;
 use crate::session::{
     DocumentSessionError, DocumentSessionRegistry, PublicLocale, negotiate_locale,
 };
@@ -45,7 +49,7 @@ use crate::watch::create_public_watch_socket;
 const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 * 1024;
 const SESSION_HEADER: &str = "x-bcsp-session";
-pub const PUBLIC_WS_SUBPROTOCOL: &str = "bcsp.v1";
+pub const PUBLIC_WS_SUBPROTOCOL: &str = SHARED_WATCH_SUBPROTOCOL;
 const WATCH_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(250);
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_VOLUME_PERCENT: u8 = 100;
@@ -70,7 +74,7 @@ const SHELL_TEMPLATE: &str = r#"<!doctype html>
     <title>Rutgers Better Course Schedule Planner</title>
   </head>
   <body>
-    <main id="app" aria-live="polite"></main>
+    <main id="root" aria-live="polite"></main>
     <script id="bcsp-bootstrap" type="application/json" nonce="__BCSP_NONCE__">__BCSP_BOOTSTRAP__</script>
   </body>
 </html>
@@ -146,7 +150,9 @@ impl RouteExtension for NoPublicProductRoutes {
 pub struct PublicRuntime {
     address: std::net::SocketAddr,
     scheduler: Arc<InMemoryPublicSchedulerStatus>,
+    open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
     watch: Arc<SharedWatchSocket>,
+    refresh: Option<OfficialRefreshRuntime>,
     shutdown: Option<oneshot::Sender<()>>,
     server_task: Option<JoinHandle<Result<(), std::io::Error>>>,
     maintenance_task: Option<JoinHandle<()>>,
@@ -158,22 +164,65 @@ impl PublicRuntime {
         store: SharedPublicOperationalStore,
         product_routes: Arc<dyn RouteExtension>,
     ) -> Result<Self, PublicRuntimeError> {
-        let watch = create_public_watch_socket(store.clone())
+        Self::spawn_with_open_runtime(
+            config,
+            store,
+            product_routes,
+            Arc::new(OpenRuntimeSnapshotRegistry::default()),
+        )
+        .await
+    }
+
+    pub async fn spawn_with_open_runtime(
+        config: PublicHostConfig,
+        store: SharedPublicOperationalStore,
+        product_routes: Arc<dyn RouteExtension>,
+        open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
+    ) -> Result<Self, PublicRuntimeError> {
+        let watch = create_public_watch_socket(store.clone(), open_runtime.clone())
             .map_err(|_| PublicRuntimeError::WatchInitialization)?;
         let scheduler = Arc::new(InMemoryPublicSchedulerStatus::default());
         let scheduler_source: Arc<dyn PublicSchedulerStatusSource> = scheduler.clone();
         let service: Arc<dyn PublicServiceStateSource> = Arc::new(
             PublicServiceInspector::with_system_clock(store, scheduler_source, watch.clone()),
         );
-        Self::spawn_with_state(config, product_routes, service, watch, scheduler).await
+        Self::spawn_with_state_and_open_runtime(
+            config,
+            product_routes,
+            service,
+            watch,
+            scheduler,
+            open_runtime,
+        )
+        .await
     }
 
+    #[cfg(test)]
     async fn spawn_with_state(
         config: PublicHostConfig,
         product_routes: Arc<dyn RouteExtension>,
         service: Arc<dyn PublicServiceStateSource>,
         watch: Arc<SharedWatchSocket>,
         scheduler: Arc<InMemoryPublicSchedulerStatus>,
+    ) -> Result<Self, PublicRuntimeError> {
+        Self::spawn_with_state_and_open_runtime(
+            config,
+            product_routes,
+            service,
+            watch,
+            scheduler,
+            Arc::new(OpenRuntimeSnapshotRegistry::default()),
+        )
+        .await
+    }
+
+    async fn spawn_with_state_and_open_runtime(
+        config: PublicHostConfig,
+        product_routes: Arc<dyn RouteExtension>,
+        service: Arc<dyn PublicServiceStateSource>,
+        watch: Arc<SharedWatchSocket>,
+        scheduler: Arc<InMemoryPublicSchedulerStatus>,
+        open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
     ) -> Result<Self, PublicRuntimeError> {
         let listener = TcpListener::bind(config.bind())
             .await
@@ -209,7 +258,9 @@ impl PublicRuntime {
         Ok(Self {
             address,
             scheduler,
+            open_runtime,
             watch,
+            refresh: None,
             shutdown: Some(shutdown),
             server_task: Some(server_task),
             maintenance_task: Some(maintenance_task),
@@ -224,11 +275,18 @@ impl PublicRuntime {
         self.scheduler.clone()
     }
 
+    pub fn open_runtime(&self) -> Arc<OpenRuntimeSnapshotRegistry> {
+        self.open_runtime.clone()
+    }
+
     pub fn watch_socket(&self) -> Arc<SharedWatchSocket> {
         self.watch.clone()
     }
 
     pub async fn shutdown(mut self) -> Result<(), PublicRuntimeError> {
+        if let Some(refresh) = self.refresh.take() {
+            refresh.shutdown().await;
+        }
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -257,6 +315,7 @@ impl PublicRuntime {
 
 impl Drop for PublicRuntime {
     fn drop(&mut self) {
+        drop(self.refresh.take());
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -272,12 +331,36 @@ pub async fn build_production_runtime() -> Result<PublicRuntime, PublicRuntimeEr
         .map_err(PublicRuntimeError::Configuration)?;
     let store =
         PublicOperationalStore::open_production().map_err(PublicRuntimeError::OperationalState)?;
-    PublicRuntime::spawn(
+    let store = Arc::new(Mutex::new(store));
+    let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
+    let target_refresh_demand = TargetRefreshDemand::default();
+    let product_routes = create_public_product_routes(store.clone(), open_runtime.clone())
+        .map_err(PublicRuntimeError::ProductComposition)?
+        .with_target_refresh_demand(target_refresh_demand.clone());
+    let mut runtime = PublicRuntime::spawn_with_open_runtime(
         config,
-        Arc::new(Mutex::new(store)),
-        Arc::new(NoPublicProductRoutes),
+        store.clone(),
+        Arc::new(product_routes),
+        open_runtime.clone(),
     )
-    .await
+    .await?;
+    let policy = FixedRefreshPolicyProvider::new(
+        crate::fixed_public_refresh_policy().map_err(PublicRuntimeError::ProductComposition)?,
+    );
+    let mut ids = SystemTraceIdSource;
+    let refresh = OfficialRefreshRuntime::spawn_with_target_refresh_demand(
+        crate::PublicProductStorageAccess::new(store),
+        policy,
+        ids.next_trace_id(),
+        OpenCounterAudience::Public,
+        runtime.watch.clone(),
+        open_runtime,
+        runtime.scheduler.clone(),
+        target_refresh_demand,
+    )
+    .map_err(PublicRuntimeError::RefreshStartup)?;
+    runtime.refresh = Some(refresh);
+    Ok(runtime)
 }
 
 pub async fn run_production() -> Result<(), PublicRuntimeError> {
@@ -703,8 +786,12 @@ pub enum PublicRuntimeError {
     Configuration(#[source] PublicHostConfigError),
     #[error("public operational state is unavailable")]
     OperationalState(#[source] PublicOperationsError),
+    #[error("public product routes could not be composed")]
+    ProductComposition(#[source] RefreshPolicyError),
     #[error("public watch runtime could not be initialized")]
     WatchInitialization,
+    #[error("official Rutgers refresh clients could not be initialized")]
+    RefreshStartup(#[source] OfficialRefreshRuntimeBuildError),
     #[error("public loopback listener could not be bound")]
     Bind,
     #[error("public HTTP service failed")]
@@ -722,7 +809,9 @@ impl PublicRuntimeError {
         match self {
             Self::Configuration(error) => error.code(),
             Self::OperationalState(error) => error.code(),
+            Self::ProductComposition(_) => "PUBLIC_PRODUCT_COMPOSITION_FAILED",
             Self::WatchInitialization => "PUBLIC_WATCH_INITIALIZATION_FAILED",
+            Self::RefreshStartup(_) => "PUBLIC_REFRESH_INITIALIZATION_FAILED",
             Self::Bind => "PUBLIC_BIND_FAILED",
             Self::Serve => "PUBLIC_SERVE_FAILED",
             Self::ServerTask => "PUBLIC_SERVER_TASK_FAILED",
@@ -936,6 +1025,114 @@ mod tests {
                 StatusCode::METHOD_NOT_ALLOWED,
                 "POST {path}"
             );
+        }
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    #[tokio::test]
+    async fn public_host_uses_shared_product_routes_and_never_exposes_local_surfaces() {
+        let temp = TempDir::new().expect("temporary directory");
+        let store = Arc::new(Mutex::new(
+            PublicOperationalStore::open_for_state_root(temp.path().join("state"))
+                .expect("public operational state"),
+        ));
+        let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
+        let routes = create_public_product_routes(store.clone(), open_runtime.clone())
+            .expect("shared public product routes");
+        assert!(Arc::ptr_eq(&routes.storage_access().store(), &store));
+        assert_eq!(routes.route_inventory().len(), 8);
+
+        let runtime = PublicRuntime::spawn_with_open_runtime(
+            test_config(),
+            store,
+            Arc::new(routes),
+            open_runtime.clone(),
+        )
+        .await
+        .expect("public runtime");
+        assert!(Arc::ptr_eq(&runtime.open_runtime(), &open_runtime));
+        let client = client();
+
+        let schema = client
+            .get(request_url(
+                &runtime,
+                bcsp_application::PRODUCT_FILTER_SCHEMA_PATH,
+            ))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .send()
+            .await
+            .expect("shared filter schema");
+        assert_eq!(schema.status(), StatusCode::OK);
+        let schema = schema.json::<Value>().await.expect("schema JSON");
+        assert_eq!(schema["protocolVersion"], 1);
+        assert_eq!(
+            schema["data"]["fields"]
+                .as_array()
+                .expect("schema fields")
+                .len(),
+            bcsp_contracts::FILTER_FIELD_COUNT
+        );
+
+        let unauthenticated = client
+            .post(request_url(
+                &runtime,
+                bcsp_application::PRODUCT_CATALOG_DISCOVERY_PATH,
+            ))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .json(&serde_json::json!({
+                "protocolVersion": 1,
+                "payload": bcsp_contracts::CatalogDiscoveryRequestV1::new()
+            }))
+            .send()
+            .await
+            .expect("unauthenticated shared mutation");
+        assert_eq!(unauthenticated.status(), StatusCode::FORBIDDEN);
+
+        let (_, _, bootstrap) = document(&client, &runtime, "/", "en-US").await;
+        let nonce = bootstrap_data(&bootstrap)["sessionNonce"]
+            .as_str()
+            .expect("document session nonce");
+        let empty_catalog = client
+            .post(request_url(
+                &runtime,
+                bcsp_application::PRODUCT_CATALOG_DISCOVERY_PATH,
+            ))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .header(ORIGIN.as_str(), TEST_ORIGIN)
+            .header(SESSION_HEADER, nonce)
+            .json(&serde_json::json!({
+                "protocolVersion": 1,
+                "payload": bcsp_contracts::CatalogDiscoveryRequestV1::new()
+            }))
+            .send()
+            .await
+            .expect("authenticated shared mutation");
+        assert_eq!(empty_catalog.status(), StatusCode::OK);
+        let empty_catalog = empty_catalog
+            .json::<Value>()
+            .await
+            .expect("empty Catalog response");
+        assert_eq!(
+            empty_catalog["data"]["status"]["availability"],
+            "UNAVAILABLE_NO_FIRST_SUCCESS"
+        );
+
+        for response in [
+            client
+                .get(request_url(&runtime, "/api/v1/local/bootstrap"))
+                .header(HOST.as_str(), TEST_AUTHORITY)
+                .send()
+                .await
+                .expect("local read probe"),
+            client
+                .post(request_url(&runtime, "/api/v1/local/settings"))
+                .header(HOST.as_str(), TEST_AUTHORITY)
+                .send()
+                .await
+                .expect("local mutation probe"),
+        ] {
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
         }
 
         runtime.shutdown().await.expect("clean shutdown");
@@ -1178,7 +1375,9 @@ mod tests {
             PublicOperationalStore::open_for_state_root(temp.path().join("state"))
                 .expect("public operational state"),
         ));
-        let watch = create_public_watch_socket(store).expect("public watch socket");
+        let watch =
+            create_public_watch_socket(store, Arc::new(OpenRuntimeSnapshotRegistry::default()))
+                .expect("public watch socket");
         let scheduler = Arc::new(InMemoryPublicSchedulerStatus::default());
         let snapshot = PublicServiceSnapshot {
             status: PublicStatusLevel::Degraded,

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use bcsp_application::SharedWatchSocket;
+use bcsp_application::{CoordinatorStatusSink, CoordinatorStatusSnapshot, SharedWatchSocket};
 use bcsp_contracts::{
     FilterRequestV1, NormalizedFilterValuesV1, OpenCircuitState as ContractOpenCircuitState,
     OpenCircuitStatusV1, OpenFreshnessState, OpenSchedulerLane, OpenSchedulerStatusV1,
@@ -76,6 +76,21 @@ impl InMemoryPublicSchedulerStatus {
 
     pub fn mark_stopped(&self) {
         self.running.store(false, Ordering::Release);
+    }
+}
+
+impl CoordinatorStatusSink for InMemoryPublicSchedulerStatus {
+    fn publish(&self, snapshot: CoordinatorStatusSnapshot) {
+        self.publish(PublicSchedulerSnapshot {
+            maximum_lag_milliseconds: snapshot.maximum_lag_milliseconds,
+            origin_circuit_open: snapshot.origin_circuit_open,
+            overloaded: snapshot.overloaded,
+            in_flight: snapshot.in_flight,
+        });
+    }
+
+    fn mark_stopped(&self) {
+        self.mark_stopped();
     }
 }
 

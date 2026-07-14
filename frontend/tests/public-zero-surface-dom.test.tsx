@@ -23,6 +23,10 @@ const denyCapabilities = (JSON.parse(
 const supplementalMarkers: Readonly<Record<string, readonly string[]>> = {
   LOCAL_RESET: ['local_user_data_reset'],
 };
+const productBootstrap = {
+  protocolVersion: 1,
+  data: { sessionNonce: '10000000-0000-4000-8000-000000000001' },
+};
 
 function normalize(value: string): string {
   return value.toLocaleLowerCase('en-US').replace(/[^a-z0-9]/gu, '');
@@ -61,8 +65,16 @@ describe('public rendered DOM zero surface', () => {
     'contains no excluded text or attributes across the full %s document',
     (locale) => {
       const { baseElement } = render(
-        <PublicCompositionRoot localeSource={{ languages: [locale] }} />,
+        <PublicCompositionRoot
+          localeSource={{ languages: [locale] }}
+          product={{ bootstrap: productBootstrap }}
+        />,
       );
+      expect(
+        baseElement.querySelector('[data-bcsp-product-state]')?.getAttribute(
+          'data-bcsp-product-state',
+        ),
+      ).toBe('READY');
       expect(publicDomViolations(baseElement.ownerDocument)).toEqual([]);
     },
   );

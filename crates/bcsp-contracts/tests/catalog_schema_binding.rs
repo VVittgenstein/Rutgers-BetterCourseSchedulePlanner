@@ -13,11 +13,12 @@ use bcsp_contracts::{
     CatalogProvenanceV1, CatalogRefreshCheckpointPointV1, CatalogRefreshCheckpointV1,
     CatalogRefreshClassification, CatalogRefreshErrorClass, CatalogRefreshObservationV1,
     CatalogRefreshPointV1, CatalogRefreshStatusV1, CatalogRequiredness,
-    CatalogSnapshotOpenStatusV1, CatalogSourceKind, CatalogSubjectCode, CatalogSubjectV1,
-    CatalogSynchronicity, CatalogTargetV1, CatalogTimeKnowledgeV1, CatalogUnitMajorV1,
-    CatalogUnknownReason, ContractSchema, CourseGroupKey, CourseVariantKey, NormalizedCatalogV1,
-    NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedOccurrenceV1,
-    NormalizedSectionV1, SectionKey, TermCampusKey, TraceId, contract_manifest,
+    CatalogSnapshotOpenStatusV1, CatalogSourceKind, CatalogSubjectCode, CatalogSubjectProvenanceV1,
+    CatalogSubjectV1, CatalogSynchronicity, CatalogTargetV1, CatalogTimeKnowledgeV1,
+    CatalogUnitMajorV1, CatalogUnknownReason, ContractSchema, CourseGroupKey, CourseVariantKey,
+    NormalizedCatalogV1, NormalizedCourseGroupV1, NormalizedCourseVariantV1,
+    NormalizedOccurrenceV1, NormalizedSectionV1, SectionKey, TermCampusKey, TraceId,
+    contract_manifest,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -155,6 +156,21 @@ fn catalog_tagged_unions_bind_to_manifest_variants() {
         &CatalogFieldKnowledge::<String>::unknown(CatalogUnknownReason::Missing),
     );
     assert_variant_binding(
+        "bcsp.catalog.subject-provenance.v1",
+        "DISCOVERY",
+        &CatalogSubjectProvenanceV1::Discovery {
+            discovery: discovery_provenance(),
+        },
+    );
+    assert_variant_binding(
+        "bcsp.catalog.subject-provenance.v1",
+        "CATALOG",
+        &CatalogSubjectProvenanceV1::Catalog {
+            content_version: CatalogContentVersion::try_from(1).unwrap(),
+            catalog: provenance(),
+        },
+    );
+    assert_variant_binding(
         "bcsp.catalog.time-knowledge.v1",
         "KNOWN",
         &CatalogTimeKnowledgeV1::Known {
@@ -250,7 +266,9 @@ fn catalog_object_manifest_fields_bind_to_serde_shapes() {
         target: target(),
         code: CatalogSubjectCode::try_from("SYN:SUBJECT").unwrap(),
         label: CatalogFieldKnowledge::present("Subject".to_owned()),
-        provenance: discovery_provenance(),
+        provenance: CatalogSubjectProvenanceV1::Discovery {
+            discovery: discovery_provenance(),
+        },
     };
     let discovery_response = CatalogDiscoveryResponseV1 {
         contract_version: CATALOG_CONTRACT_VERSION,

@@ -101,7 +101,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-application',
     kind: 'lib',
     internal: ['bcsp-catalog', 'bcsp-contracts', 'bcsp-domain', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-query', 'bcsp-rutgers-client', 'bcsp-watch'],
-    external: [['axum', NORMAL], ['serde_json', NORMAL], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tower', NORMAL], ['tower-http', NORMAL], ['tracing', NORMAL]],
+    external: [['axum', NORMAL], ['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tower', NORMAL], ['tower-http', NORMAL], ['tracing', NORMAL]],
   },
   'bcsp-local-user-state': {
     dir: 'crates/bcsp-local-user-state',

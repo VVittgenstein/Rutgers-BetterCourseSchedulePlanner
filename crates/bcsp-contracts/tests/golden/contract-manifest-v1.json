@@ -622,6 +622,40 @@
       ]
     },
     {
+      "id": "bcsp.catalog.subject-provenance.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "DISCOVERY",
+          "fields": [
+            {
+              "name": "discovery",
+              "typeRef": "$schema:bcsp.catalog.discovery-provenance.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CATALOG",
+          "fields": [
+            {
+              "name": "contentVersion",
+              "typeRef": "$scalar:catalog-content-version",
+              "required": true
+            },
+            {
+              "name": "catalog",
+              "typeRef": "$schema:bcsp.catalog.provenance.v1",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "bcsp.catalog.subject.v1",
       "direction": "SERVER_TO_CLIENT",
       "unknownFields": "IGNORE",
@@ -643,7 +677,7 @@
         },
         {
           "name": "provenance",
-          "typeRef": "$schema:bcsp.catalog.discovery-provenance.v1",
+          "typeRef": "$schema:bcsp.catalog.subject-provenance.v1",
           "required": true
         }
       ]

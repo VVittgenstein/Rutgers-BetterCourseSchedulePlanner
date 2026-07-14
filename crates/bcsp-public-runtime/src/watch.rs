@@ -1,61 +1,38 @@
 use std::sync::Arc;
 
-use bcsp_application::{NoopWatchDispatchSink, SharedWatchSocket, WatchAdmissionSource};
-use bcsp_contracts::{
-    OpenCircuitState, OpenCircuitStatusV1, OpenSchedulerLane, OpenSchedulerStatusV1, SectionKey,
+use bcsp_application::{
+    FixedRefreshPolicyProvider, NoopWatchDispatchSink, OpenRuntimeSnapshotRegistry,
+    SharedRuntimeContext, SharedWatchSocket, SystemApplicationClock, WatchAdmissionSource,
 };
-use bcsp_open::{
-    OpenCounterAudience, OpenProjectionError, OpenProjectionRuntime,
-    project_current_open_observation,
-};
+use bcsp_contracts::SectionKey;
+use bcsp_open::{OpenCounterAudience, OpenProjectionError, project_current_open_observation};
 use bcsp_watch::{WatchManagerError, WatchStartAdmission};
-use time::OffsetDateTime;
 
-use crate::{
-    PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS, PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS,
-    SharedPublicOperationalStore,
-};
+use crate::{SharedPublicOperationalStore, fixed_public_refresh_policy};
 
 struct PublicWatchAdmission {
     store: SharedPublicOperationalStore,
+    runtime: SharedRuntimeContext<SystemApplicationClock, FixedRefreshPolicyProvider>,
+    open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
 }
 
 impl WatchAdmissionSource for PublicWatchAdmission {
     fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission {
+        let target = section.target();
+        let Ok(snapshot) = self.open_runtime.snapshot(&target) else {
+            return WatchStartAdmission::TargetUnavailable;
+        };
+        let Ok(runtime) = self.runtime.projection_runtime(&snapshot) else {
+            return WatchStartAdmission::TargetUnavailable;
+        };
         let Ok(mut store) = self.store.lock() else {
             return WatchStartAdmission::TargetUnavailable;
         };
-        let runtime = watch_projection_runtime(OffsetDateTime::now_utc());
         admission_from_projection(project_current_open_observation(
             store.storage_mut(),
             section,
             &runtime,
         ))
-    }
-}
-
-fn watch_projection_runtime(now: OffsetDateTime) -> OpenProjectionRuntime {
-    OpenProjectionRuntime {
-        now,
-        audience: OpenCounterAudience::Public,
-        scheduler: OpenSchedulerStatusV1 {
-            lane: OpenSchedulerLane::ActiveWatch,
-            requested_general_interval_seconds: PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS,
-            requested_effective_interval_seconds: PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS,
-            active_watch_count: 1,
-            next_due_at: None,
-            in_flight: false,
-            scheduler_lag_milliseconds: 0,
-            actual_start_to_start_interval_milliseconds: None,
-            failure_streak: 0,
-        },
-        circuit: OpenCircuitStatusV1 {
-            state: OpenCircuitState::Closed,
-            reason: None,
-            opened_at: None,
-            retry_at: None,
-            diagnostic_recheck_required: false,
-        },
     }
 }
 
@@ -71,8 +48,20 @@ fn admission_from_projection(
 
 pub fn create_public_watch_socket(
     store: SharedPublicOperationalStore,
+    open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
 ) -> Result<Arc<SharedWatchSocket>, WatchManagerError> {
-    let admission: Arc<dyn WatchAdmissionSource> = Arc::new(PublicWatchAdmission { store });
+    let runtime = SharedRuntimeContext::new(
+        OpenCounterAudience::Public,
+        SystemApplicationClock,
+        FixedRefreshPolicyProvider::new(
+            fixed_public_refresh_policy().expect("fixed public refresh policy is valid"),
+        ),
+    );
+    let admission: Arc<dyn WatchAdmissionSource> = Arc::new(PublicWatchAdmission {
+        store,
+        runtime,
+        open_runtime,
+    });
     Ok(Arc::new(SharedWatchSocket::try_new(
         admission,
         Arc::new(NoopWatchDispatchSink),
@@ -101,15 +90,23 @@ mod tests {
 
     #[test]
     fn watch_projection_uses_fixed_public_intervals_and_service_counter_scope() {
-        let runtime = watch_projection_runtime(OffsetDateTime::UNIX_EPOCH);
+        let runtime = SharedRuntimeContext::new(
+            OpenCounterAudience::Public,
+            SystemApplicationClock,
+            FixedRefreshPolicyProvider::new(
+                fixed_public_refresh_policy().expect("fixed public policy"),
+            ),
+        )
+        .projection_runtime(&Default::default())
+        .expect("public watch projection");
         assert_eq!(runtime.audience, OpenCounterAudience::Public);
         assert_eq!(
             runtime.scheduler.requested_general_interval_seconds,
-            PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS
+            crate::PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS
         );
         assert_eq!(
             runtime.scheduler.requested_effective_interval_seconds,
-            PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS
+            crate::PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS
         );
     }
 }

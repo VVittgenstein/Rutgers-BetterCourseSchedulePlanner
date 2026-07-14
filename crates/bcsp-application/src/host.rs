@@ -9,7 +9,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Request, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST, ORIGIN, REFERRER_POLICY,
-    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    SEC_WEBSOCKET_PROTOCOL, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::Response;
@@ -25,6 +25,7 @@ use tokio::task::JoinHandle;
 
 const MAX_EXTENSION_BODY_BYTES: usize = 1024 * 1024;
 const SESSION_HEADER: &str = "x-bcsp-session";
+pub const SHARED_WATCH_SUBPROTOCOL: &str = "bcsp.v1";
 const SOCKET_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const SOCKET_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 const SOCKET_PRODUCT_TICK_INTERVAL: Duration = Duration::from_millis(250);
@@ -373,6 +374,7 @@ async fn handle_watch_socket(
     if header_text(request.headers(), HOST).as_deref() != Some(state.authority.as_str())
         || header_text(request.headers(), ORIGIN).as_deref() != Some(state.origin.as_str())
         || session_query(request.uri().query()) != Some(state.nonce.as_str())
+        || !requested_subprotocol(request.headers())
     {
         return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
     }
@@ -381,7 +383,9 @@ async fn handle_watch_socket(
     };
     let mut source = SystemTraceIdSource;
     let connection_id = source.next_trace_id();
-    upgrade.on_upgrade(move |socket| serve_websocket(socket, extension, connection_id))
+    upgrade
+        .protocols([SHARED_WATCH_SUBPROTOCOL])
+        .on_upgrade(move |socket| serve_websocket(socket, extension, connection_id))
 }
 
 /// Runs the target-neutral WebSocket frame, heartbeat, and cleanup pump.
@@ -454,6 +458,15 @@ fn session_query(query: Option<&str>) -> Option<&str> {
         }
     }
     session
+}
+
+fn requested_subprotocol(headers: &axum::http::HeaderMap) -> bool {
+    header_text(headers, SEC_WEBSOCKET_PROTOCOL).is_some_and(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .any(|protocol| protocol == SHARED_WATCH_SUBPROTOCOL)
+    })
 }
 
 async fn handle_extension(State(state): State<HostState>, request: Request) -> Response {

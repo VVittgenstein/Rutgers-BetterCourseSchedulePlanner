@@ -609,6 +609,28 @@ pub struct CatalogProvenanceV1 {
     pub payload_digest: CatalogPayloadDigest,
 }
 
+/// Exact source family behind one subject dictionary entry.
+///
+/// Discovery and Catalog observations have different identities and lifecycles. Keeping them in
+/// a tagged union prevents a Catalog-derived label from masquerading as selector evidence. The
+/// Catalog variant also binds the entry to the precise serving content version from which it was
+/// derived.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase"
+)]
+pub enum CatalogSubjectProvenanceV1 {
+    Discovery {
+        discovery: CatalogDiscoveryProvenanceV1,
+    },
+    Catalog {
+        content_version: CatalogContentVersion,
+        catalog: CatalogProvenanceV1,
+    },
+}
+
 /// Dynamic subject dictionary entry scoped to one discovered target and tied
 /// to the exact source observation that supplied it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -617,7 +639,7 @@ pub struct CatalogSubjectV1 {
     pub target: TermCampusKey,
     pub code: CatalogSubjectCode,
     pub label: CatalogFieldKnowledge<String>,
-    pub provenance: CatalogDiscoveryProvenanceV1,
+    pub provenance: CatalogSubjectProvenanceV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

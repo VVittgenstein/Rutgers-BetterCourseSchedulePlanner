@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use bcsp_contracts::{OpenBatchKey, OpenCanonicalSetHash, SectionIndex};
+use bcsp_contracts::{OpenBatchKey, OpenCanonicalSetHash, SectionIndex, TermCampusKey, TermId};
 use reqwest::header::{
     ACCEPT, AGE, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, DATE, ETAG, HeaderMap, LAST_MODIFIED,
     LOCATION, RETRY_AFTER,
@@ -73,6 +73,46 @@ impl OpenSectionsRequest {
         })
     }
 
+    /// Reconstructs one Open request from a validated, published discovery snapshot.
+    ///
+    /// Callers must first prove that the persisted term and target are owned by the same source
+    /// version. This constructor independently revalidates the immutable source identity and the
+    /// complete Rutgers term coordinates before allowing them back onto the wire.
+    pub fn try_from_persisted_discovery(
+        discovery_source_id: &str,
+        term_id: &TermId,
+        target: &TermCampusKey,
+        year: Option<u16>,
+        term_code: Option<&str>,
+    ) -> Result<Self, OpenSectionsRequestError> {
+        if term_id != target.term() {
+            return Err(OpenSectionsRequestError::TermMismatch);
+        }
+        let discovery_source_id = DiscoverySourceId::from_persisted(discovery_source_id)
+            .ok_or(OpenSectionsRequestError::InvalidDiscoverySourceId)?;
+        let year = year.ok_or(OpenSectionsRequestError::MissingYear)?;
+        if !(1_000..=9_999).contains(&year) {
+            return Err(OpenSectionsRequestError::InvalidYear);
+        }
+        let term_code = term_code.ok_or(OpenSectionsRequestError::MissingTermCode)?;
+        if term_code.is_empty()
+            || term_code.len() > 2
+            || !term_code.bytes().all(|byte| byte.is_ascii_digit())
+            || (term_code.len() > 1 && term_code.starts_with('0'))
+        {
+            return Err(OpenSectionsRequestError::InvalidTermCode);
+        }
+        let term_code = term_code
+            .parse::<u8>()
+            .map_err(|_| OpenSectionsRequestError::InvalidTermCode)?;
+        Ok(Self {
+            discovery_source_id,
+            target: OpenBatchKey::new(term_id.clone(), target.campus().clone()),
+            year,
+            term_code,
+        })
+    }
+
     pub const fn discovery_source_id(&self) -> &DiscoverySourceId {
         &self.discovery_source_id
     }
@@ -104,6 +144,8 @@ pub enum OpenSectionsRequestError {
     MissingTermCode,
     #[error("Open source term code must be a canonical one- or two-digit value")]
     InvalidTermCode,
+    #[error("Open source identity is not a canonical persisted discovery source version")]
+    InvalidDiscoverySourceId,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1016,6 +1058,61 @@ mod tests {
         assert_eq!(
             OpenSectionsRequest::try_from_discovery(&invalid_term_code, target),
             Err(OpenSectionsRequestError::InvalidTermCode)
+        );
+
+        let persisted = OpenSectionsRequest::try_from_persisted_discovery(
+            term.source_id.as_str(),
+            &term.term_id,
+            &target.key,
+            Some(2026),
+            Some("9"),
+        )
+        .expect("persisted coordinates");
+        assert_eq!(persisted, request);
+        assert_eq!(
+            OpenSectionsRequest::try_from_persisted_discovery(
+                "selector:not-a-digest",
+                &term.term_id,
+                &target.key,
+                Some(2026),
+                Some("9"),
+            ),
+            Err(OpenSectionsRequestError::InvalidDiscoverySourceId)
+        );
+        assert_eq!(
+            OpenSectionsRequest::try_from_persisted_discovery(
+                term.source_id.as_str(),
+                &term.term_id,
+                &target.key,
+                Some(999),
+                Some("9"),
+            ),
+            Err(OpenSectionsRequestError::InvalidYear)
+        );
+        assert_eq!(
+            OpenSectionsRequest::try_from_persisted_discovery(
+                term.source_id.as_str(),
+                &term.term_id,
+                &target.key,
+                Some(2026),
+                Some("09"),
+            ),
+            Err(OpenSectionsRequestError::InvalidTermCode)
+        );
+        assert_eq!(
+            OpenSectionsRequest::try_from_persisted_discovery(
+                term.source_id.as_str(),
+                &term.term_id,
+                &snapshot
+                    .targets
+                    .iter()
+                    .find(|target| target.key.term().as_str() == "12027")
+                    .expect("other persisted target")
+                    .key,
+                Some(2027),
+                Some("1"),
+            ),
+            Err(OpenSectionsRequestError::TermMismatch)
         );
     }
 

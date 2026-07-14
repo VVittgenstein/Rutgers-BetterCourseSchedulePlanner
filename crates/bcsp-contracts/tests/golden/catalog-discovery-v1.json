@@ -75,11 +75,14 @@
         }
       },
       "provenance": {
-        "observationId": "00000000-0000-4000-8000-000000000001",
-        "sourceId": "SYNTHETIC_SELECTOR",
-        "sourceKind": "SELECTOR",
-        "observedAt": "1970-01-01T00:00:00Z",
-        "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "kind": "DISCOVERY",
+        "discovery": {
+          "observationId": "00000000-0000-4000-8000-000000000001",
+          "sourceId": "SYNTHETIC_SELECTOR",
+          "sourceKind": "SELECTOR",
+          "observedAt": "1970-01-01T00:00:00Z",
+          "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
       }
     }
   ]

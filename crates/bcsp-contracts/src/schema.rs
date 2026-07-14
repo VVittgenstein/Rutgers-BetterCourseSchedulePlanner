@@ -656,6 +656,25 @@ pub fn contract_manifest() -> ContractManifest {
                     ("payloadDigest", "$scalar:catalog-payload-digest"),
                 ],
             ),
+            tagged_union_schema(
+                "bcsp.catalog.subject-provenance.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                "kind",
+                &[
+                    (
+                        "DISCOVERY",
+                        &[("discovery", "$schema:bcsp.catalog.discovery-provenance.v1")],
+                    ),
+                    (
+                        "CATALOG",
+                        &[
+                            ("contentVersion", "$scalar:catalog-content-version"),
+                            ("catalog", "$schema:bcsp.catalog.provenance.v1"),
+                        ],
+                    ),
+                ],
+            ),
             schema(
                 "bcsp.catalog.subject.v1",
                 SchemaDirection::ServerToClient,
@@ -664,7 +683,7 @@ pub fn contract_manifest() -> ContractManifest {
                     ("target", "$schema:bcsp.identity.term-campus-key.v1"),
                     ("code", "$scalar:catalog-subject-code"),
                     ("label", "$generic:CatalogFieldKnowledge<string>"),
-                    ("provenance", "$schema:bcsp.catalog.discovery-provenance.v1"),
+                    ("provenance", "$schema:bcsp.catalog.subject-provenance.v1"),
                 ],
             ),
             schema(

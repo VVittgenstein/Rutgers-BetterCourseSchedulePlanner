@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use bcsp_application::{
     ExtensionRequest, ExtensionResponse, RequestMethod, RouteExtension, SessionNonce,
@@ -216,6 +216,7 @@ pub struct LocalRouteExtension {
     nonce: SessionNonce,
     surface: Mutex<Box<dyn LocalSurfaceState>>,
     request_exit: Box<dyn Fn() + Send + Sync>,
+    product_routes: Arc<dyn RouteExtension>,
 }
 
 impl LocalRouteExtension {
@@ -224,10 +225,20 @@ impl LocalRouteExtension {
         surface: Box<dyn LocalSurfaceState>,
         request_exit: impl Fn() + Send + Sync + 'static,
     ) -> Self {
+        Self::with_product_routes(nonce, surface, request_exit, Arc::new(NoLocalProductRoutes))
+    }
+
+    pub fn with_product_routes(
+        nonce: SessionNonce,
+        surface: Box<dyn LocalSurfaceState>,
+        request_exit: impl Fn() + Send + Sync + 'static,
+        product_routes: Arc<dyn RouteExtension>,
+    ) -> Self {
         Self {
             nonce,
             surface: Mutex::new(surface),
             request_exit: Box::new(request_exit),
+            product_routes,
         }
     }
 
@@ -339,8 +350,17 @@ impl RouteExtension for LocalRouteExtension {
             | (_, "/api/v1/local/user-data-reset/prepare")
             | (_, "/api/v1/local/user-data-reset/confirm")
             | (_, "/api/v1/local/exit") => method_not_allowed(),
-            _ => ExtensionResponse::not_found(),
+            _ => self.product_routes.handle(request),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct NoLocalProductRoutes;
+
+impl RouteExtension for NoLocalProductRoutes {
+    fn handle(&self, _request: ExtensionRequest) -> ExtensionResponse {
+        ExtensionResponse::not_found()
     }
 }
 

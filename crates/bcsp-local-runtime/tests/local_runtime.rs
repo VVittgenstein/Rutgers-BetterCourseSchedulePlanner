@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bcsp_application::{
-    NoopWatchDispatchSink, OpenRuntimeSnapshot, SharedWatchSocket, WebSocketExtension,
+    NoopWatchDispatchSink, OpenRuntimeSnapshot, PRODUCT_CATALOG_DISCOVERY_PATH,
+    PRODUCT_FILTER_SCHEMA_PATH, SharedWatchSocket, WebSocketExtension,
 };
 use bcsp_contracts::{
     FilterRequestV1, FilterValuesInputV1, NormalizedFilterValuesV1, SectionKey, TermId, TraceId,
@@ -277,6 +278,11 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
     assert!(bootstrap.contains("\"activeWatchCount\":0"));
     let websocket = websocket_handshake(authority, &origin, nonce);
     assert_eq!(status(&websocket), 101, "{websocket}");
+    assert!(
+        websocket
+            .to_ascii_lowercase()
+            .contains("sec-websocket-protocol: bcsp.v1")
+    );
 
     let settings = serde_json::json!({
         "protocolVersion": 1,
@@ -331,6 +337,60 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
         status(&request(authority, "GET /missing", &origin, nonce, "")),
         404
     );
+
+    running.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_host_composes_shared_product_routes_without_replacing_local_routes() {
+    let temp = TestDirectory::new("shared-product-routes");
+    let (_root, executable) = package(&temp);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let nonce = running.nonce().as_str();
+
+    let schema = request(
+        authority,
+        &format!("GET {PRODUCT_FILTER_SCHEMA_PATH}"),
+        &origin,
+        nonce,
+        "",
+    );
+    assert_eq!(status(&schema), 200, "{schema}");
+    let schema: serde_json::Value = serde_json::from_str(body(&schema)).unwrap();
+    assert_eq!(schema["protocolVersion"], 1);
+    assert_eq!(
+        schema["data"]["fields"].as_array().unwrap().len(),
+        bcsp_contracts::FILTER_FIELD_COUNT
+    );
+
+    let unauthenticated =
+        request_without_session(authority, &format!("POST {PRODUCT_CATALOG_DISCOVERY_PATH}"));
+    assert_eq!(status(&unauthenticated), 403, "{unauthenticated}");
+
+    let empty_catalog = raw_api(
+        authority,
+        "POST",
+        PRODUCT_CATALOG_DISCOVERY_PATH,
+        &origin,
+        nonce,
+        serde_json::to_value(bcsp_contracts::CatalogDiscoveryRequestV1::new()).unwrap(),
+    );
+    assert_eq!(status(&empty_catalog), 200, "{empty_catalog}");
+    let empty_catalog: serde_json::Value = serde_json::from_str(body(&empty_catalog)).unwrap();
+    assert_eq!(
+        empty_catalog["data"]["status"]["availability"],
+        "UNAVAILABLE_NO_FIRST_SUCCESS"
+    );
+
+    let local = request(authority, "GET /api/v1/local/bootstrap", &origin, nonce, "");
+    assert_eq!(status(&local), 200, "{local}");
+    assert_eq!(find_sqlite_files(temp.path()).len(), 1);
 
     running.shutdown().await.unwrap();
 }
@@ -1131,7 +1191,7 @@ fn websocket_handshake(authority: &str, origin: &str, nonce: &str) -> String {
         .unwrap();
     write!(
         stream,
-        "GET /api/v1/watch?session={nonce} HTTP/1.1\r\nHost: {authority}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        "GET /api/v1/watch?session={nonce} HTTP/1.1\r\nHost: {authority}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: bcsp.v1\r\n\r\n"
     )
     .unwrap();
     stream.flush().unwrap();

@@ -133,6 +133,17 @@ impl DiscoverySourceId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(crate) fn from_persisted(value: &str) -> Option<Self> {
+        let digest = value
+            .strip_prefix("selector:")
+            .or_else(|| value.strip_prefix("bootstrap:"))?;
+        (digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')))
+        .then(|| Self(value.to_owned()))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

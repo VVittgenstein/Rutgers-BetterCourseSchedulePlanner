@@ -33,9 +33,9 @@ pub use catalog::{
     CatalogRefreshCheckpointPointV1, CatalogRefreshCheckpointV1, CatalogRefreshClassification,
     CatalogRefreshErrorClass, CatalogRefreshObservationV1, CatalogRefreshPointV1,
     CatalogRefreshStatusV1, CatalogRequiredness, CatalogSnapshotOpenStatusV1, CatalogSourceKind,
-    CatalogSubjectCode, CatalogSubjectCodeError, CatalogSubjectV1, CatalogSynchronicity,
-    CatalogTargetV1, CatalogTimeKnowledgeV1, CatalogUnitMajorV1, CatalogUnknownReason,
-    NormalizedCatalogV1, NormalizedCourseGroupV1, NormalizedCourseVariantV1,
+    CatalogSubjectCode, CatalogSubjectCodeError, CatalogSubjectProvenanceV1, CatalogSubjectV1,
+    CatalogSynchronicity, CatalogTargetV1, CatalogTimeKnowledgeV1, CatalogUnitMajorV1,
+    CatalogUnknownReason, NormalizedCatalogV1, NormalizedCourseGroupV1, NormalizedCourseVariantV1,
     NormalizedOccurrenceV1, NormalizedSectionV1,
 };
 

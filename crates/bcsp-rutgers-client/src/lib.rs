@@ -9,11 +9,19 @@
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-rutgers-client";
 
+mod catalog;
 mod discovery;
 mod hashing;
 mod open_sections;
 mod raw_catalog;
+mod selector;
 
+pub use catalog::{
+    CATALOG_CONNECT_TIMEOUT, CATALOG_MAX_DECODED_BYTES, CATALOG_TOTAL_TIMEOUT,
+    CatalogClientBuildError, CatalogFailure, CatalogFailureResponseMetadata, CatalogRequest,
+    CatalogRequestError, CatalogResponse, CatalogResponseMetadata, CatalogTransportError,
+    RUTGERS_CATALOG_ENDPOINT, RutgersCatalogClient,
+};
 pub use discovery::{
     DiscoveredCampus, DiscoveredSubject, DiscoveredTarget, DiscoveredTerm, DiscoveryDecodeError,
     DiscoveryError, DiscoveryFailureDisposition, DiscoverySnapshot, DiscoverySource,
@@ -33,6 +41,13 @@ pub use open_sections::{
 pub use raw_catalog::{
     CatalogDecodeError, JsonType, MalformedField, Presence, RawCatalogCourse, RawCatalogSection,
     RawInstructor, RawMeeting, SourceProvenance, decode_catalog_payload,
+};
+pub use selector::{
+    DISCOVERY_CONNECT_TIMEOUT, DISCOVERY_MAX_BOOTSTRAP_BYTES, DISCOVERY_MAX_SELECTOR_BYTES,
+    DISCOVERY_TOTAL_TIMEOUT, DiscoveryClientBuildError, DiscoveryFailure,
+    DiscoveryFailureResponseMetadata, DiscoveryResourceKind, DiscoveryResourceMetadata,
+    DiscoveryResponse, DiscoveryResponseMetadata, DiscoveryTransportError, RUTGERS_DISCOVERY_ROOT,
+    RutgersDiscoveryClient,
 };
 
 pub fn boundary_marker() -> &'static str {

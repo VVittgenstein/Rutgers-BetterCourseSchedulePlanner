@@ -5,16 +5,23 @@ import {
   resolvePublicLocale,
   type BrowserLocaleSource,
 } from './i18n/localeBootstrap';
+import {
+  PublicProductBootstrap,
+  type PublicProductBootstrapConfiguration,
+} from './product/PublicProductBootstrap';
 
 export interface PublicCompositionRootProps {
   readonly localeSource?: BrowserLocaleSource;
+  readonly product?: PublicProductBootstrapConfiguration;
 }
 
-export function PublicCompositionRoot({ localeSource }: PublicCompositionRootProps = {}) {
+export function PublicCompositionRoot({ localeSource, product }: PublicCompositionRootProps = {}) {
   const initialLocale = resolvePublicLocale(localeSource ?? currentBrowserLocaleSource());
   return (
     <BcspI18nProvider initialLocale={initialLocale}>
-      <SharedApplication />
+      <PublicProductBootstrap {...product}>
+        <SharedApplication />
+      </PublicProductBootstrap>
     </BcspI18nProvider>
   );
 }

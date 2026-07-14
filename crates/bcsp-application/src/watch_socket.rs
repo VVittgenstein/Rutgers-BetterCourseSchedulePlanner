@@ -168,6 +168,13 @@ where
             .map_or(0, |state| state.manager.active_watch_count(target))
     }
 
+    /// Returns the deduplicated Section demand sampled by the Open scheduler
+    /// for one target.
+    pub fn watched_sections(&self, target: &bcsp_contracts::TermCampusKey) -> Vec<SectionKey> {
+        self.lock_state()
+            .map_or_else(Vec::new, |state| state.manager.watched_sections(target))
+    }
+
     /// Fans out one committed, valid Open observation through the shared reducer.
     ///
     /// Returns `true` when the observation was an exact replay and therefore emitted no new
@@ -668,10 +675,15 @@ mod tests {
 
         assert_eq!(socket.total_active_watch_count(), 2);
         assert_eq!(socket.active_watch_count(&section(1).target()), 1);
+        assert_eq!(
+            socket.watched_sections(&section(1).target()),
+            vec![section(1)]
+        );
         socket.disconnect(first_connection);
         assert_eq!(socket.active_watch_count(&section(1).target()), 1);
         socket.disconnect(second_connection);
         assert_eq!(socket.active_watch_count(&section(1).target()), 0);
+        assert!(socket.watched_sections(&section(1).target()).is_empty());
     }
 
     #[test]

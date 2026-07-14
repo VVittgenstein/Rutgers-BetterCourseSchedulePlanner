@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bcsp_application::{
-    LoopbackServer, LoopbackServerError, RouteExtension, SessionNonce, SharedWatchSocket,
-    WebSocketExtension, spawn_loopback_server_with_socket,
+    LoopbackServer, LoopbackServerError, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,
+    OpenRuntimeSnapshotRegistry, RouteExtension, SessionNonce, SharedWatchSocket,
+    TargetRefreshDemand, WebSocketExtension, spawn_loopback_server_with_socket,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -15,6 +16,7 @@ use crate::{
     LocalPathError, LocalRouteExtension, LocalRuntimeCore, LocalRuntimePaths, LocalRuntimeState,
     LocalSurfaceFailure, OperationalGate, PersonalSurface, PrimaryInstanceLease,
     create_local_runtime_core, create_local_watch_socket,
+    product::{create_local_product_routes, start_local_product_refresh},
 };
 
 const EXISTING_INSTANCE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -61,7 +63,9 @@ fn local_shutdown_channel() -> (LocalShutdownTrigger, LocalShutdownListener) {
 pub struct PreparedLocalRuntime {
     operational: OperationalGate,
     core: LocalRuntimeCore,
+    open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
     watch: Arc<SharedWatchSocket>,
+    target_refresh_demand: TargetRefreshDemand,
     extension: Arc<LocalRouteExtension>,
     nonce: SessionNonce,
     shutdown_requests: LocalShutdownListener,
@@ -72,19 +76,29 @@ impl PreparedLocalRuntime {
         let operational = OperationalGate::open(paths)?;
         let database = operational.database();
         let core = create_local_runtime_core(database.clone());
-        let watch = create_local_watch_socket(database.clone())?;
+        let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
+        let target_refresh_demand = TargetRefreshDemand::default();
+        let product_routes: Arc<dyn RouteExtension> = Arc::new(
+            create_local_product_routes(database.clone(), core.clone(), open_runtime.clone())
+                .with_target_refresh_demand(target_refresh_demand.clone()),
+        );
+        let watch =
+            create_local_watch_socket(database.clone(), core.clone(), open_runtime.clone())?;
         let personal = PersonalSurface::new(database, watch.clone());
         let nonce = SessionNonce::generate();
         let (shutdown_trigger, shutdown_requests) = local_shutdown_channel();
-        let extension = Arc::new(LocalRouteExtension::new(
+        let extension = Arc::new(LocalRouteExtension::with_product_routes(
             nonce.clone(),
             Box::new(personal),
             move || shutdown_trigger.request(),
+            product_routes,
         ));
         Ok(Self {
             operational,
             core,
+            open_runtime,
             watch,
+            target_refresh_demand,
             extension,
             nonce,
             shutdown_requests,
@@ -134,7 +148,18 @@ impl PreparedLocalRuntime {
         &self.core
     }
 
+    pub fn open_runtime(&self) -> Arc<OpenRuntimeSnapshotRegistry> {
+        self.open_runtime.clone()
+    }
+
     pub async fn start(self) -> Result<RunningLocalRuntime, LocalRuntimeError> {
+        let refresh = start_local_product_refresh(
+            self.operational.database(),
+            &self.core,
+            self.watch.clone(),
+            self.open_runtime.clone(),
+            self.target_refresh_demand.clone(),
+        )?;
         let extension: Arc<dyn RouteExtension> = self.extension.clone();
         let socket: Arc<dyn WebSocketExtension> = self.watch.clone();
         let server =
@@ -142,6 +167,7 @@ impl PreparedLocalRuntime {
         Ok(RunningLocalRuntime {
             prepared: self,
             server,
+            refresh,
         })
     }
 }
@@ -163,6 +189,7 @@ where
 pub struct RunningLocalRuntime {
     prepared: PreparedLocalRuntime,
     server: LoopbackServer,
+    refresh: OfficialRefreshRuntime,
 }
 
 impl RunningLocalRuntime {
@@ -195,7 +222,12 @@ impl RunningLocalRuntime {
     }
 
     pub async fn shutdown(self) -> Result<(), LocalRuntimeError> {
-        let Self { prepared, server } = self;
+        let Self {
+            prepared,
+            server,
+            refresh,
+        } = self;
+        refresh.shutdown().await;
         prepared.watch.stop();
         server.shutdown().await?;
         prepared.extension.checkpoint_wal()?;
@@ -324,6 +356,8 @@ pub enum LocalRuntimeError {
     Loopback(#[from] LoopbackServerError),
     #[error("failed to initialize shared watch state")]
     Watch(#[from] bcsp_watch::WatchManagerError),
+    #[error("failed to initialize official Rutgers refresh clients")]
+    Refresh(#[from] OfficialRefreshRuntimeBuildError),
     #[error("failed to open the local browser URL {url}")]
     OpenBrowser {
         url: String,

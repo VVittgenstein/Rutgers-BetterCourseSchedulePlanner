@@ -6,9 +6,9 @@ use bcsp_catalog::{
 use bcsp_contracts::{
     CatalogCommentV1, CatalogDiscoveryAvailability, CatalogDiscoverySourceKind,
     CatalogFieldKnowledge, CatalogModality, CatalogOccurrenceEvidence, CatalogPrerequisiteState,
-    CatalogRefreshClassification, CatalogRefreshErrorClass, CatalogSynchronicity,
-    CatalogTimeKnowledgeV1, CatalogUnitMajorV1, CatalogUnknownReason, NormalizedCatalogV1,
-    TermCampusKey, TraceId,
+    CatalogRefreshClassification, CatalogRefreshErrorClass, CatalogSubjectProvenanceV1,
+    CatalogSynchronicity, CatalogTimeKnowledgeV1, CatalogUnitMajorV1, CatalogUnknownReason,
+    NormalizedCatalogV1, TermCampusKey, TraceId,
 };
 use bcsp_operational_storage::{
     BeginDiscoveryAttemptCommand, BeginRefreshAttemptCommand, CatalogCounts,
@@ -980,8 +980,9 @@ fn discovery_restart_uses_stable_source_ids_and_fail_closed_selectability() {
     let published = storage
         .published_discovery_snapshot()
         .expect("published discovery reader");
-    let projected = to_catalog_discovery_response_v1(&published, timestamp("2030-01-02T00:00:02Z"))
-        .expect("strict discovery projection");
+    let projected =
+        to_catalog_discovery_response_v1(&published, &[], timestamp("2030-01-02T00:00:02Z"))
+            .expect("strict discovery projection");
 
     let subject_source_version = &published.snapshot.subjects[0].source_version_id;
     let conflicting_source_version = published
@@ -994,7 +995,8 @@ fn discovery_restart_uses_stable_source_ids_and_fail_closed_selectability() {
     let mut corrupted = published.clone();
     corrupted.snapshot.subjects[0].source_version_id = conflicting_source_version;
     assert!(
-        to_catalog_discovery_response_v1(&corrupted, timestamp("2030-01-02T00:00:02Z")).is_err(),
+        to_catalog_discovery_response_v1(&corrupted, &[], timestamp("2030-01-02T00:00:02Z"))
+            .is_err(),
         "a restarted snapshot must reject cross-source subject attribution"
     );
 
@@ -1058,10 +1060,11 @@ fn discovery_restart_uses_stable_source_ids_and_fail_closed_selectability() {
         projected.subjects[0].label,
         CatalogFieldKnowledge::unknown(CatalogUnknownReason::Malformed)
     );
-    assert_eq!(
-        projected.subjects[0].provenance.source_id.as_str(),
-        "RUTGERS_SELECTOR"
-    );
+    let CatalogSubjectProvenanceV1::Discovery { discovery } = &projected.subjects[0].provenance
+    else {
+        panic!("selector subject must retain discovery provenance");
+    };
+    assert_eq!(discovery.source_id.as_str(), "RUTGERS_SELECTOR");
 
     storage
         .begin_discovery_attempt(&BeginDiscoveryAttemptCommand {
@@ -1082,6 +1085,7 @@ fn discovery_restart_uses_stable_source_ids_and_fail_closed_selectability() {
         &storage
             .published_discovery_snapshot()
             .expect("stale discovery reader"),
+        &[],
         timestamp("2030-01-03T00:00:02Z"),
     )
     .expect("stale projection");
@@ -1120,6 +1124,7 @@ fn discovery_no_first_success_has_no_fabricated_fallback() {
         &storage
             .published_discovery_snapshot()
             .expect("empty discovery reader"),
+        &[],
         timestamp("2030-01-01T00:00:02Z"),
     )
     .expect("no-first-success projection");

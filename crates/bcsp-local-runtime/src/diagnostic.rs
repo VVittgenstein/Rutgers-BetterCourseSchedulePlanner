@@ -30,6 +30,7 @@ impl StartupFailureReport {
             }
             LocalRuntimeError::Loopback(_)
             | LocalRuntimeError::Watch(_)
+            | LocalRuntimeError::Refresh(_)
             | LocalRuntimeError::ShutdownSignal(_)
             | LocalRuntimeError::ShutdownRequestChannelClosed
             | LocalRuntimeError::RuntimeBuild(_)

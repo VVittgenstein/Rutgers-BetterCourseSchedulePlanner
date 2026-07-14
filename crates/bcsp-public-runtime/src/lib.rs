@@ -5,6 +5,7 @@
 
 mod config;
 mod host;
+mod product;
 mod session;
 mod status;
 mod watch;
@@ -18,6 +19,10 @@ pub use host::{
     NoPublicProductRoutes, PUBLIC_LIVENESS_PATH, PUBLIC_METRICS_PATH, PUBLIC_READINESS_PATH,
     PUBLIC_RUNTIME_ROUTE_INVENTORY, PUBLIC_WATCH_PATH, PUBLIC_WS_SUBPROTOCOL, PublicRuntime,
     PublicRuntimeError, build_production_runtime, run_production,
+};
+pub use product::{
+    PublicProductRoutes, PublicProductStorageAccess, PublicProductStorageGuard,
+    create_public_product_routes,
 };
 pub use session::{PublicLocale, negotiate_locale};
 pub use status::{

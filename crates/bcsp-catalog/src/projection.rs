@@ -12,10 +12,10 @@ use bcsp_contracts::{
     CatalogRefreshCheckpointPointV1, CatalogRefreshCheckpointV1, CatalogRefreshClassification,
     CatalogRefreshErrorClass, CatalogRefreshObservationV1, CatalogRefreshPointV1,
     CatalogRefreshStatusV1, CatalogRequiredness, CatalogSnapshotOpenStatusV1, CatalogSourceKind,
-    CatalogSubjectCode, CatalogSubjectV1, CatalogSynchronicity, CatalogTargetV1,
-    CatalogTimeKnowledgeV1, CatalogUnitMajorV1, CatalogUnknownReason, NormalizedCatalogV1,
-    NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedOccurrenceV1,
-    NormalizedSectionV1, TermCampusKey, TraceId,
+    CatalogSubjectCode, CatalogSubjectProvenanceV1, CatalogSubjectV1, CatalogSynchronicity,
+    CatalogTargetV1, CatalogTimeKnowledgeV1, CatalogUnitMajorV1, CatalogUnknownReason,
+    NormalizedCatalogV1, NormalizedCourseGroupV1, NormalizedCourseVariantV1,
+    NormalizedOccurrenceV1, NormalizedSectionV1, TermCampusKey, TraceId,
 };
 use bcsp_operational_storage::{
     CatalogCounts, DiscoveryAvailability, DiscoveryObservation, DiscoverySourceKind,
@@ -55,6 +55,7 @@ pub enum ProjectionError {
 
 pub fn to_catalog_discovery_response_v1(
     published: &PublishedDiscoverySnapshot,
+    catalogs: &[PublishedCatalogSnapshot],
     projected_at: OffsetDateTime,
 ) -> Result<CatalogDiscoveryResponseV1, ProjectionError> {
     validate_discovery_state(&published.state)?;
@@ -176,7 +177,7 @@ pub fn to_catalog_discovery_response_v1(
         .map(|target| target.key.clone())
         .collect::<BTreeSet<_>>();
     let mut subject_keys = BTreeSet::new();
-    let mut subjects = Vec::with_capacity(published.snapshot.subjects.len());
+    let mut subjects = BTreeMap::new();
     for subject in &published.snapshot.subjects {
         let target = TermCampusKey::new(subject.term_id.clone(), subject.campus_code.clone());
         let target_source_version = target_source_versions
@@ -211,18 +212,26 @@ pub fn to_catalog_discovery_response_v1(
         {
             continue;
         }
-        subjects.push(CatalogSubjectV1 {
-            target,
-            code: CatalogSubjectCode::try_from(subject.subject_code.as_str()).map_err(|_| {
-                invalid(
-                    "discovery.subjects.code",
-                    "subject code violates the public contract",
-                )
-            })?,
-            label: discovery_fact(&subject.canonical_facts, "display", "subject.display")?,
-            provenance: discovery_provenance(observation_id, source)?,
-        });
+        let code = CatalogSubjectCode::try_from(subject.subject_code.as_str()).map_err(|_| {
+            invalid(
+                "discovery.subjects.code",
+                "subject code violates the public contract",
+            )
+        })?;
+        subjects.insert(
+            (target.clone(), code.clone()),
+            CatalogSubjectV1 {
+                target,
+                code,
+                label: discovery_fact(&subject.canonical_facts, "display", "subject.display")?,
+                provenance: CatalogSubjectProvenanceV1::Discovery {
+                    discovery: discovery_provenance(observation_id, source)?,
+                },
+            },
+        );
     }
+
+    merge_catalog_subjects(&mut subjects, catalogs, &selectable_target_keys)?;
 
     validate_discovery_counts(published)?;
     Ok(CatalogDiscoveryResponseV1 {
@@ -231,7 +240,175 @@ pub fn to_catalog_discovery_response_v1(
         status: discovery_status(&published.state)?,
         sources,
         targets,
-        subjects,
+        subjects: subjects.into_values().collect(),
+    })
+}
+
+#[derive(Default)]
+struct CatalogSubjectLabelEvidence {
+    present: BTreeSet<String>,
+    saw_explicit_null: bool,
+    saw_absent: bool,
+    saw_malformed: bool,
+}
+
+impl CatalogSubjectLabelEvidence {
+    fn observe(&mut self, description: &Presence<String>) -> Result<(), ProjectionError> {
+        match description {
+            Presence::Value(value) => {
+                self.present.insert(value.clone());
+            }
+            Presence::Null => self.saw_explicit_null = true,
+            Presence::Missing => self.saw_absent = true,
+            Presence::Malformed(value) => {
+                validate_malformed_digest(value.canonical_sha256.as_str())?;
+                self.saw_malformed = true;
+            }
+        }
+        Ok(())
+    }
+
+    fn project(self) -> CatalogFieldKnowledge<String> {
+        if self.present.len() > 1 {
+            return CatalogFieldKnowledge::unknown(CatalogUnknownReason::ConflictingEvidence);
+        }
+        if let Some(value) = self.present.into_iter().next() {
+            return CatalogFieldKnowledge::present(value);
+        }
+        if self.saw_malformed {
+            CatalogFieldKnowledge::unknown(CatalogUnknownReason::Malformed)
+        } else if self.saw_explicit_null {
+            CatalogFieldKnowledge::explicit_null()
+        } else {
+            debug_assert!(self.saw_absent);
+            CatalogFieldKnowledge::absent()
+        }
+    }
+}
+
+fn merge_catalog_subjects(
+    subjects: &mut BTreeMap<(TermCampusKey, CatalogSubjectCode), CatalogSubjectV1>,
+    catalogs: &[PublishedCatalogSnapshot],
+    selectable_targets: &BTreeSet<TermCampusKey>,
+) -> Result<(), ProjectionError> {
+    let mut catalogs_by_target = BTreeMap::new();
+    for catalog in catalogs {
+        validate_catalog_publication(catalog)?;
+        if catalogs_by_target
+            .insert(catalog.target.clone(), catalog)
+            .is_some()
+        {
+            return Err(invalid(
+                "discovery.catalogSubjects",
+                "duplicate Catalog publication target",
+            ));
+        }
+    }
+
+    for (target, catalog) in catalogs_by_target {
+        if !selectable_targets.contains(&target) {
+            continue;
+        }
+        let provenance = catalog_subject_provenance(catalog)?;
+        let mut derived = BTreeMap::<CatalogSubjectCode, CatalogSubjectLabelEvidence>::new();
+        for variant in &catalog.snapshot.course_variants {
+            if variant.key.group().target() != target {
+                return Err(invalid(
+                    "discovery.catalogSubjects",
+                    "Catalog variant target differs from its publication",
+                ));
+            }
+            let raw: RawCatalogCourse = decode_facts(
+                "discovery.catalogSubjects.canonicalFacts",
+                &variant.canonical_facts,
+            )?;
+            let code = match &raw.subject {
+                Presence::Value(value) => match CatalogSubjectCode::try_from(value.as_str()) {
+                    Ok(code) => {
+                        if variant.subject_code.as_deref() != Some(code.as_str()) {
+                            return Err(invalid(
+                                "discovery.catalogSubjects.code",
+                                "stored subject code differs from canonical Catalog facts",
+                            ));
+                        }
+                        code
+                    }
+                    Err(_) if variant.subject_code.is_none() => continue,
+                    Err(_) => {
+                        return Err(invalid(
+                            "discovery.catalogSubjects.code",
+                            "stored subject code is not a valid public subject identity",
+                        ));
+                    }
+                },
+                Presence::Malformed(value) => {
+                    validate_malformed_digest(value.canonical_sha256.as_str())?;
+                    if variant.subject_code.is_some() {
+                        return Err(invalid(
+                            "discovery.catalogSubjects.code",
+                            "stored subject code has no canonical Catalog value",
+                        ));
+                    }
+                    continue;
+                }
+                Presence::Missing | Presence::Null => {
+                    if variant.subject_code.is_some() {
+                        return Err(invalid(
+                            "discovery.catalogSubjects.code",
+                            "stored subject code has no canonical Catalog value",
+                        ));
+                    }
+                    continue;
+                }
+            };
+            derived
+                .entry(code)
+                .or_default()
+                .observe(&raw.subject_description)?;
+        }
+
+        for (code, label) in derived {
+            let key = (target.clone(), code.clone());
+            subjects.entry(key).or_insert_with(|| CatalogSubjectV1 {
+                target: target.clone(),
+                code,
+                label: label.project(),
+                provenance: provenance.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn catalog_subject_provenance(
+    published: &PublishedCatalogSnapshot,
+) -> Result<CatalogSubjectProvenanceV1, ProjectionError> {
+    let publication = &published.publication;
+    let observed_at = parse_timestamp(
+        "discovery.catalogSubjects.publication.completedAt",
+        publication.completed_at.as_deref().ok_or_else(|| {
+            invalid(
+                "discovery.catalogSubjects.publication.completedAt",
+                "published Catalog observation is incomplete",
+            )
+        })?,
+    )?;
+    let payload_digest = required_digest(
+        "discovery.catalogSubjects.publication.sourceContentSha256",
+        publication.source_content_sha256.as_deref(),
+    )?;
+    Ok(CatalogSubjectProvenanceV1::Catalog {
+        content_version: content_version(
+            "discovery.catalogSubjects.contentVersion",
+            published.content_version,
+        )?,
+        catalog: CatalogProvenanceV1 {
+            observation_id: publication.observation_id,
+            source: CatalogSourceKind::RutgersCatalog,
+            target: published.target.clone(),
+            observed_at,
+            payload_digest,
+        },
     })
 }
 
