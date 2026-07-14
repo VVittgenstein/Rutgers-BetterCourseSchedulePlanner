@@ -92,7 +92,7 @@ jobs:
       - name: Validate public package inputs
         run: |
           find deploy/public -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
-          shellcheck deploy/public/ops/*.sh deploy/public/tests/*.sh
+          shellcheck -x -P SCRIPTDIR deploy/public/ops/*.sh deploy/public/tests/*.sh
           node tools/architecture/verify-public-rust-zero-surface.mjs
 
       - name: Rehearse install, restore, upgrade, and rollback

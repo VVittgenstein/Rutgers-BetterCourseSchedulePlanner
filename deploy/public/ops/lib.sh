@@ -341,10 +341,10 @@ bcsp_sqlite_integrity() {
 }
 
 bcsp_sha256() {
-  local file="$1" digest remainder
+  local file="$1" digest
 
   bcsp_require_command "$BCSP_SHA256SUM"
-  read -r digest remainder < <("$BCSP_SHA256SUM" "$file")
+  read -r digest _ < <("$BCSP_SHA256SUM" "$file")
   [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || bcsp_die "SHA-256 command returned an invalid digest"
   printf '%s\n' "$digest"
 }
@@ -505,6 +505,10 @@ bcsp_load_last_upgrade() {
   bcsp_require_release_id "$BCSP_LAST_TO"
   [[ "$BCSP_LAST_BACKUP_ID" =~ ^backup-[A-Za-z0-9._-]+$ ]] || bcsp_die "last-upgrade backup id is invalid"
   [[ "$BCSP_LAST_COMPLETED" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || bcsp_die "last-upgrade timestamp is invalid"
+  case "$BCSP_LAST_STATUS" in
+    SUCCESS|AUTO_ROLLED_BACK|ROLLED_BACK) ;;
+    *) bcsp_die "last-upgrade status is invalid" ;;
+  esac
 }
 
 bcsp_assert_mode() {

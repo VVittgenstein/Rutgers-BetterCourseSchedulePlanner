@@ -90,8 +90,11 @@ fi
 
 [[ "$(grep -c '^BCSP_PUBLIC_ORIGIN=https://planner.invalid$' \
   "$CANDIDATE_ROOT/config/bcsp.env.example")" -eq 1 ]]
-[[ -z "$(grep -Ev '^(#.*|[[:space:]]*|BCSP_PUBLIC_ORIGIN=https://planner.invalid)$' \
-  "$CANDIDATE_ROOT/config/bcsp.env.example")" ]]
+if grep -Evq '^(#.*|[[:space:]]*|BCSP_PUBLIC_ORIGIN=https://planner.invalid)$' \
+  "$CANDIDATE_ROOT/config/bcsp.env.example"; then
+  printf 'disposable-host: environment example contains an unexpected setting\n' >&2
+  exit 1
+fi
 jq -e '
   .type == "object" and
   .additionalProperties == false and

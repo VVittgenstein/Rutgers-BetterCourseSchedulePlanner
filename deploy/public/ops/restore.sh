@@ -28,8 +28,9 @@ main() {
     bcsp_log "restored database did not become live; reverting to pre-restore backup"
     bcsp_systemctl stop "$BCSP_SERVICE_NAME" || true
     bcsp_restore_backup "$safety_backup"
-    bcsp_systemctl start "$BCSP_SERVICE_NAME" && bcsp_wait_for_liveness || \
+    if ! bcsp_systemctl start "$BCSP_SERVICE_NAME" || ! bcsp_wait_for_liveness; then
       bcsp_die "pre-restore database could not be brought live"
+    fi
     bcsp_die "restore was reverted"
   fi
   bcsp_log "database restored; pre-restore backup retained at $safety_backup"
