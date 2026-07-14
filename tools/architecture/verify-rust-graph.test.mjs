@@ -118,6 +118,26 @@ function expectFailure(mutator, pattern) {
 }
 
 assert.deepEqual(verifyGraph(fixture(), { repoRoot: REPO_ROOT }), []);
+assert.deepEqual(GRAPH_SPEC['bcsp-catalog'].external, [
+  ['serde', 'normal'],
+  ['serde_json', 'normal'],
+  ['tempfile', 'dev'],
+  ['thiserror', 'normal'],
+  ['time', 'normal'],
+  ['tokio', 'normal'],
+  ['tracing', 'normal'],
+]);
+assert.deepEqual(GRAPH_SPEC['bcsp-operational-storage'].external, [
+  ['include_dir', 'normal'],
+  ['rusqlite', 'normal'],
+  ['serde', 'normal'],
+  ['serde_json', 'normal'],
+  ['sha2', 'normal'],
+  ['tempfile', 'dev'],
+  ['thiserror', 'normal'],
+  ['time', 'normal'],
+  ['tracing', 'normal'],
+]);
 assert.deepEqual(publicClosurePackages(fixture()), [
   'bcsp-contracts',
   'bcsp-domain',
@@ -216,6 +236,22 @@ expectFailure((metadata) => {
 expectFailure((metadata) => {
   dependencyByName(metadata, 'bcsp-contracts', 'time').uses_default_features = true;
 }, /default-features mismatch/);
+
+expectFailure((metadata) => {
+  dependencyByName(metadata, 'bcsp-catalog', 'tempfile').kind = null;
+}, /dependency kind mismatch|external dependency owners mismatch/);
+
+expectFailure((metadata) => {
+  dependencyByName(metadata, 'bcsp-operational-storage', 'sha2').kind = 'dev';
+}, /dependency kind mismatch|external dependency owners mismatch/);
+
+expectFailure((metadata) => {
+  packageByName(metadata, 'bcsp-catalog').dependencies.push(externalDependency('sha2'));
+}, /external dependency owners mismatch/);
+
+expectFailure((metadata) => {
+  packageByName(metadata, 'bcsp-operational-storage').dependencies.push(externalDependency('open'));
+}, /external dependency owners mismatch/);
 
 expectFailure((metadata) => {
   dependencyByName(metadata, 'bcsp-contracts', 'serde').target = 'cfg(windows)';

@@ -5,7 +5,12 @@ use crate::identity::{
     SHA256_HEX_BYTES, TERM_MAX_BYTES,
 };
 use crate::{
-    API_PROTOCOL_VERSION, ApiErrorCode, MatchOutcome, MatchReasonCode, WS_PROTOCOL_VERSION,
+    API_PROTOCOL_VERSION, ApiErrorCode, CatalogDiscoveryAvailability, CatalogDiscoveryErrorClass,
+    CatalogDiscoverySourceKind, CatalogInstructorReliability, CatalogModality,
+    CatalogOccurrenceEvidence, CatalogOccurrenceKind, CatalogOpenStatusProvenance,
+    CatalogPrerequisiteState, CatalogRefreshClassification, CatalogRefreshErrorClass,
+    CatalogRequiredness, CatalogSourceKind, CatalogSynchronicity, CatalogUnknownReason,
+    MatchOutcome, MatchReasonCode, WS_PROTOCOL_VERSION,
 };
 
 pub const CONTRACT_SCHEMA_VERSION: u16 = 1;
@@ -252,6 +257,54 @@ pub fn contract_manifest() -> ContractManifest {
                 pattern: None,
                 semantic: Some("only integer 1 is accepted".to_owned()),
             },
+            ScalarConstraint {
+                id: "catalog-contract-version".to_owned(),
+                wire_type: "u16".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some("only integer 1 is accepted".to_owned()),
+            },
+            ScalarConstraint {
+                id: "catalog-content-version".to_owned(),
+                wire_type: "u64".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some(
+                    "monotonic target-scoped published content version; zero is invalid".to_owned(),
+                ),
+            },
+            string_constraint(
+                "catalog-payload-digest",
+                Some(SHA256_HEX_BYTES),
+                None,
+                Some("^[0-9a-f]{64}$"),
+                Some("lowercase SHA-256 of the observed upstream payload; raw body excluded"),
+            ),
+            string_constraint(
+                "catalog-subject-code",
+                None,
+                Some(64),
+                None,
+                Some(
+                    "opaque dynamic subject identity; nonempty, trim-stable, control-free UTF-8; no compiled allowlist or rewrite",
+                ),
+            ),
+            string_constraint(
+                "catalog-discovery-source-id",
+                None,
+                Some(64),
+                Some("^[A-Z0-9_.:-]+$"),
+                Some("stable public discovery source identity; not an upstream URL"),
+            ),
+            string_constraint(
+                "catalog-diagnostic-code",
+                None,
+                Some(64),
+                Some("^[A-Z0-9_]+$"),
+                Some("stable redacted diagnostic code; never parser or upstream detail"),
+            ),
         ],
         schemas: vec![
             schema(
@@ -290,6 +343,645 @@ pub fn contract_manifest() -> ContractManifest {
                 &[
                     ("group", "$schema:bcsp.identity.course-group-key.v1"),
                     ("fingerprint", "$scalar:variant-fingerprint"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.discovery-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[("contractVersion", "$scalar:catalog-contract-version")],
+            ),
+            enum_schema(
+                "bcsp.catalog.unknown-reason.v1",
+                CatalogUnknownReason::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            tagged_union_schema(
+                "bcsp.catalog.field-presence.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                "presence",
+                &[
+                    ("PRESENT", &[("value", "$generic:T")]),
+                    ("EXPLICIT_NULL", &[]),
+                    ("ABSENT", &[]),
+                ],
+            ),
+            tagged_union_schema(
+                "bcsp.catalog.field-knowledge.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                "knowledge",
+                &[
+                    ("KNOWN", &[("presence", "$generic:CatalogFieldPresence<T>")]),
+                    (
+                        "UNKNOWN",
+                        &[("reason", "$schema:bcsp.catalog.unknown-reason.v1")],
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.target.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("key", "$schema:bcsp.identity.term-campus-key.v1"),
+                    ("termLabel", "$generic:CatalogFieldKnowledge<string>"),
+                    ("campusLabel", "$generic:CatalogFieldKnowledge<string>"),
+                    ("provenance", "$schema:bcsp.catalog.discovery-provenance.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.discovery-response.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:catalog-contract-version"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    ("status", "$schema:bcsp.catalog.discovery-status.v1"),
+                    ("sources", "$array:$schema:bcsp.catalog.discovery-source.v1"),
+                    ("targets", "$array:$schema:bcsp.catalog.target.v1"),
+                    ("subjects", "$array:$schema:bcsp.catalog.subject.v1"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.catalog.discovery-source-kind.v1",
+                CatalogDiscoverySourceKind::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            schema(
+                "bcsp.catalog.discovery-source.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("sourceId", "$scalar:catalog-discovery-source-id"),
+                    (
+                        "sourceKind",
+                        "$schema:bcsp.catalog.discovery-source-kind.v1",
+                    ),
+                    ("sourceVersion", "$generic:CatalogFieldKnowledge<string>"),
+                    ("payloadDigest", "$scalar:catalog-payload-digest"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.catalog.discovery-availability.v1",
+                CatalogDiscoveryAvailability::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.catalog.discovery-error-class.v1",
+                CatalogDiscoveryErrorClass::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            schema(
+                "bcsp.catalog.discovery-error.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("class", "$schema:bcsp.catalog.discovery-error-class.v1"),
+                    ("code", "$scalar:catalog-diagnostic-code"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.discovery-point.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("observationId", "$scalar:trace-id"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    (
+                        "contentVersion",
+                        "$optional:$scalar:catalog-content-version",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.discovery-status.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    (
+                        "availability",
+                        "$schema:bcsp.catalog.discovery-availability.v1",
+                    ),
+                    (
+                        "latestAttempt",
+                        "$optional:$schema:bcsp.catalog.discovery-point.v1",
+                    ),
+                    (
+                        "lastSuccess",
+                        "$optional:$schema:bcsp.catalog.discovery-point.v1",
+                    ),
+                    ("isStale", "$primitive:bool"),
+                    ("error", "$optional:$schema:bcsp.catalog.discovery-error.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.discovery-provenance.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("observationId", "$scalar:trace-id"),
+                    ("sourceId", "$scalar:catalog-discovery-source-id"),
+                    (
+                        "sourceKind",
+                        "$schema:bcsp.catalog.discovery-source-kind.v1",
+                    ),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    ("payloadDigest", "$scalar:catalog-payload-digest"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.catalog.source-kind.v1",
+                CatalogSourceKind::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            schema(
+                "bcsp.catalog.provenance.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("observationId", "$scalar:trace-id"),
+                    ("source", "$schema:bcsp.catalog.source-kind.v1"),
+                    ("target", "$schema:bcsp.identity.term-campus-key.v1"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    ("payloadDigest", "$scalar:catalog-payload-digest"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.subject.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("target", "$schema:bcsp.identity.term-campus-key.v1"),
+                    ("code", "$scalar:catalog-subject-code"),
+                    ("label", "$generic:CatalogFieldKnowledge<string>"),
+                    ("provenance", "$schema:bcsp.catalog.discovery-provenance.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.occurrence-key.v1",
+                SchemaDirection::SharedIdentity,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("section", "$schema:bcsp.identity.section-key.v1"),
+                    ("ordinal", "$primitive:u32"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.normalized-course-group.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("key", "$schema:bcsp.identity.course-group-key.v1"),
+                    (
+                        "variantKeys",
+                        "$array:$schema:bcsp.identity.course-variant-key.v1",
+                    ),
+                ],
+            ),
+            enum_schema(
+                "bcsp.catalog.prerequisite-state.v1",
+                CatalogPrerequisiteState::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            schema(
+                "bcsp.catalog.normalized-course-variant.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("key", "$schema:bcsp.identity.course-variant-key.v1"),
+                    ("title", "$generic:CatalogFieldKnowledge<string>"),
+                    ("expandedTitle", "$generic:CatalogFieldKnowledge<string>"),
+                    ("description", "$generic:CatalogFieldKnowledge<string>"),
+                    ("notes", "$generic:CatalogFieldKnowledge<string>"),
+                    (
+                        "subjectGroupNotes",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    ("subjectNotes", "$generic:CatalogFieldKnowledge<string>"),
+                    ("unitNotes", "$generic:CatalogFieldKnowledge<string>"),
+                    ("synopsisUrl", "$generic:CatalogFieldKnowledge<string>"),
+                    (
+                        "prerequisiteNotes",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    (
+                        "prerequisiteState",
+                        "$schema:bcsp.catalog.prerequisite-state.v1",
+                    ),
+                    ("credits", "$generic:CatalogFieldKnowledge<string>"),
+                    ("level", "$generic:CatalogFieldKnowledge<string>"),
+                    ("subjectCode", "$generic:CatalogFieldKnowledge<string>"),
+                    (
+                        "subjectDescription",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    ("courseNumber", "$generic:CatalogFieldKnowledge<string>"),
+                    ("supplementCode", "$generic:CatalogFieldKnowledge<string>"),
+                    ("schoolCode", "$generic:CatalogFieldKnowledge<string>"),
+                    ("offeringUnit", "$generic:CatalogFieldKnowledge<string>"),
+                    (
+                        "offeringUnitTitle",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    ("coreCodes", "$generic:CatalogFieldKnowledge<array<string>>"),
+                    (
+                        "campusLocations",
+                        "$generic:CatalogFieldKnowledge<array<string>>",
+                    ),
+                    ("sectionKeys", "$array:$schema:bcsp.identity.section-key.v1"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.catalog.open-status-provenance.v1",
+                CatalogOpenStatusProvenance::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            schema(
+                "bcsp.catalog.snapshot-open-status.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("value", "$generic:CatalogFieldKnowledge<bool>"),
+                    (
+                        "provenance",
+                        "$schema:bcsp.catalog.open-status-provenance.v1",
+                    ),
+                ],
+            ),
+            enum_schema(
+                "bcsp.catalog.instructor-reliability.v1",
+                CatalogInstructorReliability::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            schema(
+                "bcsp.catalog.unit-major.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("unitCode", "$primitive:string"),
+                    ("majorCode", "$primitive:string"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.comment.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("code", "$generic:CatalogFieldKnowledge<string>"),
+                    ("description", "$generic:CatalogFieldKnowledge<string>"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.normalized-section.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("key", "$schema:bcsp.identity.section-key.v1"),
+                    ("variantKey", "$schema:bcsp.identity.course-variant-key.v1"),
+                    ("sectionNumber", "$generic:CatalogFieldKnowledge<string>"),
+                    ("subtitle", "$generic:CatalogFieldKnowledge<string>"),
+                    ("subtopic", "$generic:CatalogFieldKnowledge<string>"),
+                    ("sectionNotes", "$generic:CatalogFieldKnowledge<string>"),
+                    ("sessionDates", "$generic:CatalogFieldKnowledge<string>"),
+                    (
+                        "sessionDatePrintIndicator",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    (
+                        "comments",
+                        "$generic:CatalogFieldKnowledge<array<CatalogCommentV1>>",
+                    ),
+                    ("commentsText", "$generic:CatalogFieldKnowledge<string>"),
+                    (
+                        "crossListedSectionsText",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    (
+                        "crossListedSectionType",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    (
+                        "instructors",
+                        "$generic:CatalogFieldKnowledge<array<string>>",
+                    ),
+                    (
+                        "instructorReliability",
+                        "$schema:bcsp.catalog.instructor-reliability.v1",
+                    ),
+                    (
+                        "rawSectionCourseType",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    ("deliveryModality", "$schema:bcsp.catalog.modality.v1"),
+                    ("synchronicity", "$schema:bcsp.catalog.synchronicity.v1"),
+                    ("examCode", "$generic:CatalogFieldKnowledge<string>"),
+                    ("examCodeText", "$generic:CatalogFieldKnowledge<string>"),
+                    (
+                        "specialPermissionAddCode",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    (
+                        "specialPermissionAddDescription",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    (
+                        "specialPermissionDropCode",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    (
+                        "specialPermissionDropDescription",
+                        "$generic:CatalogFieldKnowledge<string>",
+                    ),
+                    (
+                        "majorCodes",
+                        "$generic:CatalogFieldKnowledge<array<string>>",
+                    ),
+                    ("unitCodes", "$generic:CatalogFieldKnowledge<array<string>>"),
+                    (
+                        "minorCodes",
+                        "$generic:CatalogFieldKnowledge<array<string>>",
+                    ),
+                    (
+                        "honorProgramCodes",
+                        "$generic:CatalogFieldKnowledge<array<string>>",
+                    ),
+                    (
+                        "unitMajors",
+                        "$generic:CatalogFieldKnowledge<array<CatalogUnitMajorV1>>",
+                    ),
+                    ("eligibilityText", "$generic:CatalogFieldKnowledge<string>"),
+                    ("openToText", "$generic:CatalogFieldKnowledge<string>"),
+                    (
+                        "catalogOpenStatus",
+                        "$schema:bcsp.catalog.snapshot-open-status.v1",
+                    ),
+                    (
+                        "occurrenceKeys",
+                        "$generic:CatalogFieldKnowledge<array<CatalogOccurrenceKeyV1>>",
+                    ),
+                ],
+            ),
+            enum_schema(
+                "bcsp.catalog.modality.v1",
+                CatalogModality::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.catalog.synchronicity.v1",
+                CatalogSynchronicity::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.catalog.occurrence-kind.v1",
+                CatalogOccurrenceKind::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.catalog.occurrence-evidence.v1",
+                CatalogOccurrenceEvidence::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.catalog.requiredness.v1",
+                CatalogRequiredness::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            tagged_union_schema(
+                "bcsp.catalog.time-knowledge.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                "knowledge",
+                &[
+                    ("MISSING", &[]),
+                    ("EXPLICIT_NULL", &[]),
+                    ("EMPTY", &[]),
+                    ("PARTIAL", &[]),
+                    ("INVALID", &[]),
+                    (
+                        "KNOWN",
+                        &[
+                            ("startMinute", "$primitive:u16"),
+                            ("endMinute", "$primitive:u16"),
+                        ],
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.normalized-occurrence.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("key", "$schema:bcsp.catalog.occurrence-key.v1"),
+                    ("rawCode", "$generic:CatalogFieldKnowledge<string>"),
+                    ("rawDescription", "$generic:CatalogFieldKnowledge<string>"),
+                    (
+                        "modality",
+                        "$generic:CatalogFieldKnowledge<CatalogModality>",
+                    ),
+                    (
+                        "synchronicity",
+                        "$generic:CatalogFieldKnowledge<CatalogSynchronicity>",
+                    ),
+                    ("rawDay", "$generic:CatalogFieldKnowledge<string>"),
+                    ("days", "$generic:CatalogFieldKnowledge<array<string>>"),
+                    ("rawStartTime", "$generic:CatalogFieldKnowledge<string>"),
+                    ("rawEndTime", "$generic:CatalogFieldKnowledge<string>"),
+                    ("time", "$schema:bcsp.catalog.time-knowledge.v1"),
+                    ("startDate", "$generic:CatalogFieldKnowledge<string>"),
+                    ("endDate", "$generic:CatalogFieldKnowledge<string>"),
+                    ("campus", "$generic:CatalogFieldKnowledge<string>"),
+                    ("campusName", "$generic:CatalogFieldKnowledge<string>"),
+                    ("building", "$generic:CatalogFieldKnowledge<string>"),
+                    ("room", "$generic:CatalogFieldKnowledge<string>"),
+                    ("requiredness", "$schema:bcsp.catalog.requiredness.v1"),
+                    ("kind", "$schema:bcsp.catalog.occurrence-kind.v1"),
+                    ("evidence", "$schema:bcsp.catalog.occurrence-evidence.v1"),
+                    ("normalizationReason", "$scalar:catalog-diagnostic-code"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.normalized-catalog.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:catalog-contract-version"),
+                    ("target", "$schema:bcsp.identity.term-campus-key.v1"),
+                    ("contentVersion", "$scalar:catalog-content-version"),
+                    ("provenance", "$schema:bcsp.catalog.provenance.v1"),
+                    (
+                        "courseGroups",
+                        "$array:$schema:bcsp.catalog.normalized-course-group.v1",
+                    ),
+                    (
+                        "courseVariants",
+                        "$array:$schema:bcsp.catalog.normalized-course-variant.v1",
+                    ),
+                    (
+                        "sections",
+                        "$array:$schema:bcsp.catalog.normalized-section.v1",
+                    ),
+                    (
+                        "occurrences",
+                        "$array:$schema:bcsp.catalog.normalized-occurrence.v1",
+                    ),
+                ],
+            ),
+            enum_schema(
+                "bcsp.catalog.refresh-classification.v1",
+                CatalogRefreshClassification::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.catalog.refresh-error-class.v1",
+                CatalogRefreshErrorClass::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            schema(
+                "bcsp.catalog.entity-counts.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("courseGroups", "$primitive:u64"),
+                    ("courseVariants", "$primitive:u64"),
+                    ("sections", "$primitive:u64"),
+                    ("occurrences", "$primitive:u64"),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.refresh-observation.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:catalog-contract-version"),
+                    ("observationId", "$scalar:trace-id"),
+                    ("target", "$schema:bcsp.identity.term-campus-key.v1"),
+                    ("startedAt", "$primitive:rfc3339-timestamp"),
+                    ("finishedAt", "$primitive:rfc3339-timestamp"),
+                    (
+                        "classification",
+                        "$schema:bcsp.catalog.refresh-classification.v1",
+                    ),
+                    (
+                        "contentVersion",
+                        "$optional:$scalar:catalog-content-version",
+                    ),
+                    ("payloadDigest", "$optional:$scalar:catalog-payload-digest"),
+                    ("counts", "$schema:bcsp.catalog.entity-counts.v1"),
+                    (
+                        "errorClass",
+                        "$optional:$schema:bcsp.catalog.refresh-error-class.v1",
+                    ),
+                    (
+                        "partialReasons",
+                        "$array:$schema:bcsp.catalog.unknown-reason.v1",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.refresh-point.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("observationId", "$scalar:trace-id"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    (
+                        "classification",
+                        "$schema:bcsp.catalog.refresh-classification.v1",
+                    ),
+                    (
+                        "contentVersion",
+                        "$optional:$scalar:catalog-content-version",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.refresh-checkpoint-point.v1",
+                SchemaDirection::Bidirectional,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("observationId", "$scalar:trace-id"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    (
+                        "classification",
+                        "$schema:bcsp.catalog.refresh-classification.v1",
+                    ),
+                    (
+                        "contentVersion",
+                        "$optional:$scalar:catalog-content-version",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.refresh-checkpoint.v1",
+                SchemaDirection::Bidirectional,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("contractVersion", "$scalar:catalog-contract-version"),
+                    ("target", "$schema:bcsp.identity.term-campus-key.v1"),
+                    (
+                        "latestAttempt",
+                        "$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+                    ),
+                    (
+                        "lastSuccess",
+                        "$optional:$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+                    ),
+                    (
+                        "lastPublished",
+                        "$optional:$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+                    ),
+                    (
+                        "lastNonempty",
+                        "$optional:$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+                    ),
+                    (
+                        "pendingEmpty",
+                        "$optional:$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.catalog.refresh-status.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:catalog-contract-version"),
+                    ("target", "$schema:bcsp.identity.term-campus-key.v1"),
+                    ("latestAttempt", "$schema:bcsp.catalog.refresh-point.v1"),
+                    (
+                        "lastSuccess",
+                        "$optional:$schema:bcsp.catalog.refresh-point.v1",
+                    ),
+                    (
+                        "lastPublished",
+                        "$optional:$schema:bcsp.catalog.refresh-point.v1",
+                    ),
+                    (
+                        "lastNonempty",
+                        "$optional:$schema:bcsp.catalog.refresh-point.v1",
+                    ),
+                    (
+                        "pendingEmpty",
+                        "$optional:$schema:bcsp.catalog.refresh-point.v1",
+                    ),
                 ],
             ),
             enum_schema("bcsp.match.outcome.v1", match_outcomes),

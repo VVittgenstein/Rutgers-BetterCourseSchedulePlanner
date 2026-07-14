@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "task": "P7.1-005",
+  "recordId": "P7-1-005-SHARED-CATALOG-2026-07-13-001",
+  "branch": "codex/p7-implementation",
+  "parentCommit": "b0eac56850f89fc1a2d0e3d4600bd988e97d748c",
+  "predecessorMarker": "P7_1_004_R1_PASS_POST_PUSH_CLEAN_REPLAY",
+  "completionMarker": "P7_1_005_PASS_POST_PUSH",
+  "nextTask": "P7.1-006",
+  "packageImpact": "BOTH_TARGETS_SHARED_CORE",
+  "productScope": [
+    "typed Rutgers Catalog and discovery DTOs with explicit knowledge states",
+    "dynamic selector-derived discovery",
+    "target-scoped normalization and versioned hashing",
+    "deterministic duplicate and variant handling",
+    "operational SQLite migrations, observations, serving rows, and FTS5",
+    "atomic publication, empty safety, rollback, and restart recovery",
+    "typed discovery, Catalog detail, refresh, and freshness projections",
+    "immutable observation identity and source metadata across idempotent retries"
+  ],
+  "nonGoals": [
+    "22-filter query engine",
+    "live Open reconciliation and scheduler",
+    "watch and WebSocket behavior",
+    "target-specific runtime paths",
+    "UI",
+    "packaging",
+    "release publication",
+    "production deployment"
+  ],
+  "identity": {
+    "sectionKey": ["term", "campus", "index"],
+    "courseGroupKey": ["term", "campus", "courseString"],
+    "variantFingerprintVersion": "v1",
+    "variantIdentityFields": [
+      "supplementCode",
+      "creditsObject",
+      "title",
+      "expandedTitle",
+      "level",
+      "offeringUnitCode"
+    ],
+    "contentAndIdentityHashesAreIndependent": true,
+    "selectorOwnsTargetIdentity": true
+  },
+  "storage": {
+    "engine": "SQLite",
+    "fts5Required": true,
+    "freshSchemaSeedRows": 0,
+    "targetReplacementAtomic": true,
+    "unchangedContentKeepsVersion": true,
+    "suspectEmptyRetainsLastKnown": true,
+    "inventedEmptyConfirmationThreshold": false
+  },
+  "recordedReplay": {
+    "mode": "OPT_IN_READ_ONLY_AGGREGATE_ONLY",
+    "scopes": 21,
+    "nonemptyScopes": 17,
+    "emptyScopes": 4,
+    "courses": 10629,
+    "rawSections": 22069,
+    "uniqueSectionKeys": 22051,
+    "equivalentDuplicateKeys": 18,
+    "conflictingDuplicateKeys": 0,
+    "meetings": 30804,
+    "instructorAssignments": 19202,
+    "multiObjectGroups": 41,
+    "multiVariantGroups": 31,
+    "crossVariantSectionOverlap": 0,
+    "deliveryConflicts": 184,
+    "verifiedBodyHashSet": "v1:c5e3db46638e32b33498dedb596e5d608c37b6f9ad0328397a3d7bba82154a14",
+    "normalizedContentHashSet": "v1:a73f3fb9519a625917226e0ee669351c5351646899f798c5c64f5860a479134e"
+  },
+  "requiredQualityGates": [
+    "rust-graph-guard",
+    "rust-graph-guard-self-test",
+    "cargo-fmt-check",
+    "cargo-check-workspace-locked-offline",
+    "cargo-test-workspace-locked-offline",
+    "cargo-clippy-workspace-locked-offline",
+    "cargo-deny-policy-locked-offline",
+    "recorded-catalog-replay"
+  ],
+  "publicationBoundary": {
+    "taskPathCount": 50,
+    "protectedWorktreePathCount": 167,
+    "excluded": [
+      ".secrets/",
+      "credentials",
+      "personal information",
+      "chat logs",
+      "P1 material",
+      "raw P3 bodies",
+      "SQLite/WAL/SHM files",
+      "caches and build targets",
+      "unrelated protected-worktree paths"
+    ]
+  },
+  "governanceSimplification": {
+    "predecessorRecoveryHelperRetained": false,
+    "validatorSelfHashing": false,
+    "sourceMarkerCardinality": false,
+    "oneShotControlProtocol": false,
+    "reason": "Return P7 execution to product development after predecessor validation succeeded."
+  },
+  "nonEffects": {
+    "liveRutgersRequests": 0,
+    "packageBuilds": 0,
+    "vultrMutations": 0,
+    "releasePublications": 0,
+    "productionMutations": 0
+  }
+}

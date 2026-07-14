@@ -150,7 +150,9 @@ dependencies = [
  "bcsp-rutgers-client",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
+ "time",
  "tokio",
  "tracing",
 ]
@@ -242,6 +244,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "time",

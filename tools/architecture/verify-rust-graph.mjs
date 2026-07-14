@@ -77,13 +77,13 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-operational-storage',
     kind: 'lib',
     internal: ['bcsp-contracts', 'bcsp-domain'],
-    external: [['include_dir', NORMAL], ['rusqlite', NORMAL], ['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tracing', NORMAL]],
+    external: [['include_dir', NORMAL], ['rusqlite', NORMAL], ['serde', NORMAL], ['serde_json', NORMAL], ['sha2', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tracing', NORMAL]],
   },
   'bcsp-catalog': {
     dir: 'crates/bcsp-catalog',
     kind: 'lib',
     internal: ['bcsp-contracts', 'bcsp-domain', 'bcsp-operational-storage', 'bcsp-rutgers-client'],
-    external: [['serde', NORMAL], ['serde_json', NORMAL], ['thiserror', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL]],
+    external: [['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL]],
   },
   'bcsp-open': {
     dir: 'crates/bcsp-open',

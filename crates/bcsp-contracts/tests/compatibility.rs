@@ -161,9 +161,24 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
                 assert!(schema_ids.contains(reference), "{reference}");
             } else if let Some(reference) = field.type_ref.strip_prefix("$scalar:") {
                 assert!(scalar_ids.contains(reference), "{reference}");
+            } else if field.type_ref.starts_with("$optional:$schema:") {
+                let reference = field.type_ref.trim_start_matches("$optional:$schema:");
+                assert!(schema_ids.contains(reference), "{reference}");
+            } else if field.type_ref.starts_with("$optional:$scalar:") {
+                let reference = field.type_ref.trim_start_matches("$optional:$scalar:");
+                assert!(scalar_ids.contains(reference), "{reference}");
             } else {
                 assert!(
-                    field.type_ref == "$generic:T" || field.type_ref == "$primitive:u32",
+                    field.type_ref.starts_with("$generic:")
+                        || matches!(
+                            field.type_ref.as_str(),
+                            "$primitive:bool"
+                                | "$primitive:rfc3339-timestamp"
+                                | "$primitive:string"
+                                | "$primitive:u16"
+                                | "$primitive:u32"
+                                | "$primitive:u64"
+                        ),
                     "unsupported type reference {}",
                     field.type_ref
                 );

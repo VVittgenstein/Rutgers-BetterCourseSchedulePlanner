@@ -2,10 +2,11 @@ use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use bcsp_contracts::{
-    API_PROTOCOL_VERSION, ApiErrorBody, ApiErrorCode, ContractDecodeError, CourseGroupKey,
-    CourseVariantKey, HttpRequestEnvelope, MatchExplanation, ProtocolVersion, SectionKey, TraceId,
-    TraceIdError, TraceIdSource, WS_PROTOCOL_VERSION, WsClientEnvelope,
-    decode_versioned_envelope_json,
+    API_PROTOCOL_VERSION, ApiErrorBody, ApiErrorCode, CatalogContentVersion, CatalogDiagnosticCode,
+    CatalogDiscoveryRequestV1, CatalogDiscoverySourceId, CatalogPayloadDigest, CatalogSubjectCode,
+    ContractDecodeError, CourseGroupKey, CourseVariantKey, HttpRequestEnvelope, MatchExplanation,
+    ProtocolVersion, SectionKey, TraceId, TraceIdError, TraceIdSource, WS_PROTOCOL_VERSION,
+    WsClientEnvelope, decode_versioned_envelope_json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +28,25 @@ fn malformed_identities_fail_closed() {
     for json in cases {
         assert!(serde_json::from_str::<SectionKey>(json).is_err(), "{json}");
     }
+}
+
+#[test]
+fn malformed_catalog_scalars_and_strict_requests_fail_closed() {
+    assert!(serde_json::from_str::<CatalogContentVersion>("0").is_err());
+    assert!(
+        serde_json::from_str::<CatalogPayloadDigest>(&format!("\"{}\"", "A".repeat(64))).is_err()
+    );
+    assert!(CatalogSubjectCode::try_from(" SYN:SUBJECT").is_err());
+    assert!(CatalogSubjectCode::try_from("SYN:SUBJECT\n").is_err());
+    assert!(CatalogDiscoverySourceId::try_from("https://source.invalid").is_err());
+    assert!(CatalogDiagnosticCode::try_from("parser detail leaked").is_err());
+    assert!(CatalogDiagnosticCode::try_from("SAFE_CODE\nforged").is_err());
+    assert!(
+        serde_json::from_str::<CatalogDiscoveryRequestV1>(
+            r#"{"contractVersion":1,"futureMutationSemantics":true}"#,
+        )
+        .is_err()
+    );
 }
 
 #[test]
