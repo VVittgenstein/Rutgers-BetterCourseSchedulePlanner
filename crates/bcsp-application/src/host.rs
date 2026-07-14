@@ -42,7 +42,7 @@ pub enum RequestMethod {
 }
 
 impl RequestMethod {
-    fn from_http(method: &axum::http::Method) -> Self {
+    pub fn from_http(method: &axum::http::Method) -> Self {
         match *method {
             axum::http::Method::GET => Self::Get,
             axum::http::Method::HEAD => Self::Head,
@@ -69,6 +69,20 @@ pub struct ExtensionRequest {
 }
 
 impl ExtensionRequest {
+    pub fn new(
+        method: RequestMethod,
+        path: impl Into<String>,
+        query: Option<String>,
+        body: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            method,
+            path: path.into(),
+            query,
+            body: body.into(),
+        }
+    }
+
     pub const fn method(&self) -> &RequestMethod {
         &self.method
     }
@@ -339,10 +353,14 @@ async fn handle_watch_socket(
     };
     let mut source = SystemTraceIdSource;
     let connection_id = source.next_trace_id();
-    upgrade.on_upgrade(move |socket| run_watch_socket(socket, extension, connection_id))
+    upgrade.on_upgrade(move |socket| serve_websocket(socket, extension, connection_id))
 }
 
-async fn run_watch_socket(
+/// Runs the target-neutral WebSocket frame, heartbeat, and cleanup pump.
+///
+/// Target hosts own their Origin and session admission policy, then hand the
+/// admitted socket to this one shared transport implementation.
+pub async fn serve_websocket(
     mut socket: WebSocket,
     extension: Arc<dyn WebSocketExtension>,
     connection_id: TraceId,
@@ -540,6 +558,20 @@ mod tests {
                 extension,
                 socket: None,
             })
+    }
+
+    #[test]
+    fn target_hosts_can_construct_the_shared_extension_request() {
+        let request = ExtensionRequest::new(
+            RequestMethod::Post,
+            "/api/v1/query",
+            Some("page=2".to_owned()),
+            br#"{}"#.to_vec(),
+        );
+        assert_eq!(request.method(), &RequestMethod::Post);
+        assert_eq!(request.path(), "/api/v1/query");
+        assert_eq!(request.query(), Some("page=2"));
+        assert_eq!(request.body(), br#"{}"#);
     }
 
     #[tokio::test]

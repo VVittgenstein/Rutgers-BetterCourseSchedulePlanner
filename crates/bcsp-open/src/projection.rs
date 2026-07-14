@@ -4,14 +4,15 @@ use bcsp_contracts::{
     CatalogContentVersion, OPEN_CONTRACT_VERSION, OpenAttemptPointV1, OpenBatchKey,
     OpenCanonicalSetHash, OpenCircuitStatusV1, OpenCounterSnapshotV1, OpenFailureClass,
     OpenFailurePointV1, OpenFreshnessState, OpenFreshnessV1, OpenObservationPointV1,
-    OpenPullCountsV1, OpenRefreshClassification, OpenRefreshStatusV1, OpenSchedulerStatusV1,
-    OpenSectionStatusV1, OpenSequence, OpenState, OpenStateHash, OpenUncertaintyReason, RutgersDay,
-    RutgersDayTimezone, TermCampusKey, TraceId,
+    OpenObservationV1, OpenPullCountsV1, OpenRefreshClassification, OpenRefreshStatusV1,
+    OpenSchedulerStatusV1, OpenSectionStatusV1, OpenSequence, OpenState, OpenStateHash,
+    OpenUncertaintyReason, RutgersDay, RutgersDayTimezone, SectionKey, TermCampusKey, TraceId,
 };
 use bcsp_operational_storage::{
     OpenAttemptClassification, OpenAttemptCounters, OpenAttemptRecord, OpenBatchObservation,
     OpenBatchState, OpenCatalogSnapshot, OpenSectionCurrent, OpenSectionState, OperationalStorage,
-    StorageError, StorageResult,
+    StorageError, StorageResult, derive_open_refresh_observation_id,
+    derive_open_section_observation_id,
 };
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -138,6 +139,8 @@ pub enum OpenProjectionError {
     Storage(#[from] StorageError),
     #[error("Open target has no published serving Catalog")]
     TargetNotPublished,
+    #[error("Open Section is absent from the published serving Catalog")]
+    SectionNotPublished,
     #[error("Open projection is missing a related {entity} row")]
     MissingRelatedRow { entity: &'static str },
     #[error("Open projection contains an invalid {field} timestamp")]
@@ -258,6 +261,125 @@ pub fn project_open_status<S: OpenStatusReadStore>(
     Ok(ProjectedOpenStatusV1 { refresh, sections })
 }
 
+/// Reconstructs the current committed per-Section observation for watch START.
+///
+/// The same shared status projection decides freshness and uncertainty. A
+/// retained LKG is intentionally not returned when it is stale, invalidated by
+/// a later failed/unsafe/racing attempt, or belongs to an older serving Catalog
+/// version. That keeps START from opening an episode on an uncertain value.
+pub fn project_current_open_observation<S: OpenStatusReadStore>(
+    store: &mut S,
+    section: &SectionKey,
+    runtime: &OpenProjectionRuntime,
+) -> Result<Option<OpenObservationV1>, OpenProjectionError> {
+    let target = section.target();
+    let projected = project_open_status(store, &target, runtime)?;
+    let section_status = projected
+        .sections
+        .iter()
+        .find(|value| value.section_key == *section)
+        .ok_or(OpenProjectionError::SectionNotPublished)?;
+
+    if section_status.state == OpenState::Unknown
+        || section_status.freshness.state != OpenFreshnessState::Fresh
+    {
+        return Ok(None);
+    }
+
+    let Some(current_catalog_version) = projected.refresh.catalog_content_version else {
+        return Err(OpenProjectionError::InconsistentState {
+            reason: "published Open projection omitted its Catalog version",
+        });
+    };
+    let Some(section_catalog_version) = section_status.catalog_content_version else {
+        return Err(OpenProjectionError::InconsistentState {
+            reason: "known Open Section omitted its Catalog version",
+        });
+    };
+    let Some(last_valid) = projected.refresh.last_valid_observation.as_ref() else {
+        return Err(OpenProjectionError::InconsistentState {
+            reason: "known fresh Open Section exists without an LKG observation",
+        });
+    };
+    if section_catalog_version != current_catalog_version
+        || last_valid.catalog_content_version != current_catalog_version
+    {
+        return Ok(None);
+    }
+
+    let batch = store
+        .open_batch_state(&target)?
+        .ok_or(OpenProjectionError::InconsistentState {
+            reason: "known fresh Open Section exists without batch state",
+        })?;
+    let lkg_attempt_id = batch
+        .lkg_attempt_id
+        .ok_or(OpenProjectionError::InconsistentState {
+            reason: "known fresh Open Section exists without an LKG attempt",
+        })?;
+    let attempt = load_attempt(store, &target, lkg_attempt_id)?;
+    let observation = store.open_batch_observation(&lkg_attempt_id)?.ok_or(
+        OpenProjectionError::MissingRelatedRow {
+            entity: "LKG batch observation",
+        },
+    )?;
+    let expected_refresh_id = derive_open_refresh_observation_id(lkg_attempt_id)?;
+    if observation.observation_id != expected_refresh_id
+        || last_valid.observation_id != expected_refresh_id
+        || observation.catalog_content_version != current_catalog_version.get()
+        || observation.observation_sequence != last_valid.observation_sequence.get()
+    {
+        return Err(OpenProjectionError::InconsistentState {
+            reason: "LKG observation identity differs from its committed projection",
+        });
+    }
+
+    let observed_at =
+        section_status
+            .freshness
+            .observed_at
+            .ok_or(OpenProjectionError::InconsistentState {
+                reason: "fresh Open Section omitted its observation timestamp",
+            })?;
+    let fresh_until =
+        section_status
+            .freshness
+            .fresh_until
+            .ok_or(OpenProjectionError::InconsistentState {
+                reason: "fresh Open Section omitted its freshness deadline",
+            })?;
+    if observed_at != last_valid.observed_at {
+        return Err(OpenProjectionError::InconsistentState {
+            reason: "Open Section timestamp differs from its LKG observation",
+        });
+    }
+    let scheduler_lag_milliseconds =
+        attempt
+            .schedule_lag_ms
+            .ok_or(OpenProjectionError::InvalidValue {
+                field: "lkg_schedule_lag_ms",
+            })?;
+
+    OpenObservationV1::try_new(
+        OPEN_CONTRACT_VERSION,
+        derive_open_section_observation_id(lkg_attempt_id, section)?,
+        expected_refresh_id,
+        OpenBatchKey::from(target),
+        section.clone(),
+        sequence(attempt.attempt_sequence)?,
+        current_catalog_version,
+        section_status.state,
+        observed_at,
+        fresh_until,
+        scheduler_lag_milliseconds,
+        section_status.counter_snapshot.clone(),
+    )
+    .map(Some)
+    .map_err(|_| OpenProjectionError::InconsistentState {
+        reason: "projected Open observation target differs from its Section",
+    })
+}
+
 fn project_sections<S: OpenStatusReadStore>(
     store: &S,
     catalog: OpenCatalogSnapshot,
@@ -306,6 +428,14 @@ fn project_sections<S: OpenStatusReadStore>(
                 if value.observation_sequence != lkg.point.observation_sequence.get() {
                     return Err(OpenProjectionError::InconsistentState {
                         reason: "known Open Section does not belong to the target LKG observation",
+                    });
+                }
+                if value.catalog_content_version != lkg.point.catalog_content_version.get()
+                    || parse_timestamp(&value.observed_at, "section_observed_at")?
+                        != lkg.point.observed_at
+                {
+                    return Err(OpenProjectionError::InconsistentState {
+                        reason: "known Open Section markers differ from its LKG observation",
                     });
                 }
                 let state = match value.state {
@@ -1075,6 +1205,123 @@ mod tests {
                 .requested_effective_interval_seconds,
             3
         );
+    }
+
+    fn store_with_reconstructable_current_observation() -> FakeStore {
+        let mut store = base_store(false);
+        store.catalog.as_mut().unwrap().content_version = 1;
+        store.catalog.as_mut().unwrap().sections = vec![section("00001"), section("00002")];
+        store
+            .observations
+            .get_mut(&trace(1))
+            .unwrap()
+            .observation_id = derive_open_refresh_observation_id(trace(1)).unwrap();
+        store
+    }
+
+    #[test]
+    fn current_watch_observation_reuses_committed_identity_and_public_counters() {
+        let mut store = store_with_reconstructable_current_observation();
+        let observation = project_current_open_observation(
+            &mut store,
+            &section("00001"),
+            &runtime(110, OpenCounterAudience::Public),
+        )
+        .unwrap()
+        .expect("fresh committed Section observation");
+
+        assert_eq!(
+            observation.observation_id,
+            derive_open_section_observation_id(trace(1), &section("00001")).unwrap()
+        );
+        assert_eq!(
+            observation.refresh_observation_id,
+            derive_open_refresh_observation_id(trace(1)).unwrap()
+        );
+        assert_eq!(observation.pull_sequence.get(), 1);
+        assert_eq!(observation.catalog_content_version.get(), 1);
+        assert_eq!(observation.state, OpenState::Open);
+        assert_eq!(observation.observed_at, at(100));
+        assert_eq!(observation.fresh_until, at(175));
+        assert_eq!(observation.scheduler_lag_milliseconds, 12);
+        assert_eq!(observation.counter_snapshot.run_counts, None);
+        assert_eq!(observation.counter_snapshot.today_counts.attempted, 99);
+        assert_eq!(
+            observation.counter_snapshot.rutgers_day.as_str(),
+            "1969-12-31"
+        );
+        assert_eq!(
+            observation.counter_snapshot.day_timezone,
+            RutgersDayTimezone::AmericaNewYork
+        );
+    }
+
+    #[test]
+    fn watch_initial_value_is_absent_for_unknown_stale_or_catalog_mismatched_state() {
+        let mut unknown = store_with_reconstructable_current_observation();
+        assert_eq!(
+            project_current_open_observation(
+                &mut unknown,
+                &section("00002"),
+                &runtime(110, OpenCounterAudience::Public),
+            )
+            .unwrap(),
+            None
+        );
+
+        for classification in [
+            OpenAttemptClassification::Failed,
+            OpenAttemptClassification::UnsafeEmpty,
+            OpenAttemptClassification::UnsafeZeroIntersection,
+            OpenAttemptClassification::StaleCatalogRace,
+        ] {
+            let mut stale = base_store(true);
+            stale.catalog.as_mut().unwrap().content_version = 1;
+            stale.attempts.get_mut(&trace(2)).unwrap().classification = classification;
+            stale
+                .observations
+                .get_mut(&trace(1))
+                .unwrap()
+                .observation_id = derive_open_refresh_observation_id(trace(1)).unwrap();
+            assert_eq!(
+                project_current_open_observation(
+                    &mut stale,
+                    &section("00001"),
+                    &runtime(110, OpenCounterAudience::Public),
+                )
+                .unwrap(),
+                None,
+                "{classification:?} must not open an initial episode"
+            );
+        }
+
+        let mut catalog_advanced = base_store(false);
+        catalog_advanced
+            .observations
+            .get_mut(&trace(1))
+            .unwrap()
+            .observation_id = derive_open_refresh_observation_id(trace(1)).unwrap();
+        assert_eq!(
+            project_current_open_observation(
+                &mut catalog_advanced,
+                &section("00001"),
+                &runtime(110, OpenCounterAudience::Public),
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn unpublished_section_is_distinct_from_a_published_section_without_current_open() {
+        let mut store = store_with_reconstructable_current_observation();
+        let error = project_current_open_observation(
+            &mut store,
+            &section("99999"),
+            &runtime(110, OpenCounterAudience::Public),
+        )
+        .unwrap_err();
+        assert!(matches!(error, OpenProjectionError::SectionNotPublished));
     }
 
     #[test]

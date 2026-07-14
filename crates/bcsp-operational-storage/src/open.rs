@@ -778,8 +778,7 @@ impl OperationalStorage {
         )?;
         let observation_sequence_u64 = stored_u64(observation_sequence)?;
         let captured_version = u64_to_i64(attempt.captured_catalog_content_version)?;
-        let refresh_observation_id =
-            derived_observation_id("bcsp-open-refresh-observation-v1", command.attempt_id, None)?;
+        let refresh_observation_id = derive_open_refresh_observation_id(command.attempt_id)?;
 
         transaction.execute(
             "INSERT INTO open_batch_observations(
@@ -854,10 +853,13 @@ impl OperationalStorage {
                 .get(&index)
                 .copied()
                 .ok_or_else(|| invalid_stored("open_batch_observations", "watched_sections"))?;
-            let observation_id = derived_observation_id(
-                "bcsp-open-section-observation-v1",
+            let observation_id = derive_open_section_observation_id(
                 command.attempt_id,
-                Some(&index),
+                &SectionKey::try_new(
+                    attempt.target.term().as_str(),
+                    attempt.target.campus().as_str(),
+                    &index,
+                )?,
             )?;
             let event_id = transaction.query_row(
                 "INSERT INTO open_section_events(
@@ -2640,6 +2642,27 @@ fn stored_bool(table: &'static str, field: &'static str, value: i64) -> StorageR
 
 fn open_target_id(target: &TermCampusKey) -> String {
     format!("{}/{}", target.term(), target.campus())
+}
+
+/// Reconstructs the stable refresh-observation identity written for a valid
+/// Open commit. Read-side projections use this exact seam instead of minting a
+/// new identity when a watch starts after the commit.
+pub fn derive_open_refresh_observation_id(attempt_id: TraceId) -> StorageResult<TraceId> {
+    derived_observation_id("bcsp-open-refresh-observation-v1", attempt_id, None)
+}
+
+/// Reconstructs the stable per-Section observation identity written for a
+/// valid Open commit. The attempt identity already binds the target; the
+/// Section index is the same discriminator used by the atomic commit path.
+pub fn derive_open_section_observation_id(
+    attempt_id: TraceId,
+    section: &SectionKey,
+) -> StorageResult<TraceId> {
+    derived_observation_id(
+        "bcsp-open-section-observation-v1",
+        attempt_id,
+        Some(section.index().as_str()),
+    )
 }
 
 fn derived_observation_id(

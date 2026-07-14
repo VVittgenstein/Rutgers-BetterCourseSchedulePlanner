@@ -124,8 +124,8 @@ export const GRAPH_SPEC = Object.freeze({
   'bcsp-public-runtime': {
     dir: 'crates/bcsp-public-runtime',
     kind: 'lib',
-    internal: ['bcsp-application', 'bcsp-operational-storage', 'bcsp-public-operations'],
-    external: [['include_dir', NORMAL], ['thiserror', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL], ['tracing-subscriber', NORMAL]],
+    internal: ['bcsp-application', 'bcsp-contracts', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-public-operations', 'bcsp-watch'],
+    external: [['axum', NORMAL], ['include_dir', NORMAL], ['reqwest', DEV], ['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tower', DEV], ['tracing', NORMAL], ['tracing-subscriber', NORMAL]],
   },
   'bcsp-local': {
     dir: 'apps/bcsp-local',
@@ -137,7 +137,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'apps/bcsp-server',
     kind: 'bin',
     internal: ['bcsp-public-runtime'],
-    external: [],
+    external: [['tokio', NORMAL], ['tracing', NORMAL]],
   },
 });
 

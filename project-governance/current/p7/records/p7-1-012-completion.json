@@ -1,0 +1,28 @@
+{
+  "task": "P7.1-012",
+  "status": "PRECOMMIT_PASS",
+  "parent": "eb939b65ddc7ac60d98901bea7dee9e4ac39917d",
+  "verifiedAtUtc": "2026-07-14T15:15:41.5733151Z",
+  "pathCount": 24,
+  "checks": {
+    "publicOperationalBoundary": "PASS",
+    "fixedRefreshPolicy": "PASS",
+    "ephemeralDocumentSession": "PASS",
+    "networkBoundary": "PASS",
+    "readinessAndMetrics": "PASS",
+    "watchStartCurrentObservation": "PASS",
+    "boundedShutdown": "PASS",
+    "workspaceTests": "PASS",
+    "clippy": "PASS",
+    "architecture": "PASS",
+    "dependencyPolicy": "PASS"
+  },
+  "deferredIntegration": {
+    "owner": "P7.1-015",
+    "schedulerStarted": false,
+    "productRoutesWired": false,
+    "readinessExpectedBeforeIntegration": false
+  },
+  "postPushMarker": "P7_1_012_PASS_POST_PUSH",
+  "nextTask": "P7.1-013"
+}

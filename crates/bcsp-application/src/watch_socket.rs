@@ -160,6 +160,14 @@ where
         })
     }
 
+    /// Returns authoritative shared watch demand for one Open target.
+    /// Multiple browser connections watching the same Section contribute one
+    /// upstream demand item rather than one request per connection.
+    pub fn active_watch_count(&self, target: &bcsp_contracts::TermCampusKey) -> u64 {
+        self.lock_state()
+            .map_or(0, |state| state.manager.active_watch_count(target))
+    }
+
     /// Fans out one committed, valid Open observation through the shared reducer.
     ///
     /// Returns `true` when the observation was an exact replay and therefore emitted no new
@@ -625,6 +633,45 @@ mod tests {
         let cleanups = sink.cleanups.lock().unwrap();
         assert_eq!(cleanups.len(), 1);
         assert_eq!(cleanups[0].sections.len(), 9);
+    }
+
+    #[test]
+    fn target_demand_deduplicates_the_same_section_across_connections() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let first_connection = trace(1);
+        let second_connection = trace(2);
+        let (first_outbound, mut first_receiver) = mpsc::unbounded_channel();
+        let (second_outbound, mut second_receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(first_connection, first_outbound));
+        assert!(socket.connect(second_connection, second_outbound));
+        send(
+            &socket,
+            first_connection,
+            trace(3),
+            WatchClientCommandV1::StartWatch {
+                items: items([section(1)]),
+            },
+        );
+        send(
+            &socket,
+            second_connection,
+            trace(4),
+            WatchClientCommandV1::StartWatch {
+                items: items([section(1)]),
+            },
+        );
+        let _ = receive(&mut first_receiver);
+        let _ = receive(&mut second_receiver);
+
+        assert_eq!(socket.total_active_watch_count(), 2);
+        assert_eq!(socket.active_watch_count(&section(1).target()), 1);
+        socket.disconnect(first_connection);
+        assert_eq!(socket.active_watch_count(&section(1).target()), 1);
+        socket.disconnect(second_connection);
+        assert_eq!(socket.active_watch_count(&section(1).target()), 0);
     }
 
     #[test]

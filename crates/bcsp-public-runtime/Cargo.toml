@@ -10,11 +10,23 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+axum.workspace = true
 bcsp-application = { version = "=0.0.0", path = "../bcsp-application" }
+bcsp-contracts = { version = "=0.0.0", path = "../bcsp-contracts" }
+bcsp-open = { version = "=0.0.0", path = "../bcsp-open" }
 bcsp-operational-storage = { version = "=0.0.0", path = "../bcsp-operational-storage" }
 bcsp-public-operations = { version = "=0.0.0", path = "../bcsp-public-operations" }
+bcsp-watch = { version = "=0.0.0", path = "../bcsp-watch" }
 include_dir.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile.workspace = true
+tower.workspace = true

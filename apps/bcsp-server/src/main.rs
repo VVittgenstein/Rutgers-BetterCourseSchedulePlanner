@@ -1,8 +1,12 @@
-//! Linux-public composition root. Product startup is implemented later.
+//! Linux-public composition root.
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]
 
-fn main() {
-    let _ = bcsp_public_runtime::boundary_marker();
+#[tokio::main]
+async fn main() {
+    if let Err(error) = bcsp_public_runtime::run_production().await {
+        tracing::error!(code = error.code(), message = %error);
+        std::process::exit(1);
+    }
 }

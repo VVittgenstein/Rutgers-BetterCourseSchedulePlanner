@@ -276,12 +276,22 @@ dependencies = [
 name = "bcsp-public-runtime"
 version = "0.0.0"
 dependencies = [
+ "axum",
  "bcsp-application",
+ "bcsp-contracts",
+ "bcsp-open",
  "bcsp-operational-storage",
  "bcsp-public-operations",
+ "bcsp-watch",
  "include_dir",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
+ "time",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]
@@ -317,6 +327,8 @@ name = "bcsp-server"
 version = "0.0.0"
 dependencies = [
  "bcsp-public-runtime",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

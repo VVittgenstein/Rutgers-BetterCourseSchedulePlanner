@@ -12,3 +12,5 @@ path = "src/main.rs"
 
 [dependencies]
 bcsp-public-runtime = { version = "=0.0.0", path = "../../crates/bcsp-public-runtime" }
+tokio.workspace = true
+tracing.workspace = true

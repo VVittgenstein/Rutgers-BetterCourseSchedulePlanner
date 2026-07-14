@@ -36,6 +36,7 @@ pub use open::{
     OpenBatchState, OpenCacheStatus, OpenCatalogSnapshot, OpenCircuitState, OpenCommitOutcome,
     OpenHttpAuditMetadata, OpenObservationCommit, OpenOriginState, OpenRequestLane,
     OpenRetentionReport, OpenScheduleState, OpenSectionCurrent, OpenSectionEvent, OpenSectionState,
+    derive_open_refresh_observation_id, derive_open_section_observation_id,
 };
 pub use storage::{OperationalStorage, catalog_content_sha256_v1};
 
