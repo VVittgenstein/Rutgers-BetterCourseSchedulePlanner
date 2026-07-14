@@ -10,7 +10,7 @@ use crate::{
     CatalogOccurrenceEvidence, CatalogOccurrenceKind, CatalogOpenStatusProvenance,
     CatalogPrerequisiteState, CatalogRefreshClassification, CatalogRefreshErrorClass,
     CatalogRequiredness, CatalogSourceKind, CatalogSynchronicity, CatalogUnknownReason,
-    MatchOutcome, MatchReasonCode, WS_PROTOCOL_VERSION,
+    FilterFieldId, MatchOutcome, MatchReasonCode, WS_PROTOCOL_VERSION,
 };
 
 pub const CONTRACT_SCHEMA_VERSION: u16 = 1;
@@ -304,6 +304,30 @@ pub fn contract_manifest() -> ContractManifest {
                 Some(64),
                 Some("^[A-Z0-9_]+$"),
                 Some("stable redacted diagnostic code; never parser or upstream detail"),
+            ),
+            ScalarConstraint {
+                id: "query-contract-version".to_owned(),
+                wire_type: "u16".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some("only integer 1 is accepted".to_owned()),
+            },
+            string_constraint(
+                "filter-token",
+                None,
+                Some(256),
+                None,
+                Some("normalized nonempty trim-stable control-free UTF-8 filter token"),
+            ),
+            string_constraint(
+                "filter-search-text",
+                None,
+                Some(512),
+                None,
+                Some(
+                    "1..=32 tokens; each <=128 UTF-8 bytes and containing Unicode alphanumeric; whitespace collapsed; total <=512 bytes",
+                ),
             ),
         ],
         schemas: vec![
@@ -982,6 +1006,514 @@ pub fn contract_manifest() -> ContractManifest {
                         "pendingEmpty",
                         "$optional:$schema:bcsp.catalog.refresh-point.v1",
                     ),
+                ],
+            ),
+            enum_schema(
+                "bcsp.query.filter-field-id.v1",
+                FilterFieldId::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.query.filter-scope.v1",
+                ["COURSE", "SECTION"].map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.filter-value-kind.v1",
+                [
+                    "TERM_ID",
+                    "CAMPUS_CODE_SET",
+                    "SUBJECT_CODE_SET",
+                    "TEXT_QUERY",
+                    "COURSE_NUMBER_SET",
+                    "LEVEL_SET",
+                    "CREDIT_RANGE",
+                    "CORE_CODE_SET",
+                    "PREREQUISITE_PRESENCE",
+                    "COURSE_LOCATION_SET",
+                    "SECTION_INDEX_SET",
+                    "SECTION_NUMBER_SET",
+                    "OPEN_STATUS_SET",
+                    "MODALITY_SET",
+                    "SYNCHRONICITY_SET",
+                    "INSTRUCTOR_NAME_SET",
+                    "AVAILABILITY_WINDOWS",
+                    "MEETING_LOCATION_SET",
+                    "BUILDING_ROOM",
+                    "EXAM_CODE_SET",
+                    "PERMISSION_REQUIREMENT",
+                    "ELIGIBILITY",
+                ]
+                .map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.filter-schema-value.v1",
+                [
+                    "REQUIRED",
+                    "EMPTY_SET",
+                    "EMPTY_TEXT",
+                    "UNBOUNDED_RANGE",
+                    "ANY",
+                    "EMPTY_WINDOWS",
+                    "EMPTY_COMPOSITE",
+                ]
+                .map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.filter-normalization.v1",
+                [
+                    "CANONICAL_IDENTITY",
+                    "TRIM",
+                    "TRIM_AND_COLLAPSE_WHITESPACE",
+                    "ASCII_UPPERCASE",
+                    "SORT_DEDUPLICATE",
+                    "CREDIT_HUNDREDTHS",
+                    "MINUTE_OF_DAY",
+                    "TOKEN_AND",
+                ]
+                .map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.filter-validation.v1",
+                [
+                    "REQUIRED",
+                    "DYNAMIC_DICTIONARY",
+                    "NONEMPTY_WHEN_ACTIVE",
+                    "ORDERED_INCLUSIVE_RANGE",
+                    "ORDERED_MINUTE_INTERVAL",
+                    "SECTION_INDEX_IDENTITY",
+                    "STRUCTURED_ONLY",
+                    "MAX32_TEXT_TOKENS",
+                    "MAX128_TOKEN_BYTES",
+                    "TOKEN_CONTAINS_ALPHANUMERIC",
+                ]
+                .map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.filter-query-encoding.v1",
+                [
+                    "EXACT_ONE",
+                    "EXACT_ANY",
+                    "TEXT_TOKEN_AND_EXACT_IDENTIFIER_PRIORITY",
+                    "INCLUSIVE_RANGE",
+                    "EXPLICIT_ANY_ALL",
+                    "TERNARY_PRESENCE",
+                    "SAME_SECTION_EXACT_ANY",
+                    "SAME_SECTION_AVAILABILITY_ALL",
+                    "SAME_SECTION_STRUCTURED_DIMENSIONS",
+                ]
+                .map(str::to_owned),
+            ),
+            schema(
+                "bcsp.query.filter-field-schema.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("stableId", "$schema:bcsp.query.filter-field-id.v1"),
+                    ("requestField", "$primitive:string"),
+                    ("scope", "$schema:bcsp.query.filter-scope.v1"),
+                    ("valueKind", "$schema:bcsp.query.filter-value-kind.v1"),
+                    ("neutral", "$schema:bcsp.query.filter-schema-value.v1"),
+                    ("default", "$schema:bcsp.query.filter-schema-value.v1"),
+                    (
+                        "normalization",
+                        "$array:$schema:bcsp.query.filter-normalization.v1",
+                    ),
+                    (
+                        "validation",
+                        "$array:$schema:bcsp.query.filter-validation.v1",
+                    ),
+                    (
+                        "queryEncoding",
+                        "$schema:bcsp.query.filter-query-encoding.v1",
+                    ),
+                    ("i18nKey", "$primitive:string"),
+                    ("chipOrder", "$primitive:u8"),
+                ],
+            ),
+            schema(
+                "bcsp.query.filter-schema.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    ("fields", "$array:$schema:bcsp.query.filter-field-schema.v1"),
+                ],
+            ),
+            enum_schema("bcsp.query.set-mode.v1", ["ANY", "ALL"].map(str::to_owned)),
+            enum_schema(
+                "bcsp.query.prerequisite-filter.v1",
+                ["ANY", "HAS", "NONE_REPORTED"].map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.live-open-state.v1",
+                ["OPEN", "CLOSED", "UNKNOWN"].map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.modality-filter.v1",
+                [
+                    "ON_CAMPUS_OR_IN_PERSON",
+                    "ONLINE",
+                    "HYBRID",
+                    "OTHER",
+                    "UNKNOWN",
+                ]
+                .map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.permission-filter.v1",
+                ["ANY", "REQUIRED", "NOT_REQUIRED"].map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.weekday.v1",
+                [
+                    "MONDAY",
+                    "TUESDAY",
+                    "WEDNESDAY",
+                    "THURSDAY",
+                    "FRIDAY",
+                    "SATURDAY",
+                    "SUNDAY",
+                ]
+                .map(str::to_owned),
+            ),
+            schema(
+                "bcsp.query.credit-range.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("minimumHundredths", "$optional:$primitive:u32"),
+                    ("maximumHundredths", "$optional:$primitive:u32"),
+                ],
+            ),
+            schema(
+                "bcsp.query.availability-window.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("weekday", "$schema:bcsp.query.weekday.v1"),
+                    ("startMinute", "$primitive:u16"),
+                    ("endMinute", "$primitive:u16"),
+                ],
+            ),
+            schema(
+                "bcsp.query.core-filter.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("codes", "$array:$scalar:filter-token"),
+                    ("mode", "$schema:bcsp.query.set-mode.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.building-room-filter.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("buildingCodes", "$array:$scalar:filter-token"),
+                    ("roomNumbers", "$array:$scalar:filter-token"),
+                ],
+            ),
+            schema(
+                "bcsp.query.eligibility-unit-major.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("unitCode", "$scalar:filter-token"),
+                    ("majorCode", "$scalar:filter-token"),
+                ],
+            ),
+            schema(
+                "bcsp.query.eligibility-filter.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("majorCodes", "$array:$scalar:filter-token"),
+                    ("minorCodes", "$array:$scalar:filter-token"),
+                    ("honorProgramCodes", "$array:$scalar:filter-token"),
+                    ("unitCodes", "$array:$scalar:filter-token"),
+                    (
+                        "unitMajors",
+                        "$array:$schema:bcsp.query.eligibility-unit-major.v1",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.query.normalized-filter-values.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("term", "$scalar:term-id"),
+                    ("campuses", "$array:$scalar:campus-code"),
+                    ("subjects", "$array:$scalar:catalog-subject-code"),
+                    ("text", "$optional:$scalar:filter-search-text"),
+                    ("courseNumbers", "$array:$scalar:filter-token"),
+                    ("levels", "$array:$scalar:filter-token"),
+                    ("credits", "$optional:$schema:bcsp.query.credit-range.v1"),
+                    ("core", "$schema:bcsp.query.core-filter.v1"),
+                    ("prerequisite", "$schema:bcsp.query.prerequisite-filter.v1"),
+                    ("courseLocations", "$array:$scalar:filter-token"),
+                    ("sectionIndexes", "$array:$scalar:section-index"),
+                    ("sectionNumbers", "$array:$scalar:filter-token"),
+                    (
+                        "openStatuses",
+                        "$array:$schema:bcsp.query.live-open-state.v1",
+                    ),
+                    ("modalities", "$array:$schema:bcsp.query.modality-filter.v1"),
+                    (
+                        "synchronicities",
+                        "$array:$schema:bcsp.catalog.synchronicity.v1",
+                    ),
+                    ("instructors", "$array:$scalar:filter-token"),
+                    (
+                        "availability",
+                        "$array:$schema:bcsp.query.availability-window.v1",
+                    ),
+                    ("meetingLocations", "$array:$scalar:filter-token"),
+                    ("buildingRoom", "$schema:bcsp.query.building-room-filter.v1"),
+                    ("examCodes", "$array:$scalar:filter-token"),
+                    ("permission", "$schema:bcsp.query.permission-filter.v1"),
+                    ("eligibility", "$schema:bcsp.query.eligibility-filter.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.filter-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    ("values", "$schema:bcsp.query.normalized-filter-values.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.page-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[("page", "$primitive:u32"), ("pageSize", "$primitive:u16")],
+            ),
+            enum_schema(
+                "bcsp.query.sort-direction.v1",
+                ["ASCENDING", "DESCENDING"].map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.course-sort-field.v1",
+                ["RELEVANCE", "COURSE_IDENTIFIER", "TITLE"].map(str::to_owned),
+            ),
+            schema(
+                "bcsp.query.course-sort.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("field", "$schema:bcsp.query.course-sort-field.v1"),
+                    ("direction", "$schema:bcsp.query.sort-direction.v1"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.query.section-sort-field.v1",
+                [
+                    "SECTION_INDEX",
+                    "SECTION_NUMBER",
+                    "COURSE_IDENTIFIER",
+                    "OPEN_STATUS",
+                ]
+                .map(str::to_owned),
+            ),
+            schema(
+                "bcsp.query.section-sort.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("field", "$schema:bcsp.query.section-sort-field.v1"),
+                    ("direction", "$schema:bcsp.query.sort-direction.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.course-query-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("filters", "$schema:bcsp.query.filter-request.v1"),
+                    ("page", "$schema:bcsp.query.page-request.v1"),
+                    ("sort", "$schema:bcsp.query.course-sort.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.section-query-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("filters", "$schema:bcsp.query.filter-request.v1"),
+                    ("page", "$schema:bcsp.query.page-request.v1"),
+                    ("sort", "$schema:bcsp.query.section-sort.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.course-detail-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    ("key", "$schema:bcsp.identity.course-group-key.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.section-detail-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    ("key", "$schema:bcsp.identity.section-key.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.live-open-evidence.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("state", "$schema:bcsp.query.live-open-state.v1"),
+                    ("observedAt", "$optional:$primitive:rfc3339-timestamp"),
+                    ("freshUntil", "$optional:$primitive:rfc3339-timestamp"),
+                    ("uncertainty", "$optional:$schema:bcsp.match.reason-code.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.filter-match.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("fieldId", "$schema:bcsp.query.filter-field-id.v1"),
+                    ("explanation", "$schema:bcsp.match.explanation.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.text-match-evidence.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("exactCourseIdentifier", "$primitive:bool"),
+                    ("matchedTokens", "$array:$primitive:string"),
+                ],
+            ),
+            schema(
+                "bcsp.query.section-query-item.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("section", "$schema:bcsp.catalog.normalized-section.v1"),
+                    (
+                        "occurrences",
+                        "$array:$schema:bcsp.catalog.normalized-occurrence.v1",
+                    ),
+                    ("open", "$schema:bcsp.query.live-open-evidence.v1"),
+                    ("explanation", "$schema:bcsp.match.explanation.v1"),
+                    ("filterMatches", "$array:$schema:bcsp.query.filter-match.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.section-search-item.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    (
+                        "variant",
+                        "$schema:bcsp.catalog.normalized-course-variant.v1",
+                    ),
+                    ("section", "$schema:bcsp.query.section-query-item.v1"),
+                    (
+                        "courseFilterMatches",
+                        "$array:$schema:bcsp.query.filter-match.v1",
+                    ),
+                    (
+                        "textMatch",
+                        "$optional:$schema:bcsp.query.text-match-evidence.v1",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.query.course-variant-query-item.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    (
+                        "variant",
+                        "$schema:bcsp.catalog.normalized-course-variant.v1",
+                    ),
+                    ("explanation", "$schema:bcsp.match.explanation.v1"),
+                    ("filterMatches", "$array:$schema:bcsp.query.filter-match.v1"),
+                    (
+                        "textMatch",
+                        "$optional:$schema:bcsp.query.text-match-evidence.v1",
+                    ),
+                    (
+                        "sections",
+                        "$array:$schema:bcsp.query.section-query-item.v1",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.query.course-query-item.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("group", "$schema:bcsp.catalog.normalized-course-group.v1"),
+                    ("explanation", "$schema:bcsp.match.explanation.v1"),
+                    (
+                        "variants",
+                        "$array:$schema:bcsp.query.course-variant-query-item.v1",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.query.page-info.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("page", "$primitive:u32"),
+                    ("pageSize", "$primitive:u16"),
+                    ("total", "$primitive:u64"),
+                    ("totalPages", "$primitive:u32"),
+                ],
+            ),
+            schema(
+                "bcsp.query.course-query-response.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    ("page", "$schema:bcsp.query.page-info.v1"),
+                    ("items", "$array:$schema:bcsp.query.course-query-item.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.section-query-response.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    ("page", "$schema:bcsp.query.page-info.v1"),
+                    ("items", "$array:$schema:bcsp.query.section-search-item.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.course-detail-response.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    ("course", "$schema:bcsp.query.course-query-item.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.query.section-detail-response.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    (
+                        "variant",
+                        "$schema:bcsp.catalog.normalized-course-variant.v1",
+                    ),
+                    ("section", "$schema:bcsp.query.section-query-item.v1"),
                 ],
             ),
             enum_schema("bcsp.match.outcome.v1", match_outcomes),

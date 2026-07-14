@@ -4,6 +4,109 @@ use bcsp_contracts::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+const MAX_COURSE_TEXT_SEARCH_TOKENS: usize = 32;
+const MAX_COURSE_TEXT_SEARCH_TOKEN_BYTES: usize = 128;
+const MAX_COURSE_TEXT_SEARCH_BYTES: usize = 512;
+
+/// Validated literal terms for a course full-text search.
+///
+/// This type deliberately cannot contain raw FTS5 query syntax. Storage quotes every item as an
+/// FTS5 literal and combines the items with `AND` before executing `MATCH`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CourseTextSearchTokens {
+    tokens: Vec<String>,
+}
+
+impl CourseTextSearchTokens {
+    pub fn try_new<I, S>(tokens: I) -> crate::StorageResult<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut validated = Vec::new();
+        let mut total_bytes = 0_usize;
+        for token in tokens {
+            if validated.len() == MAX_COURSE_TEXT_SEARCH_TOKENS {
+                return Err(crate::StorageError::InvalidCommand {
+                    field: "course_text_search_tokens",
+                    reason: "must contain between 1 and 32 literal tokens",
+                });
+            }
+            let token = token.as_ref().trim();
+            if token.is_empty() {
+                return Err(crate::StorageError::InvalidCommand {
+                    field: "course_text_search_tokens",
+                    reason: "tokens must be non-empty after trimming",
+                });
+            }
+            if token.len() > MAX_COURSE_TEXT_SEARCH_TOKEN_BYTES {
+                return Err(crate::StorageError::InvalidCommand {
+                    field: "course_text_search_tokens",
+                    reason: "each token must be at most 128 UTF-8 bytes",
+                });
+            }
+            if token.chars().any(char::is_control) {
+                return Err(crate::StorageError::InvalidCommand {
+                    field: "course_text_search_tokens",
+                    reason: "tokens must not contain control characters",
+                });
+            }
+            if !token.chars().any(char::is_alphanumeric) {
+                return Err(crate::StorageError::InvalidCommand {
+                    field: "course_text_search_tokens",
+                    reason: "tokens must contain at least one Unicode letter or number",
+                });
+            }
+            total_bytes = total_bytes
+                .checked_add(token.len())
+                .ok_or(crate::StorageError::StoredIntegerOutOfRange)?;
+            if total_bytes > MAX_COURSE_TEXT_SEARCH_BYTES {
+                return Err(crate::StorageError::InvalidCommand {
+                    field: "course_text_search_tokens",
+                    reason: "combined token text must be at most 512 UTF-8 bytes",
+                });
+            }
+            validated.push(token.to_owned());
+        }
+        if validated.is_empty() {
+            return Err(crate::StorageError::InvalidCommand {
+                field: "course_text_search_tokens",
+                reason: "must contain between 1 and 32 literal tokens",
+            });
+        }
+        Ok(Self { tokens: validated })
+    }
+
+    pub fn len(&self) -> usize {
+        self.tokens.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tokens.is_empty()
+    }
+
+    pub(crate) fn as_slice(&self) -> &[String] {
+        &self.tokens
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CourseVariantSearchHit {
+    pub key: CourseVariantKey,
+    /// Zero-based position after FTS5 relevance ordering and stable identity tie-breaks.
+    ///
+    /// This is an ordinal, not a truncated BM25 score. The query layer can put an exact Rutgers
+    /// identifier ahead of non-exact hits while retaining this order within each priority class.
+    pub fts_rank: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CourseVariantSearchResult {
+    pub target: TermCampusKey,
+    pub content_version: u64,
+    pub hits: Vec<CourseVariantSearchHit>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoredCourseGroup {

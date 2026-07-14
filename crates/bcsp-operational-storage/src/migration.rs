@@ -200,4 +200,18 @@ mod tests {
             assert_eq!(sha256_hex(audited.as_bytes()), migration.sha256);
         }
     }
+
+    #[test]
+    fn fts5_probe_failure_is_an_explicit_capability_error() {
+        let connection = Connection::open_in_memory().expect("in-memory SQLite");
+        connection
+            .execute_batch(
+                "CREATE TEMP VIEW bcsp_fts5_capability_probe AS SELECT 'synthetic' AS value;",
+            )
+            .expect("install deterministic probe conflict");
+        assert!(matches!(
+            probe_fts5(&connection),
+            Err(StorageError::Fts5Unavailable)
+        ));
+    }
 }

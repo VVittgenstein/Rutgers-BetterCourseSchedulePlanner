@@ -132,8 +132,11 @@ dependencies = [
  "bcsp-open",
  "bcsp-operational-storage",
  "bcsp-query",
+ "bcsp-rutgers-client",
  "bcsp-watch",
  "serde_json",
+ "thiserror",
+ "time",
  "tokio",
  "tower",
  "tower-http",
@@ -285,6 +288,7 @@ dependencies = [
  "proptest",
  "serde",
  "thiserror",
+ "time",
 ]
 
 [[package]]

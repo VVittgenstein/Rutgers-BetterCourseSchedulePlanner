@@ -107,6 +107,23 @@
       "maxBytes": 64,
       "pattern": "^[A-Z0-9_]+$",
       "semantic": "stable redacted diagnostic code; never parser or upstream detail"
+    },
+    {
+      "id": "query-contract-version",
+      "wireType": "u16",
+      "semantic": "only integer 1 is accepted"
+    },
+    {
+      "id": "filter-token",
+      "wireType": "string",
+      "maxBytes": 256,
+      "semantic": "normalized nonempty trim-stable control-free UTF-8 filter token"
+    },
+    {
+      "id": "filter-search-text",
+      "wireType": "string",
+      "maxBytes": 512,
+      "semantic": "1..=32 tokens; each <=128 UTF-8 bytes and containing Unicode alphanumeric; whitespace collapsed; total <=512 bytes"
     }
   ],
   "schemas": [
@@ -1487,6 +1504,994 @@
         {
           "name": "pendingEmpty",
           "typeRef": "$optional:$schema:bcsp.catalog.refresh-point.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-field-id.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "FLT-C01",
+        "FLT-C02",
+        "FLT-C03",
+        "FLT-C04",
+        "FLT-C05",
+        "FLT-C06",
+        "FLT-C07",
+        "FLT-C08",
+        "FLT-C09",
+        "FLT-C10",
+        "FLT-S01",
+        "FLT-S02",
+        "FLT-S03",
+        "FLT-S04a",
+        "FLT-S04b",
+        "FLT-S05",
+        "FLT-S06",
+        "FLT-S07",
+        "FLT-S08",
+        "FLT-S09",
+        "FLT-S10",
+        "FLT-S11"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-scope.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "COURSE",
+        "SECTION"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-value-kind.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "TERM_ID",
+        "CAMPUS_CODE_SET",
+        "SUBJECT_CODE_SET",
+        "TEXT_QUERY",
+        "COURSE_NUMBER_SET",
+        "LEVEL_SET",
+        "CREDIT_RANGE",
+        "CORE_CODE_SET",
+        "PREREQUISITE_PRESENCE",
+        "COURSE_LOCATION_SET",
+        "SECTION_INDEX_SET",
+        "SECTION_NUMBER_SET",
+        "OPEN_STATUS_SET",
+        "MODALITY_SET",
+        "SYNCHRONICITY_SET",
+        "INSTRUCTOR_NAME_SET",
+        "AVAILABILITY_WINDOWS",
+        "MEETING_LOCATION_SET",
+        "BUILDING_ROOM",
+        "EXAM_CODE_SET",
+        "PERMISSION_REQUIREMENT",
+        "ELIGIBILITY"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-schema-value.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "REQUIRED",
+        "EMPTY_SET",
+        "EMPTY_TEXT",
+        "UNBOUNDED_RANGE",
+        "ANY",
+        "EMPTY_WINDOWS",
+        "EMPTY_COMPOSITE"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-normalization.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "CANONICAL_IDENTITY",
+        "TRIM",
+        "TRIM_AND_COLLAPSE_WHITESPACE",
+        "ASCII_UPPERCASE",
+        "SORT_DEDUPLICATE",
+        "CREDIT_HUNDREDTHS",
+        "MINUTE_OF_DAY",
+        "TOKEN_AND"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-validation.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "REQUIRED",
+        "DYNAMIC_DICTIONARY",
+        "NONEMPTY_WHEN_ACTIVE",
+        "ORDERED_INCLUSIVE_RANGE",
+        "ORDERED_MINUTE_INTERVAL",
+        "SECTION_INDEX_IDENTITY",
+        "STRUCTURED_ONLY",
+        "MAX32_TEXT_TOKENS",
+        "MAX128_TOKEN_BYTES",
+        "TOKEN_CONTAINS_ALPHANUMERIC"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-query-encoding.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "EXACT_ONE",
+        "EXACT_ANY",
+        "TEXT_TOKEN_AND_EXACT_IDENTIFIER_PRIORITY",
+        "INCLUSIVE_RANGE",
+        "EXPLICIT_ANY_ALL",
+        "TERNARY_PRESENCE",
+        "SAME_SECTION_EXACT_ANY",
+        "SAME_SECTION_AVAILABILITY_ALL",
+        "SAME_SECTION_STRUCTURED_DIMENSIONS"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-field-schema.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "stableId",
+          "typeRef": "$schema:bcsp.query.filter-field-id.v1",
+          "required": true
+        },
+        {
+          "name": "requestField",
+          "typeRef": "$primitive:string",
+          "required": true
+        },
+        {
+          "name": "scope",
+          "typeRef": "$schema:bcsp.query.filter-scope.v1",
+          "required": true
+        },
+        {
+          "name": "valueKind",
+          "typeRef": "$schema:bcsp.query.filter-value-kind.v1",
+          "required": true
+        },
+        {
+          "name": "neutral",
+          "typeRef": "$schema:bcsp.query.filter-schema-value.v1",
+          "required": true
+        },
+        {
+          "name": "default",
+          "typeRef": "$schema:bcsp.query.filter-schema-value.v1",
+          "required": true
+        },
+        {
+          "name": "normalization",
+          "typeRef": "$array:$schema:bcsp.query.filter-normalization.v1",
+          "required": true
+        },
+        {
+          "name": "validation",
+          "typeRef": "$array:$schema:bcsp.query.filter-validation.v1",
+          "required": true
+        },
+        {
+          "name": "queryEncoding",
+          "typeRef": "$schema:bcsp.query.filter-query-encoding.v1",
+          "required": true
+        },
+        {
+          "name": "i18nKey",
+          "typeRef": "$primitive:string",
+          "required": true
+        },
+        {
+          "name": "chipOrder",
+          "typeRef": "$primitive:u8",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-schema.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "fields",
+          "typeRef": "$array:$schema:bcsp.query.filter-field-schema.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.set-mode.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ANY",
+        "ALL"
+      ]
+    },
+    {
+      "id": "bcsp.query.prerequisite-filter.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ANY",
+        "HAS",
+        "NONE_REPORTED"
+      ]
+    },
+    {
+      "id": "bcsp.query.live-open-state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "OPEN",
+        "CLOSED",
+        "UNKNOWN"
+      ]
+    },
+    {
+      "id": "bcsp.query.modality-filter.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ON_CAMPUS_OR_IN_PERSON",
+        "ONLINE",
+        "HYBRID",
+        "OTHER",
+        "UNKNOWN"
+      ]
+    },
+    {
+      "id": "bcsp.query.permission-filter.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ANY",
+        "REQUIRED",
+        "NOT_REQUIRED"
+      ]
+    },
+    {
+      "id": "bcsp.query.weekday.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "MONDAY",
+        "TUESDAY",
+        "WEDNESDAY",
+        "THURSDAY",
+        "FRIDAY",
+        "SATURDAY",
+        "SUNDAY"
+      ]
+    },
+    {
+      "id": "bcsp.query.credit-range.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "minimumHundredths",
+          "typeRef": "$optional:$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "maximumHundredths",
+          "typeRef": "$optional:$primitive:u32",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.availability-window.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "weekday",
+          "typeRef": "$schema:bcsp.query.weekday.v1",
+          "required": true
+        },
+        {
+          "name": "startMinute",
+          "typeRef": "$primitive:u16",
+          "required": true
+        },
+        {
+          "name": "endMinute",
+          "typeRef": "$primitive:u16",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.core-filter.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "codes",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "mode",
+          "typeRef": "$schema:bcsp.query.set-mode.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.building-room-filter.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "buildingCodes",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "roomNumbers",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.eligibility-unit-major.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "unitCode",
+          "typeRef": "$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "majorCode",
+          "typeRef": "$scalar:filter-token",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.eligibility-filter.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "majorCodes",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "minorCodes",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "honorProgramCodes",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "unitCodes",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "unitMajors",
+          "typeRef": "$array:$schema:bcsp.query.eligibility-unit-major.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.normalized-filter-values.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campuses",
+          "typeRef": "$array:$scalar:campus-code",
+          "required": true
+        },
+        {
+          "name": "subjects",
+          "typeRef": "$array:$scalar:catalog-subject-code",
+          "required": true
+        },
+        {
+          "name": "text",
+          "typeRef": "$optional:$scalar:filter-search-text",
+          "required": true
+        },
+        {
+          "name": "courseNumbers",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "levels",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "credits",
+          "typeRef": "$optional:$schema:bcsp.query.credit-range.v1",
+          "required": true
+        },
+        {
+          "name": "core",
+          "typeRef": "$schema:bcsp.query.core-filter.v1",
+          "required": true
+        },
+        {
+          "name": "prerequisite",
+          "typeRef": "$schema:bcsp.query.prerequisite-filter.v1",
+          "required": true
+        },
+        {
+          "name": "courseLocations",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "sectionIndexes",
+          "typeRef": "$array:$scalar:section-index",
+          "required": true
+        },
+        {
+          "name": "sectionNumbers",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "openStatuses",
+          "typeRef": "$array:$schema:bcsp.query.live-open-state.v1",
+          "required": true
+        },
+        {
+          "name": "modalities",
+          "typeRef": "$array:$schema:bcsp.query.modality-filter.v1",
+          "required": true
+        },
+        {
+          "name": "synchronicities",
+          "typeRef": "$array:$schema:bcsp.catalog.synchronicity.v1",
+          "required": true
+        },
+        {
+          "name": "instructors",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "availability",
+          "typeRef": "$array:$schema:bcsp.query.availability-window.v1",
+          "required": true
+        },
+        {
+          "name": "meetingLocations",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "buildingRoom",
+          "typeRef": "$schema:bcsp.query.building-room-filter.v1",
+          "required": true
+        },
+        {
+          "name": "examCodes",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "permission",
+          "typeRef": "$schema:bcsp.query.permission-filter.v1",
+          "required": true
+        },
+        {
+          "name": "eligibility",
+          "typeRef": "$schema:bcsp.query.eligibility-filter.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "values",
+          "typeRef": "$schema:bcsp.query.normalized-filter-values.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.page-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "page",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "pageSize",
+          "typeRef": "$primitive:u16",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.sort-direction.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ASCENDING",
+        "DESCENDING"
+      ]
+    },
+    {
+      "id": "bcsp.query.course-sort-field.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "RELEVANCE",
+        "COURSE_IDENTIFIER",
+        "TITLE"
+      ]
+    },
+    {
+      "id": "bcsp.query.course-sort.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "field",
+          "typeRef": "$schema:bcsp.query.course-sort-field.v1",
+          "required": true
+        },
+        {
+          "name": "direction",
+          "typeRef": "$schema:bcsp.query.sort-direction.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-sort-field.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "SECTION_INDEX",
+        "SECTION_NUMBER",
+        "COURSE_IDENTIFIER",
+        "OPEN_STATUS"
+      ]
+    },
+    {
+      "id": "bcsp.query.section-sort.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "field",
+          "typeRef": "$schema:bcsp.query.section-sort-field.v1",
+          "required": true
+        },
+        {
+          "name": "direction",
+          "typeRef": "$schema:bcsp.query.sort-direction.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-query-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "filters",
+          "typeRef": "$schema:bcsp.query.filter-request.v1",
+          "required": true
+        },
+        {
+          "name": "page",
+          "typeRef": "$schema:bcsp.query.page-request.v1",
+          "required": true
+        },
+        {
+          "name": "sort",
+          "typeRef": "$schema:bcsp.query.course-sort.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-query-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "filters",
+          "typeRef": "$schema:bcsp.query.filter-request.v1",
+          "required": true
+        },
+        {
+          "name": "page",
+          "typeRef": "$schema:bcsp.query.page-request.v1",
+          "required": true
+        },
+        {
+          "name": "sort",
+          "typeRef": "$schema:bcsp.query.section-sort.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-detail-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "key",
+          "typeRef": "$schema:bcsp.identity.course-group-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-detail-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "key",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.live-open-evidence.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.query.live-open-state.v1",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "freshUntil",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "uncertainty",
+          "typeRef": "$optional:$schema:bcsp.match.reason-code.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-match.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "fieldId",
+          "typeRef": "$schema:bcsp.query.filter-field-id.v1",
+          "required": true
+        },
+        {
+          "name": "explanation",
+          "typeRef": "$schema:bcsp.match.explanation.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.text-match-evidence.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "exactCourseIdentifier",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "matchedTokens",
+          "typeRef": "$array:$primitive:string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-query-item.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "section",
+          "typeRef": "$schema:bcsp.catalog.normalized-section.v1",
+          "required": true
+        },
+        {
+          "name": "occurrences",
+          "typeRef": "$array:$schema:bcsp.catalog.normalized-occurrence.v1",
+          "required": true
+        },
+        {
+          "name": "open",
+          "typeRef": "$schema:bcsp.query.live-open-evidence.v1",
+          "required": true
+        },
+        {
+          "name": "explanation",
+          "typeRef": "$schema:bcsp.match.explanation.v1",
+          "required": true
+        },
+        {
+          "name": "filterMatches",
+          "typeRef": "$array:$schema:bcsp.query.filter-match.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-search-item.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "variant",
+          "typeRef": "$schema:bcsp.catalog.normalized-course-variant.v1",
+          "required": true
+        },
+        {
+          "name": "section",
+          "typeRef": "$schema:bcsp.query.section-query-item.v1",
+          "required": true
+        },
+        {
+          "name": "courseFilterMatches",
+          "typeRef": "$array:$schema:bcsp.query.filter-match.v1",
+          "required": true
+        },
+        {
+          "name": "textMatch",
+          "typeRef": "$optional:$schema:bcsp.query.text-match-evidence.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-variant-query-item.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "variant",
+          "typeRef": "$schema:bcsp.catalog.normalized-course-variant.v1",
+          "required": true
+        },
+        {
+          "name": "explanation",
+          "typeRef": "$schema:bcsp.match.explanation.v1",
+          "required": true
+        },
+        {
+          "name": "filterMatches",
+          "typeRef": "$array:$schema:bcsp.query.filter-match.v1",
+          "required": true
+        },
+        {
+          "name": "textMatch",
+          "typeRef": "$optional:$schema:bcsp.query.text-match-evidence.v1",
+          "required": true
+        },
+        {
+          "name": "sections",
+          "typeRef": "$array:$schema:bcsp.query.section-query-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-query-item.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "group",
+          "typeRef": "$schema:bcsp.catalog.normalized-course-group.v1",
+          "required": true
+        },
+        {
+          "name": "explanation",
+          "typeRef": "$schema:bcsp.match.explanation.v1",
+          "required": true
+        },
+        {
+          "name": "variants",
+          "typeRef": "$array:$schema:bcsp.query.course-variant-query-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.page-info.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "page",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "pageSize",
+          "typeRef": "$primitive:u16",
+          "required": true
+        },
+        {
+          "name": "total",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "totalPages",
+          "typeRef": "$primitive:u32",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-query-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "page",
+          "typeRef": "$schema:bcsp.query.page-info.v1",
+          "required": true
+        },
+        {
+          "name": "items",
+          "typeRef": "$array:$schema:bcsp.query.course-query-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-query-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "page",
+          "typeRef": "$schema:bcsp.query.page-info.v1",
+          "required": true
+        },
+        {
+          "name": "items",
+          "typeRef": "$array:$schema:bcsp.query.section-search-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-detail-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "course",
+          "typeRef": "$schema:bcsp.query.course-query-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-detail-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "variant",
+          "typeRef": "$schema:bcsp.catalog.normalized-course-variant.v1",
+          "required": true
+        },
+        {
+          "name": "section",
+          "typeRef": "$schema:bcsp.query.section-query-item.v1",
           "required": true
         }
       ]

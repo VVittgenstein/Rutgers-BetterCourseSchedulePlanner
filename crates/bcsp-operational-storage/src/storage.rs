@@ -10,6 +10,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::migration::{apply_migrations, probe_fts5, read_migration_records, sha256_hex};
 use crate::{
     BeginRefreshAttemptCommand, CatalogCounts, CatalogRefreshCommand, CatalogSnapshot,
+    CourseTextSearchTokens, CourseVariantSearchHit, CourseVariantSearchResult,
     EmptySnapshotDecision, FinishRefreshFailureCommand, MigrationRecord, ProvenanceEntityKind,
     PublishOutcome, PublishedCatalogSnapshot, RefreshFailureStage, RefreshObservation,
     RefreshStatus, StorageError, StorageIntegrityReport, StorageResult, StoredCanonicalFacts,
@@ -489,35 +490,90 @@ impl OperationalStorage {
     }
 
     pub fn search_course_variants(
-        &self,
+        &mut self,
         target: &TermCampusKey,
-        fts_query: &str,
-    ) -> StorageResult<Vec<CourseVariantKey>> {
-        if fts_query.trim().is_empty() || fts_query.len() > 512 || fts_query.contains('\0') {
+        content_version: u64,
+        tokens: &CourseTextSearchTokens,
+    ) -> StorageResult<CourseVariantSearchResult> {
+        if content_version == 0 {
             return Err(StorageError::InvalidCommand {
-                field: "fts_query",
-                reason: "must be non-empty, NUL-free, and at most 512 bytes",
+                field: "content_version",
+                reason: "must identify a published catalog version",
             });
         }
-        let mut statement = self.connection.prepare(
-            "SELECT course_string, fingerprint
-             FROM catalog_course_fts
-             WHERE catalog_course_fts MATCH ?1 AND target_id = ?2
-             ORDER BY course_string, fingerprint",
-        )?;
-        let rows = statement.query_map(params![fts_query, target_id(target)], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        rows.map(|row| {
-            let (course_string, fingerprint) = row?;
-            let group = CourseGroupKey::try_new(
-                target.term().as_str(),
-                target.campus().as_str(),
-                &course_string,
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let current_version = transaction
+            .query_row(
+                "SELECT current_content_version FROM catalog_targets WHERE target_id = ?1",
+                [target_id(target)],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(i64_to_u64)
+            .transpose()?;
+        let Some(current_version) = current_version.filter(|version| *version > 0) else {
+            return Err(StorageError::CatalogTargetNotPublished);
+        };
+        if current_version != content_version {
+            return Err(StorageError::CatalogContentVersionMismatch {
+                requested: content_version,
+                current: current_version,
+            });
+        }
+
+        let fts_query = fts5_literal_and_query(tokens);
+        let ordered_keys = {
+            let mut statement = transaction.prepare(
+                "SELECT f.course_string, f.fingerprint
+                 FROM catalog_course_fts AS f
+                 JOIN catalog_course_variants AS v
+                   ON v.target_id = f.target_id
+                  AND v.course_string = f.course_string
+                  AND v.fingerprint = f.fingerprint
+                 JOIN catalog_targets AS t ON t.target_id = f.target_id
+                 WHERE catalog_course_fts MATCH ?1
+                   AND f.target_id = ?2
+                   AND f.content_version = ?3
+                   AND v.content_version = ?3
+                   AND t.current_content_version = ?3
+                 ORDER BY bm25(catalog_course_fts),
+                          f.course_string COLLATE BINARY,
+                          f.fingerprint COLLATE BINARY",
             )?;
-            CourseVariantKey::try_new(group, &fingerprint).map_err(StorageError::from)
+            let rows = statement.query_map(
+                params![fts_query, target_id(target), u64_to_i64(content_version)?],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            rows.map(|row| {
+                let (course_string, fingerprint) = row?;
+                let group = CourseGroupKey::try_new(
+                    target.term().as_str(),
+                    target.campus().as_str(),
+                    &course_string,
+                )?;
+                CourseVariantKey::try_new(group, &fingerprint).map_err(StorageError::from)
+            })
+            .collect::<StorageResult<Vec<_>>>()?
+        };
+        let hits = ordered_keys
+            .into_iter()
+            .enumerate()
+            .map(|(rank, key)| {
+                Ok(CourseVariantSearchHit {
+                    key,
+                    fts_rank: u32::try_from(rank)
+                        .map_err(|_| StorageError::StoredIntegerOutOfRange)?,
+                })
+            })
+            .collect::<StorageResult<Vec<_>>>()?;
+        transaction.commit()?;
+        Ok(CourseVariantSearchResult {
+            target: target.clone(),
+            content_version,
+            hits,
         })
-        .collect()
     }
 
     pub fn integrity_report(
@@ -2569,6 +2625,15 @@ fn target_id(target: &TermCampusKey) -> String {
     format!("{}/{}", target.term(), target.campus())
 }
 
+fn fts5_literal_and_query(tokens: &CourseTextSearchTokens) -> String {
+    tokens
+        .as_slice()
+        .iter()
+        .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
 fn validate_group_target(target: &TermCampusKey, group: &CourseGroupKey) -> StorageResult<()> {
     if group.term() != target.term() || group.campus() != target.campus() {
         return Err(StorageError::InvalidCommand {
@@ -2739,4 +2804,19 @@ fn optional_u64_to_i64(value: Option<u64>) -> StorageResult<Option<i64>> {
 
 pub(crate) fn i64_to_u64(value: i64) -> StorageResult<u64> {
     u64::try_from(value).map_err(|_| StorageError::StoredIntegerOutOfRange)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fts5_query_builder_quotes_every_literal_and_doubles_embedded_quotes() {
+        let tokens = CourseTextSearchTokens::try_new(["alpha", "say\"hello", "OR"])
+            .expect("valid literal tokens");
+        assert_eq!(
+            fts5_literal_and_query(&tokens),
+            "\"alpha\" AND \"say\"\"hello\" AND \"OR\""
+        );
+    }
 }

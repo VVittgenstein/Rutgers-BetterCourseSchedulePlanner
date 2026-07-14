@@ -1,0 +1,103 @@
+{
+  "filters": {
+    "contractVersion": 1,
+    "values": {
+      "term": "T2026F",
+      "campuses": [
+        "CAMPUS_A"
+      ],
+      "subjects": [
+        "198"
+      ],
+      "text": "data structures",
+      "courseNumbers": [
+        "01"
+      ],
+      "levels": [
+        "UG"
+      ],
+      "credits": {
+        "minimumHundredths": 300,
+        "maximumHundredths": 400
+      },
+      "core": {
+        "codes": [
+          "CC"
+        ],
+        "mode": "ALL"
+      },
+      "prerequisite": "HAS",
+      "courseLocations": [
+        "NB"
+      ],
+      "sectionIndexes": [
+        "12345"
+      ],
+      "sectionNumbers": [
+        "01"
+      ],
+      "openStatuses": [
+        "OPEN"
+      ],
+      "modalities": [
+        "ONLINE"
+      ],
+      "synchronicities": [
+        "SYNC"
+      ],
+      "instructors": [
+        "Ada Lovelace"
+      ],
+      "availability": [
+        {
+          "weekday": "MONDAY",
+          "startMinute": 540,
+          "endMinute": 720
+        }
+      ],
+      "meetingLocations": [
+        "CAC"
+      ],
+      "buildingRoom": {
+        "buildingCodes": [
+          "HILL"
+        ],
+        "roomNumbers": [
+          "114"
+        ]
+      },
+      "examCodes": [
+        "A"
+      ],
+      "permission": "REQUIRED",
+      "eligibility": {
+        "majorCodes": [
+          "198"
+        ],
+        "minorCodes": [
+          "CS"
+        ],
+        "honorProgramCodes": [
+          "HON"
+        ],
+        "unitCodes": [
+          "01"
+        ],
+        "unitMajors": [
+          {
+            "unitCode": "01",
+            "majorCode": "198"
+          }
+        ]
+      }
+    }
+  },
+  "page": {
+    "page": 2,
+    "pageSize": 50
+  },
+  "sort": {
+    "field": "RELEVANCE",
+    "direction": "DESCENDING"
+  }
+}

@@ -18,15 +18,16 @@ pub use discovery::discovery_content_sha256_v1;
 pub use error::{StorageError, StorageResult};
 pub use model::{
     BeginDiscoveryAttemptCommand, BeginRefreshAttemptCommand, CatalogCounts, CatalogRefreshCommand,
-    CatalogSnapshot, DiscoveredCampus, DiscoveredSubject, DiscoveredTerm, DiscoveryAvailability,
-    DiscoveryCounts, DiscoveryObservation, DiscoveryPublishOutcome, DiscoveryRefreshCommand,
-    DiscoverySnapshot, DiscoverySourceKind, DiscoverySourceVersion, DiscoveryState,
-    DiscoveryStatus, EmptySnapshotDecision, FinishDiscoveryFailureCommand,
-    FinishRefreshFailureCommand, InitialEmptyProof, MigrationRecord, ProvenanceEntityKind,
-    PublishOutcome, PublishedCatalogSnapshot, PublishedDiscoverySnapshot, RawStagingPayload,
-    RefreshFailureStage, RefreshObservation, RefreshStatus, StorageIntegrityReport,
-    StoredCanonicalFacts, StoredCourseGroup, StoredCourseVariant, StoredOccurrence,
-    StoredProvenance, StoredSection, TargetState,
+    CatalogSnapshot, CourseTextSearchTokens, CourseVariantSearchHit, CourseVariantSearchResult,
+    DiscoveredCampus, DiscoveredSubject, DiscoveredTerm, DiscoveryAvailability, DiscoveryCounts,
+    DiscoveryObservation, DiscoveryPublishOutcome, DiscoveryRefreshCommand, DiscoverySnapshot,
+    DiscoverySourceKind, DiscoverySourceVersion, DiscoveryState, DiscoveryStatus,
+    EmptySnapshotDecision, FinishDiscoveryFailureCommand, FinishRefreshFailureCommand,
+    InitialEmptyProof, MigrationRecord, ProvenanceEntityKind, PublishOutcome,
+    PublishedCatalogSnapshot, PublishedDiscoverySnapshot, RawStagingPayload, RefreshFailureStage,
+    RefreshObservation, RefreshStatus, StorageIntegrityReport, StoredCanonicalFacts,
+    StoredCourseGroup, StoredCourseVariant, StoredOccurrence, StoredProvenance, StoredSection,
+    TargetState,
 };
 pub use storage::{OperationalStorage, catalog_content_sha256_v1};
 

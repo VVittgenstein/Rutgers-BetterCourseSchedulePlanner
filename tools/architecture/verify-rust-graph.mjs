@@ -65,7 +65,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-query',
     kind: 'lib',
     internal: ['bcsp-contracts', 'bcsp-domain'],
-    external: [['proptest', DEV], ['serde', NORMAL], ['thiserror', NORMAL]],
+    external: [['proptest', DEV], ['serde', NORMAL], ['thiserror', NORMAL], ['time', NORMAL]],
   },
   'bcsp-rutgers-client': {
     dir: 'crates/bcsp-rutgers-client',
@@ -100,8 +100,8 @@ export const GRAPH_SPEC = Object.freeze({
   'bcsp-application': {
     dir: 'crates/bcsp-application',
     kind: 'lib',
-    internal: ['bcsp-catalog', 'bcsp-contracts', 'bcsp-domain', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-query', 'bcsp-watch'],
-    external: [['axum', NORMAL], ['serde_json', NORMAL], ['tokio', NORMAL], ['tower', NORMAL], ['tower-http', NORMAL], ['tracing', NORMAL]],
+    internal: ['bcsp-catalog', 'bcsp-contracts', 'bcsp-domain', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-query', 'bcsp-rutgers-client', 'bcsp-watch'],
+    external: [['axum', NORMAL], ['serde_json', NORMAL], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tower', NORMAL], ['tower-http', NORMAL], ['tracing', NORMAL]],
   },
   'bcsp-local-user-state': {
     dir: 'crates/bcsp-local-user-state',

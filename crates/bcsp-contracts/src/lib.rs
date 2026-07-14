@@ -14,6 +14,7 @@ mod error;
 mod identity;
 mod match_contract;
 mod protocol;
+mod query;
 mod schema;
 
 pub use catalog::{
@@ -52,6 +53,22 @@ pub use match_contract::{
 };
 pub use protocol::{
     API_PROTOCOL_VERSION, ProtocolVersion, ProtocolVersionError, WS_PROTOCOL_VERSION,
+};
+pub use query::{
+    AvailabilityWindowV1, BuildingRoomFilterV1, CoreFilterV1, CourseDetailRequestV1,
+    CourseDetailResponseV1, CourseQueryItemV1, CourseQueryRequestV1, CourseQueryResponseV1,
+    CourseSortFieldV1, CourseSortV1, CourseVariantQueryItemV1, CreditRangeV1, DEFAULT_PAGE_SIZE,
+    EligibilityFilterV1, EligibilityUnitMajorV1, FILTER_FIELD_COUNT, FilterFieldId,
+    FilterFieldSchemaV1, FilterMatchV1, FilterNormalizationV1, FilterQueryEncodingV1,
+    FilterRequestV1, FilterSchemaV1, FilterSchemaValueV1, FilterScopeV1, FilterSearchTextError,
+    FilterSearchTextV1, FilterSetModeV1, FilterTokenError, FilterTokenV1, FilterValidationV1,
+    FilterValueError, FilterValueKindV1, FilterValuesInputV1, LiveOpenEvidenceV1, LiveOpenStateV1,
+    MAX_AVAILABILITY_WINDOWS, MAX_FILTER_VALUES_PER_FIELD, MAX_PAGE_SIZE, MAX_TOTAL_FILTER_VALUES,
+    ModalityFilterV1, NormalizedFilterValuesV1, PageInfoV1, PageRequestV1, PermissionFilterV1,
+    PrerequisiteFilterV1, QUERY_CONTRACT_VERSION, QueryContractVersion, QueryContractVersionError,
+    SectionDetailRequestV1, SectionDetailResponseV1, SectionQueryItemV1, SectionQueryRequestV1,
+    SectionQueryResponseV1, SectionSearchItemV1, SectionSortFieldV1, SectionSortV1,
+    SortDirectionV1, TextMatchEvidenceV1, WeekdayV1, filter_schema_v1,
 };
 pub use schema::{
     CONTRACT_SCHEMA_VERSION, ContractField, ContractManifest, ContractSchema, ContractVariant,

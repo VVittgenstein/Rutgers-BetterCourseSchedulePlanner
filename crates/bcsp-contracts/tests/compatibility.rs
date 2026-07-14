@@ -161,6 +161,8 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
                 assert!(schema_ids.contains(reference), "{reference}");
             } else if let Some(reference) = field.type_ref.strip_prefix("$scalar:") {
                 assert!(scalar_ids.contains(reference), "{reference}");
+            } else if let Some(reference) = field.type_ref.strip_prefix("$array:$scalar:") {
+                assert!(scalar_ids.contains(reference), "{reference}");
             } else if field.type_ref.starts_with("$optional:$schema:") {
                 let reference = field.type_ref.trim_start_matches("$optional:$schema:");
                 assert!(schema_ids.contains(reference), "{reference}");
@@ -175,10 +177,16 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
                             "$primitive:bool"
                                 | "$primitive:rfc3339-timestamp"
                                 | "$primitive:string"
+                                | "$primitive:u8"
                                 | "$primitive:u16"
                                 | "$primitive:u32"
                                 | "$primitive:u64"
-                        ),
+                        )
+                        || matches!(
+                            field.type_ref.as_str(),
+                            "$optional:$primitive:rfc3339-timestamp" | "$optional:$primitive:u32"
+                        )
+                        || field.type_ref == "$array:$primitive:string",
                     "unsupported type reference {}",
                     field.type_ref
                 );

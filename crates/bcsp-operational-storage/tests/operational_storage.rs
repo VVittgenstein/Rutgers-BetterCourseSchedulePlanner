@@ -3,13 +3,14 @@ use std::path::Path;
 use bcsp_contracts::{CourseGroupKey, CourseVariantKey, SectionKey, TermCampusKey, TraceId};
 use bcsp_operational_storage::{
     BeginDiscoveryAttemptCommand, BeginRefreshAttemptCommand, CatalogRefreshCommand,
-    CatalogSnapshot, DiscoveredCampus, DiscoveredSubject, DiscoveredTerm, DiscoveryAvailability,
-    DiscoveryPublishOutcome, DiscoveryRefreshCommand, DiscoverySnapshot, DiscoverySourceKind,
-    DiscoverySourceVersion, EmptySnapshotDecision, FinishDiscoveryFailureCommand,
-    FinishRefreshFailureCommand, InitialEmptyProof, OperationalStorage, ProvenanceEntityKind,
-    PublishOutcome, RawStagingPayload, RefreshFailureStage, RefreshStatus, StorageError,
-    StoredCourseGroup, StoredCourseVariant, StoredOccurrence, StoredProvenance, StoredSection,
-    catalog_content_sha256_v1, discovery_content_sha256_v1,
+    CatalogSnapshot, CourseTextSearchTokens, DiscoveredCampus, DiscoveredSubject, DiscoveredTerm,
+    DiscoveryAvailability, DiscoveryPublishOutcome, DiscoveryRefreshCommand, DiscoverySnapshot,
+    DiscoverySourceKind, DiscoverySourceVersion, EmptySnapshotDecision,
+    FinishDiscoveryFailureCommand, FinishRefreshFailureCommand, InitialEmptyProof,
+    OperationalStorage, ProvenanceEntityKind, PublishOutcome, RawStagingPayload,
+    RefreshFailureStage, RefreshStatus, StorageError, StoredCourseGroup, StoredCourseVariant,
+    StoredOccurrence, StoredProvenance, StoredSection, catalog_content_sha256_v1,
+    discovery_content_sha256_v1,
 };
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -20,9 +21,14 @@ const STARTED: &str = "2026-07-14T00:00:00Z";
 const COMPLETED: &str = "2026-07-14T00:00:01Z";
 const HASH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HASH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const HASH_C: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
 fn target(term: &str, campus: &str) -> TermCampusKey {
     TermCampusKey::try_new(term, campus).expect("synthetic target")
+}
+
+fn text_tokens(tokens: &[&str]) -> CourseTextSearchTokens {
+    CourseTextSearchTokens::try_new(tokens).expect("valid synthetic search tokens")
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -359,15 +365,17 @@ fn publication_preserves_presence_and_handles_unchanged_suspect_and_valid_empty(
     assert_eq!(stored_sections[0].synchronicity, "UNKNOWN");
     assert_eq!(
         storage
-            .search_course_variants(&scope, "computing")
+            .search_course_variants(&scope, 1, &text_tokens(&["computing"]))
             .expect("FTS search")
+            .hits
             .len(),
         1
     );
     assert_eq!(
         storage
-            .search_course_variants(&scope, "计算机")
+            .search_course_variants(&scope, 1, &text_tokens(&["计算机"]))
             .expect("Unicode FTS search")
+            .hits
             .len(),
         1
     );
@@ -744,8 +752,9 @@ fn variants_in_one_group_retain_independent_course_facts() {
     assert_eq!(variants[1].description, None);
     assert_eq!(
         storage
-            .search_course_variants(&scope, "计算机")
+            .search_course_variants(&scope, 1, &text_tokens(&["计算机"]))
             .expect("FTS variants")
+            .hits
             .len(),
         2
     );
@@ -753,6 +762,244 @@ fn variants_in_one_group_retain_independent_course_facts() {
         storage
             .integrity_report(&scope)
             .expect("integrity")
+            .is_clean()
+    );
+}
+
+#[test]
+fn course_text_search_tokens_are_nonempty_bounded_and_control_free() {
+    assert!(matches!(
+        CourseTextSearchTokens::try_new(std::iter::empty::<&str>()),
+        Err(StorageError::InvalidCommand {
+            field: "course_text_search_tokens",
+            ..
+        })
+    ));
+    for invalid in ["", "   ", "line\nbreak", "nul\0byte", "\"", "()", "***"] {
+        assert!(matches!(
+            CourseTextSearchTokens::try_new([invalid]),
+            Err(StorageError::InvalidCommand {
+                field: "course_text_search_tokens",
+                ..
+            })
+        ));
+    }
+    assert!(CourseTextSearchTokens::try_new(vec!["token"; 32]).is_ok());
+    assert!(matches!(
+        CourseTextSearchTokens::try_new(vec!["token"; 33]),
+        Err(StorageError::InvalidCommand { .. })
+    ));
+    assert!(matches!(
+        CourseTextSearchTokens::try_new(["x".repeat(129)]),
+        Err(StorageError::InvalidCommand { .. })
+    ));
+    assert!(matches!(
+        CourseTextSearchTokens::try_new(vec!["x".repeat(128); 5]),
+        Err(StorageError::InvalidCommand { .. })
+    ));
+    let trimmed = CourseTextSearchTokens::try_new(["  computing  ", "计算机"])
+        .expect("trimmed Unicode literal tokens");
+    assert_eq!(trimmed.len(), 2);
+    assert!(!trimmed.is_empty());
+}
+
+#[test]
+fn fts_search_uses_literal_token_and_and_returns_stable_variant_rank() {
+    let mut storage = OperationalStorage::open_in_memory().expect("storage");
+    let scope = target("FALL_2026", "FTS_LITERAL");
+    let mut normalized = snapshot(&scope, "00001", "Literal Alpha Beta");
+    normalized.course_variants[0].search_document =
+        "SYN:CAT:001 shared alpha OR beta quoted value 计算机".to_owned();
+    let group = normalized.course_variants[0].key.group().clone();
+    normalized.course_variants.push(StoredCourseVariant {
+        key: CourseVariantKey::try_new(group.clone(), &format!("v1:{HASH_B}"))
+            .expect("second variant key"),
+        subject_code: Some("SYN".to_owned()),
+        course_number: Some("001".to_owned()),
+        title: Some("Literal Alpha".to_owned()),
+        description: None,
+        credits_summary: None,
+        supplement: None,
+        search_document: "SYN:CAT:001 shared alpha only".to_owned(),
+        canonical_sha256: HASH_B.to_owned(),
+        raw_multiplicity: 1,
+        canonical_facts: json!({"title": "Literal Alpha"}),
+    });
+    normalized.course_variants.push(StoredCourseVariant {
+        key: CourseVariantKey::try_new(group, &format!("v1:{HASH_C}")).expect("third variant key"),
+        subject_code: Some("SYN".to_owned()),
+        course_number: Some("001".to_owned()),
+        title: Some("Literal Beta".to_owned()),
+        description: None,
+        credits_summary: None,
+        supplement: None,
+        search_document: "SYN:CAT:001 shared beta only".to_owned(),
+        canonical_sha256: HASH_C.to_owned(),
+        raw_multiplicity: 1,
+        canonical_facts: json!({"title": "Literal Beta"}),
+    });
+    storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "fts.literal.1",
+                &scope,
+                normalized,
+                b"fts-literal-synthetic",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+        )
+        .expect("publish FTS fixture");
+
+    let and_result = storage
+        .search_course_variants(&scope, 1, &text_tokens(&["alpha", "beta"]))
+        .expect("literal token AND");
+    assert_eq!(and_result.target, scope);
+    assert_eq!(and_result.content_version, 1);
+    assert_eq!(and_result.hits.len(), 1);
+    assert_eq!(
+        and_result.hits[0].key.fingerprint().as_str(),
+        format!("v1:{HASH_A}")
+    );
+
+    let operator_result = storage
+        .search_course_variants(&scope, 1, &text_tokens(&["OR"]))
+        .expect("operator word remains literal");
+    assert_eq!(operator_result.hits.len(), 1);
+    assert_eq!(operator_result.hits[0].key, and_result.hits[0].key);
+    let quoted_phrase = storage
+        .search_course_variants(&scope, 1, &text_tokens(&["alpha\" OR beta"]))
+        .expect("embedded quote remains literal");
+    assert_eq!(quoted_phrase.hits.len(), 1);
+    assert_eq!(quoted_phrase.hits[0].key, and_result.hits[0].key);
+    assert_eq!(
+        storage
+            .search_course_variants(&scope, 1, &text_tokens(&["计算机"]))
+            .expect("Unicode literal")
+            .hits,
+        and_result.hits
+    );
+
+    let ranked_once = storage
+        .search_course_variants(&scope, 1, &text_tokens(&["shared"]))
+        .expect("ranked search");
+    let ranked_twice = storage
+        .search_course_variants(&scope, 1, &text_tokens(&["shared"]))
+        .expect("repeat ranked search");
+    assert_eq!(ranked_once, ranked_twice);
+    assert_eq!(
+        ranked_once
+            .hits
+            .iter()
+            .map(|hit| hit.fts_rank)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+}
+
+#[test]
+fn fts_search_is_strictly_bound_to_target_and_published_content_version() {
+    let mut storage = OperationalStorage::open_in_memory().expect("storage");
+    let unpublished = target("FALL_2026", "FTS_UNPUBLISHED");
+    assert!(matches!(
+        storage.search_course_variants(&unpublished, 1, &text_tokens(&["synthetic"])),
+        Err(StorageError::CatalogTargetNotPublished)
+    ));
+    assert!(matches!(
+        storage.search_course_variants(&unpublished, 0, &text_tokens(&["synthetic"])),
+        Err(StorageError::InvalidCommand {
+            field: "content_version",
+            ..
+        })
+    ));
+
+    let target_a = target("FALL_2026", "FTS_A");
+    let target_b = target("FALL_2026", "FTS_B");
+    storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "fts.target.a.1",
+                &target_a,
+                snapshot(&target_a, "00001", "Shared Legacy Alpha"),
+                b"fts-target-a-1",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+        )
+        .expect("publish A v1");
+    storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "fts.target.b.1",
+                &target_b,
+                snapshot(&target_b, "00002", "Shared Stable Beta"),
+                b"fts-target-b-1",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+        )
+        .expect("publish B v1");
+    let a_v1 = storage
+        .search_course_variants(&target_a, 1, &text_tokens(&["legacy"]))
+        .expect("A v1 search");
+    assert_eq!(a_v1.hits.len(), 1);
+    assert_eq!(a_v1.hits[0].key.group().campus(), target_a.campus());
+    assert!(
+        storage
+            .search_course_variants(&target_b, 1, &text_tokens(&["legacy"]))
+            .expect("B cannot see A")
+            .hits
+            .is_empty()
+    );
+
+    storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "fts.target.a.2",
+                &target_a,
+                snapshot(&target_a, "00003", "Shared Replacement Gamma"),
+                b"fts-target-a-2",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+        )
+        .expect("replace A");
+    assert!(matches!(
+        storage.search_course_variants(&target_a, 1, &text_tokens(&["legacy"])),
+        Err(StorageError::CatalogContentVersionMismatch {
+            requested: 1,
+            current: 2
+        })
+    ));
+    assert!(
+        storage
+            .search_course_variants(&target_a, 2, &text_tokens(&["legacy"]))
+            .expect("old A row removed")
+            .hits
+            .is_empty()
+    );
+    assert_eq!(
+        storage
+            .search_course_variants(&target_a, 2, &text_tokens(&["replacement"]))
+            .expect("A v2 search")
+            .hits
+            .len(),
+        1
+    );
+    assert_eq!(
+        storage
+            .search_course_variants(&target_b, 1, &text_tokens(&["stable"]))
+            .expect("B remains on v1")
+            .hits
+            .len(),
+        1
+    );
+    assert!(
+        storage
+            .integrity_report(&target_a)
+            .expect("A parity")
+            .is_clean()
+    );
+    assert!(
+        storage
+            .integrity_report(&target_b)
+            .expect("B parity")
             .is_clean()
     );
 }

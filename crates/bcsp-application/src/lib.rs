@@ -5,6 +5,10 @@
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-application";
 
+mod query_service;
+
+pub use query_service::{SharedQueryError, SharedQueryService};
+
 pub fn boundary_marker() -> &'static str {
     let _ = (
         bcsp_catalog::PACKAGE_BOUNDARY,
@@ -13,6 +17,7 @@ pub fn boundary_marker() -> &'static str {
         bcsp_open::PACKAGE_BOUNDARY,
         bcsp_operational_storage::PACKAGE_BOUNDARY,
         bcsp_query::PACKAGE_BOUNDARY,
+        bcsp_rutgers_client::PACKAGE_BOUNDARY,
         bcsp_watch::PACKAGE_BOUNDARY,
     );
     PACKAGE_BOUNDARY

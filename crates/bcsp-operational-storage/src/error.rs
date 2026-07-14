@@ -11,6 +11,12 @@ pub enum StorageError {
     Identity(#[from] bcsp_contracts::IdentityError),
     #[error("FTS5 is unavailable in the active SQLite runtime")]
     Fts5Unavailable,
+    #[error("the requested catalog target has no published content")]
+    CatalogTargetNotPublished,
+    #[error(
+        "requested catalog content version {requested} does not match current version {current}"
+    )]
+    CatalogContentVersionMismatch { requested: u64, current: u64 },
     #[error("invalid write command field {field}: {reason}")]
     InvalidCommand {
         field: &'static str,
