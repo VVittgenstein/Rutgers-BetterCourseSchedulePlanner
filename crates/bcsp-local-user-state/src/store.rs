@@ -16,13 +16,13 @@ use crate::{
     HistoryWriteOutcome, LocalSettings, MAX_SELECTED_SECTIONS, PageRequest,
     PersonalMigrationRecord, PersonalResetResult, PersonalStateError, PersonalStateResult,
     PersonalStateSnapshot, PersonalTableCounts, SelectionMutation, SettingsRevision,
-    SqliteConfiguration, StoredSettings, UnixMillis, WalCheckpoint,
+    SqliteConfiguration, StoredSettings, UnixMillis, UserStateRevision, WalCheckpoint,
 };
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct PersonalStateStore {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 
 impl PersonalStateStore {
@@ -74,6 +74,7 @@ impl PersonalStateStore {
 
     pub fn compare_and_swap_settings(
         &mut self,
+        expected_state_revision: UserStateRevision,
         expected_revision: SettingsRevision,
         next: &LocalSettings,
     ) -> PersonalStateResult<StoredSettings> {
@@ -83,6 +84,7 @@ impl PersonalStateStore {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_user_state_revision(&transaction, expected_state_revision)?;
         let current = load_settings(&transaction)?;
         if current.revision != expected_revision {
             return Err(PersonalStateError::RevisionConflict {
@@ -117,12 +119,14 @@ impl PersonalStateStore {
 
     pub fn replace_selected_sections(
         &mut self,
+        expected_state_revision: UserStateRevision,
         sections: &[SectionKey],
     ) -> PersonalStateResult<()> {
         validate_selection(sections)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_user_state_revision(&transaction, expected_state_revision)?;
         replace_selection(&transaction, sections)?;
         transaction.commit()?;
         Ok(())
@@ -130,11 +134,13 @@ impl PersonalStateStore {
 
     pub fn add_selected_section(
         &mut self,
+        expected_state_revision: UserStateRevision,
         section: SectionKey,
     ) -> PersonalStateResult<SelectionMutation> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_user_state_revision(&transaction, expected_state_revision)?;
         let mut selected = load_selected_sections(&transaction)?;
         if let Some(position) = selected.iter().position(|value| value == &section) {
             return Ok(SelectionMutation::AlreadySelected {
@@ -156,10 +162,15 @@ impl PersonalStateStore {
         })
     }
 
-    pub fn remove_selected_section(&mut self, section: &SectionKey) -> PersonalStateResult<bool> {
+    pub fn remove_selected_section(
+        &mut self,
+        expected_state_revision: UserStateRevision,
+        section: &SectionKey,
+    ) -> PersonalStateResult<bool> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_user_state_revision(&transaction, expected_state_revision)?;
         let mut selected = load_selected_sections(&transaction)?;
         let original_len = selected.len();
         selected.retain(|value| value != section);
@@ -422,7 +433,10 @@ impl PersonalStateStore {
 
     pub fn snapshot(&self, page: PageRequest) -> PersonalStateResult<PersonalStateSnapshot> {
         Ok(PersonalStateSnapshot {
+            state_revision: self.user_state_revision()?,
             settings: self.settings()?,
+            current_filters: self.current_filters()?,
+            saved_views: self.saved_views()?,
             selected_sections: self.selected_sections()?,
             episode_history: self.episode_history(&HistoryFilter::default(), page)?,
             active_watch_count: 0,
@@ -432,26 +446,56 @@ impl PersonalStateStore {
     pub fn personal_table_counts(&self) -> PersonalStateResult<PersonalTableCounts> {
         Ok(PersonalTableCounts {
             settings: table_count(&self.connection, "personal_settings_v1")?,
+            current_filters: table_count(&self.connection, "personal_current_filters_v1")?,
+            saved_views: table_count(&self.connection, "personal_saved_views_v1")?,
             selected_sections: table_count(&self.connection, "personal_selected_sections_v1")?,
             episode_summaries: table_count(&self.connection, "personal_episode_summaries_v1")?,
             episode_actions: table_count(&self.connection, "personal_episode_actions_v1")?,
         })
     }
 
-    pub fn clear_personal_data(&mut self) -> PersonalStateResult<PersonalResetResult> {
+    pub fn clear_personal_data(
+        &mut self,
+        expected_state_revision: UserStateRevision,
+    ) -> PersonalStateResult<PersonalResetResult> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let actual_state_revision = transaction.query_row(
+            "SELECT state_revision FROM personal_state_metadata_v1 WHERE singleton_id = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let actual_state_revision = nonnegative_i64_to_u64(actual_state_revision)?;
+        if actual_state_revision != expected_state_revision.get() {
+            return Err(PersonalStateError::UserStateRevisionConflict {
+                expected: expected_state_revision.get(),
+                actual: actual_state_revision,
+            });
+        }
+        let next_state_revision = actual_state_revision
+            .checked_add(1)
+            .ok_or(PersonalStateError::RevisionOverflow)?;
         let deleted_episode_actions =
             transaction.execute("DELETE FROM personal_episode_actions_v1", [])?;
         let deleted_episode_summaries =
             transaction.execute("DELETE FROM personal_episode_summaries_v1", [])?;
+        let deleted_saved_views = transaction.execute("DELETE FROM personal_saved_views_v1", [])?;
+        let deleted_current_filters =
+            transaction.execute("DELETE FROM personal_current_filters_v1", [])?;
         let deleted_selected_sections =
             transaction.execute("DELETE FROM personal_selected_sections_v1", [])?;
         let deleted_settings = transaction.execute("DELETE FROM personal_settings_v1", [])?;
+        transaction.execute(
+            "UPDATE personal_state_metadata_v1 SET state_revision = ?1 WHERE singleton_id = 1",
+            [u64_to_i64(next_state_revision)?],
+        )?;
         transaction.commit()?;
         Ok(PersonalResetResult {
+            state_revision: UserStateRevision::from_stored(next_state_revision),
             deleted_settings: deleted_settings as u64,
+            deleted_current_filters: deleted_current_filters as u64,
+            deleted_saved_views: deleted_saved_views as u64,
             deleted_selected_sections: deleted_selected_sections as u64,
             deleted_episode_summaries: deleted_episode_summaries as u64,
             deleted_episode_actions: deleted_episode_actions as u64,
@@ -499,6 +543,25 @@ fn load_settings(connection: &Connection) -> PersonalStateResult<StoredSettings>
         revision: SettingsRevision::from_stored(revision),
         value,
     })
+}
+
+fn require_user_state_revision(
+    connection: &Connection,
+    expected: UserStateRevision,
+) -> PersonalStateResult<()> {
+    let actual = connection.query_row(
+        "SELECT state_revision FROM personal_state_metadata_v1 WHERE singleton_id = 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let actual = nonnegative_i64_to_u64(actual)?;
+    if actual != expected.get() {
+        return Err(PersonalStateError::UserStateRevisionConflict {
+            expected: expected.get(),
+            actual,
+        });
+    }
+    Ok(())
 }
 
 fn validate_selection(sections: &[SectionKey]) -> PersonalStateResult<()> {
@@ -816,6 +879,8 @@ fn parse_notification_mode(value: &str) -> PersonalStateResult<WatchNotification
 fn table_count(connection: &Connection, table: &'static str) -> PersonalStateResult<u64> {
     let sql = match table {
         "personal_settings_v1" => "SELECT COUNT(*) FROM personal_settings_v1",
+        "personal_current_filters_v1" => "SELECT COUNT(*) FROM personal_current_filters_v1",
+        "personal_saved_views_v1" => "SELECT COUNT(*) FROM personal_saved_views_v1",
         "personal_selected_sections_v1" => "SELECT COUNT(*) FROM personal_selected_sections_v1",
         "personal_episode_summaries_v1" => "SELECT COUNT(*) FROM personal_episode_summaries_v1",
         "personal_episode_actions_v1" => "SELECT COUNT(*) FROM personal_episode_actions_v1",

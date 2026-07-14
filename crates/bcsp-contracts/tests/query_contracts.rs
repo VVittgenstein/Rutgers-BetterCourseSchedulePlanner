@@ -43,6 +43,28 @@ fn neutral_values_json() -> Value {
 }
 
 #[test]
+fn registry_exposes_each_exact_materializable_canonical_neutral() {
+    let Value::Object(neutral_values) = neutral_values_json() else {
+        panic!("neutral filter values must be an object")
+    };
+    let schema = filter_schema_v1();
+
+    for field in schema.fields {
+        let actual = field.canonical_neutral.json();
+        if field.stable_id == FilterFieldId::CourseTerm {
+            assert!(actual.is_none(), "required term must not be invented");
+        } else {
+            assert_eq!(
+                actual,
+                neutral_values.get(&field.request_field),
+                "{}",
+                field.stable_id
+            );
+        }
+    }
+}
+
+#[test]
 fn stable_filter_ids_are_exact_ordered_and_unique() {
     let actual = FilterFieldId::ALL
         .iter()

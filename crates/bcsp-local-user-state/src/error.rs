@@ -1,4 +1,7 @@
+use bcsp_contracts::TraceId;
 use thiserror::Error;
+
+use crate::SavedViewIncompatibility;
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum SettingValueError {
@@ -34,6 +37,36 @@ pub enum PersonalStateError {
     MigrationChecksumMismatch { migration_id: u32 },
     #[error("settings revision conflict: expected {expected}, actual {actual}")]
     RevisionConflict { expected: u64, actual: u64 },
+    #[error("user-state revision conflict: expected {expected}, actual {actual}")]
+    UserStateRevisionConflict { expected: u64, actual: u64 },
+    #[error("current-filter revision conflict: expected {expected}, actual {actual}")]
+    CurrentFiltersRevisionConflict { expected: u64, actual: u64 },
+    #[error("Saved view {id} revision conflict: expected {expected}, actual {actual}")]
+    SavedViewRevisionConflict {
+        id: TraceId,
+        expected: u64,
+        actual: u64,
+    },
+    #[error("Saved view {id} does not exist")]
+    SavedViewNotFound { id: TraceId },
+    #[error("Saved view name conflicts with {existing_id} at revision {existing_revision}")]
+    SavedViewNameConflict {
+        existing_id: TraceId,
+        existing_revision: u64,
+    },
+    #[error("Saved view name must be nonempty, trim-stable, and control-free")]
+    InvalidSavedViewName,
+    #[error("Saved view {id} is incompatible: {reason:?}")]
+    SavedViewIncompatible {
+        id: TraceId,
+        reason: SavedViewIncompatibility,
+    },
+    #[error("Saved view filter snapshot is invalid")]
+    InvalidFilterSnapshot,
+    #[error("could not allocate a unique Saved view ID")]
+    SavedViewIdExhausted,
+    #[error("local user-state storage is full")]
+    StorageFull,
     #[error("settings revision cannot be represented by SQLite")]
     RevisionOverflow,
     #[error("selection contains duplicate SectionKey {0}")]

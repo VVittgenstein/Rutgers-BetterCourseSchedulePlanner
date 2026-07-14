@@ -2641,6 +2641,29 @@
       ]
     },
     {
+      "id": "bcsp.query.filter-canonical-neutral.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "REQUIRED",
+          "fields": []
+        },
+        {
+          "tagValue": "JSON",
+          "fields": [
+            {
+              "name": "value",
+              "typeRef": "$primitive:json",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "bcsp.query.filter-field-schema.v1",
       "direction": "SERVER_TO_CLIENT",
       "unknownFields": "IGNORE",
@@ -2673,6 +2696,11 @@
         {
           "name": "default",
           "typeRef": "$schema:bcsp.query.filter-schema-value.v1",
+          "required": true
+        },
+        {
+          "name": "canonicalNeutral",
+          "typeRef": "$schema:bcsp.query.filter-canonical-neutral.v1",
           "required": true
         },
         {
@@ -4589,6 +4617,16 @@
             {
               "name": "seconds",
               "typeRef": "$primitive:u32",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CURRENT_REVISION",
+          "fields": [
+            {
+              "name": "revision",
+              "typeRef": "$primitive:u64",
               "required": true
             }
           ]

@@ -2,19 +2,31 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use bcsp_application::OpenRuntimeSnapshot;
+use bcsp_application::{
+    NoopWatchDispatchSink, OpenRuntimeSnapshot, SharedWatchSocket, WebSocketExtension,
+};
+use bcsp_contracts::{
+    FilterRequestV1, FilterValuesInputV1, NormalizedFilterValuesV1, SectionKey, TermId, TraceId,
+    WatchClientCommandV1, WatchPolicyV1, WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope,
+};
 use bcsp_local_runtime::{
-    LocalRuntimeError, LocalRuntimePaths, PreparedLocalRuntime, prepare_and_start_with,
+    LocalRuntimeError, LocalRuntimePaths, LocalSurfaceState, PersonalSurface, PreparedLocalRuntime,
+    prepare_and_start_with,
 };
 use bcsp_local_user_state::{
     CatalogRefreshMinutes, LocalSettings, OpenRefreshSeconds, PersonalStateStore, SettingsRevision,
+    UserStateRevision,
 };
 use bcsp_open::OpenCounterAudience;
+use bcsp_watch::WatchStartAdmission;
 use rusqlite::Connection;
+use tokio::sync::mpsc;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CURRENT_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
@@ -49,6 +61,16 @@ fn package(temp: &TestDirectory) -> (PathBuf, PathBuf) {
     let executable = root.join("RBCSP.exe");
     fs::write(&executable, b"test executable").unwrap();
     (root.canonicalize().unwrap(), executable)
+}
+
+fn trace(value: u64) -> TraceId {
+    TraceId::from_str(&format!("00000000-0000-4000-8000-{value:012x}"))
+        .expect("valid deterministic UUIDv4")
+}
+
+fn filter_request(term: &str) -> FilterRequestV1 {
+    let values = FilterValuesInputV1::for_term(TermId::try_from(term).unwrap());
+    FilterRequestV1::new(NormalizedFilterValuesV1::try_new(values).unwrap())
 }
 
 #[test]
@@ -142,9 +164,10 @@ fn configured_refresh_policy_is_live_bounded_and_scoped_to_a_fresh_run() {
             open_refresh_seconds: OpenRefreshSeconds::try_from(3).unwrap(),
             ..LocalSettings::default()
         };
+        let state_revision = database.personal().user_state_revision().unwrap();
         database
             .personal_mut()
-            .compare_and_swap_settings(SettingsRevision::ZERO, &minimum)
+            .compare_and_swap_settings(state_revision, SettingsRevision::ZERO, &minimum)
             .unwrap();
     }
     let minimum = prepared.core().refresh_policy().unwrap();
@@ -165,9 +188,14 @@ fn configured_refresh_policy_is_live_bounded_and_scoped_to_a_fresh_run() {
             open_refresh_seconds: OpenRefreshSeconds::try_from(3_600).unwrap(),
             ..LocalSettings::default()
         };
+        let state_revision = database.personal().user_state_revision().unwrap();
         database
             .personal_mut()
-            .compare_and_swap_settings(SettingsRevision::try_from(1).unwrap(), &maximum)
+            .compare_and_swap_settings(
+                state_revision,
+                SettingsRevision::try_from(1).unwrap(),
+                &maximum,
+            )
             .unwrap();
     }
     let maximum = prepared.core().refresh_policy().unwrap();
@@ -238,6 +266,8 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
         "/api/v1/local/settings",
         "/api/v1/local/selection",
         "/api/v1/local/history",
+        "/api/v1/local/current-filters",
+        "/api/v1/local/saved-views",
     ] {
         let response = request(authority, &format!("GET {path}"), &origin, nonce, "");
         assert_eq!(status(&response), 200, "{path}: {response}");
@@ -251,6 +281,7 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
     let settings = serde_json::json!({
         "protocolVersion": 1,
         "payload": {
+            "expectedUserStateRevision": 1,
             "expectedRevision": 0,
             "value": LocalSettings::default(),
         },
@@ -266,7 +297,7 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
         )),
         200
     );
-    let selection = r#"{"protocolVersion":1,"payload":{"sections":[{"term":"2026FA","campus":"NB","index":"12345"}]}}"#;
+    let selection = r#"{"protocolVersion":1,"payload":{"expectedUserStateRevision":1,"sections":[{"term":"2026FA","campus":"NB","index":"12345"}]}}"#;
     assert_eq!(
         status(&request(
             authority,
@@ -363,6 +394,656 @@ async fn only_an_authenticated_ui_exit_request_signals_ordered_shutdown() {
     running.shutdown().await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn saved_view_http_routes_cover_crud_dirty_state_cas_and_no_url_restore() {
+    let temp = TestDirectory::new("saved-view-http");
+    let (_root, executable) = package(&temp);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let nonce = running.nonce().as_str();
+    let filters_a = serde_json::to_value(filter_request("T2026F")).unwrap();
+    let filters_b = serde_json::to_value(filter_request("T2027S")).unwrap();
+
+    let initial = success_payload(&request(
+        authority,
+        "GET /api/v1/local/current-filters",
+        &origin,
+        nonce,
+        "",
+    ));
+    assert_eq!(initial["stateRevision"], 1);
+    assert_eq!(initial["revision"], 0);
+    assert!(initial["value"].is_null());
+
+    let current = post_api(
+        authority,
+        "PUT",
+        "/api/v1/local/current-filters",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 0,
+            "filters": filters_a,
+        }),
+    );
+    assert_eq!(current["revision"], 1);
+    assert_eq!(current["value"]["association"]["kind"], "CUSTOM");
+
+    let created = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 1,
+            "name": "Morning plan",
+            "filters": filters_a,
+        }),
+    );
+    let id = created["definition"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(created["definition"]["revision"], 1);
+    assert_eq!(created["currentFilters"]["revision"], 2);
+
+    let library = saved_view_library(authority, &origin, nonce);
+    assert_eq!(library["views"].as_array().unwrap().len(), 1);
+    assert_eq!(library["views"][0]["matchState"], "CLEAN");
+
+    let modified = post_api(
+        authority,
+        "PUT",
+        "/api/v1/local/current-filters",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 2,
+            "filters": filters_b,
+        }),
+    );
+    assert_eq!(modified["revision"], 3);
+    assert_eq!(
+        modified["value"]["association"]["viewId"], id,
+        "ordinary edits preserve the Applied association",
+    );
+    assert_eq!(
+        saved_view_library(authority, &origin, nonce)["views"][0]["matchState"],
+        "MODIFIED"
+    );
+
+    let clean_again = post_api(
+        authority,
+        "PUT",
+        "/api/v1/local/current-filters",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 3,
+            "filters": filters_a,
+        }),
+    );
+    assert_eq!(clean_again["revision"], 4);
+    assert_eq!(
+        saved_view_library(authority, &origin, nonce)["views"][0]["matchState"],
+        "CLEAN"
+    );
+
+    let renamed = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/rename",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 4,
+            "id": id,
+            "expectedViewRevision": 1,
+            "name": "Renamed plan",
+        }),
+    );
+    assert_eq!(renamed["definition"]["revision"], 2);
+    assert_eq!(renamed["currentFilters"]["revision"], 5);
+    assert_eq!(
+        renamed["currentFilters"]["value"]["association"]["revision"],
+        2
+    );
+
+    let stale = raw_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/rename",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 5,
+            "id": id,
+            "expectedViewRevision": 1,
+            "name": "Stale overwrite",
+        }),
+    );
+    assert_eq!(status(&stale), 409);
+    let stale = response_json(&stale);
+    assert_eq!(stale["error"]["code"], "SAVED_VIEW_REVISION_CONFLICT");
+    assert_eq!(stale["error"]["details"][0]["revision"], 2);
+
+    let updated = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/update",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 5,
+            "id": id,
+            "expectedViewRevision": 2,
+            "filters": filters_b,
+        }),
+    );
+    assert_eq!(updated["definition"]["revision"], 3);
+    assert_eq!(updated["currentFilters"]["revision"], 6);
+
+    let duplicate = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/duplicate",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "id": id,
+            "expectedViewRevision": 3,
+            "name": "Copy",
+        }),
+    );
+    let copy_id = duplicate["definition"]["id"].as_str().unwrap().to_owned();
+    assert_ne!(copy_id, id);
+    assert_eq!(duplicate["definition"]["revision"], 1);
+    assert_eq!(duplicate["currentFilters"]["revision"], 6);
+
+    let conflict = raw_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/duplicate",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "id": id,
+            "expectedViewRevision": 3,
+            "name": "renamed PLAN",
+        }),
+    );
+    assert_eq!(status(&conflict), 409);
+    assert_eq!(
+        response_json(&conflict)["error"]["code"],
+        "SAVED_VIEW_NAME_CONFLICT"
+    );
+
+    let deleted_copy = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/delete",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 6,
+            "id": copy_id,
+            "expectedViewRevision": 1,
+        }),
+    );
+    assert_eq!(deleted_copy["currentFilters"]["revision"], 6);
+
+    let applied = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/apply",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 6,
+            "id": id,
+            "expectedViewRevision": 3,
+        }),
+    );
+    assert_eq!(applied["revision"], 7);
+
+    let query_shell = request(
+        authority,
+        "GET /?savedView=must-not-restore",
+        &origin,
+        nonce,
+        "",
+    );
+    assert_eq!(status(&query_shell), 200);
+    assert_eq!(
+        success_payload(&request(
+            authority,
+            "GET /api/v1/local/current-filters",
+            &origin,
+            nonce,
+            "",
+        ))["revision"],
+        7,
+        "URL query state must not mutate or restore local filters",
+    );
+    assert_eq!(
+        status(&request(
+            authority,
+            "GET /api/v1/local/saved-views/restore-url",
+            &origin,
+            nonce,
+            "",
+        )),
+        404,
+    );
+
+    let deleted = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/delete",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 7,
+            "id": id,
+            "expectedViewRevision": 3,
+        }),
+    );
+    assert_eq!(deleted["currentFilters"]["revision"], 8);
+    assert_eq!(
+        deleted["currentFilters"]["value"]["association"]["kind"],
+        "CUSTOM"
+    );
+    assert!(
+        saved_view_library(authority, &origin, nonce)["views"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    running.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_reset() {
+    let temp = TestDirectory::new("reset-scopes");
+    let (_root, executable) = package(&temp);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let nonce = running.nonce().as_str();
+    let database_path = running.prepared().paths().database().to_path_buf();
+    let filters = serde_json::to_value(filter_request("T2026F")).unwrap();
+
+    let connection = Connection::open(&database_path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE operational_reset_probe(value TEXT NOT NULL) STRICT;
+             INSERT INTO operational_reset_probe(value) VALUES ('preserve-me');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let created = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 0,
+            "name": "Keep through filter reset",
+            "filters": filters,
+        }),
+    );
+    let id = created["definition"]["id"].as_str().unwrap().to_owned();
+    let reset_filters = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/filters/reset",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 1,
+        }),
+    );
+    assert_eq!(reset_filters["revision"], 2);
+    assert!(reset_filters["value"].is_null());
+    assert_eq!(
+        saved_view_library(authority, &origin, nonce)["views"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "ordinary filter reset must preserve the Saved-view library",
+    );
+
+    let applied = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/apply",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 2,
+            "id": id,
+            "expectedViewRevision": 1,
+        }),
+    );
+    assert_eq!(applied["revision"], 3);
+    let deleted_all = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views/delete-all",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 3,
+        }),
+    );
+    assert_eq!(deleted_all["deletedViews"], 1);
+    assert_eq!(deleted_all["currentFilters"]["revision"], 4);
+    assert_eq!(
+        deleted_all["currentFilters"]["value"]["association"]["kind"],
+        "CUSTOM"
+    );
+    assert_eq!(
+        deleted_all["currentFilters"]["value"]["content"]["filters"], filters,
+        "delete-all must preserve the current canonical filters",
+    );
+    assert!(
+        saved_view_library(authority, &origin, nonce)["views"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let recreated = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/saved-views",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 4,
+            "name": "Delete only on confirmed user reset",
+            "filters": filters,
+        }),
+    );
+    assert_eq!(recreated["currentFilters"]["revision"], 5);
+
+    let settings = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {
+            "expectedUserStateRevision": 1,
+            "expectedRevision": 0,
+            "value": LocalSettings::default(),
+        },
+    })
+    .to_string();
+    assert_eq!(
+        status(&request(
+            authority,
+            "PUT /api/v1/local/settings",
+            &origin,
+            nonce,
+            &settings,
+        )),
+        200
+    );
+    let selection = serde_json::json!({
+        "expectedUserStateRevision": 1,
+        "sections": [{"term": "T2026F", "campus": "CAMPUS_A", "index": "12345"}],
+    });
+    let selection = post_api(
+        authority,
+        "PUT",
+        "/api/v1/local/selection",
+        &origin,
+        nonce,
+        selection,
+    );
+    assert_eq!(selection.as_array().unwrap().len(), 1);
+
+    let unauthenticated =
+        request_without_session(authority, "POST /api/v1/local/user-data-reset/prepare");
+    assert_eq!(status(&unauthenticated), 403);
+    let bare_boolean = raw_api(
+        authority,
+        "POST",
+        "/api/v1/local/user-data-reset/prepare",
+        &origin,
+        nonce,
+        serde_json::json!({"confirmed": true}),
+    );
+    assert_eq!(status(&bare_boolean), 400);
+    assert_eq!(
+        response_json(&bare_boolean)["error"]["code"],
+        "MALFORMED_REQUEST"
+    );
+
+    let prepared = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/user-data-reset/prepare",
+        &origin,
+        nonce,
+        serde_json::json!({"expectedUserStateRevision": 1}),
+    );
+    let token = prepared["confirmationToken"].as_str().unwrap().to_owned();
+    assert_eq!(prepared["expiresInSeconds"], 60);
+
+    let invalid = raw_api(
+        authority,
+        "POST",
+        "/api/v1/local/user-data-reset/confirm",
+        &origin,
+        nonce,
+        serde_json::json!({"confirmationToken": trace(999)}),
+    );
+    assert_eq!(status(&invalid), 409);
+    assert_eq!(
+        response_json(&invalid)["error"]["code"],
+        "RESET_CONFIRMATION_INVALID"
+    );
+
+    let confirmed = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/user-data-reset/confirm",
+        &origin,
+        nonce,
+        serde_json::json!({"confirmationToken": token}),
+    );
+    assert_eq!(confirmed["stateRevision"], 2);
+    assert_eq!(confirmed["deletedSettings"], 1);
+    assert_eq!(confirmed["deletedCurrentFilters"], 1);
+    assert_eq!(confirmed["deletedSavedViews"], 1);
+    assert_eq!(confirmed["deletedSelectedSections"], 1);
+
+    let reused = raw_api(
+        authority,
+        "POST",
+        "/api/v1/local/user-data-reset/confirm",
+        &origin,
+        nonce,
+        serde_json::json!({"confirmationToken": token}),
+    );
+    assert_eq!(status(&reused), 409);
+    assert_eq!(
+        response_json(&reused)["error"]["code"],
+        "RESET_CONFIRMATION_REQUIRED"
+    );
+
+    let bootstrap = success_payload(&request(
+        authority,
+        "GET /api/v1/local/bootstrap",
+        &origin,
+        nonce,
+        "",
+    ));
+    assert_eq!(bootstrap["state"]["stateRevision"], 2);
+    assert_eq!(bootstrap["state"]["settings"]["revision"], 0);
+    assert_eq!(
+        bootstrap["state"]["settings"]["value"]["catalogRefreshMinutes"],
+        10
+    );
+    assert_eq!(
+        bootstrap["state"]["settings"]["value"]["openRefreshSeconds"],
+        30
+    );
+    assert_eq!(bootstrap["state"]["currentFilters"]["revision"], 0);
+    assert!(bootstrap["state"]["currentFilters"]["value"].is_null());
+    assert!(
+        bootstrap["state"]["savedViews"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        bootstrap["state"]["selectedSections"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        bootstrap["state"]["episodeHistory"]["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(bootstrap["state"]["activeWatchCount"], 0);
+
+    let stale_settings = raw_api(
+        authority,
+        "PUT",
+        "/api/v1/local/settings",
+        &origin,
+        nonce,
+        serde_json::json!({
+            "expectedUserStateRevision": 1,
+            "expectedRevision": 0,
+            "value": LocalSettings::default(),
+        }),
+    );
+    assert_eq!(status(&stale_settings), 409);
+    let stale_settings = response_json(&stale_settings);
+    assert_eq!(
+        stale_settings["error"]["code"],
+        "USER_STATE_REVISION_CONFLICT"
+    );
+    assert_eq!(stale_settings["error"]["details"][0]["revision"], 2);
+
+    let connection = Connection::open(&database_path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT value FROM operational_reset_probe", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        "preserve-me",
+    );
+    assert!(
+        connection
+            .query_row("SELECT COUNT(*) FROM catalog_terms", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .is_ok(),
+        "operational Catalog schema must survive local user reset",
+    );
+    drop(connection);
+
+    running.shutdown().await.unwrap();
+}
+
+#[test]
+fn confirmed_reset_stops_active_watches_before_attempting_the_personal_transaction() {
+    let temp = TestDirectory::new("reset-stop-order");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let database = prepared.operational().database();
+    let admission = Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None));
+    let watch =
+        Arc::new(SharedWatchSocket::try_new(admission, Arc::new(NoopWatchDispatchSink)).unwrap());
+    let connection_id = trace(100);
+    let (outbound, mut responses) = mpsc::unbounded_channel();
+    assert!(watch.connect(connection_id, outbound));
+    let section = SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap();
+    let items = WatchStartItemsV1::try_from(vec![WatchStartItemV1::new(
+        section,
+        WatchPolicyV1::default(),
+    )])
+    .unwrap();
+    let frame = serde_json::to_string(&WsClientEnvelope::new(
+        trace(101),
+        WatchClientCommandV1::StartWatch { items },
+    ))
+    .unwrap();
+    watch.receive_text(connection_id, &frame);
+    assert!(responses.try_recv().is_ok());
+    assert_eq!(watch.total_active_watch_count(), 1);
+
+    let mut surface = PersonalSurface::new(database.clone(), watch.clone());
+    let prepare = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"expectedUserStateRevision": 1},
+    })
+    .to_string();
+    let prepared_reset = surface
+        .prepare_local_user_data_reset(prepare.as_bytes())
+        .unwrap();
+    let prepared_reset: serde_json::Value = serde_json::from_slice(&prepared_reset).unwrap();
+    let token = prepared_reset["data"]["confirmationToken"].clone();
+
+    {
+        let mut database = database.lock().unwrap();
+        database
+            .personal_mut()
+            .clear_personal_data(UserStateRevision::try_from(1).unwrap())
+            .unwrap();
+    }
+    let confirm = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"confirmationToken": token},
+    })
+    .to_string();
+    assert_eq!(
+        surface.confirm_local_user_data_reset(confirm.as_bytes()),
+        Err(bcsp_local_runtime::LocalSurfaceFailure::revision_conflict(
+            bcsp_local_runtime::LocalApiErrorCode::UserStateRevisionConflict,
+            2,
+        ))
+    );
+    assert_eq!(
+        watch.total_active_watch_count(),
+        0,
+        "watch cleanup must happen before even a failing reset transaction",
+    );
+}
+
 fn request(authority: &str, request_line: &str, origin: &str, nonce: &str, body: &str) -> String {
     let mut stream = TcpStream::connect(authority).unwrap();
     stream
@@ -378,6 +1059,53 @@ fn request(authority: &str, request_line: &str, origin: &str, nonce: &str, body:
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
+}
+
+fn raw_api(
+    authority: &str,
+    method: &str,
+    path: &str,
+    origin: &str,
+    nonce: &str,
+    payload: serde_json::Value,
+) -> String {
+    let body = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": payload,
+    })
+    .to_string();
+    request(authority, &format!("{method} {path}"), origin, nonce, &body)
+}
+
+fn post_api(
+    authority: &str,
+    method: &str,
+    path: &str,
+    origin: &str,
+    nonce: &str,
+    payload: serde_json::Value,
+) -> serde_json::Value {
+    let response = raw_api(authority, method, path, origin, nonce, payload);
+    assert_eq!(status(&response), 200, "{path}: {response}");
+    success_payload(&response)
+}
+
+fn saved_view_library(authority: &str, origin: &str, nonce: &str) -> serde_json::Value {
+    success_payload(&request(
+        authority,
+        "GET /api/v1/local/saved-views",
+        origin,
+        nonce,
+        "",
+    ))
+}
+
+fn success_payload(response: &str) -> serde_json::Value {
+    response_json(response)["data"].clone()
+}
+
+fn response_json(response: &str) -> serde_json::Value {
+    serde_json::from_str(body(response)).unwrap()
 }
 
 fn request_without_session(authority: &str, request_line: &str) -> String {

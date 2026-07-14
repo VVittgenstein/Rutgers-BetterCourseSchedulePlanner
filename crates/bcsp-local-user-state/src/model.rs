@@ -5,6 +5,7 @@ use bcsp_contracts::{
     WatchPolicyV1, WatchStopReason,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 use crate::{PersonalStateError, PersonalStateResult, SettingValueError};
 
@@ -127,25 +128,39 @@ impl TryFrom<u8> for VolumePercent {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum FilterAssociation {
     Custom,
-    Applied { view_id: TraceId, revision: u64 },
+    Applied {
+        view_id: TraceId,
+        revision: SavedViewRevision,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CurrentFilters {
     pub association: FilterAssociation,
-    pub filters: FilterRequestV1,
+    pub content: SavedViewContent,
 }
 
 impl CurrentFilters {
-    pub const fn new(association: FilterAssociation, filters: FilterRequestV1) -> Self {
+    pub fn new(association: FilterAssociation, filters: FilterRequestV1) -> Self {
         Self {
             association,
-            filters,
+            content: SavedViewContent::Compatible {
+                filters: Box::new(filters),
+            },
         }
+    }
+
+    pub fn filters(&self) -> Option<&FilterRequestV1> {
+        self.content.filters()
     }
 }
 
@@ -157,7 +172,6 @@ pub struct LocalSettings {
     pub open_refresh_seconds: OpenRefreshSeconds,
     pub volume_percent: VolumePercent,
     pub sound_policy: WatchPolicyV1,
-    pub current_filters: Option<CurrentFilters>,
 }
 
 impl Default for LocalSettings {
@@ -168,7 +182,6 @@ impl Default for LocalSettings {
             open_refresh_seconds: OpenRefreshSeconds::DEFAULT,
             volume_percent: VolumePercent::DEFAULT,
             sound_policy: WatchPolicyV1::default(),
-            current_filters: None,
         }
     }
 }
@@ -223,6 +236,178 @@ impl TryFrom<u64> for SettingsRevision {
 pub struct StoredSettings {
     pub revision: SettingsRevision,
     pub value: LocalSettings,
+}
+
+macro_rules! revision_type {
+    ($name:ident) => {
+        #[derive(
+            Clone,
+            Copy,
+            Debug,
+            Default,
+            Deserialize,
+            Eq,
+            Hash,
+            Ord,
+            PartialEq,
+            PartialOrd,
+            Serialize,
+        )]
+        #[serde(transparent)]
+        pub struct $name(u64);
+
+        impl $name {
+            pub const ZERO: Self = Self(0);
+
+            pub const fn get(self) -> u64 {
+                self.0
+            }
+
+            pub(crate) const fn from_stored(value: u64) -> Self {
+                Self(value)
+            }
+        }
+
+        impl TryFrom<u64> for $name {
+            type Error = PersonalStateError;
+
+            fn try_from(value: u64) -> Result<Self, Self::Error> {
+                if value <= i64::MAX as u64 {
+                    Ok(Self(value))
+                } else {
+                    Err(PersonalStateError::RevisionOverflow)
+                }
+            }
+        }
+    };
+}
+
+revision_type!(UserStateRevision);
+revision_type!(CurrentFiltersRevision);
+revision_type!(SavedViewRevision);
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum SavedViewIncompatibility {
+    InvalidEnvelope,
+    UnsupportedCodecVersion { observed: Option<u64> },
+    FutureSchemaVersion { observed: u64, supported: u64 },
+    UnknownField { stable_id: String },
+    MissingRequiredField { stable_id: String },
+    InvalidFieldData,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum SavedViewContent {
+    Compatible {
+        filters: Box<FilterRequestV1>,
+    },
+    Incompatible {
+        raw_snapshot: JsonValue,
+        reason: SavedViewIncompatibility,
+    },
+}
+
+impl SavedViewContent {
+    pub fn filters(&self) -> Option<&FilterRequestV1> {
+        match self {
+            Self::Compatible { filters } => Some(filters.as_ref()),
+            Self::Incompatible { .. } => None,
+        }
+    }
+
+    pub fn incompatibility(&self) -> Option<&SavedViewIncompatibility> {
+        match self {
+            Self::Compatible { .. } => None,
+            Self::Incompatible { reason, .. } => Some(reason),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoredCurrentFilters {
+    pub state_revision: UserStateRevision,
+    pub revision: CurrentFiltersRevision,
+    pub value: Option<CurrentFilters>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewDefinition {
+    pub id: TraceId,
+    pub name: String,
+    pub schema_version: u64,
+    pub revision: SavedViewRevision,
+    pub content: SavedViewContent,
+    pub created_at: UnixMillis,
+    pub updated_at: UnixMillis,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SavedViewMatch {
+    NotApplied,
+    Clean,
+    Modified,
+    Incompatible,
+}
+
+impl SavedViewDefinition {
+    pub fn match_current(&self, current: &StoredCurrentFilters) -> SavedViewMatch {
+        let Some(filters) = self.content.filters() else {
+            return SavedViewMatch::Incompatible;
+        };
+        let Some(current) = &current.value else {
+            return SavedViewMatch::NotApplied;
+        };
+        let FilterAssociation::Applied { view_id, .. } = &current.association else {
+            return SavedViewMatch::NotApplied;
+        };
+        if *view_id != self.id {
+            return SavedViewMatch::NotApplied;
+        }
+        if current.filters() == Some(filters) {
+            SavedViewMatch::Clean
+        } else {
+            SavedViewMatch::Modified
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewMutation {
+    pub state_revision: UserStateRevision,
+    pub definition: SavedViewDefinition,
+    pub current_filters: StoredCurrentFilters,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewDeleteResult {
+    pub state_revision: UserStateRevision,
+    pub deleted_id: TraceId,
+    pub current_filters: StoredCurrentFilters,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewsDeleteAllResult {
+    pub state_revision: UserStateRevision,
+    pub deleted_views: u64,
+    pub current_filters: StoredCurrentFilters,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -506,6 +691,8 @@ pub struct PersonalMigrationRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PersonalTableCounts {
     pub settings: u64,
+    pub current_filters: u64,
+    pub saved_views: u64,
     pub selected_sections: u64,
     pub episode_summaries: u64,
     pub episode_actions: u64,
@@ -514,7 +701,10 @@ pub struct PersonalTableCounts {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PersonalResetResult {
+    pub state_revision: UserStateRevision,
     pub deleted_settings: u64,
+    pub deleted_current_filters: u64,
+    pub deleted_saved_views: u64,
     pub deleted_selected_sections: u64,
     pub deleted_episode_summaries: u64,
     pub deleted_episode_actions: u64,
@@ -523,7 +713,10 @@ pub struct PersonalResetResult {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PersonalStateSnapshot {
+    pub state_revision: UserStateRevision,
     pub settings: StoredSettings,
+    pub current_filters: StoredCurrentFilters,
+    pub saved_views: Vec<SavedViewDefinition>,
     pub selected_sections: Vec<SectionKey>,
     pub episode_history: HistoryPage<EpisodeHistorySummary>,
     pub active_watch_count: u8,

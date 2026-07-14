@@ -138,6 +138,11 @@ fn error_detail_tagged_union_is_bound_to_every_serde_variant() {
         "RETRY_AFTER_SECONDS",
         &ApiErrorDetail::RetryAfterSeconds { seconds: 30 },
     );
+    assert_tagged_variant_binding(
+        "bcsp.http.error-detail.v1",
+        "CURRENT_REVISION",
+        &ApiErrorDetail::CurrentRevision { revision: 7 },
+    );
 }
 
 #[test]

@@ -9,17 +9,21 @@
 mod error;
 mod migration;
 mod model;
+mod saved_store;
+mod saved_view;
 mod store;
 
 pub use error::{PersonalStateError, PersonalStateResult, SettingValueError};
 pub use model::{
-    CatalogRefreshMinutes, CurrentFilters, EpisodeActionInput, EpisodeActionKind,
-    EpisodeActionRecord, EpisodeDisposition, EpisodeHistoryIdentity, EpisodeHistorySummary,
-    EpisodeSummaryInput, FilterAssociation, HistoryFilter, HistoryPage, HistoryWriteOutcome,
-    LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest, PersonalMigrationRecord,
-    PersonalResetResult, PersonalStateSnapshot, PersonalTableCounts, SelectionMutation,
-    SettingsRevision, SqliteConfiguration, StoredSettings, UnixMillis, VolumePercent,
-    WalCheckpoint,
+    CatalogRefreshMinutes, CurrentFilters, CurrentFiltersRevision, EpisodeActionInput,
+    EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition, EpisodeHistoryIdentity,
+    EpisodeHistorySummary, EpisodeSummaryInput, FilterAssociation, HistoryFilter, HistoryPage,
+    HistoryWriteOutcome, LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest,
+    PersonalMigrationRecord, PersonalResetResult, PersonalStateSnapshot, PersonalTableCounts,
+    SavedViewContent, SavedViewDefinition, SavedViewDeleteResult, SavedViewIncompatibility,
+    SavedViewMatch, SavedViewMutation, SavedViewRevision, SavedViewsDeleteAllResult,
+    SelectionMutation, SettingsRevision, SqliteConfiguration, StoredCurrentFilters, StoredSettings,
+    UnixMillis, UserStateRevision, VolumePercent, WalCheckpoint,
 };
 pub use store::PersonalStateStore;
 
@@ -28,13 +32,18 @@ pub const PERSONAL_MIGRATION_ID_BASE: u32 = 10_000;
 pub const PERSONAL_MIGRATION_LEDGER_TABLE: &str = "personal_migration_ledger";
 pub const PERSONAL_DATA_TABLE_ALLOWLIST: &[&str] = &[
     "personal_settings_v1",
+    "personal_current_filters_v1",
+    "personal_saved_views_v1",
     "personal_selected_sections_v1",
     "personal_episode_summaries_v1",
     "personal_episode_actions_v1",
 ];
 pub const PERSONAL_TABLE_ALLOWLIST: &[&str] = &[
     PERSONAL_MIGRATION_LEDGER_TABLE,
+    "personal_state_metadata_v1",
     "personal_settings_v1",
+    "personal_current_filters_v1",
+    "personal_saved_views_v1",
     "personal_selected_sections_v1",
     "personal_episode_summaries_v1",
     "personal_episode_actions_v1",

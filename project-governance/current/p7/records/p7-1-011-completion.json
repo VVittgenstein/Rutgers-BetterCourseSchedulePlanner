@@ -1,0 +1,21 @@
+{
+  "task": "P7.1-011",
+  "status": "PRECOMMIT_PASS",
+  "parent": "f134506bbddedff29e30b797ed2f1b44ec1f7176",
+  "verifiedAtUtc": "2026-07-14T14:16:46.4418217Z",
+  "pathCount": 26,
+  "checks": {
+    "savedViewCrud": "PASS",
+    "snapshotMigration": "PASS",
+    "optimisticConcurrency": "PASS",
+    "resetScopeSeparation": "PASS",
+    "watchStopBeforeReset": "PASS",
+    "operationalDataPreservation": "PASS",
+    "workspaceTests": "PASS",
+    "clippy": "PASS",
+    "architecture": "PASS",
+    "dependencyPolicy": "PASS"
+  },
+  "postPushMarker": "P7_1_011_PASS_POST_PUSH",
+  "nextTask": "P7.1-012"
+}

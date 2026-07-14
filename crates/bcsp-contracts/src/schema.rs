@@ -1597,6 +1597,13 @@ pub fn contract_manifest() -> ContractManifest {
                 ]
                 .map(str::to_owned),
             ),
+            tagged_union_schema(
+                "bcsp.query.filter-canonical-neutral.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                "kind",
+                &[("REQUIRED", &[]), ("JSON", &[("value", "$primitive:json")])],
+            ),
             schema(
                 "bcsp.query.filter-field-schema.v1",
                 SchemaDirection::ServerToClient,
@@ -1608,6 +1615,10 @@ pub fn contract_manifest() -> ContractManifest {
                     ("valueKind", "$schema:bcsp.query.filter-value-kind.v1"),
                     ("neutral", "$schema:bcsp.query.filter-schema-value.v1"),
                     ("default", "$schema:bcsp.query.filter-schema-value.v1"),
+                    (
+                        "canonicalNeutral",
+                        "$schema:bcsp.query.filter-canonical-neutral.v1",
+                    ),
                     (
                         "normalization",
                         "$array:$schema:bcsp.query.filter-normalization.v1",
@@ -2503,6 +2514,7 @@ pub fn contract_manifest() -> ContractManifest {
                         ],
                     ),
                     ("RETRY_AFTER_SECONDS", &[("seconds", "$primitive:u32")]),
+                    ("CURRENT_REVISION", &[("revision", "$primitive:u64")]),
                 ],
             ),
             schema(

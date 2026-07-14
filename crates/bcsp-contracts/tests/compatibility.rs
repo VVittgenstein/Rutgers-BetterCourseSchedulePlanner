@@ -175,6 +175,7 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
                         || matches!(
                             field.type_ref.as_str(),
                             "$primitive:bool"
+                                | "$primitive:json"
                                 | "$primitive:rfc3339-timestamp"
                                 | "$primitive:string"
                                 | "$primitive:u8"

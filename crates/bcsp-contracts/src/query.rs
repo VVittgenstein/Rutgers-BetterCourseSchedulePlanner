@@ -245,6 +245,35 @@ pub enum FilterSchemaValueV1 {
     EmptyComposite,
 }
 
+/// Exact canonical JSON used when a filter field is neutral.
+///
+/// `Required` deliberately has no JSON value: callers migrating an older
+/// filter payload must obtain that field from product context instead of
+/// silently inventing a value. `Json` distinguishes a materialized JSON null
+/// from an unavailable required value.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FilterCanonicalNeutralV1 {
+    Required,
+    Json { value: serde_json::Value },
+}
+
+impl FilterCanonicalNeutralV1 {
+    pub const fn json(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Required => None,
+            Self::Json { value } => Some(value),
+        }
+    }
+
+    pub fn into_json(self) -> Option<serde_json::Value> {
+        match self {
+            Self::Required => None,
+            Self::Json { value } => Some(value),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FilterNormalizationV1 {
@@ -298,6 +327,7 @@ pub struct FilterFieldSchemaV1 {
     pub value_kind: FilterValueKindV1,
     pub neutral: FilterSchemaValueV1,
     pub default: FilterSchemaValueV1,
+    pub canonical_neutral: FilterCanonicalNeutralV1,
     pub normalization: Vec<FilterNormalizationV1>,
     pub validation: Vec<FilterValidationV1>,
     pub query_encoding: FilterQueryEncodingV1,
@@ -325,6 +355,7 @@ pub fn filter_schema_v1() -> FilterSchemaV1 {
 }
 
 fn filter_field_schema(id: FilterFieldId, chip_order: u8) -> FilterFieldSchemaV1 {
+    use FilterCanonicalNeutralV1 as C;
     use FilterFieldId as Id;
     use FilterNormalizationV1 as N;
     use FilterQueryEncodingV1 as Q;
@@ -332,212 +363,248 @@ fn filter_field_schema(id: FilterFieldId, chip_order: u8) -> FilterFieldSchemaV1
     use FilterValidationV1 as V;
     use FilterValueKindV1 as K;
 
-    let (request_field, value_kind, neutral, default, normalization, validation, query_encoding) =
-        match id {
-            Id::CourseTerm => (
-                "term",
-                K::TermId,
-                D::Required,
-                D::Required,
-                vec![N::CanonicalIdentity],
-                vec![V::Required, V::DynamicDictionary],
-                Q::ExactOne,
-            ),
-            Id::CourseCampus => (
-                "campuses",
-                K::CampusCodeSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::CanonicalIdentity, N::SortDeduplicate],
-                vec![V::DynamicDictionary],
-                Q::ExactAny,
-            ),
-            Id::CourseSubject => (
-                "subjects",
-                K::SubjectCodeSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::CanonicalIdentity, N::SortDeduplicate],
-                vec![V::DynamicDictionary],
-                Q::ExactAny,
-            ),
-            Id::CourseText => (
-                "text",
-                K::TextQuery,
-                D::EmptyText,
-                D::EmptyText,
-                vec![N::TrimAndCollapseWhitespace, N::TokenAnd],
-                vec![
-                    V::NonemptyWhenActive,
-                    V::Max32TextTokens,
-                    V::Max128TokenBytes,
-                    V::TokenContainsAlphanumeric,
-                ],
-                Q::TextTokenAndExactIdentifierPriority,
-            ),
-            Id::CourseNumber => (
-                "courseNumbers",
-                K::CourseNumberSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-                vec![V::NonemptyWhenActive],
-                Q::ExactAny,
-            ),
-            Id::CourseLevel => (
-                "levels",
-                K::LevelSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-                vec![V::DynamicDictionary],
-                Q::ExactAny,
-            ),
-            Id::CourseCredits => (
-                "credits",
-                K::CreditRange,
-                D::UnboundedRange,
-                D::UnboundedRange,
-                vec![N::CreditHundredths],
-                vec![V::OrderedInclusiveRange],
-                Q::InclusiveRange,
-            ),
-            Id::CourseCoreCode => (
-                "core",
-                K::CoreCodeSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-                vec![V::DynamicDictionary],
-                Q::ExplicitAnyAll,
-            ),
-            Id::CoursePrerequisite => (
-                "prerequisite",
-                K::PrerequisitePresence,
-                D::Any,
-                D::Any,
-                vec![],
-                vec![],
-                Q::TernaryPresence,
-            ),
-            Id::CourseLocation => (
-                "courseLocations",
-                K::CourseLocationSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-                vec![V::DynamicDictionary],
-                Q::ExactAny,
-            ),
-            Id::SectionIndex => (
-                "sectionIndexes",
-                K::SectionIndexSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::CanonicalIdentity, N::SortDeduplicate],
-                vec![V::SectionIndexIdentity],
-                Q::SameSectionExactAny,
-            ),
-            Id::SectionNumber => (
-                "sectionNumbers",
-                K::SectionNumberSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-                vec![V::NonemptyWhenActive],
-                Q::SameSectionExactAny,
-            ),
-            Id::SectionOpenStatus => (
-                "openStatuses",
-                K::OpenStatusSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::SortDeduplicate],
-                vec![],
-                Q::SameSectionExactAny,
-            ),
-            Id::SectionModality => (
-                "modalities",
-                K::ModalitySet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::SortDeduplicate],
-                vec![],
-                Q::SameSectionExactAny,
-            ),
-            Id::SectionSynchronicity => (
-                "synchronicities",
-                K::SynchronicitySet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::SortDeduplicate],
-                vec![],
-                Q::SameSectionExactAny,
-            ),
-            Id::SectionInstructor => (
-                "instructors",
-                K::InstructorNameSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::TrimAndCollapseWhitespace, N::SortDeduplicate],
-                vec![V::DynamicDictionary],
-                Q::SameSectionExactAny,
-            ),
-            Id::SectionAvailability => (
-                "availability",
-                K::AvailabilityWindows,
-                D::EmptyWindows,
-                D::EmptyWindows,
-                vec![N::MinuteOfDay, N::SortDeduplicate],
-                vec![V::OrderedMinuteInterval],
-                Q::SameSectionAvailabilityAll,
-            ),
-            Id::SectionMeetingLocation => (
-                "meetingLocations",
-                K::MeetingLocationSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-                vec![V::DynamicDictionary],
-                Q::SameSectionExactAny,
-            ),
-            Id::SectionBuildingRoom => (
-                "buildingRoom",
-                K::BuildingRoom,
-                D::EmptyComposite,
-                D::EmptyComposite,
-                vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-                vec![V::StructuredOnly],
-                Q::SameSectionStructuredDimensions,
-            ),
-            Id::SectionExam => (
-                "examCodes",
-                K::ExamCodeSet,
-                D::EmptySet,
-                D::EmptySet,
-                vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-                vec![V::DynamicDictionary],
-                Q::SameSectionExactAny,
-            ),
-            Id::SectionPermission => (
-                "permission",
-                K::PermissionRequirement,
-                D::Any,
-                D::Any,
-                vec![],
-                vec![],
-                Q::TernaryPresence,
-            ),
-            Id::SectionEligibility => (
-                "eligibility",
-                K::Eligibility,
-                D::EmptyComposite,
-                D::EmptyComposite,
-                vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-                vec![V::StructuredOnly],
-                Q::SameSectionStructuredDimensions,
-            ),
-        };
+    let (
+        request_field,
+        value_kind,
+        neutral,
+        default,
+        canonical_neutral,
+        normalization,
+        validation,
+        query_encoding,
+    ) = match id {
+        Id::CourseTerm => (
+            "term",
+            K::TermId,
+            D::Required,
+            D::Required,
+            C::Required,
+            vec![N::CanonicalIdentity],
+            vec![V::Required, V::DynamicDictionary],
+            Q::ExactOne,
+        ),
+        Id::CourseCampus => (
+            "campuses",
+            K::CampusCodeSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::CanonicalIdentity, N::SortDeduplicate],
+            vec![V::DynamicDictionary],
+            Q::ExactAny,
+        ),
+        Id::CourseSubject => (
+            "subjects",
+            K::SubjectCodeSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::CanonicalIdentity, N::SortDeduplicate],
+            vec![V::DynamicDictionary],
+            Q::ExactAny,
+        ),
+        Id::CourseText => (
+            "text",
+            K::TextQuery,
+            D::EmptyText,
+            D::EmptyText,
+            canonical_json(serde_json::Value::Null),
+            vec![N::TrimAndCollapseWhitespace, N::TokenAnd],
+            vec![
+                V::NonemptyWhenActive,
+                V::Max32TextTokens,
+                V::Max128TokenBytes,
+                V::TokenContainsAlphanumeric,
+            ],
+            Q::TextTokenAndExactIdentifierPriority,
+        ),
+        Id::CourseNumber => (
+            "courseNumbers",
+            K::CourseNumberSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
+            vec![V::NonemptyWhenActive],
+            Q::ExactAny,
+        ),
+        Id::CourseLevel => (
+            "levels",
+            K::LevelSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
+            vec![V::DynamicDictionary],
+            Q::ExactAny,
+        ),
+        Id::CourseCredits => (
+            "credits",
+            K::CreditRange,
+            D::UnboundedRange,
+            D::UnboundedRange,
+            canonical_json(serde_json::Value::Null),
+            vec![N::CreditHundredths],
+            vec![V::OrderedInclusiveRange],
+            Q::InclusiveRange,
+        ),
+        Id::CourseCoreCode => (
+            "core",
+            K::CoreCodeSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!({"codes": [], "mode": "ANY"})),
+            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
+            vec![V::DynamicDictionary],
+            Q::ExplicitAnyAll,
+        ),
+        Id::CoursePrerequisite => (
+            "prerequisite",
+            K::PrerequisitePresence,
+            D::Any,
+            D::Any,
+            canonical_json(serde_json::json!("ANY")),
+            vec![],
+            vec![],
+            Q::TernaryPresence,
+        ),
+        Id::CourseLocation => (
+            "courseLocations",
+            K::CourseLocationSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
+            vec![V::DynamicDictionary],
+            Q::ExactAny,
+        ),
+        Id::SectionIndex => (
+            "sectionIndexes",
+            K::SectionIndexSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::CanonicalIdentity, N::SortDeduplicate],
+            vec![V::SectionIndexIdentity],
+            Q::SameSectionExactAny,
+        ),
+        Id::SectionNumber => (
+            "sectionNumbers",
+            K::SectionNumberSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
+            vec![V::NonemptyWhenActive],
+            Q::SameSectionExactAny,
+        ),
+        Id::SectionOpenStatus => (
+            "openStatuses",
+            K::OpenStatusSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::SortDeduplicate],
+            vec![],
+            Q::SameSectionExactAny,
+        ),
+        Id::SectionModality => (
+            "modalities",
+            K::ModalitySet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::SortDeduplicate],
+            vec![],
+            Q::SameSectionExactAny,
+        ),
+        Id::SectionSynchronicity => (
+            "synchronicities",
+            K::SynchronicitySet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::SortDeduplicate],
+            vec![],
+            Q::SameSectionExactAny,
+        ),
+        Id::SectionInstructor => (
+            "instructors",
+            K::InstructorNameSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::TrimAndCollapseWhitespace, N::SortDeduplicate],
+            vec![V::DynamicDictionary],
+            Q::SameSectionExactAny,
+        ),
+        Id::SectionAvailability => (
+            "availability",
+            K::AvailabilityWindows,
+            D::EmptyWindows,
+            D::EmptyWindows,
+            canonical_json(serde_json::json!([])),
+            vec![N::MinuteOfDay, N::SortDeduplicate],
+            vec![V::OrderedMinuteInterval],
+            Q::SameSectionAvailabilityAll,
+        ),
+        Id::SectionMeetingLocation => (
+            "meetingLocations",
+            K::MeetingLocationSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
+            vec![V::DynamicDictionary],
+            Q::SameSectionExactAny,
+        ),
+        Id::SectionBuildingRoom => (
+            "buildingRoom",
+            K::BuildingRoom,
+            D::EmptyComposite,
+            D::EmptyComposite,
+            canonical_json(serde_json::json!({"buildingCodes": [], "roomNumbers": []})),
+            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
+            vec![V::StructuredOnly],
+            Q::SameSectionStructuredDimensions,
+        ),
+        Id::SectionExam => (
+            "examCodes",
+            K::ExamCodeSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
+            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
+            vec![V::DynamicDictionary],
+            Q::SameSectionExactAny,
+        ),
+        Id::SectionPermission => (
+            "permission",
+            K::PermissionRequirement,
+            D::Any,
+            D::Any,
+            canonical_json(serde_json::json!("ANY")),
+            vec![],
+            vec![],
+            Q::TernaryPresence,
+        ),
+        Id::SectionEligibility => (
+            "eligibility",
+            K::Eligibility,
+            D::EmptyComposite,
+            D::EmptyComposite,
+            canonical_json(serde_json::json!({
+                "majorCodes": [],
+                "minorCodes": [],
+                "honorProgramCodes": [],
+                "unitCodes": [],
+                "unitMajors": []
+            })),
+            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
+            vec![V::StructuredOnly],
+            Q::SameSectionStructuredDimensions,
+        ),
+    };
     FilterFieldSchemaV1 {
         stable_id: id,
         request_field: request_field.to_owned(),
@@ -545,12 +612,17 @@ fn filter_field_schema(id: FilterFieldId, chip_order: u8) -> FilterFieldSchemaV1
         value_kind,
         neutral,
         default,
+        canonical_neutral,
         normalization,
         validation,
         query_encoding,
         i18n_key: format!("filter.{}", id.wire_name().to_ascii_lowercase()),
         chip_order,
     }
+}
+
+fn canonical_json(value: serde_json::Value) -> FilterCanonicalNeutralV1 {
+    FilterCanonicalNeutralV1::Json { value }
 }
 
 const FILTER_TOKEN_MAX_BYTES: usize = 256;

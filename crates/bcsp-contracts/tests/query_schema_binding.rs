@@ -9,13 +9,14 @@ use bcsp_contracts::{
     CourseDetailRequestV1, CourseDetailResponseV1, CourseGroupKey, CourseQueryItemV1,
     CourseQueryRequestV1, CourseQueryResponseV1, CourseSortV1, CourseVariantKey,
     CourseVariantQueryItemV1, CreditRangeV1, EligibilityFilterV1, EligibilityUnitMajorV1,
-    FilterFieldId, FilterMatchV1, FilterRequestV1, FilterSchemaV1, FilterSetModeV1, FilterTokenV1,
-    LiveOpenEvidenceV1, LiveOpenStateV1, MatchExplanation, NormalizedCourseGroupV1,
-    NormalizedCourseVariantV1, NormalizedFilterValuesV1, NormalizedOccurrenceV1,
-    NormalizedSectionV1, PageInfoV1, PageRequestV1, QUERY_CONTRACT_VERSION, SchemaDirection,
-    SectionDetailRequestV1, SectionDetailResponseV1, SectionKey, SectionQueryItemV1,
-    SectionQueryRequestV1, SectionQueryResponseV1, SectionSearchItemV1, SectionSortV1, TermId,
-    TextMatchEvidenceV1, UnknownFieldPolicy, WeekdayV1, contract_manifest, filter_schema_v1,
+    FilterCanonicalNeutralV1, FilterFieldId, FilterMatchV1, FilterRequestV1, FilterSchemaV1,
+    FilterSetModeV1, FilterTokenV1, LiveOpenEvidenceV1, LiveOpenStateV1, MatchExplanation,
+    NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedFilterValuesV1,
+    NormalizedOccurrenceV1, NormalizedSectionV1, PageInfoV1, PageRequestV1, QUERY_CONTRACT_VERSION,
+    SchemaDirection, SectionDetailRequestV1, SectionDetailResponseV1, SectionKey,
+    SectionQueryItemV1, SectionQueryRequestV1, SectionQueryResponseV1, SectionSearchItemV1,
+    SectionSortV1, TermId, TextMatchEvidenceV1, UnknownFieldPolicy, WeekdayV1, contract_manifest,
+    filter_schema_v1,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -368,4 +369,44 @@ fn query_manifest_object_fields_match_serde_shapes() {
         "bcsp.query.section-detail-response.v1",
         &section_detail_response,
     );
+}
+
+#[test]
+fn canonical_neutral_manifest_binds_required_and_json_variants() {
+    let schema = contract_manifest()
+        .schemas
+        .into_iter()
+        .find(|schema| schema.id == "bcsp.query.filter-canonical-neutral.v1")
+        .unwrap();
+    assert_eq!(schema.discriminator.as_deref(), Some("kind"));
+
+    let cases = [
+        (
+            "REQUIRED",
+            FilterCanonicalNeutralV1::Required,
+            BTreeSet::from(["kind".to_owned()]),
+        ),
+        (
+            "JSON",
+            FilterCanonicalNeutralV1::Json { value: Value::Null },
+            BTreeSet::from(["kind".to_owned(), "value".to_owned()]),
+        ),
+    ];
+    for (tag, value, expected_keys) in cases {
+        let serialized = serde_json::to_value(value).unwrap();
+        assert_eq!(serialized["kind"], Value::String(tag.to_owned()));
+        let Value::Object(object) = serialized else {
+            panic!("canonical neutral must serialize as an object")
+        };
+        assert_eq!(
+            object.keys().cloned().collect::<BTreeSet<_>>(),
+            expected_keys
+        );
+        assert!(
+            schema
+                .variants
+                .iter()
+                .any(|variant| variant.tag_value == tag)
+        );
+    }
 }

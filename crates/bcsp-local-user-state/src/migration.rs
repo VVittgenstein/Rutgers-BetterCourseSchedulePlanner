@@ -1,4 +1,4 @@
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -17,14 +17,24 @@ struct EmbeddedMigration {
     id: u32,
     name: &'static str,
     sql: &'static str,
+    after_sql: Option<fn(&Transaction<'_>) -> PersonalStateResult<()>>,
 }
 
-const MIGRATIONS: &[EmbeddedMigration] = &[EmbeddedMigration {
-    // Personal migrations occupy a disjoint namespace from operational 1..N.
-    id: PERSONAL_MIGRATION_ID_BASE + 1,
-    name: "personal_state",
-    sql: include_str!("../migrations/0001_personal_state.sql"),
-}];
+const MIGRATIONS: &[EmbeddedMigration] = &[
+    EmbeddedMigration {
+        // Personal migrations occupy a disjoint namespace from operational 1..N.
+        id: PERSONAL_MIGRATION_ID_BASE + 1,
+        name: "personal_state",
+        sql: include_str!("../migrations/0001_personal_state.sql"),
+        after_sql: None,
+    },
+    EmbeddedMigration {
+        id: PERSONAL_MIGRATION_ID_BASE + 2,
+        name: "saved_views",
+        sql: include_str!("../migrations/0002_saved_views.sql"),
+        after_sql: Some(crate::saved_view::migrate_legacy_current_filters),
+    },
+];
 
 pub(crate) fn apply_migrations(connection: &mut Connection) -> PersonalStateResult<()> {
     connection.execute_batch(CREATE_LEDGER_SQL)?;
@@ -38,6 +48,9 @@ pub(crate) fn apply_migrations(connection: &mut Connection) -> PersonalStateResu
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for migration in MIGRATIONS.iter().skip(applied.len()) {
         transaction.execute_batch(migration.sql)?;
+        if let Some(after_sql) = migration.after_sql {
+            after_sql(&transaction)?;
+        }
         transaction.execute(
             "INSERT INTO personal_migration_ledger
                 (migration_id, name, checksum, applied_at)

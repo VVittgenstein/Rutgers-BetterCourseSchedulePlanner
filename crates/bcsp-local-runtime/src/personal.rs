@@ -1,26 +1,42 @@
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bcsp_application::SessionNonce;
 use bcsp_application::SharedWatchSocket;
 use bcsp_contracts::{
-    ContractDecodeError, HttpRequestEnvelope, HttpSuccessEnvelope, SectionKey,
-    decode_versioned_envelope_json,
+    ContractDecodeError, FilterRequestV1, HttpRequestEnvelope, HttpSuccessEnvelope, SectionKey,
+    SystemTraceIdSource, TraceId, TraceIdSource, decode_versioned_envelope_json,
 };
 use bcsp_local_user_state::{
-    HistoryFilter, LocalSettings, PageRequest, PersonalStateError, SettingsRevision,
+    CurrentFiltersRevision, HistoryFilter, LocalSettings, PageRequest, PersonalStateError,
+    SavedViewDefinition, SavedViewMatch, SavedViewRevision, SettingsRevision, UnixMillis,
+    UserStateRevision,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{LocalApiErrorCode, LocalPrimaryDatabase, LocalSurfaceFailure, LocalSurfaceState};
 
+const LOCAL_USER_DATA_RESET_TOKEN_TTL: Duration = Duration::from_secs(60);
+
+struct PendingLocalUserDataReset {
+    token: TraceId,
+    expected_state_revision: UserStateRevision,
+    expires_at: Instant,
+}
+
 pub struct PersonalSurface {
     database: Arc<Mutex<LocalPrimaryDatabase>>,
     watch: Arc<SharedWatchSocket>,
+    pending_reset: Option<PendingLocalUserDataReset>,
 }
 
 impl PersonalSurface {
     pub fn new(database: Arc<Mutex<LocalPrimaryDatabase>>, watch: Arc<SharedWatchSocket>) -> Self {
-        Self { database, watch }
+        Self {
+            database,
+            watch,
+            pending_reset: None,
+        }
     }
 
     fn with_store<T>(
@@ -66,6 +82,7 @@ impl LocalSurfaceState for PersonalSurface {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Update {
+            expected_user_state_revision: UserStateRevision,
             expected_revision: u64,
             value: LocalSettings,
         }
@@ -73,8 +90,13 @@ impl LocalSurfaceState for PersonalSurface {
         let update: Update = decode_payload(body)?;
         let revision =
             SettingsRevision::try_from(update.expected_revision).map_err(map_personal_error)?;
-        let stored =
-            self.with_store(|store| store.compare_and_swap_settings(revision, &update.value))?;
+        let stored = self.with_store(|store| {
+            store.compare_and_swap_settings(
+                update.expected_user_state_revision,
+                revision,
+                &update.value,
+            )
+        })?;
         encode(&stored)
     }
 
@@ -87,11 +109,14 @@ impl LocalSurfaceState for PersonalSurface {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Update {
+            expected_user_state_revision: UserStateRevision,
             sections: Vec<SectionKey>,
         }
 
         let update: Update = decode_payload(body)?;
-        self.with_store(|store| store.replace_selected_sections(&update.sections))?;
+        self.with_store(|store| {
+            store.replace_selected_sections(update.expected_user_state_revision, &update.sections)
+        })?;
         encode(&update.sections)
     }
 
@@ -102,9 +127,331 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&history)
     }
 
+    fn current_filters(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        let current = self.with_store(|store| store.current_filters())?;
+        encode(&current)
+    }
+
+    fn put_current_filters(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Update {
+            expected_user_state_revision: UserStateRevision,
+            expected_current_filters_revision: CurrentFiltersRevision,
+            filters: FilterRequestV1,
+        }
+
+        let update: Update = decode_payload(body)?;
+        let current = self.with_store(|store| {
+            store.replace_current_filters(
+                update.expected_user_state_revision,
+                update.expected_current_filters_revision,
+                &update.filters,
+            )
+        })?;
+        encode(&current)
+    }
+
+    fn saved_views(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct SavedViewListItem {
+            definition: SavedViewDefinition,
+            match_state: SavedViewMatch,
+        }
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct SavedViewLibrary {
+            state_revision: UserStateRevision,
+            current_filters: bcsp_local_user_state::StoredCurrentFilters,
+            views: Vec<SavedViewListItem>,
+        }
+
+        let library = self.with_store(|store| {
+            let current_filters = store.current_filters()?;
+            let views = store
+                .saved_views()?
+                .into_iter()
+                .map(|definition| SavedViewListItem {
+                    match_state: definition.match_current(&current_filters),
+                    definition,
+                })
+                .collect();
+            Ok(SavedViewLibrary {
+                state_revision: current_filters.state_revision,
+                current_filters,
+                views,
+            })
+        })?;
+        encode(&library)
+    }
+
+    fn create_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Create {
+            expected_user_state_revision: UserStateRevision,
+            expected_current_filters_revision: CurrentFiltersRevision,
+            name: String,
+            filters: FilterRequestV1,
+        }
+
+        let create: Create = decode_payload(body)?;
+        let now = unix_millis_now()?;
+        let mutation = self.with_store(|store| {
+            store.create_saved_view(
+                create.expected_user_state_revision,
+                create.expected_current_filters_revision,
+                &create.name,
+                &create.filters,
+                now,
+            )
+        })?;
+        encode(&mutation)
+    }
+
+    fn apply_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        let command: SavedViewCommand = decode_payload(body)?;
+        let current = self.with_store(|store| {
+            store.apply_saved_view(
+                command.expected_user_state_revision,
+                command.expected_current_filters_revision,
+                command.id,
+                command.expected_view_revision,
+            )
+        })?;
+        encode(&current)
+    }
+
+    fn rename_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Rename {
+            expected_user_state_revision: UserStateRevision,
+            expected_current_filters_revision: CurrentFiltersRevision,
+            id: TraceId,
+            expected_view_revision: SavedViewRevision,
+            name: String,
+        }
+
+        let rename: Rename = decode_payload(body)?;
+        let now = unix_millis_now()?;
+        let mutation = self.with_store(|store| {
+            store.rename_saved_view(
+                rename.expected_user_state_revision,
+                rename.expected_current_filters_revision,
+                rename.id,
+                rename.expected_view_revision,
+                &rename.name,
+                now,
+            )
+        })?;
+        encode(&mutation)
+    }
+
+    fn update_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Update {
+            expected_user_state_revision: UserStateRevision,
+            expected_current_filters_revision: CurrentFiltersRevision,
+            id: TraceId,
+            expected_view_revision: SavedViewRevision,
+            filters: FilterRequestV1,
+        }
+
+        let update: Update = decode_payload(body)?;
+        let now = unix_millis_now()?;
+        let mutation = self.with_store(|store| {
+            store.update_saved_view(
+                update.expected_user_state_revision,
+                update.expected_current_filters_revision,
+                update.id,
+                update.expected_view_revision,
+                &update.filters,
+                now,
+            )
+        })?;
+        encode(&mutation)
+    }
+
+    fn duplicate_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Duplicate {
+            expected_user_state_revision: UserStateRevision,
+            id: TraceId,
+            expected_view_revision: SavedViewRevision,
+            name: String,
+        }
+
+        let duplicate: Duplicate = decode_payload(body)?;
+        let now = unix_millis_now()?;
+        let mutation = self.with_store(|store| {
+            store.duplicate_saved_view(
+                duplicate.expected_user_state_revision,
+                duplicate.id,
+                duplicate.expected_view_revision,
+                &duplicate.name,
+                now,
+            )
+        })?;
+        encode(&mutation)
+    }
+
+    fn delete_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        let command: SavedViewCommand = decode_payload(body)?;
+        let result = self.with_store(|store| {
+            store.delete_saved_view(
+                command.expected_user_state_revision,
+                command.expected_current_filters_revision,
+                command.id,
+                command.expected_view_revision,
+            )
+        })?;
+        encode(&result)
+    }
+
+    fn delete_all_saved_views(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        let command: CurrentFiltersCommand = decode_payload(body)?;
+        let result = self.with_store(|store| {
+            store.delete_all_saved_views(
+                command.expected_user_state_revision,
+                command.expected_current_filters_revision,
+            )
+        })?;
+        encode(&result)
+    }
+
+    fn reset_current_filters(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        let command: CurrentFiltersCommand = decode_payload(body)?;
+        let current = self.with_store(|store| {
+            store.reset_current_filters(
+                command.expected_user_state_revision,
+                command.expected_current_filters_revision,
+                None,
+            )
+        })?;
+        encode(&current)
+    }
+
+    fn prepare_local_user_data_reset(
+        &mut self,
+        body: &[u8],
+    ) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Prepare {
+            expected_user_state_revision: UserStateRevision,
+        }
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Prepared {
+            confirmation_token: TraceId,
+            expected_user_state_revision: UserStateRevision,
+            expires_in_seconds: u64,
+        }
+
+        let prepare: Prepare = decode_payload(body)?;
+        let current = self.with_store(|store| store.user_state_revision())?;
+        if current != prepare.expected_user_state_revision {
+            return Err(LocalSurfaceFailure::revision_conflict(
+                LocalApiErrorCode::UserStateRevisionConflict,
+                current.get(),
+            ));
+        }
+        let mut ids = SystemTraceIdSource;
+        let token = ids.next_trace_id();
+        self.pending_reset = Some(PendingLocalUserDataReset {
+            token,
+            expected_state_revision: current,
+            expires_at: Instant::now() + LOCAL_USER_DATA_RESET_TOKEN_TTL,
+        });
+        encode(&Prepared {
+            confirmation_token: token,
+            expected_user_state_revision: current,
+            expires_in_seconds: LOCAL_USER_DATA_RESET_TOKEN_TTL.as_secs(),
+        })
+    }
+
+    fn confirm_local_user_data_reset(
+        &mut self,
+        body: &[u8],
+    ) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Confirm {
+            confirmation_token: TraceId,
+        }
+
+        let confirm: Confirm = decode_payload(body)?;
+        let expected_state_revision = consume_reset_confirmation(
+            &mut self.pending_reset,
+            confirm.confirmation_token,
+            Instant::now(),
+        )?;
+
+        self.watch.stop();
+        let reset = self.with_store(|store| store.clear_personal_data(expected_state_revision))?;
+        encode(&reset)
+    }
+
     fn checkpoint_wal(&mut self) -> Result<(), LocalSurfaceFailure> {
         self.with_store(|store| store.checkpoint_wal()).map(|_| ())
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CurrentFiltersCommand {
+    expected_user_state_revision: UserStateRevision,
+    expected_current_filters_revision: CurrentFiltersRevision,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SavedViewCommand {
+    expected_user_state_revision: UserStateRevision,
+    expected_current_filters_revision: CurrentFiltersRevision,
+    id: TraceId,
+    expected_view_revision: SavedViewRevision,
+}
+
+fn unix_millis_now() -> Result<UnixMillis, LocalSurfaceFailure> {
+    let milliseconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?
+        .as_millis();
+    let milliseconds = i64::try_from(milliseconds)
+        .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?;
+    UnixMillis::try_from(milliseconds)
+        .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))
+}
+
+fn consume_reset_confirmation(
+    pending: &mut Option<PendingLocalUserDataReset>,
+    provided_token: TraceId,
+    now: Instant,
+) -> Result<UserStateRevision, LocalSurfaceFailure> {
+    let Some(candidate) = pending.take() else {
+        return Err(LocalSurfaceFailure::conflict(
+            LocalApiErrorCode::ResetConfirmationRequired,
+        ));
+    };
+    if now >= candidate.expires_at {
+        return Err(LocalSurfaceFailure::conflict(
+            LocalApiErrorCode::ResetConfirmationExpired,
+        ));
+    }
+    if provided_token != candidate.token {
+        *pending = Some(candidate);
+        return Err(LocalSurfaceFailure::conflict(
+            LocalApiErrorCode::ResetConfirmationInvalid,
+        ));
+    }
+    Ok(candidate.expected_state_revision)
 }
 
 fn decode_payload<T>(body: &[u8]) -> Result<T, LocalSurfaceFailure>
@@ -133,8 +480,47 @@ where
 
 fn map_personal_error(error: PersonalStateError) -> LocalSurfaceFailure {
     match error {
-        PersonalStateError::RevisionConflict { .. } => {
-            LocalSurfaceFailure::conflict(LocalApiErrorCode::SettingsRevisionConflict)
+        PersonalStateError::RevisionConflict { actual, .. } => {
+            LocalSurfaceFailure::revision_conflict(
+                LocalApiErrorCode::SettingsRevisionConflict,
+                actual,
+            )
+        }
+        PersonalStateError::UserStateRevisionConflict { actual, .. } => {
+            LocalSurfaceFailure::revision_conflict(
+                LocalApiErrorCode::UserStateRevisionConflict,
+                actual,
+            )
+        }
+        PersonalStateError::CurrentFiltersRevisionConflict { actual, .. } => {
+            LocalSurfaceFailure::revision_conflict(
+                LocalApiErrorCode::CurrentFiltersRevisionConflict,
+                actual,
+            )
+        }
+        PersonalStateError::SavedViewRevisionConflict { actual, .. } => {
+            LocalSurfaceFailure::revision_conflict(
+                LocalApiErrorCode::SavedViewRevisionConflict,
+                actual,
+            )
+        }
+        PersonalStateError::SavedViewNameConflict {
+            existing_revision, ..
+        } => LocalSurfaceFailure::revision_conflict(
+            LocalApiErrorCode::SavedViewNameConflict,
+            existing_revision,
+        ),
+        PersonalStateError::SavedViewNotFound { .. } => {
+            LocalSurfaceFailure::not_found(LocalApiErrorCode::SavedViewNotFound)
+        }
+        PersonalStateError::SavedViewIncompatible { .. } => {
+            LocalSurfaceFailure::unprocessable(LocalApiErrorCode::SavedViewIncompatible)
+        }
+        PersonalStateError::InvalidSavedViewName | PersonalStateError::InvalidFilterSnapshot => {
+            LocalSurfaceFailure::bad_request(LocalApiErrorCode::InvalidSavedView)
+        }
+        PersonalStateError::StorageFull => {
+            LocalSurfaceFailure::insufficient_storage(LocalApiErrorCode::StorageFull)
         }
         PersonalStateError::InvalidSetting(_)
         | PersonalStateError::DuplicateSelection(_)
@@ -145,5 +531,56 @@ fn map_personal_error(error: PersonalStateError) -> LocalSurfaceFailure {
             LocalSurfaceFailure::bad_request(LocalApiErrorCode::InvalidLocalState)
         }
         _ => LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    fn trace(value: u64) -> TraceId {
+        TraceId::from_str(&format!("00000000-0000-4000-8000-{value:012x}")).unwrap()
+    }
+
+    #[test]
+    fn expired_reset_confirmation_is_consumed_and_rejected() {
+        let token = trace(1);
+        let mut pending = Some(PendingLocalUserDataReset {
+            token,
+            expected_state_revision: UserStateRevision::try_from(7).unwrap(),
+            expires_at: Instant::now() - Duration::from_millis(1),
+        });
+        assert_eq!(
+            consume_reset_confirmation(&mut pending, token, Instant::now()),
+            Err(LocalSurfaceFailure::conflict(
+                LocalApiErrorCode::ResetConfirmationExpired
+            ))
+        );
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn wrong_reset_token_does_not_consume_the_real_single_use_token() {
+        let token = trace(2);
+        let expected = UserStateRevision::try_from(8).unwrap();
+        let now = Instant::now();
+        let mut pending = Some(PendingLocalUserDataReset {
+            token,
+            expected_state_revision: expected,
+            expires_at: now + Duration::from_secs(1),
+        });
+        assert_eq!(
+            consume_reset_confirmation(&mut pending, trace(3), now),
+            Err(LocalSurfaceFailure::conflict(
+                LocalApiErrorCode::ResetConfirmationInvalid
+            ))
+        );
+        assert_eq!(
+            consume_reset_confirmation(&mut pending, token, now),
+            Ok(expected)
+        );
+        assert!(pending.is_none());
     }
 }

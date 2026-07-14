@@ -236,6 +236,7 @@ pub enum ApiErrorDetail {
     InvalidField { field: DetailName },
     Limit { name: DetailName, maximum: u32 },
     RetryAfterSeconds { seconds: u32 },
+    CurrentRevision { revision: u64 },
 }
 
 /// Generic error body for a separately versioned target-specific error set.

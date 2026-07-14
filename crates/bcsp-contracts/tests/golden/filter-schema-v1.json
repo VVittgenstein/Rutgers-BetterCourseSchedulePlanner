@@ -8,6 +8,9 @@
       "valueKind": "TERM_ID",
       "neutral": "REQUIRED",
       "default": "REQUIRED",
+      "canonicalNeutral": {
+        "kind": "REQUIRED"
+      },
       "normalization": [
         "CANONICAL_IDENTITY"
       ],
@@ -26,6 +29,10 @@
       "valueKind": "CAMPUS_CODE_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "CANONICAL_IDENTITY",
         "SORT_DEDUPLICATE"
@@ -44,6 +51,10 @@
       "valueKind": "SUBJECT_CODE_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "CANONICAL_IDENTITY",
         "SORT_DEDUPLICATE"
@@ -62,6 +73,10 @@
       "valueKind": "TEXT_QUERY",
       "neutral": "EMPTY_TEXT",
       "default": "EMPTY_TEXT",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": null
+      },
       "normalization": [
         "TRIM_AND_COLLAPSE_WHITESPACE",
         "TOKEN_AND"
@@ -83,6 +98,10 @@
       "valueKind": "COURSE_NUMBER_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "TRIM",
         "ASCII_UPPERCASE",
@@ -102,6 +121,10 @@
       "valueKind": "LEVEL_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "TRIM",
         "ASCII_UPPERCASE",
@@ -121,6 +144,10 @@
       "valueKind": "CREDIT_RANGE",
       "neutral": "UNBOUNDED_RANGE",
       "default": "UNBOUNDED_RANGE",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": null
+      },
       "normalization": [
         "CREDIT_HUNDREDTHS"
       ],
@@ -138,6 +165,13 @@
       "valueKind": "CORE_CODE_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": {
+          "codes": [],
+          "mode": "ANY"
+        }
+      },
       "normalization": [
         "TRIM",
         "ASCII_UPPERCASE",
@@ -157,6 +191,10 @@
       "valueKind": "PREREQUISITE_PRESENCE",
       "neutral": "ANY",
       "default": "ANY",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": "ANY"
+      },
       "normalization": [],
       "validation": [],
       "queryEncoding": "TERNARY_PRESENCE",
@@ -170,6 +208,10 @@
       "valueKind": "COURSE_LOCATION_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "TRIM",
         "ASCII_UPPERCASE",
@@ -189,6 +231,10 @@
       "valueKind": "SECTION_INDEX_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "CANONICAL_IDENTITY",
         "SORT_DEDUPLICATE"
@@ -207,6 +253,10 @@
       "valueKind": "SECTION_NUMBER_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "TRIM",
         "ASCII_UPPERCASE",
@@ -226,6 +276,10 @@
       "valueKind": "OPEN_STATUS_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "SORT_DEDUPLICATE"
       ],
@@ -241,6 +295,10 @@
       "valueKind": "MODALITY_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "SORT_DEDUPLICATE"
       ],
@@ -256,6 +314,10 @@
       "valueKind": "SYNCHRONICITY_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "SORT_DEDUPLICATE"
       ],
@@ -271,6 +333,10 @@
       "valueKind": "INSTRUCTOR_NAME_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "TRIM_AND_COLLAPSE_WHITESPACE",
         "SORT_DEDUPLICATE"
@@ -289,6 +355,10 @@
       "valueKind": "AVAILABILITY_WINDOWS",
       "neutral": "EMPTY_WINDOWS",
       "default": "EMPTY_WINDOWS",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "MINUTE_OF_DAY",
         "SORT_DEDUPLICATE"
@@ -307,6 +377,10 @@
       "valueKind": "MEETING_LOCATION_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "TRIM",
         "ASCII_UPPERCASE",
@@ -326,6 +400,13 @@
       "valueKind": "BUILDING_ROOM",
       "neutral": "EMPTY_COMPOSITE",
       "default": "EMPTY_COMPOSITE",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": {
+          "buildingCodes": [],
+          "roomNumbers": []
+        }
+      },
       "normalization": [
         "TRIM",
         "ASCII_UPPERCASE",
@@ -345,6 +426,10 @@
       "valueKind": "EXAM_CODE_SET",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": []
+      },
       "normalization": [
         "TRIM",
         "ASCII_UPPERCASE",
@@ -364,6 +449,10 @@
       "valueKind": "PERMISSION_REQUIREMENT",
       "neutral": "ANY",
       "default": "ANY",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": "ANY"
+      },
       "normalization": [],
       "validation": [],
       "queryEncoding": "TERNARY_PRESENCE",
@@ -377,6 +466,16 @@
       "valueKind": "ELIGIBILITY",
       "neutral": "EMPTY_COMPOSITE",
       "default": "EMPTY_COMPOSITE",
+      "canonicalNeutral": {
+        "kind": "JSON",
+        "value": {
+          "honorProgramCodes": [],
+          "majorCodes": [],
+          "minorCodes": [],
+          "unitCodes": [],
+          "unitMajors": []
+        }
+      },
       "normalization": [
         "TRIM",
         "ASCII_UPPERCASE",
