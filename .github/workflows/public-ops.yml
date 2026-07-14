@@ -1,0 +1,102 @@
+name: Public operations rehearsal
+
+on:
+  push:
+    paths:
+      - '.github/workflows/public-ops.yml'
+      - 'deploy/public/**'
+      - 'apps/bcsp-server/**'
+      - 'crates/**'
+      - 'frontend/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - 'tools/architecture/**'
+  pull_request:
+    paths:
+      - '.github/workflows/public-ops.yml'
+      - 'deploy/public/**'
+      - 'apps/bcsp-server/**'
+      - 'crates/**'
+      - 'frontend/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - 'tools/architecture/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-ops-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  disposable-ubuntu:
+    name: Ubuntu 24.04 disposable host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: 1.97.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Select the locked Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+          package-manager-cache: false
+
+      - name: Install disposable-host tools
+        run: |
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+          sudo chmod 0755 /usr/sbin/policy-rc.d
+          trap 'sudo rm -f /usr/sbin/policy-rc.d' EXIT
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends caddy jq shellcheck sqlite3
+          npm install --global npm@11.16.0
+          test "$(node --version)" = 'v24.18.0'
+          test "$(npm --version)" = '11.16.0'
+
+      - name: Build and verify the public frontend
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build:public
+
+      - name: Build the real Linux service binary
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --target x86_64-unknown-linux-gnu
+          cargo build --locked --release -p bcsp-server
+
+      - name: Assemble a disposable candidate root
+        id: candidate
+        run: |
+          candidate="$RUNNER_TEMP/bcsp-public-candidate"
+          install -d "$candidate/bin" "$candidate/share/bcsp"
+          install -m 0755 target/release/bcsp-server "$candidate/bin/bcsp-server"
+          cp -a frontend/dist/public/. "$candidate/share/bcsp/"
+          for directory in systemd caddy config ops docs; do
+            cp -a "deploy/public/$directory" "$candidate/"
+          done
+          printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+
+      - name: Validate public package inputs
+        run: |
+          find deploy/public -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+          shellcheck deploy/public/ops/*.sh deploy/public/tests/*.sh
+          node tools/architecture/verify-public-rust-zero-surface.mjs
+
+      - name: Rehearse install, restore, upgrade, and rollback
+        run: >-
+          sudo env BCSP_DISPOSABLE_HOST_CONFIRM=YES BCSP_CI_NO_RUTGERS=1
+          bash deploy/public/tests/disposable-host.sh
+          --candidate-root "${{ steps.candidate.outputs.candidate }}"

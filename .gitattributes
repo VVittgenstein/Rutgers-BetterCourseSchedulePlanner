@@ -1,0 +1,8 @@
+/deploy/public/ops/*.sh text eol=lf
+/deploy/public/tests/*.sh text eol=lf
+/deploy/public/systemd/* text eol=lf
+/deploy/public/caddy/* text eol=lf
+/deploy/public/config/*.json text eol=lf
+/deploy/public/config/*.example text eol=lf
+/deploy/public/docs/*.md text eol=lf
+/.github/workflows/*.yml text eol=lf
