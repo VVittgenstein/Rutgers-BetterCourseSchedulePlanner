@@ -158,12 +158,17 @@ mapfile -t business_tables < <(sqlite3 "$DATABASE" \
        AND name NOT LIKE 'sqlite_%'
        AND name <> 'bcsp_operational_migrations'
        AND name <> 'catalog_discovery_state'
+       AND (name = 'catalog_course_fts' OR name NOT LIKE 'catalog_course_fts_%')
      ORDER BY name;")
 [[ "${#business_tables[@]}" -gt 0 ]]
 for table in "${business_tables[@]}"; do
   [[ "$table" =~ ^[A-Za-z0-9_]+$ ]]
   table_rows="$(sqlite3 "$DATABASE" "SELECT count(*) FROM \"$table\";")"
-  [[ "$table_rows" -eq 0 ]]
+  if [[ "$table_rows" -ne 0 ]]; then
+    printf 'disposable-host: first-start table %s contains %s unexpected row(s)\n' \
+      "$table" "$table_rows" >&2
+    exit 1
+  fi
 done
 discovery_sentinel="$(sqlite3 "$DATABASE" \
   'SELECT count(*) FROM catalog_discovery_state
@@ -174,7 +179,10 @@ discovery_sentinel="$(sqlite3 "$DATABASE" \
       AND last_success_observation_id IS NULL
       AND last_published_observation_id IS NULL
       AND last_nonempty_observation_id IS NULL;')"
-[[ "$discovery_sentinel" -eq 1 ]]
+if [[ "$discovery_sentinel" -ne 1 ]]; then
+  printf 'disposable-host: initial discovery state is not the empty sentinel\n' >&2
+  exit 1
+fi
 
 sqlite3 "$DATABASE" \
   'CREATE TABLE ops_disposable_proof(value TEXT NOT NULL); INSERT INTO ops_disposable_proof VALUES ("baseline");'
