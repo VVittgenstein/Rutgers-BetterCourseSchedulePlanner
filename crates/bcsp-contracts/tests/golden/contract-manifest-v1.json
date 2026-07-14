@@ -114,6 +114,55 @@
       "semantic": "only integer 1 is accepted"
     },
     {
+      "id": "open-contract-version",
+      "wireType": "u16",
+      "semantic": "only integer 1 is accepted"
+    },
+    {
+      "id": "open-sequence",
+      "wireType": "u64",
+      "semantic": "nonzero target-scoped attempt or observation sequence"
+    },
+    {
+      "id": "open-http-status-code",
+      "wireType": "u16",
+      "semantic": "valid HTTP status code in the inclusive range 100..=599"
+    },
+    {
+      "id": "open-http-header-value",
+      "wireType": "string",
+      "maxBytes": 4096,
+      "semantic": "nonempty trim-stable unfolded HTTP response-header value containing only visible ASCII or horizontal tabs"
+    },
+    {
+      "id": "open-decoded-body-sha256",
+      "wireType": "string",
+      "exactBytes": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "semantic": "lowercase SHA-256 of the decoded Open response body; raw body excluded"
+    },
+    {
+      "id": "open-canonical-set-hash",
+      "wireType": "string",
+      "exactBytes": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "semantic": "lowercase SHA-256 over the normalized Open index set; raw body excluded"
+    },
+    {
+      "id": "open-state-hash",
+      "wireType": "string",
+      "exactBytes": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "semantic": "lowercase SHA-256 over the batch Catalog intersection state"
+    },
+    {
+      "id": "rutgers-day",
+      "wireType": "string",
+      "exactBytes": 10,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "semantic": "valid calendar date at the America/New_York day boundary"
+    },
+    {
       "id": "filter-token",
       "wireType": "string",
       "maxBytes": 256,
@@ -1504,6 +1553,943 @@
         {
           "name": "pendingEmpty",
           "typeRef": "$optional:$schema:bcsp.catalog.refresh-point.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.batch-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campus",
+          "typeRef": "$scalar:campus-code",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.refresh-classification.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "IN_FLIGHT",
+        "VALID_APPLIED",
+        "VALID_EMPTY_NO_ROWS",
+        "UNSAFE_EMPTY",
+        "UNSAFE_ZERO_INTERSECTION",
+        "STALE_CATALOG_RACE",
+        "FAILED"
+      ]
+    },
+    {
+      "id": "bcsp.open.applied-classification.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "VALID_APPLIED",
+        "VALID_EMPTY_NO_ROWS"
+      ]
+    },
+    {
+      "id": "bcsp.open.failure-class.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "NETWORK",
+        "TIMEOUT",
+        "HTTP_408",
+        "HTTP_429",
+        "FORBIDDEN",
+        "OTHER_HTTP_4XX",
+        "HTTP_5XX",
+        "OFF_ORIGIN_REDIRECT",
+        "NON_JSON",
+        "OVERSIZE",
+        "SCHEMA_VIOLATION",
+        "INVALID_VALUE",
+        "PERSIST"
+      ]
+    },
+    {
+      "id": "bcsp.open.state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "OPEN",
+        "CLOSED",
+        "UNKNOWN"
+      ]
+    },
+    {
+      "id": "bcsp.open.freshness-state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "UNKNOWN",
+        "FRESH",
+        "STALE"
+      ]
+    },
+    {
+      "id": "bcsp.open.uncertainty-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "NEVER_OBSERVED",
+        "STALE_LAST_KNOWN_GOOD",
+        "LATEST_ATTEMPT_FAILED",
+        "LATEST_ATTEMPT_UNSAFE",
+        "STALE_CATALOG_RACE",
+        "CATALOG_VERSION_UNAVAILABLE"
+      ]
+    },
+    {
+      "id": "bcsp.open.scheduler-lane.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "GENERAL",
+        "ACTIVE_WATCH",
+        "FIRST_LOAD",
+        "MANUAL_REFRESH",
+        "CATALOG_RACE_RECHECK"
+      ]
+    },
+    {
+      "id": "bcsp.open.circuit-state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "CLOSED",
+        "RETRY_AFTER",
+        "FATAL_DIAGNOSTIC"
+      ]
+    },
+    {
+      "id": "bcsp.open.circuit-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "RATE_LIMITED",
+        "FORBIDDEN",
+        "OTHER_HTTP_4XX",
+        "OFF_ORIGIN_REDIRECT",
+        "SAME_ORIGIN_REDIRECT",
+        "INVALID_REDIRECT",
+        "NON_JSON",
+        "INVALID_CONTENT_TYPE",
+        "SCHEMA_VIOLATION",
+        "INVALID_VALUE",
+        "OVERSIZE"
+      ]
+    },
+    {
+      "id": "bcsp.open.rutgers-day-timezone.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "America/New_York"
+      ]
+    },
+    {
+      "id": "bcsp.open.pull-counts.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "attempted",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "succeeded",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "failed",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "empty",
+          "typeRef": "$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.counter-snapshot.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "todayCounts",
+          "typeRef": "$schema:bcsp.open.pull-counts.v1",
+          "required": true
+        },
+        {
+          "name": "rutgersDay",
+          "typeRef": "$scalar:rutgers-day",
+          "required": true
+        },
+        {
+          "name": "dayTimezone",
+          "typeRef": "$schema:bcsp.open.rutgers-day-timezone.v1",
+          "required": true
+        },
+        {
+          "name": "runCounts",
+          "typeRef": "$schema:bcsp.open.pull-counts.v1",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.freshness.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.open.freshness-state.v1",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "freshUntil",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "lastKnownGoodAgeSeconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "uncertainty",
+          "typeRef": "$optional:$schema:bcsp.open.uncertainty-reason.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.http-metadata.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "statusCode",
+          "typeRef": "$optional:$scalar:open-http-status-code",
+          "required": true
+        },
+        {
+          "name": "decodedBytes",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "decodedBodySha256",
+          "typeRef": "$optional:$scalar:open-decoded-body-sha256",
+          "required": true
+        },
+        {
+          "name": "contentType",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "etag",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "cacheControl",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "date",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "ageSeconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "lastModified",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "retryAfter",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.reconcile-counts.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "canonicalOpenIndexes",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "duplicateIndexes",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "catalogSections",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "matchedOpenSections",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "closedSections",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "orphanIndexes",
+          "typeRef": "$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.attempt-schedule.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "lane",
+          "typeRef": "$schema:bcsp.open.scheduler-lane.v1",
+          "required": true
+        },
+        {
+          "name": "requestedGeneralIntervalSeconds",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "requestedEffectiveIntervalSeconds",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "dueAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "schedulerLagMilliseconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "actualStartToStartIntervalMilliseconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.pull-attempt.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "attemptId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        },
+        {
+          "name": "attemptSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "startedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "completedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "classification",
+          "typeRef": "$schema:bcsp.open.refresh-classification.v1",
+          "required": true
+        },
+        {
+          "name": "failureClass",
+          "typeRef": "$optional:$schema:bcsp.open.failure-class.v1",
+          "required": true
+        },
+        {
+          "name": "http",
+          "typeRef": "$schema:bcsp.open.http-metadata.v1",
+          "required": true
+        },
+        {
+          "name": "canonicalSetHash",
+          "typeRef": "$optional:$scalar:open-canonical-set-hash",
+          "required": true
+        },
+        {
+          "name": "stateHash",
+          "typeRef": "$optional:$scalar:open-state-hash",
+          "required": true
+        },
+        {
+          "name": "counts",
+          "typeRef": "$schema:bcsp.open.reconcile-counts.v1",
+          "required": true
+        },
+        {
+          "name": "schedule",
+          "typeRef": "$schema:bcsp.open.attempt-schedule.v1",
+          "required": true
+        },
+        {
+          "name": "lastKnownGoodAgeSeconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.refresh-observation.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        },
+        {
+          "name": "attemptSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "observationSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "startedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "completedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "classification",
+          "typeRef": "$schema:bcsp.open.applied-classification.v1",
+          "required": true
+        },
+        {
+          "name": "http",
+          "typeRef": "$schema:bcsp.open.http-metadata.v1",
+          "required": true
+        },
+        {
+          "name": "canonicalSetHash",
+          "typeRef": "$scalar:open-canonical-set-hash",
+          "required": true
+        },
+        {
+          "name": "stateHash",
+          "typeRef": "$scalar:open-state-hash",
+          "required": true
+        },
+        {
+          "name": "counts",
+          "typeRef": "$schema:bcsp.open.reconcile-counts.v1",
+          "required": true
+        },
+        {
+          "name": "schedule",
+          "typeRef": "$schema:bcsp.open.attempt-schedule.v1",
+          "required": true
+        },
+        {
+          "name": "bodyChanged",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "stateChanged",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "lastKnownGoodAgeSeconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.observation.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "refreshObservationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "pullSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.open.state.v1",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "freshUntil",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "schedulerLagMilliseconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "counterSnapshot",
+          "typeRef": "$schema:bcsp.open.counter-snapshot.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.attempt-point.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "attemptSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "startedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "completedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "classification",
+          "typeRef": "$schema:bcsp.open.refresh-classification.v1",
+          "required": true
+        },
+        {
+          "name": "failureClass",
+          "typeRef": "$optional:$schema:bcsp.open.failure-class.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.failure-point.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "attemptSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "failedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "failureClass",
+          "typeRef": "$schema:bcsp.open.failure-class.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.observation-point.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "observationSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "canonicalSetHash",
+          "typeRef": "$scalar:open-canonical-set-hash",
+          "required": true
+        },
+        {
+          "name": "stateHash",
+          "typeRef": "$scalar:open-state-hash",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.circuit-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.open.circuit-state.v1",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "typeRef": "$optional:$schema:bcsp.open.circuit-reason.v1",
+          "required": true
+        },
+        {
+          "name": "openedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "retryAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "diagnosticRecheckRequired",
+          "typeRef": "$primitive:bool",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.scheduler-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "lane",
+          "typeRef": "$schema:bcsp.open.scheduler-lane.v1",
+          "required": true
+        },
+        {
+          "name": "requestedGeneralIntervalSeconds",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "requestedEffectiveIntervalSeconds",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "activeWatchCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "nextDueAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "inFlight",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "schedulerLagMilliseconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "actualStartToStartIntervalMilliseconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "failureStreak",
+          "typeRef": "$primitive:u32",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.refresh-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "latestAttempt",
+          "typeRef": "$optional:$schema:bcsp.open.attempt-point.v1",
+          "required": true
+        },
+        {
+          "name": "latestFailure",
+          "typeRef": "$optional:$schema:bcsp.open.failure-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastValidObservation",
+          "typeRef": "$optional:$schema:bcsp.open.observation-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastBodyChangeAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "lastStateChangeAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "freshness",
+          "typeRef": "$schema:bcsp.open.freshness.v1",
+          "required": true
+        },
+        {
+          "name": "scheduler",
+          "typeRef": "$schema:bcsp.open.scheduler-status.v1",
+          "required": true
+        },
+        {
+          "name": "circuit",
+          "typeRef": "$schema:bcsp.open.circuit-status.v1",
+          "required": true
+        },
+        {
+          "name": "counterSnapshot",
+          "typeRef": "$schema:bcsp.open.counter-snapshot.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.section-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.open.state.v1",
+          "required": true
+        },
+        {
+          "name": "lastObservationId",
+          "typeRef": "$optional:$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "freshness",
+          "typeRef": "$schema:bcsp.open.freshness.v1",
+          "required": true
+        },
+        {
+          "name": "schedulerLagMilliseconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "counterSnapshot",
+          "typeRef": "$schema:bcsp.open.counter-snapshot.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.status-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.section-status-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
           "required": true
         }
       ]

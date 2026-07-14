@@ -1,0 +1,71 @@
+{
+  "contractVersion": 1,
+  "batch": {
+    "term": "T2026F",
+    "campus": "CAMPUS_A"
+  },
+  "catalogContentVersion": 3,
+  "latestAttempt": {
+    "attemptSequence": 7,
+    "startedAt": "1970-01-01T00:00:00Z",
+    "completedAt": "1970-01-01T00:00:01Z",
+    "classification": "VALID_APPLIED",
+    "failureClass": null
+  },
+  "latestFailure": {
+    "attemptSequence": 6,
+    "failedAt": "1969-12-31T23:59:00Z",
+    "failureClass": "HTTP_5XX"
+  },
+  "lastValidObservation": {
+    "observationId": "00000000-0000-4000-8000-000000000001",
+    "observationSequence": 7,
+    "catalogContentVersion": 3,
+    "observedAt": "1970-01-01T00:00:01Z",
+    "canonicalSetHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "stateHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "lastBodyChangeAt": "1970-01-01T00:00:01Z",
+  "lastStateChangeAt": "1969-12-31T23:57:00Z",
+  "freshness": {
+    "state": "FRESH",
+    "observedAt": "1970-01-01T00:00:01Z",
+    "freshUntil": "1970-01-01T00:00:36Z",
+    "lastKnownGoodAgeSeconds": 0,
+    "uncertainty": null
+  },
+  "scheduler": {
+    "lane": "ACTIVE_WATCH",
+    "requestedGeneralIntervalSeconds": 30,
+    "requestedEffectiveIntervalSeconds": 10,
+    "activeWatchCount": 2,
+    "nextDueAt": "1970-01-01T00:00:30Z",
+    "inFlight": false,
+    "schedulerLagMilliseconds": 250,
+    "actualStartToStartIntervalMilliseconds": 10250,
+    "failureStreak": 0
+  },
+  "circuit": {
+    "state": "CLOSED",
+    "reason": null,
+    "openedAt": null,
+    "retryAt": null,
+    "diagnosticRecheckRequired": false
+  },
+  "counterSnapshot": {
+    "runCounts": {
+      "attempted": 9,
+      "succeeded": 7,
+      "failed": 2,
+      "empty": 1
+    },
+    "todayCounts": {
+      "attempted": 9,
+      "succeeded": 7,
+      "failed": 2,
+      "empty": 1
+    },
+    "rutgersDay": "2026-07-14",
+    "dayTimezone": "America/New_York"
+  }
+}

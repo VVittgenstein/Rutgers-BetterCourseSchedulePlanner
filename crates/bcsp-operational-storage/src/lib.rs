@@ -12,6 +12,7 @@ mod error;
 mod migration;
 mod migration_bundle;
 mod model;
+mod open;
 mod storage;
 
 pub use discovery::discovery_content_sha256_v1;
@@ -28,6 +29,13 @@ pub use model::{
     RefreshObservation, RefreshStatus, StorageIntegrityReport, StoredCanonicalFacts,
     StoredCourseGroup, StoredCourseVariant, StoredOccurrence, StoredProvenance, StoredSection,
     TargetState,
+};
+pub use open::{
+    BeginOpenPullAttemptCommand, FinishOpenPullFailureCommand, FinishOpenPullSuccessCommand,
+    OpenAttemptClassification, OpenAttemptCounters, OpenAttemptRecord, OpenBatchObservation,
+    OpenBatchState, OpenCacheStatus, OpenCatalogSnapshot, OpenCircuitState, OpenCommitOutcome,
+    OpenHttpAuditMetadata, OpenOriginState, OpenRequestLane, OpenRetentionReport,
+    OpenScheduleState, OpenSectionCurrent, OpenSectionEvent, OpenSectionState,
 };
 pub use storage::{OperationalStorage, catalog_content_sha256_v1};
 

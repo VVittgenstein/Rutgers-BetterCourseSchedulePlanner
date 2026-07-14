@@ -11,6 +11,7 @@ pub const PACKAGE_BOUNDARY: &str = "bcsp-rutgers-client";
 
 mod discovery;
 mod hashing;
+mod open_sections;
 mod raw_catalog;
 
 pub use discovery::{
@@ -21,6 +22,14 @@ pub use discovery::{
     decide_discovery_failure, decode_discovery_payload,
 };
 pub use hashing::{sha256_hex, sha256_v1};
+pub use open_sections::{
+    OPEN_CONNECT_TIMEOUT, OPEN_MAX_DECODED_BYTES, OPEN_SET_HASH_DOMAIN, OPEN_TOTAL_TIMEOUT,
+    OpenClientBuildError, OpenFailureDisposition, OpenFailureResponseMetadata,
+    OpenPayloadClassification, OpenResponseMetadata, OpenSectionsError, OpenSectionsFailure,
+    OpenSectionsRequest, OpenSectionsRequestError, OpenSectionsResponse,
+    RUTGERS_OPEN_SECTIONS_ENDPOINT, RedirectScope, RetryAfterHeader, RetryAfterValue,
+    RutgersOpenSectionsClient, canonical_open_set_sha256,
+};
 pub use raw_catalog::{
     CatalogDecodeError, JsonType, MalformedField, Presence, RawCatalogCourse, RawCatalogSection,
     RawInstructor, RawMeeting, SourceProvenance, decode_catalog_payload,

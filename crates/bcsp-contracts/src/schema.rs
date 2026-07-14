@@ -10,7 +10,9 @@ use crate::{
     CatalogOccurrenceEvidence, CatalogOccurrenceKind, CatalogOpenStatusProvenance,
     CatalogPrerequisiteState, CatalogRefreshClassification, CatalogRefreshErrorClass,
     CatalogRequiredness, CatalogSourceKind, CatalogSynchronicity, CatalogUnknownReason,
-    FilterFieldId, MatchOutcome, MatchReasonCode, WS_PROTOCOL_VERSION,
+    FilterFieldId, MatchOutcome, MatchReasonCode, OpenAppliedClassification, OpenCircuitReason,
+    OpenCircuitState, OpenFailureClass, OpenFreshnessState, OpenRefreshClassification,
+    OpenSchedulerLane, OpenState, OpenUncertaintyReason, RutgersDayTimezone, WS_PROTOCOL_VERSION,
 };
 
 pub const CONTRACT_SCHEMA_VERSION: u16 = 1;
@@ -94,6 +96,14 @@ fn field(name: &str, type_ref: &str) -> ContractField {
     }
 }
 
+fn optional_field(name: &str, type_ref: &str) -> ContractField {
+    ContractField {
+        name: name.to_owned(),
+        type_ref: type_ref.to_owned(),
+        required: false,
+    }
+}
+
 fn schema(
     id: &str,
     direction: SchemaDirection,
@@ -107,6 +117,32 @@ fn schema(
         fields: fields
             .iter()
             .map(|(name, type_ref)| field(name, type_ref))
+            .collect(),
+        enum_values: Vec::new(),
+        discriminator: None,
+        variants: Vec::new(),
+    }
+}
+
+fn schema_with_optional_fields(
+    id: &str,
+    direction: SchemaDirection,
+    unknown_fields: UnknownFieldPolicy,
+    required_fields: &[(&str, &str)],
+    optional_fields: &[(&str, &str)],
+) -> ContractSchema {
+    ContractSchema {
+        id: id.to_owned(),
+        direction,
+        unknown_fields,
+        fields: required_fields
+            .iter()
+            .map(|(name, type_ref)| field(name, type_ref))
+            .chain(
+                optional_fields
+                    .iter()
+                    .map(|(name, type_ref)| optional_field(name, type_ref)),
+            )
             .collect(),
         enum_values: Vec::new(),
         discriminator: None,
@@ -313,6 +349,69 @@ pub fn contract_manifest() -> ContractManifest {
                 pattern: None,
                 semantic: Some("only integer 1 is accepted".to_owned()),
             },
+            ScalarConstraint {
+                id: "open-contract-version".to_owned(),
+                wire_type: "u16".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some("only integer 1 is accepted".to_owned()),
+            },
+            ScalarConstraint {
+                id: "open-sequence".to_owned(),
+                wire_type: "u64".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some("nonzero target-scoped attempt or observation sequence".to_owned()),
+            },
+            ScalarConstraint {
+                id: "open-http-status-code".to_owned(),
+                wire_type: "u16".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some(
+                    "valid HTTP status code in the inclusive range 100..=599".to_owned(),
+                ),
+            },
+            string_constraint(
+                "open-http-header-value",
+                None,
+                Some(4_096),
+                None,
+                Some(
+                    "nonempty trim-stable unfolded HTTP response-header value containing only visible ASCII or horizontal tabs",
+                ),
+            ),
+            string_constraint(
+                "open-decoded-body-sha256",
+                Some(SHA256_HEX_BYTES),
+                None,
+                Some("^[0-9a-f]{64}$"),
+                Some("lowercase SHA-256 of the decoded Open response body; raw body excluded"),
+            ),
+            string_constraint(
+                "open-canonical-set-hash",
+                Some(SHA256_HEX_BYTES),
+                None,
+                Some("^[0-9a-f]{64}$"),
+                Some("lowercase SHA-256 over the normalized Open index set; raw body excluded"),
+            ),
+            string_constraint(
+                "open-state-hash",
+                Some(SHA256_HEX_BYTES),
+                None,
+                Some("^[0-9a-f]{64}$"),
+                Some("lowercase SHA-256 over the batch Catalog intersection state"),
+            ),
+            string_constraint(
+                "rutgers-day",
+                Some(10),
+                None,
+                Some("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"),
+                Some("valid calendar date at the America/New_York day boundary"),
+            ),
             string_constraint(
                 "filter-token",
                 None,
@@ -1006,6 +1105,381 @@ pub fn contract_manifest() -> ContractManifest {
                         "pendingEmpty",
                         "$optional:$schema:bcsp.catalog.refresh-point.v1",
                     ),
+                ],
+            ),
+            schema(
+                "bcsp.open.batch-key.v1",
+                SchemaDirection::SharedIdentity,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("term", "$scalar:term-id"),
+                    ("campus", "$scalar:campus-code"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.open.refresh-classification.v1",
+                OpenRefreshClassification::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.open.applied-classification.v1",
+                OpenAppliedClassification::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.open.failure-class.v1",
+                OpenFailureClass::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.open.state.v1",
+                OpenState::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.open.freshness-state.v1",
+                OpenFreshnessState::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.open.uncertainty-reason.v1",
+                OpenUncertaintyReason::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.open.scheduler-lane.v1",
+                OpenSchedulerLane::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.open.circuit-state.v1",
+                OpenCircuitState::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.open.circuit-reason.v1",
+                OpenCircuitReason::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            enum_schema(
+                "bcsp.open.rutgers-day-timezone.v1",
+                RutgersDayTimezone::ALL
+                    .iter()
+                    .map(|value| value.wire_name().to_owned()),
+            ),
+            schema(
+                "bcsp.open.pull-counts.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("attempted", "$primitive:u64"),
+                    ("succeeded", "$primitive:u64"),
+                    ("failed", "$primitive:u64"),
+                    ("empty", "$primitive:u64"),
+                ],
+            ),
+            schema_with_optional_fields(
+                "bcsp.open.counter-snapshot.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("todayCounts", "$schema:bcsp.open.pull-counts.v1"),
+                    ("rutgersDay", "$scalar:rutgers-day"),
+                    ("dayTimezone", "$schema:bcsp.open.rutgers-day-timezone.v1"),
+                ],
+                &[("runCounts", "$schema:bcsp.open.pull-counts.v1")],
+            ),
+            schema(
+                "bcsp.open.freshness.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("state", "$schema:bcsp.open.freshness-state.v1"),
+                    ("observedAt", "$optional:$primitive:rfc3339-timestamp"),
+                    ("freshUntil", "$optional:$primitive:rfc3339-timestamp"),
+                    ("lastKnownGoodAgeSeconds", "$optional:$primitive:u64"),
+                    (
+                        "uncertainty",
+                        "$optional:$schema:bcsp.open.uncertainty-reason.v1",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.open.http-metadata.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("statusCode", "$optional:$scalar:open-http-status-code"),
+                    ("decodedBytes", "$optional:$primitive:u64"),
+                    (
+                        "decodedBodySha256",
+                        "$optional:$scalar:open-decoded-body-sha256",
+                    ),
+                    ("contentType", "$optional:$scalar:open-http-header-value"),
+                    ("etag", "$optional:$scalar:open-http-header-value"),
+                    ("cacheControl", "$optional:$scalar:open-http-header-value"),
+                    ("date", "$optional:$scalar:open-http-header-value"),
+                    ("ageSeconds", "$optional:$primitive:u64"),
+                    ("lastModified", "$optional:$scalar:open-http-header-value"),
+                    ("retryAfter", "$optional:$scalar:open-http-header-value"),
+                ],
+            ),
+            schema(
+                "bcsp.open.reconcile-counts.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("canonicalOpenIndexes", "$primitive:u64"),
+                    ("duplicateIndexes", "$primitive:u64"),
+                    ("catalogSections", "$primitive:u64"),
+                    ("matchedOpenSections", "$primitive:u64"),
+                    ("closedSections", "$primitive:u64"),
+                    ("orphanIndexes", "$primitive:u64"),
+                ],
+            ),
+            schema(
+                "bcsp.open.attempt-schedule.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("lane", "$schema:bcsp.open.scheduler-lane.v1"),
+                    ("requestedGeneralIntervalSeconds", "$primitive:u32"),
+                    ("requestedEffectiveIntervalSeconds", "$primitive:u32"),
+                    ("dueAt", "$primitive:rfc3339-timestamp"),
+                    ("schedulerLagMilliseconds", "$primitive:u64"),
+                    (
+                        "actualStartToStartIntervalMilliseconds",
+                        "$optional:$primitive:u64",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.open.pull-attempt.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:open-contract-version"),
+                    ("attemptId", "$scalar:trace-id"),
+                    ("batch", "$schema:bcsp.open.batch-key.v1"),
+                    ("attemptSequence", "$scalar:open-sequence"),
+                    ("catalogContentVersion", "$scalar:catalog-content-version"),
+                    ("startedAt", "$primitive:rfc3339-timestamp"),
+                    ("completedAt", "$optional:$primitive:rfc3339-timestamp"),
+                    (
+                        "classification",
+                        "$schema:bcsp.open.refresh-classification.v1",
+                    ),
+                    (
+                        "failureClass",
+                        "$optional:$schema:bcsp.open.failure-class.v1",
+                    ),
+                    ("http", "$schema:bcsp.open.http-metadata.v1"),
+                    (
+                        "canonicalSetHash",
+                        "$optional:$scalar:open-canonical-set-hash",
+                    ),
+                    ("stateHash", "$optional:$scalar:open-state-hash"),
+                    ("counts", "$schema:bcsp.open.reconcile-counts.v1"),
+                    ("schedule", "$schema:bcsp.open.attempt-schedule.v1"),
+                    ("lastKnownGoodAgeSeconds", "$optional:$primitive:u64"),
+                ],
+            ),
+            schema(
+                "bcsp.open.refresh-observation.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:open-contract-version"),
+                    ("observationId", "$scalar:trace-id"),
+                    ("batch", "$schema:bcsp.open.batch-key.v1"),
+                    ("attemptSequence", "$scalar:open-sequence"),
+                    ("observationSequence", "$scalar:open-sequence"),
+                    ("catalogContentVersion", "$scalar:catalog-content-version"),
+                    ("startedAt", "$primitive:rfc3339-timestamp"),
+                    ("completedAt", "$primitive:rfc3339-timestamp"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    (
+                        "classification",
+                        "$schema:bcsp.open.applied-classification.v1",
+                    ),
+                    ("http", "$schema:bcsp.open.http-metadata.v1"),
+                    ("canonicalSetHash", "$scalar:open-canonical-set-hash"),
+                    ("stateHash", "$scalar:open-state-hash"),
+                    ("counts", "$schema:bcsp.open.reconcile-counts.v1"),
+                    ("schedule", "$schema:bcsp.open.attempt-schedule.v1"),
+                    ("bodyChanged", "$primitive:bool"),
+                    ("stateChanged", "$primitive:bool"),
+                    ("lastKnownGoodAgeSeconds", "$primitive:u64"),
+                ],
+            ),
+            schema(
+                "bcsp.open.observation.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:open-contract-version"),
+                    ("observationId", "$scalar:trace-id"),
+                    ("refreshObservationId", "$scalar:trace-id"),
+                    ("batch", "$schema:bcsp.open.batch-key.v1"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                    ("pullSequence", "$scalar:open-sequence"),
+                    ("catalogContentVersion", "$scalar:catalog-content-version"),
+                    ("state", "$schema:bcsp.open.state.v1"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    ("freshUntil", "$primitive:rfc3339-timestamp"),
+                    ("schedulerLagMilliseconds", "$primitive:u64"),
+                    ("counterSnapshot", "$schema:bcsp.open.counter-snapshot.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.open.attempt-point.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("attemptSequence", "$scalar:open-sequence"),
+                    ("startedAt", "$primitive:rfc3339-timestamp"),
+                    ("completedAt", "$optional:$primitive:rfc3339-timestamp"),
+                    (
+                        "classification",
+                        "$schema:bcsp.open.refresh-classification.v1",
+                    ),
+                    (
+                        "failureClass",
+                        "$optional:$schema:bcsp.open.failure-class.v1",
+                    ),
+                ],
+            ),
+            schema(
+                "bcsp.open.failure-point.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("attemptSequence", "$scalar:open-sequence"),
+                    ("failedAt", "$primitive:rfc3339-timestamp"),
+                    ("failureClass", "$schema:bcsp.open.failure-class.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.open.observation-point.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("observationId", "$scalar:trace-id"),
+                    ("observationSequence", "$scalar:open-sequence"),
+                    ("catalogContentVersion", "$scalar:catalog-content-version"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    ("canonicalSetHash", "$scalar:open-canonical-set-hash"),
+                    ("stateHash", "$scalar:open-state-hash"),
+                ],
+            ),
+            schema(
+                "bcsp.open.circuit-status.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("state", "$schema:bcsp.open.circuit-state.v1"),
+                    ("reason", "$optional:$schema:bcsp.open.circuit-reason.v1"),
+                    ("openedAt", "$optional:$primitive:rfc3339-timestamp"),
+                    ("retryAt", "$optional:$primitive:rfc3339-timestamp"),
+                    ("diagnosticRecheckRequired", "$primitive:bool"),
+                ],
+            ),
+            schema(
+                "bcsp.open.scheduler-status.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("lane", "$schema:bcsp.open.scheduler-lane.v1"),
+                    ("requestedGeneralIntervalSeconds", "$primitive:u32"),
+                    ("requestedEffectiveIntervalSeconds", "$primitive:u32"),
+                    ("activeWatchCount", "$primitive:u64"),
+                    ("nextDueAt", "$optional:$primitive:rfc3339-timestamp"),
+                    ("inFlight", "$primitive:bool"),
+                    ("schedulerLagMilliseconds", "$primitive:u64"),
+                    (
+                        "actualStartToStartIntervalMilliseconds",
+                        "$optional:$primitive:u64",
+                    ),
+                    ("failureStreak", "$primitive:u32"),
+                ],
+            ),
+            schema(
+                "bcsp.open.refresh-status.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:open-contract-version"),
+                    ("batch", "$schema:bcsp.open.batch-key.v1"),
+                    (
+                        "catalogContentVersion",
+                        "$optional:$scalar:catalog-content-version",
+                    ),
+                    (
+                        "latestAttempt",
+                        "$optional:$schema:bcsp.open.attempt-point.v1",
+                    ),
+                    (
+                        "latestFailure",
+                        "$optional:$schema:bcsp.open.failure-point.v1",
+                    ),
+                    (
+                        "lastValidObservation",
+                        "$optional:$schema:bcsp.open.observation-point.v1",
+                    ),
+                    ("lastBodyChangeAt", "$optional:$primitive:rfc3339-timestamp"),
+                    (
+                        "lastStateChangeAt",
+                        "$optional:$primitive:rfc3339-timestamp",
+                    ),
+                    ("freshness", "$schema:bcsp.open.freshness.v1"),
+                    ("scheduler", "$schema:bcsp.open.scheduler-status.v1"),
+                    ("circuit", "$schema:bcsp.open.circuit-status.v1"),
+                    ("counterSnapshot", "$schema:bcsp.open.counter-snapshot.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.open.section-status.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:open-contract-version"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
+                    ("state", "$schema:bcsp.open.state.v1"),
+                    ("lastObservationId", "$optional:$scalar:trace-id"),
+                    (
+                        "catalogContentVersion",
+                        "$optional:$scalar:catalog-content-version",
+                    ),
+                    ("freshness", "$schema:bcsp.open.freshness.v1"),
+                    ("schedulerLagMilliseconds", "$primitive:u64"),
+                    ("counterSnapshot", "$schema:bcsp.open.counter-snapshot.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.open.status-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("contractVersion", "$scalar:open-contract-version"),
+                    ("batch", "$schema:bcsp.open.batch-key.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.open.section-status-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("contractVersion", "$scalar:open-contract-version"),
+                    ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
                 ],
             ),
             enum_schema(

@@ -182,7 +182,7 @@ fn fresh_schema_has_no_catalog_seed_and_migration_checksum_is_strict() {
     let temp = TempDir::new().expect("temp dir");
     let path = db_path(&temp);
     let storage = OperationalStorage::open(&path).expect("initialize schema");
-    assert_eq!(storage.migration_records().expect("migrations").len(), 1);
+    assert_eq!(storage.migration_records().expect("migrations").len(), 2);
     assert!(storage.discovered_targets().expect("targets").is_empty());
     let discovery = storage.discovery_state().expect("discovery state");
     assert_eq!((discovery.term_count, discovery.campus_count), (0, 0));
@@ -243,7 +243,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
         .execute(
             "INSERT INTO bcsp_operational_migrations
                 (migration_id, name, sha256, applied_at)
-             VALUES (2, 'future', ?1, ?2)",
+             VALUES (3, 'future', ?1, ?2)",
             [HASH_A, COMPLETED],
         )
         .expect("future migration");
@@ -251,7 +251,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
     assert!(matches!(
         OperationalStorage::open(&future_path),
         Err(StorageError::UnknownMigration {
-            migration_id: 2,
+            migration_id: 3,
             ..
         })
     ));

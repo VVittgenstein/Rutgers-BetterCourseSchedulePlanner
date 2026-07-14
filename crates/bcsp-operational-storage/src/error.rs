@@ -38,6 +38,14 @@ pub enum StorageError {
     ObservationNotStaged(TraceId),
     #[error("refresh observation {0} is not in STARTED state")]
     ObservationNotStarted(TraceId),
+    #[error("Open pull attempt {0} does not exist")]
+    OpenAttemptNotFound(TraceId),
+    #[error("Open pull attempt {0} is not in STARTED state")]
+    OpenAttemptNotStarted(TraceId),
+    #[error("Open pull attempt {0} is already active for this target")]
+    OpenTargetInFlight(TraceId),
+    #[error("Open pull attempt {0} was superseded by a later target attempt")]
+    OpenAttemptSuperseded(TraceId),
     #[error("database row contains an unknown refresh status")]
     UnknownRefreshStatus,
     #[error("database row contains an invalid trace ID in {table}.{column}")]

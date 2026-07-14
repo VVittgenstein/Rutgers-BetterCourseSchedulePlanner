@@ -1,7 +1,44 @@
-//! Shared Open-state boundary; scheduling and reconciliation are absent.
+//! Shared Open-state reconciliation, freshness, and scheduling policy.
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]
+
+mod freshness;
+mod policy;
+mod projection;
+mod reconcile;
+mod scheduler;
+mod service;
+
+pub use freshness::{
+    LastValidOpenPoint, LatestOpenAttemptPoint, OPEN_FRESHNESS_GRACE_SECONDS, OpenFreshnessError,
+    project_open_freshness,
+};
+pub use policy::{
+    ACTIVE_WATCH_OPEN_INTERVAL_SECONDS, FATAL_DIAGNOSTIC_COOLDOWN_SECONDS, GeneralOpenInterval,
+    LOCAL_DEFAULT_OPEN_INTERVAL_SECONDS, LOCAL_MAXIMUM_OPEN_INTERVAL_SECONDS,
+    LOCAL_MINIMUM_OPEN_INTERVAL_SECONDS, MISSING_RETRY_AFTER_CIRCUIT_SECONDS, OpenFailureKind,
+    OpenIntervalError, OpenRuntimeMode, PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS, RetryDirective,
+    RetryMode, deterministic_jitter_v1, retry_directive,
+};
+pub use projection::{
+    OpenCounterAudience, OpenProjectionError, OpenProjectionRuntime, OpenStatusReadStore,
+    ProjectedOpenStatusV1, project_open_status,
+};
+pub use reconcile::{
+    CatalogOpenBatch, OpenReconcileClassification, OpenReconcilePlan, OpenSetEvidence,
+    ReconcileInputError, ReconciledOpenState, SectionOpenUpdate, canonical_open_set_hash_v1,
+    reconcile_open_set,
+};
+pub use scheduler::{
+    CompletionSchedule, MonotonicTime, OriginCircuit, OriginDispatch, OriginEdfScheduler,
+    OriginJobKey, OriginJobKind, OriginSchedulerLane, SchedulerError, restore_monotonic_due,
+};
+pub use service::{
+    OpenPullClock, OpenPullCommand, OpenPullExecution, OpenPullFailure, OpenPullPersistence,
+    OpenPullTerminal, SharedOpenService, SharedOpenServiceError, SystemOpenPullClock,
+    rutgers_day_at,
+};
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-open";
 

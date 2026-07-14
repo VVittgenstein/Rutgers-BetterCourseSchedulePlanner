@@ -13,6 +13,7 @@ mod envelope;
 mod error;
 mod identity;
 mod match_contract;
+mod open;
 mod protocol;
 mod query;
 mod schema;
@@ -50,6 +51,20 @@ pub use identity::{
 pub use match_contract::{
     MatchExplanation, MatchExplanationError, MatchOutcome, MatchReason, MatchReasonCode,
     ReasonField,
+};
+pub use open::{
+    OPEN_CONTRACT_VERSION, OpenAppliedClassification, OpenAttemptPointV1, OpenAttemptScheduleV1,
+    OpenBatchKey, OpenCanonicalSetHash, OpenCanonicalSetHashError, OpenCircuitReason,
+    OpenCircuitState, OpenCircuitStatusV1, OpenContractVersion, OpenContractVersionError,
+    OpenCounterSnapshotV1, OpenDecodedBodySha256, OpenDecodedBodySha256Error, OpenFailureClass,
+    OpenFailurePointV1, OpenFreshnessState, OpenFreshnessV1, OpenHttpHeaderValue,
+    OpenHttpHeaderValueError, OpenHttpMetadataV1, OpenObservationPointV1,
+    OpenObservationTargetMismatchError, OpenObservationV1, OpenPullAttemptV1, OpenPullCountsV1,
+    OpenReconcileCountsV1, OpenRefreshClassification, OpenRefreshObservationV1,
+    OpenRefreshStatusV1, OpenSchedulerLane, OpenSchedulerStatusV1, OpenSectionStatusRequestV1,
+    OpenSectionStatusV1, OpenSequence, OpenSequenceError, OpenState, OpenStateHash,
+    OpenStateHashError, OpenStatusRequestV1, OpenUncertaintyReason, RutgersDay, RutgersDayError,
+    RutgersDayTimezone,
 };
 pub use protocol::{
     API_PROTOCOL_VERSION, ProtocolVersion, ProtocolVersionError, WS_PROTOCOL_VERSION,

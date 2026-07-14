@@ -184,7 +184,10 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
                         )
                         || matches!(
                             field.type_ref.as_str(),
-                            "$optional:$primitive:rfc3339-timestamp" | "$optional:$primitive:u32"
+                            "$optional:$primitive:rfc3339-timestamp"
+                                | "$optional:$primitive:u16"
+                                | "$optional:$primitive:u32"
+                                | "$optional:$primitive:u64"
                         )
                         || field.type_ref == "$array:$primitive:string",
                     "unsupported type reference {}",

@@ -1,5 +1,6 @@
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use bcsp_contracts::{CourseGroupKey, CourseVariantKey, SectionKey, TermCampusKey, TraceId};
@@ -8,6 +9,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::migration::{apply_migrations, probe_fts5, read_migration_records, sha256_hex};
+use crate::open::recover_interrupted_open_attempts;
 use crate::{
     BeginRefreshAttemptCommand, CatalogCounts, CatalogRefreshCommand, CatalogSnapshot,
     CourseTextSearchTokens, CourseVariantSearchHit, CourseVariantSearchResult,
@@ -20,7 +22,10 @@ use crate::{
 
 pub struct OperationalStorage {
     pub(crate) connection: Connection,
+    recovery_key: Option<PathBuf>,
 }
+
+static ACTIVE_DATABASES: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PublishFaultPoint {
@@ -43,22 +48,53 @@ struct StagedMetadata {
 
 impl OperationalStorage {
     pub fn open(path: impl AsRef<Path>) -> StorageResult<Self> {
+        let path = path.as_ref();
         let connection = Connection::open(path)?;
-        Self::initialize(connection)
+        let recovery_key = database_recovery_key(path);
+        let mut active_databases = ACTIVE_DATABASES
+            .get_or_init(|| Mutex::new(BTreeMap::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let should_recover = match active_databases.get_mut(&recovery_key) {
+            Some(active_connections) => {
+                *active_connections += 1;
+                false
+            }
+            None => {
+                active_databases.insert(recovery_key.clone(), 1);
+                true
+            }
+        };
+        let result = Self::initialize(connection, should_recover, Some(recovery_key.clone()));
+        if result.is_err() {
+            unregister_active_database(&mut active_databases, &recovery_key);
+        }
+        drop(active_databases);
+        result
     }
 
     pub fn open_in_memory() -> StorageResult<Self> {
         let connection = Connection::open_in_memory()?;
-        Self::initialize(connection)
+        Self::initialize(connection, true, None)
     }
 
-    fn initialize(mut connection: Connection) -> StorageResult<Self> {
+    fn initialize(
+        mut connection: Connection,
+        recover_interrupted: bool,
+        recovery_key: Option<PathBuf>,
+    ) -> StorageResult<Self> {
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         connection.busy_timeout(Duration::from_secs(5))?;
         probe_fts5(&connection)?;
         apply_migrations(&mut connection)?;
-        recover_interrupted_refreshes(&mut connection)?;
-        Ok(Self { connection })
+        if recover_interrupted {
+            recover_interrupted_refreshes(&mut connection)?;
+            recover_interrupted_open_attempts(&mut connection)?;
+        }
+        Ok(Self {
+            connection,
+            recovery_key,
+        })
     }
 
     pub fn migration_records(&self) -> StorageResult<Vec<MigrationRecord>> {
@@ -706,6 +742,46 @@ impl OperationalStorage {
             error_code: error_code.to_owned(),
             diagnostic_token: None,
         });
+    }
+}
+
+impl Drop for OperationalStorage {
+    fn drop(&mut self) {
+        let Some(recovery_key) = self.recovery_key.as_ref() else {
+            return;
+        };
+        let Some(active_databases) = ACTIVE_DATABASES.get() else {
+            return;
+        };
+        let mut active_databases = active_databases
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unregister_active_database(&mut active_databases, recovery_key);
+    }
+}
+
+fn database_recovery_key(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|directory| directory.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        }
+    })
+}
+
+fn unregister_active_database(
+    active_databases: &mut BTreeMap<PathBuf, usize>,
+    recovery_key: &Path,
+) {
+    let Some(active_connections) = active_databases.get_mut(recovery_key) else {
+        return;
+    };
+    *active_connections -= 1;
+    if *active_connections == 0 {
+        active_databases.remove(recovery_key);
     }
 }
 
