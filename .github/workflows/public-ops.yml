@@ -17,6 +17,7 @@ on:
       - 'packaging/linux/**'
       - 'packaging/windows/**'
       - 'packaging/release-inputs.json'
+      - 'packaging/tests/**'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
   pull_request:
@@ -35,6 +36,7 @@ on:
       - 'packaging/linux/**'
       - 'packaging/windows/**'
       - 'packaging/release-inputs.json'
+      - 'packaging/tests/**'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
   workflow_dispatch:
@@ -135,7 +137,7 @@ jobs:
       - name: Rehearse install, restore, upgrade, and rollback
         run: >-
           sudo env BCSP_DISPOSABLE_HOST_CONFIRM=YES BCSP_CI_NO_RUTGERS=1
-          BCSP_BROWSER_ACCEPTANCE_SCRIPT="$GITHUB_WORKSPACE/deploy/public/tests/final-candidate-browser.mjs"
+          BCSP_BROWSER_ACCEPTANCE_SCRIPT="$GITHUB_WORKSPACE/packaging/tests/final-candidate-browser.mjs"
           BCSP_PLAYWRIGHT_ROOT="${{ steps.candidate.outputs.source_root }}/frontend"
           BCSP_NODE_BIN="$(command -v node)"
           PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/ms-playwright"
@@ -343,7 +345,7 @@ jobs:
           & 'C:\rbcsp-final-candidate\tools\packaging\windows\verify.ps1' `
             -ArchivePath 'C:\rbcsp-final-candidate\release\rbcsp-windows-x86_64-0.1.0.zip' `
             -DumpBinPath '${{ steps.windows_candidate.outputs.dumpbin }}' `
-            -BrowserSmokeScript 'C:\rbcsp-final-candidate\tools\deploy\public\tests\final-candidate-browser.mjs' `
+            -BrowserSmokeScript 'C:\rbcsp-final-candidate\tools\packaging\tests\final-candidate-browser.mjs' `
             -PlaywrightRoot 'C:\rbcsp-final-candidate\source\frontend' `
             -NodePath '__NODE_PATH__'
           '@
