@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use bcsp_application::WatchDispatchSink;
@@ -16,8 +16,6 @@ use bcsp_watch::{
     WatchAction, WatchActionKind, WatchCleanupReason, WatchCleanupReport, WatchDispatch,
 };
 
-use crate::LocalPrimaryDatabase;
-
 /// Projects the shared in-memory watch reducer into local-only durable episode history.
 pub(crate) struct LocalWatchHistorySink {
     sender: Option<mpsc::Sender<LocalWatchHistoryWork>>,
@@ -31,21 +29,21 @@ enum LocalWatchHistoryWork {
 }
 
 struct LocalWatchHistoryWriter {
-    database: Arc<Mutex<LocalPrimaryDatabase>>,
+    store: PersonalStateStore,
     run_id: TraceId,
 }
 
 impl LocalWatchHistorySink {
-    pub(crate) fn new(database: Arc<Mutex<LocalPrimaryDatabase>>) -> Self {
+    pub(crate) fn new(store: PersonalStateStore) -> Self {
         let mut ids = SystemTraceIdSource;
-        Self::with_run_id(database, ids.next_trace_id())
+        Self::with_run_id(store, ids.next_trace_id())
     }
 
-    fn with_run_id(database: Arc<Mutex<LocalPrimaryDatabase>>, run_id: TraceId) -> Self {
+    fn with_run_id(store: PersonalStateStore, run_id: TraceId) -> Self {
         let (sender, receiver) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("bcsp-watch-history".to_owned())
-            .spawn(move || LocalWatchHistoryWriter { database, run_id }.run(receiver))
+            .spawn(move || LocalWatchHistoryWriter { store, run_id }.run(receiver))
             .expect("local watch history worker must start");
         Self {
             sender: Some(sender),
@@ -95,7 +93,7 @@ impl Drop for LocalWatchHistorySink {
 }
 
 impl LocalWatchHistoryWriter {
-    fn run(self, receiver: mpsc::Receiver<LocalWatchHistoryWork>) {
+    fn run(mut self, receiver: mpsc::Receiver<LocalWatchHistoryWork>) {
         while let Ok(work) = receiver.recv() {
             match work {
                 LocalWatchHistoryWork::Dispatch(dispatch) => {
@@ -115,12 +113,8 @@ impl LocalWatchHistoryWriter {
         }
     }
 
-    fn persist_dispatch(&self, dispatch: &WatchDispatch) -> PersonalStateResult<()> {
-        let mut database = self
-            .database
-            .lock()
-            .map_err(|_| PersonalStateError::SqliteConfiguration("local database lock"))?;
-        let store = database.personal_mut();
+    fn persist_dispatch(&mut self, dispatch: &WatchDispatch) -> PersonalStateResult<()> {
+        let store = &mut self.store;
         let stop_reasons = dispatch
             .events
             .iter()
@@ -189,12 +183,8 @@ impl LocalWatchHistoryWriter {
         Ok(())
     }
 
-    fn persist_cleanup(&self, cleanup: &WatchCleanupReport) -> PersonalStateResult<()> {
-        let mut database = self
-            .database
-            .lock()
-            .map_err(|_| PersonalStateError::SqliteConfiguration("local database lock"))?;
-        let store = database.personal_mut();
+    fn persist_cleanup(&mut self, cleanup: &WatchCleanupReport) -> PersonalStateResult<()> {
+        let store = &mut self.store;
         let occurred_at = unix_millis(cleanup.recorded_at.unix_timestamp_nanos())?;
         let reason = match cleanup.reason {
             WatchCleanupReason::ConnectionClosed => WatchStopReason::ConnectionClosed,
@@ -377,14 +367,14 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::mpsc::RecvTimeoutError;
+    use std::sync::{Arc, Mutex, mpsc::RecvTimeoutError};
     use std::time::Duration;
 
     use bcsp_contracts::{ActiveWatchId, OpenEpisodeId, SectionKey, WatchStoppedV1};
     use rusqlite::Connection;
 
     use super::*;
-    use crate::{LocalRuntimePaths, OperationalGate};
+    use crate::{LocalPrimaryDatabase, LocalRuntimePaths, OperationalGate};
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -488,7 +478,8 @@ mod tests {
         let gate =
             OperationalGate::open(LocalRuntimePaths::from_executable(executable).unwrap()).unwrap();
         let database = gate.database();
-        let sink = LocalWatchHistorySink::with_run_id(database.clone(), trace(0x900));
+        let history_store = PersonalStateStore::open(gate.paths().database()).unwrap();
+        let sink = LocalWatchHistorySink::with_run_id(history_store, trace(0x900));
         (temp, gate, database, sink)
     }
 
@@ -762,6 +753,8 @@ mod tests {
         });
         let enqueue_returned = observe_enqueue.recv_timeout(Duration::from_secs(1)).is_ok();
         enqueue.join().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let serving_database_remained_available = database.try_lock().is_ok();
 
         let (flushed, observe_flush) = mpsc::sync_channel(0);
         let flush_sink = sink.clone();
@@ -781,6 +774,10 @@ mod tests {
         assert!(
             enqueue_returned,
             "record_dispatch waited for the SQLite writer"
+        );
+        assert!(
+            serving_database_remained_available,
+            "watch history persistence held the serving database mutex while SQLite was busy"
         );
         assert!(
             flush_waited_for_writer,

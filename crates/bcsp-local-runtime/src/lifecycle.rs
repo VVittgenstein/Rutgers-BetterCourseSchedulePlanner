@@ -8,6 +8,7 @@ use bcsp_application::{
     OpenRuntimeSnapshotRegistry, RouteExtension, SessionNonce, SharedWatchSocket,
     TargetRefreshDemand, WebSocketExtension, spawn_loopback_server_with_socket,
 };
+use bcsp_local_user_state::PersonalStateStore;
 use thiserror::Error;
 use tokio::sync::watch;
 
@@ -82,8 +83,14 @@ impl PreparedLocalRuntime {
             create_local_product_routes(database.clone(), core.clone(), open_runtime.clone())
                 .with_target_refresh_demand(target_refresh_demand.clone()),
         );
-        let watch =
-            create_local_watch_socket(database.clone(), core.clone(), open_runtime.clone())?;
+        let history_store = PersonalStateStore::open(operational.paths().database())
+            .map_err(LocalBootstrapError::PersonalState)?;
+        let watch = create_local_watch_socket(
+            database.clone(),
+            history_store,
+            core.clone(),
+            open_runtime.clone(),
+        )?;
         let personal = PersonalSurface::new(database, watch.clone());
         let nonce = SessionNonce::generate();
         let (shutdown_trigger, shutdown_requests) = local_shutdown_channel();

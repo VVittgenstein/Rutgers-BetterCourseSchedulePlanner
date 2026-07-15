@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use bcsp_application::{OpenRuntimeSnapshotRegistry, SharedWatchSocket, WatchAdmissionSource};
 use bcsp_contracts::SectionKey;
+use bcsp_local_user_state::PersonalStateStore;
 use bcsp_open::{OpenProjectionError, project_current_open_observation};
 use bcsp_watch::{WatchManagerError, WatchStartAdmission};
 
@@ -45,6 +46,7 @@ fn admission_from_projection(
 
 pub fn create_local_watch_socket(
     database: Arc<Mutex<LocalPrimaryDatabase>>,
+    history_store: PersonalStateStore,
     runtime: LocalRuntimeCore,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
 ) -> Result<Arc<SharedWatchSocket>, WatchManagerError> {
@@ -55,7 +57,7 @@ pub fn create_local_watch_socket(
     });
     Ok(Arc::new(SharedWatchSocket::try_new(
         admission,
-        Arc::new(LocalWatchHistorySink::new(database)),
+        Arc::new(LocalWatchHistorySink::new(history_store)),
     )?))
 }
 
