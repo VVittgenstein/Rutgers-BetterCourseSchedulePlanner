@@ -118,7 +118,7 @@ jobs:
             --output-root "$output_root"
           archive="$output_root/rbcsp-linux-x86_64-0.1.0.tar.gz"
           test "$(sha256sum "$archive" | awk '{print $1}')" = \
-            '77160882304fbe4d17a070a1cce16471cd618a1cd5cee18c9a2f6e9e8e920d07'
+            '67c4f5ac228dee7e4cc69378b12fbe294f3175f0bc453f5818e18704eba6cf04'
           bash packaging/linux/verify.sh --archive "$archive"
           install -d "$candidate"
           tar -xzf "$archive" -C "$candidate" --no-same-owner
@@ -158,7 +158,7 @@ jobs:
         with:
           path: ${{ steps.candidate.outputs.archive }}
           key: >-
-            p7-5-linux-candidate-77160882304fbe4d17a070a1cce16471cd618a1cd5cee18c9a2f6e9e8e920d07-${{ github.run_id }}-${{ github.run_attempt }}
+            p7-5-linux-candidate-67c4f5ac228dee7e4cc69378b12fbe294f3175f0bc453f5818e18704eba6cf04-${{ github.run_id }}-${{ github.run_attempt }}
 
   windows-candidate:
     name: Windows package and standard-user acceptance
