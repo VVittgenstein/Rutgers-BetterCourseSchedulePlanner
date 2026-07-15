@@ -153,6 +153,13 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+      - name: Preserve the verified Linux candidate for the manual real-world tier
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.candidate.outputs.archive }}
+          key: >-
+            p7-5-linux-candidate-77160882304fbe4d17a070a1cce16471cd618a1cd5cee18c9a2f6e9e8e920d07-${{ github.run_id }}-${{ github.run_attempt }}
+
   windows-candidate:
     name: Windows package and standard-user acceptance
     runs-on: windows-2025
@@ -254,7 +261,7 @@ jobs:
             -SourceRoot $sourceRoot -OutputRoot $outputRoot
           $archive = Join-Path $outputRoot 'rbcsp-windows-x86_64-0.1.0.zip'
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -cne '69719b9b576dded0d50d2ee0ab49b1ea94e8a712e9d185b74ecc87fdda6cada4') {
+          if ($hash -cne 'eb85374bbf97215124b4f2b64be4c51c96bc2af0502fc79b5230024709590610') {
             throw "The Windows candidate hash drifted: $hash"
           }
           $utf8 = New-Object Text.UTF8Encoding($false)
