@@ -1,0 +1,62 @@
+{
+  "task": "P7.4-005",
+  "status": "PRECOMMIT_CANDIDATE_ACCEPTANCE_VERIFIED",
+  "parent": "91744cbfbc691834f6668ca10b0b27389ce38ba1",
+  "verifiedAtUtc": "2026-07-15T06:10:45.3739833Z",
+  "sourceCommit": "7d8297404d033e79b514333748b7072ebd3a0099",
+  "validatedWorkflowCommit": "91744cbfbc691834f6668ca10b0b27389ce38ba1",
+  "candidateSetCardinality": 2,
+  "windows": {
+    "sha256": "eb85374bbf97215124b4f2b64be4c51c96bc2af0502fc79b5230024709590610",
+    "bytes": 5534122,
+    "fileCount": 11
+  },
+  "linux": {
+    "sha256": "77160882304fbe4d17a070a1cce16471cd618a1cd5cee18c9a2f6e9e8e920d07",
+    "bytes": 6366047,
+    "fileCount": 20
+  },
+  "successfulActionsRunIds": [29391985651, 29392739883],
+  "canonicalActionsRunId": 29392739883,
+  "actionsJobIds": {
+    "first": {
+      "windows": 87277268473,
+      "linux": 87277268502,
+      "fakeUpstream": 87277268517,
+      "malware": 87278986627
+    },
+    "second": {
+      "windows": 87279544529,
+      "linux": 87279544540,
+      "fakeUpstream": 87279544528,
+      "malware": 87281355232
+    }
+  },
+  "actionsArtifactIds": {
+    "windows": [8333808987, 8334104281],
+    "linux": [8333722294, 8334014409]
+  },
+  "checks": {
+    "twoCleanRuns": "PASS_BYTE_IDENTICAL",
+    "windowsStandardUserBrowserAndDefender": "PASS",
+    "linuxCaddyBrowserInstallRestoreUpgradeRollback": "PASS",
+    "targetedFakeUpstream": "PASS",
+    "clamAv": "PASS_0_INFECTED_2_FILES_BOTH_RUNS",
+    "jointAudit": "PASS_BOTH_PAIRS_SHARED_169_FRONTEND_10",
+    "absoluteAndShortPathHits": "PASS_ZERO"
+  },
+  "candidateLineageDisposition": "P7_4_004_HISTORICAL_BYTES_PRESERVED_INTERMEDIATE_WINDOWS_REJECTED_FINAL_PAIR_CANONICAL",
+  "artifactsCommitted": false,
+  "realWorldE2ECompleted": false,
+  "p7Completed": false,
+  "githubReleaseCreated": false,
+  "githubReleaseAuthorized": false,
+  "githubReleaseEligible": false,
+  "productionMutation": false,
+  "productionDeploymentAuthorized": false,
+  "gate": "P7_5_ELIGIBLE",
+  "commitBoundary": "P7_4_FINAL_DEDICATED_CANDIDATE_GATE_COMMIT",
+  "postPushMarker": "P7_4_005_PASS_POST_PUSH",
+  "nextTask": "P7.5-001",
+  "nextTaskBlockedUntil": "P7_4_005_PASS_POST_PUSH"
+}
