@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use bcsp_application::{
     NoopCoordinatorStatusSink, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,
     OpenRuntimeSnapshotRegistry, ProductStorageAccess, ProductStorageLockError,
-    SharedProductRoutes, SharedWatchSocket, SystemApplicationClock, TargetRefreshDemand,
+    SharedProductRoutes, SharedProductStorage, SharedWatchSocket, SystemApplicationClock,
+    TargetRefreshDemand,
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_operational_storage::OperationalStorage;
@@ -68,7 +69,8 @@ pub(crate) fn create_local_product_routes(
 }
 
 pub(crate) fn start_local_product_refresh(
-    database: Arc<Mutex<LocalPrimaryDatabase>>,
+    refresh_storage: SharedProductStorage,
+    policy_database: Arc<Mutex<LocalPrimaryDatabase>>,
     runtime: &LocalRuntimeCore,
     watch: Arc<SharedWatchSocket>,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
@@ -78,8 +80,8 @@ pub(crate) fn start_local_product_refresh(
         unreachable!("local runtime always owns a local counter audience");
     };
     OfficialRefreshRuntime::spawn_with_target_refresh_demand(
-        LocalProductStorageAccess::new(database.clone()),
-        LocalRefreshPolicyProvider::new(database),
+        refresh_storage,
+        LocalRefreshPolicyProvider::new(policy_database),
         run_id,
         runtime.counter_audience(),
         watch,

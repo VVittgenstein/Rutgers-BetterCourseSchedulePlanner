@@ -19,7 +19,11 @@ use crate::{
     SqliteConfiguration, StoredSettings, UnixMillis, UserStateRevision, WalCheckpoint,
 };
 
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+// A first-load Catalog publication can hold SQLite's single writer slot for
+// tens of seconds on a clean low-resource Windows machine. Personal mutations
+// run on blocking workers, so waiting here preserves the user action without
+// starving the async HTTP runtime or returning a transient 500.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct PersonalStateStore {
     pub(crate) connection: Connection,

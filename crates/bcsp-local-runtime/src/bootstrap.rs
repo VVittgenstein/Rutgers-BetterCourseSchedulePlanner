@@ -20,13 +20,15 @@ pub struct LocalRuntimeState {
 pub struct OperationalGate {
     paths: LocalRuntimePaths,
     database: Arc<Mutex<LocalPrimaryDatabase>>,
+    refresh_storage: Arc<Mutex<OperationalStorage>>,
 }
 
 /// The single package-local SQLite host.
 ///
 /// Operational and personal repositories keep separate SQL ownership while this
-/// host guarantees that the local process opens exactly one database pool and
-/// one physical file.
+/// host guarantees one physical package-relative database. The product-serving
+/// and refresh connections are intentionally distinct: SQLite WAL preserves the
+/// last published snapshot for UI reads while a replacement snapshot is written.
 pub struct LocalPrimaryDatabase {
     operational: OperationalStorage,
     personal: PersonalStateStore,
@@ -59,6 +61,8 @@ impl OperationalGate {
             .map_err(LocalBootstrapError::OperationalStorage)?;
         let personal = PersonalStateStore::open(paths.database())
             .map_err(LocalBootstrapError::PersonalState)?;
+        let refresh_storage = OperationalStorage::open(paths.database())
+            .map_err(LocalBootstrapError::OperationalStorage)?;
         verify_database_target_after_open(paths.database(), &canonical_data)?;
         Ok(Self {
             paths,
@@ -66,6 +70,7 @@ impl OperationalGate {
                 operational,
                 personal,
             })),
+            refresh_storage: Arc::new(Mutex::new(refresh_storage)),
         })
     }
 
@@ -75,6 +80,10 @@ impl OperationalGate {
 
     pub fn database(&self) -> Arc<Mutex<LocalPrimaryDatabase>> {
         self.database.clone()
+    }
+
+    pub fn refresh_storage(&self) -> Arc<Mutex<OperationalStorage>> {
+        self.refresh_storage.clone()
     }
 }
 

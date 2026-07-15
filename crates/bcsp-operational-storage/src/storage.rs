@@ -85,6 +85,17 @@ impl OperationalStorage {
     ) -> StorageResult<Self> {
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         connection.busy_timeout(Duration::from_secs(5))?;
+        // File-backed runtimes use a dedicated serving connection alongside the
+        // refresh writer. WAL keeps already-published Catalog data readable while
+        // a large replacement snapshot is staged and committed atomically.
+        if recovery_key.is_some() {
+            connection.pragma_update(None, "journal_mode", "WAL")?;
+            let journal_mode = connection
+                .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))?;
+            if !journal_mode.eq_ignore_ascii_case("wal") {
+                return Err(StorageError::SqliteConfiguration("journal_mode"));
+            }
+        }
         probe_fts5(&connection)?;
         apply_migrations(&mut connection)?;
         if recover_interrupted {
@@ -2898,6 +2909,7 @@ pub(crate) fn i64_to_u64(value: i64) -> StorageResult<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn fts5_query_builder_quotes_every_literal_and_doubles_embedded_quotes() {
@@ -2907,5 +2919,43 @@ mod tests {
             fts5_literal_and_query(&tokens),
             "\"alpha\" AND \"say\"\"hello\" AND \"OR\""
         );
+    }
+
+    #[test]
+    fn file_backed_storage_uses_wal_for_serving_reads_during_a_write() {
+        let temp = TempDir::new().expect("temporary database directory");
+        let path = temp.path().join("operational.sqlite");
+        let mut writer = OperationalStorage::open(&path).expect("writer storage");
+        let reader = OperationalStorage::open(&path).expect("serving storage");
+
+        let writer_mode = writer
+            .connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .expect("writer journal mode");
+        let reader_mode = reader
+            .connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .expect("reader journal mode");
+        assert!(writer_mode.eq_ignore_ascii_case("wal"));
+        assert!(reader_mode.eq_ignore_ascii_case("wal"));
+
+        let transaction = writer
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Exclusive)
+            .expect("exclusive writer transaction");
+        transaction
+            .execute(
+                "UPDATE bcsp_operational_migrations SET name = name WHERE migration_id = 1",
+                [],
+            )
+            .expect("hold a real write transaction");
+
+        assert!(
+            !reader
+                .migration_records()
+                .expect("serving read must not wait for writer commit")
+                .is_empty()
+        );
+        transaction.rollback().expect("rollback synthetic write");
     }
 }

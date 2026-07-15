@@ -6,15 +6,17 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bcsp_application::{
-    NoopWatchDispatchSink, OpenRuntimeSnapshot, PRODUCT_CATALOG_DISCOVERY_PATH,
-    PRODUCT_FILTER_SCHEMA_PATH, SharedWatchSocket, WebSocketExtension,
+    ExtensionRequest, NoopWatchDispatchSink, OpenRuntimeSnapshot, PRODUCT_CATALOG_DISCOVERY_PATH,
+    PRODUCT_FILTER_SCHEMA_PATH, RequestMethod, RouteExtension, SharedWatchSocket,
+    WebSocketExtension,
 };
 use bcsp_contracts::{
-    FilterRequestV1, FilterValuesInputV1, NormalizedFilterValuesV1, SectionKey, TermId, TraceId,
-    WatchClientCommandV1, WatchPolicyV1, WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope,
+    CatalogDiscoveryRequestV1, FilterRequestV1, FilterValuesInputV1, HttpRequestEnvelope,
+    NormalizedFilterValuesV1, SectionKey, TermId, TraceId, WatchClientCommandV1, WatchPolicyV1,
+    WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope,
 };
 use bcsp_local_runtime::{
     LocalRuntimeError, LocalRuntimePaths, LocalSurfaceState, PersonalSurface, PreparedLocalRuntime,
@@ -26,7 +28,7 @@ use bcsp_local_user_state::{
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_watch::WatchStartAdmission;
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use tokio::sync::mpsc;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -228,6 +230,103 @@ fn configured_refresh_policy_is_live_bounded_and_scoped_to_a_fresh_run() {
         3_600
     );
     assert_eq!(restarted.state().active_watch_count, 0);
+}
+
+#[test]
+fn catalog_writer_does_not_block_local_bootstrap_or_product_serving_reads() {
+    let temp = TestDirectory::new("writer-serving-isolation");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let refresh_storage = prepared.operational().refresh_storage();
+    let _refresh_guard = refresh_storage.lock().unwrap();
+
+    let mut external_writer = Connection::open(prepared.paths().database()).unwrap();
+    external_writer
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    let transaction = external_writer
+        .transaction_with_behavior(TransactionBehavior::Exclusive)
+        .unwrap();
+    transaction
+        .execute(
+            "UPDATE bcsp_operational_migrations SET name = name WHERE migration_id = 1",
+            [],
+        )
+        .unwrap();
+
+    let routes = prepared.route_extension();
+    let local_routes = routes.clone();
+    let (local_response, local_response_rx) = std::sync::mpsc::channel();
+    let local_worker = std::thread::spawn(move || {
+        local_response
+            .send(local_routes.handle(ExtensionRequest::new(
+                RequestMethod::Get,
+                "/api/v1/local/bootstrap",
+                None,
+                Vec::new(),
+            )))
+            .expect("publish local bootstrap response");
+    });
+    let local = local_response_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("local bootstrap must not wait for the refresh writer");
+    local_worker.join().expect("local bootstrap worker");
+    assert_eq!(local.status(), 200);
+
+    let body =
+        serde_json::to_vec(&HttpRequestEnvelope::new(CatalogDiscoveryRequestV1::new())).unwrap();
+    let discovery_routes = routes.clone();
+    let (discovery_response, discovery_response_rx) = std::sync::mpsc::channel();
+    let discovery_worker = std::thread::spawn(move || {
+        discovery_response
+            .send(discovery_routes.handle(ExtensionRequest::new(
+                RequestMethod::Post,
+                PRODUCT_CATALOG_DISCOVERY_PATH,
+                None,
+                body,
+            )))
+            .expect("publish Catalog discovery response");
+    });
+    let discovery = discovery_response_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("Catalog discovery must not wait for the refresh writer");
+    discovery_worker.join().expect("Catalog discovery worker");
+    assert_eq!(discovery.status(), 200);
+    assert_eq!(find_sqlite_files(temp.path()).len(), 1);
+
+    let database = prepared.operational().database();
+    let (mutation_started, mutation_started_rx) = std::sync::mpsc::sync_channel(0);
+    let (mutation_finished, mutation_finished_rx) = std::sync::mpsc::channel();
+    let personal_mutation = std::thread::spawn(move || {
+        let mut database = database.lock().unwrap();
+        let state_revision = database.personal().user_state_revision().unwrap();
+        let started_at = Instant::now();
+        mutation_started
+            .send(())
+            .expect("announce personal mutation attempt");
+        let result = database.personal_mut().compare_and_swap_settings(
+            state_revision,
+            SettingsRevision::ZERO,
+            &LocalSettings::default(),
+        );
+        mutation_finished
+            .send((result, started_at.elapsed()))
+            .expect("publish personal mutation result");
+    });
+    mutation_started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("personal mutation attempt started");
+    std::thread::sleep(Duration::from_millis(5_250));
+    transaction.rollback().unwrap();
+    let (mutation_result, mutation_elapsed) = mutation_finished_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("personal mutation completes after the Catalog writer releases");
+    mutation_result.expect("personal mutation waits for the Catalog writer");
+    assert!(
+        mutation_elapsed >= Duration::from_secs(5),
+        "personal mutation must remain in SQLite busy-wait beyond the old five-second limit"
+    );
+    personal_mutation.join().expect("personal mutation thread");
 }
 
 #[test]

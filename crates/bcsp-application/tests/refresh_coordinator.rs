@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use bcsp_application::{
     ApplicationClock, CoordinatorClock, CoordinatorDispatchOutcome, CoordinatorStatusSink,
@@ -9,9 +9,10 @@ use bcsp_application::{
     OpenRuntimeSnapshotRegistry, PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH,
     PRODUCT_COURSE_SEARCH_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
     PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
-    RefreshFuture, RefreshPolicy, RefreshUpstream, RequestMethod, RouteExtension,
-    ScheduledRefreshTarget, SharedProductRoutes, SharedRefreshCoordinator, SharedRuntimeContext,
-    SharedWatchSocket, WebSocketExtension, publish_discovery_for_refresh,
+    ProductStorageAccess, ProductStorageLockError, RefreshFuture, RefreshPolicy, RefreshUpstream,
+    RequestMethod, RouteExtension, ScheduledRefreshTarget, SharedProductRoutes,
+    SharedRefreshCoordinator, SharedRuntimeContext, SharedWatchSocket, WebSocketExtension,
+    publish_discovery_for_refresh,
 };
 use bcsp_contracts::{
     CatalogDiscoveryRequestV1, CatalogDiscoveryResponseV1, CourseDetailRequestV1,
@@ -297,6 +298,24 @@ struct Fixture {
     catalog_response: bcsp_application::CatalogPullResponse,
 }
 
+#[derive(Clone)]
+struct DelayedCatalogPersistence {
+    storage: Arc<Mutex<OperationalStorage>>,
+    lock_calls: Arc<AtomicUsize>,
+    delay: Duration,
+}
+
+impl ProductStorageAccess for DelayedCatalogPersistence {
+    type Guard<'a> = MutexGuard<'a, OperationalStorage>;
+
+    fn lock_operational(&self) -> Result<Self::Guard<'_>, ProductStorageLockError> {
+        if self.lock_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            std::thread::sleep(self.delay);
+        }
+        self.storage.lock().map_err(|_| ProductStorageLockError)
+    }
+}
+
 fn fixture() -> Fixture {
     let directory = TempDir::new().expect("temporary directory");
     let storage = Arc::new(Mutex::new(
@@ -428,6 +447,56 @@ fn watch_events(receiver: &mut mpsc::UnboundedReceiver<String>) -> Vec<WatchServ
                 .into_payload()
         })
         .collect()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn catalog_persistence_does_not_block_the_async_runtime_thread() {
+    let fixture = fixture();
+    let clock = FakeClock::default();
+    let upstream_state = Arc::new(FakeUpstream::new(
+        Arc::clone(&fixture.storage),
+        [Ok(fixture.catalog_response.clone())],
+        [],
+    ));
+    let delayed_storage = DelayedCatalogPersistence {
+        storage: Arc::clone(&fixture.storage),
+        lock_calls: Arc::new(AtomicUsize::new(0)),
+        delay: Duration::from_millis(250),
+    };
+    let mut coordinator = SharedRefreshCoordinator::with_parts(
+        delayed_storage,
+        FakeUpstreamHandle(upstream_state),
+        FixedRefreshPolicyProvider::new(policy(GeneralOpenInterval::public())),
+        clock,
+        FakeIds(300),
+        trace(90),
+        OpenCounterAudience::Public,
+        create_socket(),
+        Arc::new(OpenRuntimeSnapshotRegistry::default()),
+        Arc::new(RecordingStatus::default()),
+    );
+    coordinator
+        .register_target(
+            ScheduledRefreshTarget::try_new(fixture.target, fixture.open_request)
+                .expect("registration"),
+        )
+        .expect("register target");
+
+    let started = Instant::now();
+    let catalog = tokio::spawn(async move { coordinator.run_next().await });
+    tokio::task::yield_now().await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        started.elapsed() < Duration::from_millis(125),
+        "Catalog persistence blocked the single Tokio worker"
+    );
+    assert!(matches!(
+        catalog
+            .await
+            .expect("Catalog task")
+            .expect("Catalog dispatch"),
+        Some(CoordinatorDispatchOutcome::CatalogPublished { .. })
+    ));
 }
 
 #[tokio::test]

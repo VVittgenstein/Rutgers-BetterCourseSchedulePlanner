@@ -3,8 +3,8 @@ use std::sync::{Arc, MutexGuard};
 
 use bcsp_application::{
     FixedRefreshPolicyProvider, OpenRuntimeSnapshotRegistry, ProductStorageAccess,
-    ProductStorageLockError, RefreshPolicyError, SharedProductRoutes, SharedRuntimeContext,
-    SystemApplicationClock,
+    ProductStorageLockError, RefreshPolicyError, SharedProductRoutes, SharedProductStorage,
+    SharedRuntimeContext, SystemApplicationClock,
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_operational_storage::OperationalStorage;
@@ -54,14 +54,11 @@ impl ProductStorageAccess for PublicProductStorageAccess {
     }
 }
 
-pub type PublicProductRoutes = SharedProductRoutes<
-    SystemApplicationClock,
-    FixedRefreshPolicyProvider,
-    PublicProductStorageAccess,
->;
+pub type PublicProductRoutes =
+    SharedProductRoutes<SystemApplicationClock, FixedRefreshPolicyProvider, SharedProductStorage>;
 
 pub fn create_public_product_routes(
-    store: SharedPublicOperationalStore,
+    serving_storage: SharedProductStorage,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
 ) -> Result<PublicProductRoutes, RefreshPolicyError> {
     let runtime = SharedRuntimeContext::new(
@@ -69,8 +66,8 @@ pub fn create_public_product_routes(
         SystemApplicationClock,
         FixedRefreshPolicyProvider::new(fixed_public_refresh_policy()?),
     );
-    Ok(SharedProductRoutes::with_storage_access(
-        PublicProductStorageAccess::new(store),
+    Ok(SharedProductRoutes::new(
+        serving_storage,
         runtime,
         open_runtime,
     ))

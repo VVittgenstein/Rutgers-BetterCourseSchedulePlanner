@@ -538,19 +538,28 @@ where
             }
         };
 
-        let normalized = match normalize_target(
-            response.target.clone(),
-            response.courses,
-            response.provenance.clone(),
-        ) {
-            Ok(normalized) => normalized,
-            Err(_) => {
+        let source_content_sha256 = response.provenance.body_sha256.clone();
+        let source_bytes = response.provenance.decoded_bytes;
+        let selector_confirms_target = response.selector_confirms_target;
+        let command_completed_at = completed_at.clone();
+        let command = tokio::task::spawn_blocking(move || {
+            let normalized =
+                normalize_target(response.target, response.courses, response.provenance)
+                    .map_err(|_| CatalogPreparationFailure::Normalization)?;
+            to_catalog_refresh_command(&normalized, attempt_id, started_at, command_completed_at)
+                .map_err(|_| CatalogPreparationFailure::Mapping)
+        })
+        .await
+        .map_err(|_| CoordinatorError::CatalogBlockingTask)?;
+        let command = match command {
+            Ok(command) => command,
+            Err(CatalogPreparationFailure::Normalization) => {
                 self.finish_catalog_failure(
                     attempt_id,
                     completed_at,
                     RefreshFailureStage::Normalization,
-                    Some(response.provenance.body_sha256),
-                    Some(response.provenance.decoded_bytes),
+                    Some(source_content_sha256),
+                    Some(source_bytes),
                     "CATALOG_NORMALIZATION_FAILED",
                 )?;
                 return Ok(self.catalog_failure_result(
@@ -559,21 +568,13 @@ where
                     CatalogPullFailure::Schema,
                 ));
             }
-        };
-        let command = match to_catalog_refresh_command(
-            &normalized,
-            attempt_id,
-            started_at,
-            completed_at.clone(),
-        ) {
-            Ok(command) => command,
-            Err(_) => {
+            Err(CatalogPreparationFailure::Mapping) => {
                 self.finish_catalog_failure(
                     attempt_id,
                     completed_at,
                     RefreshFailureStage::Normalization,
-                    Some(response.provenance.body_sha256),
-                    Some(response.provenance.decoded_bytes),
+                    Some(source_content_sha256),
+                    Some(source_bytes),
                     "CATALOG_MAPPING_FAILED",
                 )?;
                 return Ok(self.catalog_failure_result(
@@ -583,8 +584,11 @@ where
                 ));
             }
         };
-        let selector_confirms_target = response.selector_confirms_target;
-        let outcome = self.with_storage(move |storage| {
+        let storage_access = self.storage.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> Result<_, CoordinatorError> {
+            let mut storage = storage_access
+                .lock_operational()
+                .map_err(|_| CoordinatorError::StorageLock)?;
             let state = storage.target_state(&command.target)?;
             let empty_decision = if !command.snapshot.is_empty() {
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty
@@ -597,10 +601,10 @@ where
                         InitialEmptyProof::CurrentSelectorMembership,
                     )
                 } else {
-                    return Err(StorageError::InvalidCommand {
+                    return Err(CoordinatorError::Storage(StorageError::InvalidCommand {
                         field: "selector_confirms_target",
                         reason: "initial empty Catalog requires current selector membership",
-                    });
+                    }));
                 }
             } else if state
                 .as_ref()
@@ -610,8 +614,12 @@ where
             } else {
                 EmptySnapshotDecision::RetainLastKnownGood
             };
-            storage.apply_catalog_refresh(command, empty_decision)
-        })?;
+            storage
+                .apply_catalog_refresh(command, empty_decision)
+                .map_err(CoordinatorError::Storage)
+        })
+        .await
+        .map_err(|_| CoordinatorError::CatalogBlockingTask)??;
         let immediate_open_lane = match &outcome {
             PublishOutcome::AppliedChanged {
                 content_version: 1, ..
@@ -972,6 +980,12 @@ fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CatalogPreparationFailure {
+    Normalization,
+    Mapping,
+}
+
 fn format_timestamp(value: OffsetDateTime) -> Result<String, CoordinatorError> {
     value
         .format(&Rfc3339)
@@ -992,6 +1006,8 @@ pub enum CoordinatorError {
     Storage(#[from] StorageError),
     #[error("Catalog source byte count overflowed")]
     SourceBytesOverflow,
+    #[error("Catalog blocking work did not complete")]
+    CatalogBlockingTask,
     #[error("refresh timestamp could not be represented as RFC 3339")]
     TimestampFormat,
     #[error("Open target is not registered")]

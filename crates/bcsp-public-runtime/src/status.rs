@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use bcsp_application::{CoordinatorStatusSink, CoordinatorStatusSnapshot, SharedWatchSocket};
+use bcsp_application::{
+    CoordinatorStatusSink, CoordinatorStatusSnapshot, SharedProductStorage, SharedWatchSocket,
+};
 use bcsp_contracts::{
     FilterRequestV1, NormalizedFilterValuesV1, OpenCircuitState as ContractOpenCircuitState,
     OpenCircuitStatusV1, OpenFreshnessState, OpenSchedulerLane, OpenSchedulerStatusV1,
@@ -189,7 +191,7 @@ pub trait PublicServiceStateSource: Send + Sync + 'static {
 }
 
 pub struct PublicServiceInspector {
-    store: SharedPublicOperationalStore,
+    storage: SharedProductStorage,
     scheduler: Arc<dyn PublicSchedulerStatusSource>,
     watch_demand: Arc<dyn PublicWatchDemandSource>,
     clock: Arc<dyn PublicClock>,
@@ -197,13 +199,13 @@ pub struct PublicServiceInspector {
 
 impl PublicServiceInspector {
     pub fn new(
-        store: SharedPublicOperationalStore,
+        storage: SharedProductStorage,
         scheduler: Arc<dyn PublicSchedulerStatusSource>,
         watch_demand: Arc<dyn PublicWatchDemandSource>,
         clock: Arc<dyn PublicClock>,
     ) -> Self {
         Self {
-            store,
+            storage,
             scheduler,
             watch_demand,
             clock,
@@ -211,11 +213,16 @@ impl PublicServiceInspector {
     }
 
     pub fn with_system_clock(
-        store: SharedPublicOperationalStore,
+        storage: SharedProductStorage,
         scheduler: Arc<dyn PublicSchedulerStatusSource>,
         watch_demand: Arc<dyn PublicWatchDemandSource>,
     ) -> Self {
-        Self::new(store, scheduler, watch_demand, Arc::new(SystemPublicClock))
+        Self::new(
+            storage,
+            scheduler,
+            watch_demand,
+            Arc::new(SystemPublicClock),
+        )
     }
 
     fn inspect(&self) -> Result<PublicServiceSnapshot, ()> {
@@ -225,32 +232,27 @@ impl PublicServiceInspector {
         let scheduler_running = self.scheduler.scheduler_running();
         let websocket_connection_count = self.watch_demand.connection_count();
         let active_watch_count = self.watch_demand.total_active_watch_count();
-        let mut store = self.store.lock().map_err(|_| ())?;
-        let persisted_circuit = store
-            .storage()
+        let mut storage = self.storage.lock().map_err(|_| ())?;
+        let persisted_circuit = storage
             .open_origin_state(PUBLIC_RUTGERS_ORIGIN_ID)
             .map_err(|_| ())?;
         let circuit = persisted_circuit_status(persisted_circuit.as_ref(), now)?;
         scheduler.origin_circuit_open |= circuit.active;
         let mut scheduler_backing_off = circuit.backing_off;
-        let targets = store.storage().discovered_targets().map_err(|_| ())?;
+        let targets = storage.discovered_targets().map_err(|_| ())?;
         let mut catalog_available_target_count = 0_u64;
         let mut open_available_target_count = 0_u64;
         let mut open_stale_target_count = 0_u64;
         let mut maximum_persisted_lag = 0_u64;
         for target in &targets {
-            let catalog_available = store
-                .storage()
+            let catalog_available = storage
                 .target_state(target)
                 .map_err(|_| ())?
                 .is_some_and(|state| state.current_content_version > 0);
             if catalog_available {
                 catalog_available_target_count = catalog_available_target_count.saturating_add(1);
             }
-            let schedule = store
-                .storage()
-                .open_schedule_state(target)
-                .map_err(|_| ())?;
+            let schedule = storage.open_schedule_state(target).map_err(|_| ())?;
             if let Some(schedule) = &schedule {
                 maximum_persisted_lag = maximum_persisted_lag.max(schedule.schedule_lag_ms);
                 if schedule.failure_streak > 0
@@ -262,7 +264,7 @@ impl PublicServiceInspector {
             if catalog_available {
                 let active_target_watches = self.watch_demand.active_watch_count(target);
                 let projected = project_open_status(
-                    store.storage_mut(),
+                    &mut *storage,
                     target,
                     &OpenProjectionRuntime {
                         now,
@@ -286,7 +288,9 @@ impl PublicServiceInspector {
                 }
             }
         }
-        let counters = store.service_day_counters(&rutgers_day).map_err(|_| ())?;
+        let counters = storage
+            .open_service_day_counters(&rutgers_day)
+            .map_err(|_| ())?;
         let catalog_target_count = u64::try_from(targets.len()).unwrap_or(u64::MAX);
         scheduler.maximum_lag_milliseconds = scheduler
             .maximum_lag_milliseconds
@@ -477,13 +481,8 @@ impl PublicServiceStateSource for PublicServiceInspector {
     }
 
     fn default_current_filters(&self) -> Option<FilterRequestV1> {
-        let store = self.store.lock().ok()?;
-        let target = store
-            .storage()
-            .discovered_targets()
-            .ok()?
-            .into_iter()
-            .next()?;
+        let storage = self.storage.lock().ok()?;
+        let target = storage.discovered_targets().ok()?.into_iter().next()?;
         Some(FilterRequestV1::new(NormalizedFilterValuesV1::for_term(
             target.term().clone(),
         )))
@@ -492,8 +491,7 @@ impl PublicServiceStateSource for PublicServiceInspector {
 
 #[cfg(test)]
 mod tests {
-    use bcsp_operational_storage::{OpenCircuitState, OpenOriginState};
-    use bcsp_public_operations::PublicOperationalStore;
+    use bcsp_operational_storage::{OpenCircuitState, OpenOriginState, OperationalStorage};
     use tempfile::TempDir;
     use time::Duration;
 
@@ -519,11 +517,11 @@ mod tests {
     #[test]
     fn fresh_operational_schema_is_live_but_not_product_ready() {
         let temp = TempDir::new().expect("temporary directory");
-        let store = PublicOperationalStore::open_for_state_root(temp.path().join("state"))
-            .expect("public state");
+        let storage =
+            OperationalStorage::open(temp.path().join("rbcsp.sqlite")).expect("public state");
         let now = OffsetDateTime::from_unix_timestamp(1_784_006_400).expect("fixed time");
         let inspector = PublicServiceInspector::new(
-            Arc::new(Mutex::new(store)),
+            Arc::new(Mutex::new(storage)),
             Arc::new(InMemoryPublicSchedulerStatus::default()),
             Arc::new(NoDemand),
             Arc::new(move || now),
@@ -555,15 +553,14 @@ mod tests {
     #[test]
     fn persisted_retry_after_is_reported_as_backoff_and_origin_circuit() {
         let temp = TempDir::new().expect("temporary directory");
-        let mut store = PublicOperationalStore::open_for_state_root(temp.path().join("state"))
-            .expect("public state");
+        let mut storage =
+            OperationalStorage::open(temp.path().join("rbcsp.sqlite")).expect("public state");
         let now = OffsetDateTime::from_unix_timestamp(1_784_006_400).expect("fixed time");
         let opened_at = now.format(&Rfc3339).expect("opened timestamp");
         let retry_at = (now + Duration::hours(1))
             .format(&Rfc3339)
             .expect("retry timestamp");
-        store
-            .storage_mut()
+        storage
             .put_open_origin_state(&OpenOriginState {
                 origin_id: PUBLIC_RUTGERS_ORIGIN_ID.to_owned(),
                 circuit_state: OpenCircuitState::RetryAfter,
@@ -575,7 +572,7 @@ mod tests {
             })
             .expect("persist origin backoff");
         let inspector = PublicServiceInspector::new(
-            Arc::new(Mutex::new(store)),
+            Arc::new(Mutex::new(storage)),
             Arc::new(InMemoryPublicSchedulerStatus::default()),
             Arc::new(NoDemand),
             Arc::new(move || now),
@@ -615,8 +612,8 @@ mod tests {
     #[test]
     fn persisted_or_live_lag_has_an_explicit_degradation_reason() {
         let temp = TempDir::new().expect("temporary directory");
-        let store = PublicOperationalStore::open_for_state_root(temp.path().join("state"))
-            .expect("public state");
+        let storage =
+            OperationalStorage::open(temp.path().join("rbcsp.sqlite")).expect("public state");
         let scheduler = Arc::new(InMemoryPublicSchedulerStatus::default());
         scheduler.publish(PublicSchedulerSnapshot {
             maximum_lag_milliseconds: 42,
@@ -624,7 +621,7 @@ mod tests {
         });
         let now = OffsetDateTime::from_unix_timestamp(1_784_006_400).expect("fixed time");
         let inspector = PublicServiceInspector::new(
-            Arc::new(Mutex::new(store)),
+            Arc::new(Mutex::new(storage)),
             scheduler,
             Arc::new(NoDemand),
             Arc::new(move || now),

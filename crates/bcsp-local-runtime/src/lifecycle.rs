@@ -154,6 +154,7 @@ impl PreparedLocalRuntime {
 
     pub async fn start(self) -> Result<RunningLocalRuntime, LocalRuntimeError> {
         let refresh = start_local_product_refresh(
+            self.operational.refresh_storage(),
             self.operational.database(),
             &self.core,
             self.watch.clone(),

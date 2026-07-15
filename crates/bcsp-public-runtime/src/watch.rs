@@ -2,16 +2,17 @@ use std::sync::Arc;
 
 use bcsp_application::{
     FixedRefreshPolicyProvider, NoopWatchDispatchSink, OpenRuntimeSnapshotRegistry,
-    SharedRuntimeContext, SharedWatchSocket, SystemApplicationClock, WatchAdmissionSource,
+    SharedProductStorage, SharedRuntimeContext, SharedWatchSocket, SystemApplicationClock,
+    WatchAdmissionSource,
 };
 use bcsp_contracts::SectionKey;
 use bcsp_open::{OpenCounterAudience, OpenProjectionError, project_current_open_observation};
 use bcsp_watch::{WatchManagerError, WatchStartAdmission};
 
-use crate::{SharedPublicOperationalStore, fixed_public_refresh_policy};
+use crate::fixed_public_refresh_policy;
 
 struct PublicWatchAdmission {
-    store: SharedPublicOperationalStore,
+    storage: SharedProductStorage,
     runtime: SharedRuntimeContext<SystemApplicationClock, FixedRefreshPolicyProvider>,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
 }
@@ -25,11 +26,11 @@ impl WatchAdmissionSource for PublicWatchAdmission {
         let Ok(runtime) = self.runtime.projection_runtime(&snapshot) else {
             return WatchStartAdmission::TargetUnavailable;
         };
-        let Ok(mut store) = self.store.lock() else {
+        let Ok(mut storage) = self.storage.lock() else {
             return WatchStartAdmission::TargetUnavailable;
         };
         admission_from_projection(project_current_open_observation(
-            store.storage_mut(),
+            &mut *storage,
             section,
             &runtime,
         ))
@@ -47,7 +48,7 @@ fn admission_from_projection(
 }
 
 pub fn create_public_watch_socket(
-    store: SharedPublicOperationalStore,
+    storage: SharedProductStorage,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
 ) -> Result<Arc<SharedWatchSocket>, WatchManagerError> {
     let runtime = SharedRuntimeContext::new(
@@ -58,7 +59,7 @@ pub fn create_public_watch_socket(
         ),
     );
     let admission: Arc<dyn WatchAdmissionSource> = Arc::new(PublicWatchAdmission {
-        store,
+        storage,
         runtime,
         open_runtime,
     });

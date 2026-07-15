@@ -11,6 +11,8 @@ pub enum StorageError {
     Identity(#[from] bcsp_contracts::IdentityError),
     #[error("FTS5 is unavailable in the active SQLite runtime")]
     Fts5Unavailable,
+    #[error("required SQLite configuration is unavailable: {0}")]
+    SqliteConfiguration(&'static str),
     #[error("the requested catalog target has no published content")]
     CatalogTargetNotPublished,
     #[error(
