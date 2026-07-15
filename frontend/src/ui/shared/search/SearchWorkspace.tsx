@@ -68,10 +68,61 @@ export interface SearchWorkspaceProps {
   readonly shellState: Extract<ShellDataState, { status: 'READY' }>;
 }
 
+interface RutgersTermRank {
+  readonly termCode: number;
+  readonly year: number;
+}
+
+function rutgersTermRank(term: string): RutgersTermRank | null {
+  const match = /^([0179])(\d{4})$/u.exec(term);
+  const termCodeText = match?.[1];
+  const yearText = match?.[2];
+  if (termCodeText === undefined || yearText === undefined) return null;
+  return { termCode: Number(termCodeText), year: Number(yearText) };
+}
+
+function initialTarget(
+  shellState: Extract<ShellDataState, { status: 'READY' }>,
+) {
+  const targets = shellState.discovery.targets;
+  const targetsWithSubjects = new Set(
+    shellState.discovery.subjects.map((subject) =>
+      `${subject.target.term}\u0000${subject.target.campus}`),
+  );
+  let selected = targets[0];
+  let selectedRank: RutgersTermRank | null = null;
+  let selectedHasSubjects = selected === undefined
+    ? false
+    : targetsWithSubjects.has(`${selected.key.term}\u0000${selected.key.campus}`);
+  for (const target of targets) {
+    const rank = rutgersTermRank(target.key.term);
+    if (rank === null) continue;
+    const hasSubjects = targetsWithSubjects.has(
+      `${target.key.term}\u0000${target.key.campus}`,
+    );
+    if (
+      selectedRank === null
+      || rank.year > selectedRank.year
+      || (rank.year === selectedRank.year && rank.termCode > selectedRank.termCode)
+      || (
+        rank.year === selectedRank.year
+        && rank.termCode === selectedRank.termCode
+        && hasSubjects
+        && !selectedHasSubjects
+      )
+    ) {
+      selected = target;
+      selectedRank = rank;
+      selectedHasSubjects = hasSubjects;
+    }
+  }
+  return selected;
+}
+
 function createInitialFilters(
   shellState: Extract<ShellDataState, { status: 'READY' }>,
 ): FilterStateV1 {
-  const target = shellState.discovery.targets[0];
+  const target = initialTarget(shellState);
   const filters = createNeutralFilterState(target?.key.term ?? null);
   return target === undefined ? filters : { ...filters, campuses: [target.key.campus] };
 }
@@ -219,6 +270,7 @@ export function SearchWorkspace({
     initialFilters ?? createInitialFilters(shellState));
   const [query, setQuery] = useState<QueryState>({ kind: 'IDLE' });
   const [courseDetail, setCourseDetail] = useState<CourseDetailState>({ kind: 'CLOSED' });
+  const userEditedFilters = useRef(false);
   const searchAbort = useRef<AbortController | null>(null);
   const detailAbort = useRef<AbortController | null>(null);
   const resultsRef = useRef<HTMLElement | null>(null);
@@ -230,6 +282,26 @@ export function SearchWorkspace({
     searchAbort.current?.abort();
     detailAbort.current?.abort();
   }, []);
+
+  useEffect(() => {
+    if (initialFilters !== undefined || userEditedFilters.current) return;
+    const next = createInitialFilters(shellState);
+    if (
+      filters.term === next.term
+      && filters.campuses.length === next.campuses.length
+      && filters.campuses.every((campus, index) => campus === next.campuses[index])
+    ) {
+      return;
+    }
+    searchAbort.current?.abort();
+    detailAbort.current?.abort();
+    pendingFocus.current = null;
+    courseDetailReturnTarget.current = null;
+    setFilters(next);
+    setQuery({ kind: 'IDLE' });
+    setCourseDetail({ kind: 'CLOSED' });
+    onFiltersChange?.(next);
+  }, [filters, initialFilters, onFiltersChange, shellState]);
 
   useEffect(() => {
     if (directSection !== null) return;
@@ -408,6 +480,7 @@ export function SearchWorkspace({
           discovery={shellState.discovery}
           mode={mode}
           onChange={(next) => {
+            userEditedFilters.current = true;
             setFilters(next);
             onFiltersChange?.(next);
             setQuery({ kind: 'IDLE' });

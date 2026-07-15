@@ -74,6 +74,31 @@ const shellState: Extract<ShellDataState, { status: 'READY' }> = {
   status: 'READY',
 };
 
+function target(
+  term: string,
+  campus: string,
+  termLabel: string,
+  campusLabel: string,
+): CatalogDiscoveryResponseV1['targets'][number] {
+  const provenance = discovery().targets[0]?.provenance;
+  if (provenance === undefined) throw new Error('synthetic discovery target is required');
+  return {
+    campusLabel: known(campusLabel),
+    key: { campus, term },
+    provenance,
+    termLabel: known(termLabel),
+  };
+}
+
+function shellStateWithTargets(
+  targets: CatalogDiscoveryResponseV1['targets'],
+): Extract<ShellDataState, { status: 'READY' }> {
+  return {
+    ...shellState,
+    discovery: { ...shellState.discovery, subjects: [], targets },
+  };
+}
+
 const emptyCourses: CourseQueryResponseV1 = {
   contractVersion: 1,
   items: [],
@@ -94,19 +119,108 @@ function productRuntime(overrides: Partial<ProductApiPort>): ProductRuntimePort 
   };
 }
 
-function renderWorkspace(runtime: ProductRuntimePort, path: string) {
+function renderWorkspace(
+  runtime: ProductRuntimePort,
+  path: string,
+  state: Extract<ShellDataState, { status: 'READY' }> = shellState,
+) {
   return render(
     <BcspI18nProvider initialLocale="en-US">
       <AppRouterProvider initialPath={path}>
-        <SearchWorkspace runtime={runtime} shellState={shellState} />
+        <SearchWorkspace runtime={runtime} shellState={state} />
       </AppRouterProvider>
     </BcspI18nProvider>,
   );
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 afterEach(cleanup);
 
 describe('Course and Section workspace controller', () => {
+  it('defaults to the same latest Rutgers term selected by the refresh coordinator', () => {
+    const state = shellStateWithTargets([
+      target('92025', 'OLD', 'Fall 2025', 'Historical campus'),
+      target('72026', 'SUMMER', 'Summer 2026', 'Summer campus'),
+      target('92026', 'CURRENT', 'Fall 2026', 'Current campus'),
+      target('12026', 'SPRING', 'Spring 2026', 'Spring campus'),
+    ]);
+    renderWorkspace(productRuntime({}), '/', state);
+
+    expect((screen.getByLabelText('Term') as HTMLSelectElement).value).toBe('92026');
+    expect((screen.getByRole('checkbox', { name: /Current campus/ }) as HTMLInputElement).checked)
+      .toBe(true);
+  });
+
+  it('keeps the first discovered target as the stable fallback for non-Rutgers term identities', () => {
+    const state = shellStateWithTargets([
+      target('SYNTHETIC_B', 'FIRST', 'Synthetic B', 'First synthetic campus'),
+      target('SYNTHETIC_A', 'SECOND', 'Synthetic A', 'Second synthetic campus'),
+    ]);
+    renderWorkspace(productRuntime({}), '/', state);
+
+    expect((screen.getByLabelText('Term') as HTMLSelectElement).value).toBe('SYNTHETIC_B');
+    expect((screen.getByRole('checkbox', { name: /First synthetic campus/ }) as HTMLInputElement).checked)
+      .toBe(true);
+  });
+
+  it('moves an untouched default to a hydrated target without accepting the old search', async () => {
+    const targets = [
+      target('92026', 'EMPTY', 'Fall 2026', 'Empty campus'),
+      target('92026', 'READY', 'Fall 2026', 'Ready campus'),
+    ];
+    const initial = shellStateWithTargets(targets);
+    const pending = deferred<CourseQueryResponseV1>();
+    const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockReturnValue(pending.promise);
+    const runtime = productRuntime({ searchCourses });
+    const view = renderWorkspace(runtime, '/', initial);
+    expect((screen.getByRole('checkbox', { name: /Empty campus/ }) as HTMLInputElement).checked)
+      .toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(searchCourses).toHaveBeenCalledTimes(1));
+    const oldSignal = searchCourses.mock.calls[0]?.[1];
+    expect(oldSignal?.aborted).toBe(false);
+
+    const subject = discovery().subjects[0];
+    if (subject === undefined || targets[1] === undefined) {
+      throw new Error('synthetic subject and target are required');
+    }
+    const hydrated: Extract<ShellDataState, { status: 'READY' }> = {
+      ...initial,
+      discovery: {
+        ...initial.discovery,
+        subjects: [{ ...subject, target: targets[1].key }],
+      },
+    };
+    view.rerender(
+      <BcspI18nProvider initialLocale="en-US">
+        <AppRouterProvider initialPath="/">
+          <SearchWorkspace runtime={runtime} shellState={hydrated} />
+        </AppRouterProvider>
+      </BcspI18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect((screen.getByRole('checkbox', { name: /Ready campus/ }) as HTMLInputElement).checked)
+        .toBe(true);
+      expect(oldSignal?.aborted).toBe(true);
+      expect(view.container.querySelector('[data-query-state="idle"]')).not.toBeNull();
+    });
+
+    pending.resolve(emptyCourses);
+    await waitFor(() => {
+      expect(view.container.querySelector('[data-query-state="idle"]')).not.toBeNull();
+      expect(screen.queryByRole('heading', { name: 'No matching records' })).toBeNull();
+    });
+  });
+
   it('submits one typed Course query with combined Course and same-Section filters', async () => {
     const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue(emptyCourses);
     renderWorkspace(productRuntime({ searchCourses }), '/');

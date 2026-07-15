@@ -4,6 +4,8 @@ import type { CatalogDiscoveryResponseV1 } from '../product/contracts/catalog';
 import type { FilterSchemaV1 } from '../product/contracts/query';
 import type { ProductRuntimePort } from '../product/runtime';
 
+const DISCOVERY_HYDRATION_INTERVAL_MILLISECONDS = 2_000;
+
 export type ShellDiscoveryState =
   | 'CURRENT'
   | 'STALE_LAST_SUCCESS'
@@ -80,6 +82,67 @@ export function useShellDataState(runtime: ProductRuntimePort): ShellDataResourc
       abort.abort();
     };
   }, [requestGeneration, runtime]);
+
+  useEffect(() => {
+    if (
+      state.status !== 'READY'
+      || state.discoveryState !== 'CURRENT'
+      || state.discovery.targets.length === 0
+      || state.discovery.subjects.length > 0
+    ) {
+      return undefined;
+    }
+
+    const abort = new AbortController();
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const schedule = () => {
+      timer = globalThis.setTimeout(() => {
+        timer = undefined;
+        void poll();
+      }, DISCOVERY_HYDRATION_INTERVAL_MILLISECONDS);
+    };
+    const poll = async () => {
+      try {
+        // This product route reads the local operational store. It never starts
+        // a Rutgers refresh, so multiple browser sessions cannot fan out to the
+        // upstream origin while waiting for the first Catalog publication.
+        const discovery = await runtime.product.catalogDiscovery(
+          { contractVersion: 1 },
+          abort.signal,
+        );
+        if (!active) return;
+        if (
+          discovery.status.availability === 'CURRENT'
+          && discovery.targets.length > 0
+          && discovery.subjects.length > 0
+        ) {
+          setState((current) => {
+            if (current.status !== 'READY' || current.discovery !== state.discovery) {
+              return current;
+            }
+            return {
+              ...current,
+              discovery,
+              discoveryState: classifyDiscovery(discovery),
+            };
+          });
+          return;
+        }
+      } catch {
+        if (!active || abort.signal.aborted) return;
+      }
+      if (active) schedule();
+    };
+
+    schedule();
+    return () => {
+      active = false;
+      if (timer !== undefined) globalThis.clearTimeout(timer);
+      abort.abort();
+    };
+  }, [runtime, state]);
 
   return { retry, state };
 }

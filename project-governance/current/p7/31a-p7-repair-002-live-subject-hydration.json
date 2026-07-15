@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "task": "P7-REPAIR-002",
+  "parentTask": "P7-REPAIR-001",
+  "scope": "SHARED_UI_DISCOVERY_HYDRATION",
+  "pollIntervalSeconds": 2,
+  "pollSource": "LOCAL_OPERATIONAL_API_ONLY",
+  "readyStateFlicker": false,
+  "userEditedFiltersOverridden": false,
+  "staleSearchCanBackfill": false,
+  "networkRequestsAuthorized": 0,
+  "packageBuildsAuthorized": 0,
+  "vultrMutationsAuthorized": 0,
+  "nextTask": "P7-REPAIR-003"
+}

@@ -99,6 +99,35 @@ function discovery(
   };
 }
 
+function catalogHydratedDiscovery(
+  response: CatalogDiscoveryResponseV1,
+): CatalogDiscoveryResponseV1 {
+  const target = response.targets[0]?.key;
+  if (target === undefined) throw new Error('hydrated discovery requires a target');
+  return {
+    ...response,
+    subjects: [{
+      code: '198',
+      label: {
+        knowledge: 'KNOWN',
+        presence: { presence: 'PRESENT', value: 'Computer Science' },
+      },
+      provenance: {
+        kind: 'CATALOG',
+        contentVersion: 1,
+        catalog: {
+          observationId: '30000000-0000-4000-8000-000000000001',
+          source: 'RUTGERS_CATALOG',
+          target,
+          observedAt: OBSERVED_AT,
+          payloadDigest: 'b'.repeat(64),
+        },
+      },
+      target,
+    }],
+  };
+}
+
 function unused(): never {
   throw new Error('unexpected ProductApiPort call');
 }
@@ -129,6 +158,7 @@ function runtimeWith(product: Pick<ProductApiPort, 'filterSchema' | 'catalogDisc
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -168,6 +198,98 @@ describe('shell data state', () => {
       filterCount: 2,
       filterSchema: FILTER_SCHEMA,
     });
+  });
+
+  it('hydrates late Catalog subjects in the background without reloading schema or leaving READY', async () => {
+    vi.useFakeTimers();
+    const schemaRequest = deferred<FilterSchemaV1>();
+    const initialRequest = deferred<CatalogDiscoveryResponseV1>();
+    const hydrationRequest = deferred<CatalogDiscoveryResponseV1>();
+    const hydrationSignals: AbortSignal[] = [];
+    let discoveryCall = 0;
+    const filterSchema = vi.fn<ProductApiPort['filterSchema']>(() => schemaRequest.promise);
+    const catalogDiscovery = vi.fn<ProductApiPort['catalogDiscovery']>((_request, signal) => {
+      discoveryCall += 1;
+      if (discoveryCall === 1) return initialRequest.promise;
+      if (signal !== undefined) hydrationSignals.push(signal);
+      return hydrationRequest.promise;
+    });
+    const runtime = runtimeWith({ catalogDiscovery, filterSchema });
+    const initial = discovery('CURRENT');
+    const hydrated = catalogHydratedDiscovery(initial);
+
+    const { result } = renderHook(() => useShellDataState(runtime));
+    await act(async () => {
+      schemaRequest.resolve(FILTER_SCHEMA);
+      initialRequest.resolve(initial);
+      await Promise.all([schemaRequest.promise, initialRequest.promise]);
+    });
+    expect(result.current.state).toMatchObject({
+      status: 'READY',
+      discovery: initial,
+      filterSchema: FILTER_SCHEMA,
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(catalogDiscovery).toHaveBeenCalledTimes(2);
+    expect(filterSchema).toHaveBeenCalledTimes(1);
+    expect(result.current.state).toMatchObject({ status: 'READY', discovery: initial });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(catalogDiscovery).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      hydrationRequest.resolve(hydrated);
+      await hydrationRequest.promise;
+    });
+    expect(result.current.state).toMatchObject({ status: 'READY', discovery: hydrated });
+    expect(hydrationSignals).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(catalogDiscovery).toHaveBeenCalledTimes(2);
+    expect(filterSchema).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels an in-flight discovery hydration when the shell unmounts', async () => {
+    vi.useFakeTimers();
+    const hydrationRequest = deferred<CatalogDiscoveryResponseV1>();
+    let hydrationSignal: AbortSignal | undefined;
+    let discoveryCall = 0;
+    const catalogDiscovery = vi.fn<ProductApiPort['catalogDiscovery']>((_request, signal) => {
+      discoveryCall += 1;
+      if (discoveryCall === 1) return Promise.resolve(discovery('CURRENT'));
+      hydrationSignal = signal;
+      return hydrationRequest.promise;
+    });
+    const runtime = runtimeWith({
+      filterSchema: async () => FILTER_SCHEMA,
+      catalogDiscovery,
+    });
+
+    const { result, unmount } = renderHook(() => useShellDataState(runtime));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.state.status).toBe('READY');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(catalogDiscovery).toHaveBeenCalledTimes(2);
+    expect(hydrationSignal?.aborted).toBe(false);
+
+    act(() => unmount());
+    expect(hydrationSignal?.aborted).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(catalogDiscovery).toHaveBeenCalledTimes(2);
   });
 
   it.each([
