@@ -11,7 +11,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ExpectedSourceCommit = '476565cbe8e19075214cdc1427c86cf2dcf4e966'
+$ExpectedSourceCommit = '7d5debef005277e4d8f2ed2b9fb2f72c495e62f1'
 $PackageId = 'WINDOWS_LOCAL_RELEASE_ARCHIVE'
 $Target = 'x86_64-pc-windows-msvc'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
