@@ -232,6 +232,17 @@ impl PublicServiceInspector {
         let scheduler_running = self.scheduler.scheduler_running();
         let websocket_connection_count = self.watch_demand.connection_count();
         let active_watch_count = self.watch_demand.total_active_watch_count();
+        let targets = {
+            let storage = self.storage.lock().map_err(|_| ())?;
+            storage.discovered_targets().map_err(|_| ())?
+        };
+        // Watch START takes the socket lock before the serving-storage lock. Sample every
+        // socket-owned count before reacquiring storage so service inspection can never take
+        // those locks in the opposite order.
+        let active_target_watches = targets
+            .iter()
+            .map(|target| self.watch_demand.active_watch_count(target))
+            .collect::<Vec<_>>();
         let mut storage = self.storage.lock().map_err(|_| ())?;
         let persisted_circuit = storage
             .open_origin_state(PUBLIC_RUTGERS_ORIGIN_ID)
@@ -239,12 +250,11 @@ impl PublicServiceInspector {
         let circuit = persisted_circuit_status(persisted_circuit.as_ref(), now)?;
         scheduler.origin_circuit_open |= circuit.active;
         let mut scheduler_backing_off = circuit.backing_off;
-        let targets = storage.discovered_targets().map_err(|_| ())?;
         let mut catalog_available_target_count = 0_u64;
         let mut open_available_target_count = 0_u64;
         let mut open_stale_target_count = 0_u64;
         let mut maximum_persisted_lag = 0_u64;
-        for target in &targets {
+        for (target, active_target_watches) in targets.iter().zip(active_target_watches) {
             let catalog_available = storage
                 .target_state(target)
                 .map_err(|_| ())?
@@ -262,7 +272,6 @@ impl PublicServiceInspector {
                 }
             }
             if catalog_available {
-                let active_target_watches = self.watch_demand.active_watch_count(target);
                 let projected = project_open_status(
                     &mut *storage,
                     target,
@@ -491,7 +500,15 @@ impl PublicServiceStateSource for PublicServiceInspector {
 
 #[cfg(test)]
 mod tests {
-    use bcsp_operational_storage::{OpenCircuitState, OpenOriginState, OperationalStorage};
+    use std::sync::atomic::AtomicUsize;
+
+    use bcsp_contracts::{CourseGroupKey, CourseVariantKey, SectionKey, TraceId};
+    use bcsp_operational_storage::{
+        CatalogRefreshCommand, CatalogSnapshot, EmptySnapshotDecision, OpenCircuitState,
+        OpenOriginState, OperationalStorage, StoredCourseGroup, StoredCourseVariant, StoredSection,
+        catalog_content_sha256_v1,
+    };
+    use serde_json::json;
     use tempfile::TempDir;
     use time::Duration;
 
@@ -512,6 +529,98 @@ mod tests {
         fn active_watch_count(&self, _target: &TermCampusKey) -> u64 {
             0
         }
+    }
+
+    struct LockOrderDemand {
+        storage: SharedProductStorage,
+        active_calls: AtomicUsize,
+        storage_was_unlocked: AtomicBool,
+    }
+
+    impl PublicWatchDemandSource for LockOrderDemand {
+        fn connection_count(&self) -> u64 {
+            0
+        }
+
+        fn total_active_watch_count(&self) -> u64 {
+            0
+        }
+
+        fn active_watch_count(&self, _target: &TermCampusKey) -> u64 {
+            self.active_calls.fetch_add(1, Ordering::SeqCst);
+            if self.storage.try_lock().is_err() {
+                self.storage_was_unlocked.store(false, Ordering::SeqCst);
+            }
+            0
+        }
+    }
+
+    fn publish_one_catalog_target(storage: &mut OperationalStorage) -> TermCampusKey {
+        let target = TermCampusKey::try_new("TERM_2026_FALL", "CAMPUS_A").expect("target");
+        let group =
+            CourseGroupKey::try_new("TERM_2026_FALL", "CAMPUS_A", "SYN:101").expect("group");
+        let variant = CourseVariantKey::try_new(
+            group.clone(),
+            "v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("variant");
+        let snapshot = CatalogSnapshot {
+            course_groups: vec![StoredCourseGroup {
+                key: group,
+                canonical_facts: json!({"fixture": "lock-order"}),
+            }],
+            course_variants: vec![StoredCourseVariant {
+                key: variant.clone(),
+                subject_code: Some("SYN".to_owned()),
+                course_number: Some("101".to_owned()),
+                title: Some("Lock Order".to_owned()),
+                description: None,
+                credits_summary: None,
+                supplement: None,
+                search_document: "SYN 101 lock order".to_owned(),
+                canonical_sha256:
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+                raw_multiplicity: 1,
+                canonical_facts: json!({"fixture": "lock-order"}),
+            }],
+            sections: vec![StoredSection {
+                key: SectionKey::try_new("TERM_2026_FALL", "CAMPUS_A", "12345").expect("section"),
+                variant_key: variant,
+                section_number: None,
+                catalog_status: None,
+                section_course_type: None,
+                delivery_modality: "UNKNOWN".to_owned(),
+                synchronicity: "UNKNOWN".to_owned(),
+                canonical_facts: json!({"fixture": "lock-order"}),
+                canonical_sha256:
+                    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
+            }],
+            occurrences: Vec::new(),
+            provenance: Vec::new(),
+        };
+        let semantic_content_sha256 =
+            catalog_content_sha256_v1(&target, &snapshot).expect("catalog hash");
+        storage
+            .apply_catalog_refresh(
+                CatalogRefreshCommand {
+                    observation_id: "00000000-0000-4000-8000-000000000001"
+                        .parse::<TraceId>()
+                        .expect("observation"),
+                    target: target.clone(),
+                    started_at: "2026-07-15T00:00:00Z".to_owned(),
+                    completed_at: "2026-07-15T00:00:01Z".to_owned(),
+                    source_content_sha256:
+                        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                            .to_owned(),
+                    semantic_content_sha256,
+                    source_bytes: 1,
+                    raw_payload: None,
+                    snapshot,
+                },
+                EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            )
+            .expect("publish catalog");
+        target
     }
 
     #[test]
@@ -538,6 +647,32 @@ mod tests {
         );
         assert_eq!(snapshot.today_counts, PublicDayCounters::default());
         assert_eq!(inspector.default_current_filters(), None);
+    }
+
+    #[test]
+    fn service_snapshot_never_holds_storage_while_sampling_watch_demand() {
+        let temp = TempDir::new().expect("temporary directory");
+        let mut storage =
+            OperationalStorage::open(temp.path().join("rbcsp.sqlite")).expect("public state");
+        publish_one_catalog_target(&mut storage);
+        let storage = Arc::new(Mutex::new(storage));
+        let demand = Arc::new(LockOrderDemand {
+            storage: storage.clone(),
+            active_calls: AtomicUsize::new(0),
+            storage_was_unlocked: AtomicBool::new(true),
+        });
+        let now = OffsetDateTime::from_unix_timestamp(1_784_006_400).expect("fixed time");
+        let inspector = PublicServiceInspector::new(
+            storage,
+            Arc::new(InMemoryPublicSchedulerStatus::default()),
+            demand.clone(),
+            Arc::new(move || now),
+        );
+
+        let _ = inspector.snapshot();
+
+        assert_eq!(demand.active_calls.load(Ordering::SeqCst), 1);
+        assert!(demand.storage_was_unlocked.load(Ordering::SeqCst));
     }
 
     #[test]

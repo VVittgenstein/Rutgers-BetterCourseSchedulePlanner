@@ -250,7 +250,13 @@ impl PublicRuntime {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
-                maintenance_watch.tick();
+                let watch = maintenance_watch.clone();
+                if tokio::task::spawn_blocking(move || watch.tick())
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
             }
         });
         Ok(Self {
@@ -453,7 +459,15 @@ async fn handle_readiness(State(state): State<PublicHostState>, request: Request
             ApiErrorCode::MalformedRequest,
         );
     }
-    let snapshot = state.service.snapshot();
+    let snapshot = match load_service_snapshot(state.service).await {
+        Ok(snapshot) => snapshot,
+        Err(()) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiErrorCode::InternalError,
+            );
+        }
+    };
     let status = if snapshot.ready {
         StatusCode::OK
     } else {
@@ -469,7 +483,15 @@ async fn handle_metrics(State(state): State<PublicHostState>, request: Request) 
             ApiErrorCode::MalformedRequest,
         );
     }
-    let snapshot = state.service.snapshot();
+    let snapshot = match load_service_snapshot(state.service).await {
+        Ok(snapshot) => snapshot,
+        Err(()) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiErrorCode::InternalError,
+            );
+        }
+    };
     text_response(
         StatusCode::OK,
         "text/plain; version=0.0.4; charset=utf-8",
@@ -515,7 +537,7 @@ async fn handle_fallback(State(state): State<PublicHostState>, request: Request)
             return public_asset_response(asset_path);
         }
         if is_public_document_path(&path) {
-            return document_response(&state, request.headers());
+            return document_response(&state, request.headers()).await;
         }
     }
     if !path.starts_with("/api/")
@@ -554,8 +576,30 @@ async fn handle_fallback(State(state): State<PublicHostState>, request: Request)
     }
 }
 
-fn document_response(state: &PublicHostState, headers: &HeaderMap) -> Response {
+async fn load_service_snapshot(
+    service: Arc<dyn PublicServiceStateSource>,
+) -> Result<PublicServiceSnapshot, ()> {
+    tokio::task::spawn_blocking(move || service.snapshot())
+        .await
+        .map_err(|_| ())
+}
+
+async fn document_response(state: &PublicHostState, headers: &HeaderMap) -> Response {
     let locale = negotiate_locale(header_text(headers, ACCEPT_LANGUAGE).as_deref());
+    let service = state.service.clone();
+    let (service_snapshot, current_filters) = match tokio::task::spawn_blocking(move || {
+        (service.snapshot(), service.default_current_filters())
+    })
+    .await
+    {
+        Ok(inspection) => inspection,
+        Err(_) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ApiErrorCode::InternalError,
+            );
+        }
+    };
     let nonce = match state.sessions.issue(locale) {
         Ok(nonce) => nonce,
         Err(DocumentSessionError::Unavailable) => {
@@ -570,14 +614,14 @@ fn document_response(state: &PublicHostState, headers: &HeaderMap) -> Response {
         session_nonce: nonce.to_string(),
         locale,
         filter_schema: filter_schema_v1(),
-        current_filters: state.service.default_current_filters(),
+        current_filters,
         selected_sections: Vec::new(),
         active_watches: Vec::new(),
         current_page_alerts: Vec::new(),
         volume_percent: DEFAULT_VOLUME_PERCENT,
         watch_policy: WatchPolicyV1::default(),
         refresh_policy: PublicRefreshPolicyView::default(),
-        service: state.service.snapshot(),
+        service: service_snapshot,
     });
     let bootstrap = match serde_json::to_string(&bootstrap) {
         Ok(value) => escape_inline_json(&value),

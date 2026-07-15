@@ -330,7 +330,13 @@ async fn spawn_loopback_server_internal(
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                socket.tick();
+                let tick_socket = Arc::clone(&socket);
+                if tokio::task::spawn_blocking(move || tick_socket.tick())
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
             }
         })
     });
@@ -394,7 +400,11 @@ pub async fn serve_websocket(
     connection_id: TraceId,
 ) {
     let (outbound, mut outbound_messages) = mpsc::unbounded_channel();
-    if !extension.connect(connection_id, outbound) {
+    let connect_extension = Arc::clone(&extension);
+    let connected =
+        tokio::task::spawn_blocking(move || connect_extension.connect(connection_id, outbound))
+            .await;
+    if !matches!(connected, Ok(true)) {
         return;
     }
     let mut heartbeat = tokio::time::interval(SOCKET_HEARTBEAT_INTERVAL);
@@ -406,19 +416,44 @@ pub async fn serve_websocket(
                 match incoming {
                     Some(Ok(Message::Text(message))) => {
                         last_seen = tokio::time::Instant::now();
-                        extension.transport_activity(connection_id);
-                        extension.receive_text(connection_id, message.as_str());
+                        let text_extension = Arc::clone(&extension);
+                        let message = message.to_string();
+                        if tokio::task::spawn_blocking(move || {
+                            text_extension.transport_activity(connection_id);
+                            text_extension.receive_text(connection_id, &message);
+                        })
+                        .await
+                        .is_err()
+                        {
+                            break;
+                        }
                     }
                     Some(Ok(Message::Ping(payload))) => {
                         last_seen = tokio::time::Instant::now();
-                        extension.transport_activity(connection_id);
+                        let activity_extension = Arc::clone(&extension);
+                        if tokio::task::spawn_blocking(move || {
+                            activity_extension.transport_activity(connection_id);
+                        })
+                        .await
+                        .is_err()
+                        {
+                            break;
+                        }
                         if socket.send(Message::Pong(payload)).await.is_err() {
                             break;
                         }
                     }
                     Some(Ok(Message::Pong(_))) => {
                         last_seen = tokio::time::Instant::now();
-                        extension.transport_activity(connection_id);
+                        let activity_extension = Arc::clone(&extension);
+                        if tokio::task::spawn_blocking(move || {
+                            activity_extension.transport_activity(connection_id);
+                        })
+                        .await
+                        .is_err()
+                        {
+                            break;
+                        }
                     }
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     Some(Ok(Message::Binary(_))) => break,
@@ -441,7 +476,7 @@ pub async fn serve_websocket(
             }
         }
     }
-    extension.disconnect(connection_id);
+    let _ = tokio::task::spawn_blocking(move || extension.disconnect(connection_id)).await;
 }
 
 fn session_query(query: Option<&str>) -> Option<&str> {
@@ -555,7 +590,10 @@ fn extension_response(value: ExtensionResponse) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Condvar, Mutex};
 
     use axum::http::Request as HttpRequest;
     use tower::ServiceExt;
@@ -564,6 +602,65 @@ mod tests {
 
     struct CountingExtension {
         calls: AtomicUsize,
+    }
+
+    #[derive(Default)]
+    struct BlockingConnectState {
+        entered: bool,
+        released: bool,
+    }
+
+    struct BlockingConnectSocket {
+        block_next: AtomicBool,
+        state: Mutex<BlockingConnectState>,
+        changed: Condvar,
+    }
+
+    impl BlockingConnectSocket {
+        fn new() -> Self {
+            Self {
+                block_next: AtomicBool::new(true),
+                state: Mutex::new(BlockingConnectState::default()),
+                changed: Condvar::new(),
+            }
+        }
+
+        fn wait_until_blocked(&self, timeout: Duration) -> bool {
+            let state = self.state.lock().unwrap();
+            let (state, _) = self
+                .changed
+                .wait_timeout_while(state, timeout, |state| !state.entered)
+                .unwrap();
+            state.entered
+        }
+
+        fn release(&self) {
+            let mut state = self.state.lock().unwrap();
+            state.released = true;
+            self.changed.notify_all();
+        }
+    }
+
+    impl WebSocketExtension for BlockingConnectSocket {
+        fn connect(
+            &self,
+            _connection_id: TraceId,
+            _outbound: mpsc::UnboundedSender<String>,
+        ) -> bool {
+            if self.block_next.swap(false, Ordering::SeqCst) {
+                let mut state = self.state.lock().unwrap();
+                state.entered = true;
+                self.changed.notify_all();
+                while !state.released {
+                    state = self.changed.wait(state).unwrap();
+                }
+            }
+            true
+        }
+
+        fn receive_text(&self, _connection_id: TraceId, _message: &str) {}
+
+        fn disconnect(&self, _connection_id: TraceId) {}
     }
 
     #[derive(Default)]
@@ -606,6 +703,49 @@ mod tests {
                 extension,
                 socket: None,
             })
+    }
+
+    fn websocket_handshake(
+        address: SocketAddr,
+        authority: &str,
+        origin: &str,
+        nonce: &str,
+        timeout: Duration,
+    ) -> bool {
+        let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
+            return false;
+        };
+        if stream.set_read_timeout(Some(timeout)).is_err()
+            || stream.set_write_timeout(Some(timeout)).is_err()
+        {
+            return false;
+        }
+        let request = format!(
+            "GET /api/v1/watch?session={nonce} HTTP/1.1\r\n\
+             Host: {authority}\r\n\
+             Origin: {origin}\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Protocol: {SHARED_WATCH_SUBPROTOCOL}\r\n\r\n"
+        );
+        if stream.write_all(request.as_bytes()).is_err() {
+            return false;
+        }
+        let mut response = Vec::new();
+        let mut buffer = [0_u8; 512];
+        while !response.windows(4).any(|window| window == b"\r\n\r\n") && response.len() <= 8 * 1024
+        {
+            let Ok(read) = stream.read(&mut buffer) else {
+                return false;
+            };
+            if read == 0 {
+                return false;
+            }
+            response.extend_from_slice(&buffer[..read]);
+        }
+        response.starts_with(b"HTTP/1.1 101 ")
     }
 
     #[test]
@@ -731,6 +871,54 @@ mod tests {
         })
         .await
         .expect("shared socket maintenance tick");
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn blocked_extension_connect_does_not_starve_a_second_websocket_handshake() {
+        let extension = Arc::new(CountingExtension {
+            calls: AtomicUsize::new(0),
+        });
+        let socket = Arc::new(BlockingConnectSocket::new());
+        let server =
+            spawn_loopback_server_with_socket(extension, socket.clone(), SessionNonce::generate())
+                .await
+                .unwrap();
+        let origin = server.origin().to_owned();
+        let authority = origin.strip_prefix("http://").unwrap().to_owned();
+        let address = authority.parse::<SocketAddr>().unwrap();
+        let nonce = server.nonce().as_str().to_owned();
+        let watchdog_socket = socket.clone();
+
+        let watchdog = std::thread::spawn(move || {
+            let first =
+                websocket_handshake(address, &authority, &origin, &nonce, Duration::from_secs(2));
+            let blocked = first && watchdog_socket.wait_until_blocked(Duration::from_secs(2));
+            let second = blocked
+                && websocket_handshake(
+                    address,
+                    &authority,
+                    &origin,
+                    &nonce,
+                    Duration::from_secs(1),
+                );
+            watchdog_socket.release();
+            (first, blocked, second)
+        });
+        let (first, blocked, second) = tokio::task::spawn_blocking(move || watchdog.join())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(first, "first WebSocket handshake must be accepted");
+        assert!(
+            blocked,
+            "first extension connect must reach the blocking seam"
+        );
+        assert!(
+            second,
+            "a blocked extension connect must not starve the async handshake worker"
+        );
         server.shutdown().await.unwrap();
     }
 }
