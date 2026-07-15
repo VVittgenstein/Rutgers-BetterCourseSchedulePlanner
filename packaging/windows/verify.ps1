@@ -1,0 +1,435 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$ArchivePath,
+
+    [string]$DumpBinPath
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$PackageId = 'WINDOWS_LOCAL_RELEASE_ARCHIVE'
+$ExpectedSourceCommit = '7aa314def7947d1e1160e3417a9b52cbf26e1058'
+$ExpectedSourceDateEpoch = 1784072665
+$RepositoryRoot = [System.IO.Path]::GetFullPath(
+    (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+)
+$ReleaseInputsPath = Join-Path $RepositoryRoot 'packaging\release-inputs.json'
+$ArchivePath = [System.IO.Path]::GetFullPath($ArchivePath)
+$releaseInputs = Get-Content -LiteralPath $ReleaseInputsPath -Raw | ConvertFrom-Json
+$packageMatches = @($releaseInputs.packages | Where-Object { $_.id -eq $PackageId })
+if ($packageMatches.Count -ne 1) {
+    throw "release-inputs.json must define exactly one $PackageId package."
+}
+$package = $packageMatches[0]
+$expectedFiles = @($package.allowlist | ForEach-Object { [string]$_ } | Sort-Object)
+
+function Assert-Condition {
+    param(
+        [Parameter(Mandatory = $true)][bool]$Condition,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    if (-not $Condition) {
+        throw $Message
+    }
+}
+
+function Get-LowerSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-DumpBin {
+    if ($DumpBinPath) {
+        $candidate = [System.IO.Path]::GetFullPath($DumpBinPath)
+        Assert-Condition (Test-Path -LiteralPath $candidate -PathType Leaf) "dumpbin.exe was not found at $candidate"
+        return $candidate
+    }
+
+    $command = Get-Command dumpbin.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) {
+        return $command.Source
+    }
+
+    $roots = @(
+        'C:\Software\VSBuildTools\VC\Tools\MSVC',
+        'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC',
+        'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC',
+        'C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC',
+        'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC'
+    )
+    foreach ($root in $roots) {
+        if (Test-Path -LiteralPath $root -PathType Container) {
+            $candidate = Get-ChildItem -LiteralPath $root -Recurse -Filter dumpbin.exe -File |
+                Where-Object { $_.FullName -match '\\bin\\Hostx64\\x64\\dumpbin\.exe$' } |
+                Sort-Object FullName -Descending |
+                Select-Object -First 1
+            if ($candidate) {
+                return $candidate.FullName
+            }
+        }
+    }
+    throw 'dumpbin.exe from a Visual Studio 2022 x64 C++ toolchain is required.'
+}
+
+function Read-Bootstrap {
+    param([Parameter(Mandatory = $true)][string]$Origin)
+
+    return Invoke-RestMethod -UseBasicParsing -Method Get -Uri ($Origin + 'api/v1/local/bootstrap') -TimeoutSec 10
+}
+
+function Read-SharedText {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = New-Object System.IO.FileStream(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::ReadWrite
+    )
+    try {
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+        try {
+            return $reader.ReadToEnd()
+        }
+        finally {
+            $reader.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+function Stop-TestProcessTree {
+    param($Process)
+
+    if (-not $Process) {
+        return
+    }
+    try {
+        $Process.Refresh()
+        if (-not $Process.HasExited) {
+            $previousPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                & taskkill.exe /PID $Process.Id /T /F *> $null
+            }
+            finally {
+                $ErrorActionPreference = $previousPreference
+            }
+        }
+    }
+    catch {
+        # Preserve the original verification failure.
+    }
+}
+
+function Start-Candidate {
+    param(
+        [Parameter(Mandatory = $true)][string]$CandidateRoot,
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string]$LogLabel,
+        [Parameter(Mandatory = $true)][string]$LogRoot,
+        [switch]$UseLauncher
+    )
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    if ($UseLauncher) {
+        $launcher = Join-Path $CandidateRoot 'Start-RBCSP.bat'
+        $startInfo.FileName = $env:ComSpec
+        $startInfo.Arguments = "/d /s /c `"`"$launcher`"`""
+    }
+    else {
+        $startInfo.FileName = Join-Path $CandidateRoot 'RBCSP.exe'
+        $startInfo.Arguments = ''
+    }
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $startInfo.EnvironmentVariables['BCSP_CI_NO_RUTGERS'] = '1'
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    Assert-Condition ($process.Start()) 'Windows could not start the RBCSP candidate process.'
+
+    $lockPath = Join-Path $CandidateRoot 'data\rbcsp.instance.lock'
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
+    $origin = $null
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $process.Refresh()
+        if ($process.HasExited) {
+            throw "RBCSP exited before publishing its local URL (exit $($process.ExitCode))."
+        }
+        if (Test-Path -LiteralPath $lockPath -PathType Leaf) {
+            try {
+                $lockText = Read-SharedText $lockPath
+                if ($lockText -match '^http://127\.0\.0\.1:(?<port>[1-9][0-9]{0,4})/\n$') {
+                    $port = [int]$Matches.port
+                    if ($port -le 65535) {
+                        $origin = $lockText.TrimEnd("`n")
+                        $null = Read-Bootstrap $origin
+                        break
+                    }
+                }
+            }
+            catch {
+                # The server may publish the lock just before the first request is accepted.
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $origin) {
+        Stop-TestProcessTree $process
+        throw 'RBCSP did not publish a healthy canonical loopback URL within 45 seconds.'
+    }
+
+    return [pscustomobject]@{
+        Process = $process
+        Origin = $origin
+        LockPath = $lockPath
+    }
+}
+
+function Stop-CandidateGracefully {
+    param(
+        [Parameter(Mandatory = $true)]$Run,
+        [Parameter(Mandatory = $true)][string]$SessionNonce
+    )
+
+    $headers = @{
+        Origin = $Run.Origin.TrimEnd('/')
+        'x-bcsp-session' = $SessionNonce
+    }
+    $response = Invoke-WebRequest -UseBasicParsing -Method Post `
+        -Uri ($Run.Origin + 'api/v1/local/exit') -Headers $headers `
+        -ContentType 'application/json' -Body '' -TimeoutSec 10
+    Assert-Condition ($response.StatusCode -eq 204) "Local exit returned HTTP $($response.StatusCode), not 204."
+    Assert-Condition ($Run.Process.WaitForExit(15000)) 'RBCSP did not exit within 15 seconds after the local exit request.'
+    $Run.Process.WaitForExit()
+    $Run.Process.Refresh()
+    $exitCode = $Run.Process.ExitCode
+    Assert-Condition ($exitCode -eq 0) "RBCSP exited with code $exitCode."
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ((Test-Path -LiteralPath $Run.LockPath) -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 50
+    }
+    Assert-Condition (-not (Test-Path -LiteralPath $Run.LockPath)) 'The local instance lock remained after graceful exit.'
+}
+
+function Stop-CandidateAfterFailure {
+    param($Run)
+
+    if (-not $Run) {
+        return
+    }
+    Stop-TestProcessTree $Run.Process
+}
+
+Assert-Condition (Test-Path -LiteralPath $ArchivePath -PathType Leaf) "Archive was not found: $ArchivePath"
+Assert-Condition ([System.IO.Path]::GetFileName($ArchivePath) -eq $package.archiveName) "Archive name must be $($package.archiveName)."
+
+$tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
+$verificationRoot = Join-Path $tempBase ("rbcsp-p7-4-002-" + [Guid]::NewGuid().ToString('N'))
+$verificationRoot = [System.IO.Path]::GetFullPath($verificationRoot)
+Assert-Condition ($verificationRoot.StartsWith($tempBase + '\', [StringComparison]::OrdinalIgnoreCase)) 'Verification root escaped the system temp directory.'
+Assert-Condition ([System.IO.Path]::GetFileName($verificationRoot).StartsWith('rbcsp-p7-4-002-', [StringComparison]::Ordinal)) 'Unexpected verification root name.'
+
+$unicodePath = 'RBCSP verify ' + [char]0x96ea + '\candidate ' + [char]0x5305
+$candidateRoot = Join-Path $verificationRoot $unicodePath
+$upgradeRoot = Join-Path $verificationRoot 'upgrade files'
+$outsideOne = Join-Path $verificationRoot 'outside one'
+$outsideTwo = Join-Path $verificationRoot 'outside two'
+$logRoot = Join-Path $verificationRoot 'logs'
+$run = $null
+$verificationSucceeded = $false
+
+New-Item -ItemType Directory -Path $candidateRoot, $upgradeRoot, $outsideOne, $outsideTwo, $logRoot -Force | Out-Null
+
+try {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $entries = @($zip.Entries)
+        $entryNames = @($entries | ForEach-Object { $_.FullName } | Sort-Object)
+        Assert-Condition ($entryNames.Count -eq 11) "ZIP must contain exactly 11 entries; found $($entryNames.Count)."
+        Assert-Condition (($entryNames | Select-Object -Unique).Count -eq $entryNames.Count) 'ZIP contains duplicate entries.'
+        Assert-Condition (($entryNames -join "`n") -eq ($expectedFiles -join "`n")) 'ZIP entries do not exactly match the frozen Windows allowlist.'
+        foreach ($entry in $entries) {
+            Assert-Condition (-not $entry.FullName.EndsWith('/')) "ZIP contains a directory entry: $($entry.FullName)"
+            Assert-Condition (-not $entry.FullName.Contains('\')) "ZIP entry uses a backslash: $($entry.FullName)"
+            Assert-Condition (-not [System.IO.Path]::IsPathRooted($entry.FullName)) "ZIP entry is rooted: $($entry.FullName)"
+            Assert-Condition ($entry.FullName -notmatch '(^|/)\.\.(/|$)') "ZIP entry traverses directories: $($entry.FullName)"
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile(
+                $entry,
+                (Join-Path $candidateRoot $entry.FullName),
+                $false
+            )
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile(
+                $entry,
+                (Join-Path $upgradeRoot $entry.FullName),
+                $false
+            )
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+
+    $dataPath = Join-Path $candidateRoot 'data'
+    Assert-Condition (-not (Test-Path -LiteralPath $dataPath)) 'The extracted package must not contain a data directory.'
+    $databaseLikeBefore = @(Get-ChildItem -LiteralPath $candidateRoot -Recurse -File | Where-Object {
+        $_.Name -match '(?i)(\.db|\.sqlite|\.sqlite3|-wal|-shm)$'
+    })
+    Assert-Condition ($databaseLikeBefore.Count -eq 0) 'The extracted package contains a database or SQLite sidecar.'
+
+    $version = [System.IO.File]::ReadAllText((Join-Path $candidateRoot 'VERSION')).TrimEnd("`r", "`n")
+    Assert-Condition ($version -eq $releaseInputs.releaseVersion) "VERSION contains $version, not $($releaseInputs.releaseVersion)."
+
+    $sumPath = Join-Path $candidateRoot 'SHA256SUMS'
+    $sumText = [System.IO.File]::ReadAllText($sumPath)
+    Assert-Condition (-not $sumText.Contains("`r")) 'SHA256SUMS must use LF line endings.'
+    $sumLines = @($sumText.TrimEnd("`n").Split("`n"))
+    Assert-Condition ($sumLines.Count -eq 10) "SHA256SUMS must contain 10 entries; found $($sumLines.Count)."
+    $sumNames = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $sumLines) {
+        Assert-Condition ($line -cmatch '^(?<hash>[0-9a-f]{64})  (?<path>[^/\\]+)$') "Invalid SHA256SUMS line: $line"
+        $sumNames.Add($Matches.path)
+        $actualHash = Get-LowerSha256 (Join-Path $candidateRoot $Matches.path)
+        Assert-Condition ($actualHash -ceq $Matches.hash) "SHA-256 mismatch for $($Matches.path)."
+    }
+    $expectedSumNames = @($expectedFiles | Where-Object { $_ -ne 'SHA256SUMS' } | Sort-Object)
+    Assert-Condition ((@($sumNames) | Sort-Object) -join "`n" -eq ($expectedSumNames -join "`n")) 'SHA256SUMS coverage is not exact.'
+
+    $manifest = Get-Content -LiteralPath (Join-Path $candidateRoot 'MANIFEST.json') -Raw | ConvertFrom-Json
+    $provenance = Get-Content -LiteralPath (Join-Path $candidateRoot 'BUILD-PROVENANCE.json') -Raw | ConvertFrom-Json
+    $sbom = Get-Content -LiteralPath (Join-Path $candidateRoot 'SBOM.cdx.json') -Raw | ConvertFrom-Json
+    $notices = [System.IO.File]::ReadAllText((Join-Path $candidateRoot 'THIRD-PARTY-NOTICES.txt'))
+    Assert-Condition ($notices.Trim().Length -gt 0) 'THIRD-PARTY-NOTICES.txt is empty.'
+    Assert-Condition ([string]$sbom.bomFormat -eq 'CycloneDX' -and [string]$sbom.specVersion -eq '1.6') 'SBOM must be CycloneDX 1.6.'
+    Assert-Condition (@($sbom.components).Count -gt 0 -and @($sbom.dependencies).Count -gt 0) 'SBOM must contain components and dependency relationships.'
+
+    Assert-Condition (
+        [int]$manifest.schemaVersion -eq 1 -and
+        [string]$manifest.packageId -ceq $PackageId -and
+        [string]$manifest.archiveName -ceq $package.archiveName -and
+        [string]$manifest.version -ceq $releaseInputs.releaseVersion -and
+        [string]$manifest.target -ceq $package.target -and
+        [string]$manifest.sourceCommit -ceq $ExpectedSourceCommit -and
+        [long]$manifest.sourceDateEpoch -eq $ExpectedSourceDateEpoch -and
+        [int]$manifest.fileCount -eq 9
+    ) 'MANIFEST.json identity is invalid.'
+
+    $executablePath = Join-Path $candidateRoot 'RBCSP.exe'
+    Assert-Condition (
+        [int]$provenance.schemaVersion -eq 1 -and
+        [string]$provenance.packageId -ceq $PackageId -and
+        [string]$provenance.source.commit -ceq $ExpectedSourceCommit -and
+        [string]$provenance.build.target -ceq $package.target -and
+        [string]$provenance.artifact.path -ceq 'RBCSP.exe' -and
+        [string]$provenance.artifact.sha256 -ceq (Get-LowerSha256 $executablePath)
+    ) 'BUILD-PROVENANCE.json identity is invalid.'
+    Assert-Condition (
+        [int]$sbom.version -eq 1 -and
+        [string]$sbom.metadata.component.version -ceq $releaseInputs.releaseVersion
+    ) 'SBOM root identity is invalid.'
+
+    $dumpbin = Get-DumpBin
+    $imports = @(& $dumpbin /NOLOGO /DEPENDENTS $executablePath)
+    Assert-Condition ($LASTEXITCODE -eq 0) "dumpbin /DEPENDENTS failed with exit code $LASTEXITCODE."
+    $dlls = @($imports | ForEach-Object {
+        if ($_ -match '^\s*(?<dll>[^\s]+\.dll)\s*$') { $Matches.dll }
+    })
+    $forbiddenImports = @($dlls | Where-Object {
+        $_ -match '(?i)^(vcruntime|msvcp|msvcr|concrt).*\.dll$' -or
+        $_ -match '(?i)^ucrtbase\.dll$' -or
+        $_ -match '(?i)^api-ms-win-crt-.*\.dll$'
+    })
+    Assert-Condition ($forbiddenImports.Count -eq 0) "RBCSP.exe dynamically imports a C/C++ runtime: $($forbiddenImports -join ', ')"
+
+    $run = Start-Candidate $candidateRoot $outsideOne 'first' $logRoot
+    $first = Read-Bootstrap $run.Origin
+    Assert-Condition ([int]$first.protocolVersion -eq 1) 'Local bootstrap protocol version is not 1.'
+    Assert-Condition ([string]$first.data.mode -ceq 'LOCAL') 'Local bootstrap mode is not LOCAL.'
+    $firstNonce = [string]$first.data.sessionNonce
+    Assert-Condition ($firstNonce -match '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') 'Local bootstrap session nonce is not a UUIDv4.'
+    Assert-Condition (@($first.data.state.savedViews).Count -eq 0) 'First-run Saved views are not empty.'
+    Assert-Condition (@($first.data.state.selectedSections).Count -eq 0) 'First-run selected Sections are not empty.'
+    Assert-Condition (@($first.data.state.episodeHistory.items).Count -eq 0) 'First-run local history is not empty.'
+    Assert-Condition ($null -eq $first.data.state.currentFilters.value) 'First-run current filters are not empty.'
+    Assert-Condition ([int]$first.data.state.activeWatchCount -eq 0) 'First-run active watch count is not zero.'
+
+    $marker = [ordered]@{ term = 'T2099F'; campus = 'TEST'; index = '99999' }
+    $selectionBody = [ordered]@{
+        protocolVersion = 1
+        payload = [ordered]@{
+            expectedUserStateRevision = [long]$first.data.state.stateRevision
+            sections = @($marker)
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $headers = @{
+        Origin = $run.Origin.TrimEnd('/')
+        'x-bcsp-session' = $firstNonce
+    }
+    $selectionResponse = Invoke-RestMethod -UseBasicParsing -Method Put `
+        -Uri ($run.Origin + 'api/v1/local/selection') -Headers $headers `
+        -ContentType 'application/json' -Body $selectionBody -TimeoutSec 10
+    Assert-Condition ([int]$selectionResponse.protocolVersion -eq 1) 'Selection update did not return protocol version 1.'
+
+    $databasePath = Join-Path $candidateRoot 'data\rbcsp.sqlite'
+    Assert-Condition (Test-Path -LiteralPath $databasePath -PathType Leaf) 'First run did not create data/rbcsp.sqlite.'
+
+    Stop-CandidateGracefully $run $firstNonce
+    $run = $null
+    $databaseHeader = [System.IO.File]::ReadAllBytes($databasePath)[0..15]
+    Assert-Condition ([System.Text.Encoding]::ASCII.GetString($databaseHeader) -ceq "SQLite format 3`0") 'The runtime database does not have the SQLite 3 header.'
+    $sidecars = @(Get-ChildItem -LiteralPath (Join-Path $candidateRoot 'data') -File | Where-Object { $_.Name -match '(?i)(-wal|-shm)$' })
+    Assert-Condition ($sidecars.Count -eq 0) 'SQLite WAL/SHM sidecars remained after graceful exit.'
+    $databaseHashBeforeUpgrade = Get-LowerSha256 $databasePath
+
+    foreach ($name in $expectedFiles) {
+        Copy-Item -LiteralPath (Join-Path $upgradeRoot $name) -Destination (Join-Path $candidateRoot $name) -Force
+    }
+    Assert-Condition ((Get-LowerSha256 $databasePath) -ceq $databaseHashBeforeUpgrade) 'Replacing release files changed the package-local database.'
+
+    $run = Start-Candidate $candidateRoot $outsideTwo 'second' $logRoot -UseLauncher
+    $second = Read-Bootstrap $run.Origin
+    $secondNonce = [string]$second.data.sessionNonce
+    Assert-Condition ($secondNonce -ne $firstNonce) 'Restart reused the previous local session nonce.'
+    $selected = @($second.data.state.selectedSections)
+    Assert-Condition ($selected.Count -eq 1) 'Restart did not restore exactly one selected Section.'
+    Assert-Condition (
+        [string]$selected[0].term -ceq $marker.term -and
+        [string]$selected[0].campus -ceq $marker.campus -and
+        [string]$selected[0].index -ceq $marker.index
+    ) 'Restart did not restore the package-local synthetic selection marker.'
+    $sqliteFiles = @(Get-ChildItem -LiteralPath $candidateRoot -Recurse -File | Where-Object { $_.Name -match '(?i)\.(db|sqlite|sqlite3)$' })
+    Assert-Condition ($sqliteFiles.Count -eq 1 -and $sqliteFiles[0].FullName -eq $databasePath) 'The candidate did not use exactly one package-local database.'
+    Stop-CandidateGracefully $run $secondNonce
+    $run = $null
+
+    $archiveHash = Get-LowerSha256 $ArchivePath
+    $verificationSucceeded = $true
+    [ordered]@{
+        status = 'PASS'
+        archive = [System.IO.Path]::GetFileName($ArchivePath)
+        sha256 = $archiveHash
+        files = $expectedFiles.Count
+        restarts = 1
+    } | ConvertTo-Json -Compress
+}
+finally {
+    Stop-CandidateAfterFailure $run
+    if ($verificationSucceeded -and (Test-Path -LiteralPath $verificationRoot)) {
+        $resolved = [System.IO.Path]::GetFullPath($verificationRoot)
+        if ($resolved.StartsWith($tempBase + '\', [StringComparison]::OrdinalIgnoreCase) -and
+            [System.IO.Path]::GetFileName($resolved).StartsWith('rbcsp-p7-4-002-', [StringComparison]::Ordinal)) {
+            Remove-Item -LiteralPath $resolved -Recurse -Force
+        }
+    }
+}
