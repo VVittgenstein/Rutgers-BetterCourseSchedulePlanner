@@ -1,5 +1,7 @@
 name: Final candidate acceptance
 
+# Independent replay marker: both official-runner candidate hashes are locked.
+
 on:
   push:
     paths:
