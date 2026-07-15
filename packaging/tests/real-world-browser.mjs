@@ -199,7 +199,9 @@ async function selectCurrentOpenSection(page) {
 
   const openRow = page.locator('[data-filter-row="FLT-S03"]');
   const sectionGroup = page.locator('details.filter-panel__group').filter({ has: openRow });
-  await sectionGroup.locator(':scope > summary').click();
+  if (await sectionGroup.getAttribute('open') === null) {
+    await sectionGroup.locator(':scope > summary').click();
+  }
   await openRow.locator('input[value="OPEN"]').check();
 
   for (const stableId of ['FLT-C01', 'FLT-C02', 'FLT-S03']) {
