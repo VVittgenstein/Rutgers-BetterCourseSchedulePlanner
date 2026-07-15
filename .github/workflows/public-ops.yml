@@ -1,6 +1,6 @@
 name: Final candidate acceptance
 
-# Replacement candidate hashes locked for repaired source 7d5debe.
+# Independent replay marker after accepted run 29408621103.
 
 on:
   push:
