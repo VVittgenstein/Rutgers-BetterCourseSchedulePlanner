@@ -456,6 +456,12 @@ jobs:
       - name: Run the targeted product test
         run: |
           rustup toolchain install 1.97.0 --profile minimal
+          cargo test --locked -p bcsp-application --lib \
+            host::tests::blocked_extension_connect_does_not_starve_a_second_websocket_handshake \
+            -- --exact
+          cargo test --locked -p bcsp-public-runtime --lib \
+            status::tests::service_snapshot_never_holds_storage_while_sampling_watch_demand \
+            -- --exact
           cargo test --locked -p bcsp-application --test refresh_coordinator \
             fake_upstream_drives_all_product_routes_and_watch_without_client_amplification \
             -- --exact --nocapture
