@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "task": "P7.4-001-R1",
+  "status": "P7_4_REPAIRED_SOURCE_FROZEN",
+  "sourceCommit": "476565cbe8e19075214cdc1427c86cf2dcf4e966",
+  "packageCount": 2,
+  "rustTests": { "passed": 449, "failed": 0, "ignoredOptIn": 2 },
+  "frontendGuard": { "passed": 82, "failed": 0 },
+  "frontendTests": { "passed": 105, "failed": 0 },
+  "dualBuild": "PASS",
+  "dependencyOrLockChange": false,
+  "oldCandidatesEligible": false,
+  "packageBuildPerformed": false,
+  "nextTasks": ["P7.4-002-R1", "P7.4-003-R1"]
+}
