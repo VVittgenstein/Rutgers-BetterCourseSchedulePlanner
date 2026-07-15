@@ -108,8 +108,7 @@ jobs:
           candidate="$RUNNER_TEMP/bcsp-public-candidate"
           git worktree add --detach "$source_root" \
             7aa314def7947d1e1160e3417a9b52cbf26e1058
-          cargo fetch --locked --manifest-path "$source_root/Cargo.toml" \
-            --target x86_64-unknown-linux-gnu
+          cargo fetch --locked --manifest-path "$source_root/Cargo.toml"
           bash packaging/linux/build.sh \
             --source-root "$source_root" \
             --output-root "$output_root"
