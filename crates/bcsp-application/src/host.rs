@@ -493,12 +493,23 @@ async fn handle_extension(State(state): State<HostState>, request: Request) -> R
             );
         }
     };
-    extension_response(state.extension.handle(ExtensionRequest {
-        method,
-        path,
-        query,
-        body,
-    }))
+    let extension = state.extension;
+    let response = tokio::task::spawn_blocking(move || {
+        extension.handle(ExtensionRequest {
+            method,
+            path,
+            query,
+            body,
+        })
+    })
+    .await;
+    match response {
+        Ok(response) => extension_response(response),
+        Err(_) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+        ),
+    }
 }
 
 fn header_text(headers: &axum::http::HeaderMap, name: axum::http::HeaderName) -> Option<String> {

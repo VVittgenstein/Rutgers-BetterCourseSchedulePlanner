@@ -464,14 +464,31 @@ pub fn to_normalized_catalog_v1(
         }
     }
 
+    let mut variants_by_group = BTreeMap::new();
+    for variant in &snapshot.course_variants {
+        variants_by_group
+            .entry(variant.key.group().clone())
+            .or_insert_with(Vec::new)
+            .push(variant.key.clone());
+    }
+    let mut sections_by_variant = BTreeMap::new();
+    for section in &snapshot.sections {
+        sections_by_variant
+            .entry(section.variant_key.clone())
+            .or_insert_with(Vec::new)
+            .push(section.key.clone());
+    }
+    let mut occurrences_by_section = BTreeMap::new();
+    for occurrence in &snapshot.occurrences {
+        occurrences_by_section
+            .entry(occurrence.section_key.clone())
+            .or_insert_with(Vec::new)
+            .push(occurrence);
+    }
+
     let mut course_groups = Vec::with_capacity(snapshot.course_groups.len());
     for group in &snapshot.course_groups {
-        let keys = snapshot
-            .course_variants
-            .iter()
-            .filter(|variant| variant.key.group() == &group.key)
-            .map(|variant| variant.key.clone())
-            .collect::<Vec<_>>();
+        let keys = variants_by_group.remove(&group.key).unwrap_or_default();
         validate_group_facts(group, &keys)?;
         course_groups.push(NormalizedCourseGroupV1 {
             key: group.key.clone(),
@@ -481,22 +498,15 @@ pub fn to_normalized_catalog_v1(
 
     let mut course_variants = Vec::with_capacity(snapshot.course_variants.len());
     for variant in &snapshot.course_variants {
-        let section_keys = snapshot
-            .sections
-            .iter()
-            .filter(|section| section.variant_key == variant.key)
-            .map(|section| section.key.clone())
-            .collect::<Vec<_>>();
+        let section_keys = sections_by_variant.remove(&variant.key).unwrap_or_default();
         course_variants.push(project_variant(variant, section_keys)?);
     }
 
     let mut sections = Vec::with_capacity(snapshot.sections.len());
     for section in &snapshot.sections {
-        let occurrences = snapshot
-            .occurrences
-            .iter()
-            .filter(|occurrence| occurrence.section_key == section.key)
-            .collect::<Vec<_>>();
+        let occurrences = occurrences_by_section
+            .remove(&section.key)
+            .unwrap_or_default();
         sections.push(project_section(section, &occurrences)?);
     }
     let occurrences = snapshot

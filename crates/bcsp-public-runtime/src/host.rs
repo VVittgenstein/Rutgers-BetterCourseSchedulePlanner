@@ -529,11 +529,18 @@ async fn handle_fallback(State(state): State<PublicHostState>, request: Request)
             );
         }
     };
-    extension_response(
-        state
-            .product_routes
-            .handle(ExtensionRequest::new(method, path, query, body)),
-    )
+    let routes = state.product_routes;
+    match tokio::task::spawn_blocking(move || {
+        routes.handle(ExtensionRequest::new(method, path, query, body))
+    })
+    .await
+    {
+        Ok(response) => extension_response(response),
+        Err(_) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ApiErrorCode::InternalError,
+        ),
+    }
 }
 
 fn document_response(state: &PublicHostState, headers: &HeaderMap) -> Response {

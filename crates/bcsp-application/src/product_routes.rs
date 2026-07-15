@@ -151,14 +151,24 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
+        let policy = match self.runtime.refresh_policy() {
+            Ok(policy) => policy,
+            Err(error) => {
+                return product_failure_response(ProductRouteFailure::Runtime(error));
+            }
+        };
         self.with_storage(|storage| {
             let targets = self.search_targets(storage, request.filters.values())?;
             self.request_target_refresh(&targets)?;
             let snapshots = self.snapshots(&targets)?;
             self.runtime
-                .course_search(storage, &targets, &request, |target| {
-                    runtime_for(&snapshots, target)
-                })
+                .course_search_with_policy(
+                    storage,
+                    &targets,
+                    &request,
+                    |target| runtime_for(&snapshots, target),
+                    policy,
+                )
                 .map_err(ProductRouteFailure::Runtime)
         })
     }
@@ -168,14 +178,24 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
+        let policy = match self.runtime.refresh_policy() {
+            Ok(policy) => policy,
+            Err(error) => {
+                return product_failure_response(ProductRouteFailure::Runtime(error));
+            }
+        };
         self.with_storage(|storage| {
             let targets = self.search_targets(storage, request.filters.values())?;
             self.request_target_refresh(&targets)?;
             let snapshots = self.snapshots(&targets)?;
             self.runtime
-                .section_search(storage, &targets, &request, |target| {
-                    runtime_for(&snapshots, target)
-                })
+                .section_search_with_policy(
+                    storage,
+                    &targets,
+                    &request,
+                    |target| runtime_for(&snapshots, target),
+                    policy,
+                )
                 .map_err(ProductRouteFailure::Runtime)
         })
     }
@@ -187,15 +207,25 @@ where
         };
         let target = request.key.target();
         let targets = vec![target];
+        let policy = match self.runtime.refresh_policy() {
+            Ok(policy) => policy,
+            Err(error) => {
+                return product_failure_response(ProductRouteFailure::Runtime(error));
+            }
+        };
         if let Err(error) = self.request_target_refresh(&targets) {
             return product_failure_response(error);
         }
         self.with_storage(|storage| {
             let snapshots = self.snapshots(&targets)?;
             self.runtime
-                .course_detail(storage, &targets, &request, |target| {
-                    runtime_for(&snapshots, target)
-                })
+                .course_detail_with_policy(
+                    storage,
+                    &targets,
+                    &request,
+                    |target| runtime_for(&snapshots, target),
+                    policy,
+                )
                 .map_err(ProductRouteFailure::Runtime)
         })
     }
@@ -207,15 +237,25 @@ where
         };
         let target = request.key.target();
         let targets = vec![target];
+        let policy = match self.runtime.refresh_policy() {
+            Ok(policy) => policy,
+            Err(error) => {
+                return product_failure_response(ProductRouteFailure::Runtime(error));
+            }
+        };
         if let Err(error) = self.request_target_refresh(&targets) {
             return product_failure_response(error);
         }
         self.with_storage(|storage| {
             let snapshots = self.snapshots(&targets)?;
             self.runtime
-                .section_detail(storage, &targets, &request, |target| {
-                    runtime_for(&snapshots, target)
-                })
+                .section_detail_with_policy(
+                    storage,
+                    &targets,
+                    &request,
+                    |target| runtime_for(&snapshots, target),
+                    policy,
+                )
                 .map_err(ProductRouteFailure::Runtime)
         })
     }
@@ -226,13 +266,19 @@ where
             Err(response) => return response,
         };
         let target = request.batch.target();
+        let policy = match self.runtime.refresh_policy() {
+            Ok(policy) => policy,
+            Err(error) => {
+                return product_failure_response(ProductRouteFailure::Runtime(error));
+            }
+        };
         if let Err(error) = self.request_target_refresh(std::slice::from_ref(&target)) {
             return product_failure_response(error);
         }
         self.with_storage(|storage| {
             let snapshot = self.open_runtime.snapshot(&target)?;
             self.runtime
-                .open_status(storage, &target, &snapshot)
+                .open_status_with_policy(storage, &target, &snapshot, policy)
                 .map(|status| status.refresh)
                 .map_err(ProductRouteFailure::Runtime)
         })
@@ -244,13 +290,19 @@ where
             Err(response) => return response,
         };
         let target = request.section_key.target();
+        let policy = match self.runtime.refresh_policy() {
+            Ok(policy) => policy,
+            Err(error) => {
+                return product_failure_response(ProductRouteFailure::Runtime(error));
+            }
+        };
         if let Err(error) = self.request_target_refresh(std::slice::from_ref(&target)) {
             return product_failure_response(error);
         }
         self.with_storage(|storage| {
             let snapshot = self.open_runtime.snapshot(&target)?;
             self.runtime
-                .open_status(storage, &target, &snapshot)
+                .open_status_with_policy(storage, &target, &snapshot, policy)
                 .map_err(ProductRouteFailure::Runtime)?
                 .sections
                 .into_iter()
@@ -317,7 +369,9 @@ where
             Ok(storage) => storage,
             Err(_) => return api_error_response(500, ApiErrorCode::InternalError),
         };
-        match operation(&mut storage) {
+        let result = operation(&mut storage);
+        drop(storage);
+        match result {
             Ok(value) => success_response(value),
             Err(error) => product_failure_response(error),
         }

@@ -6,8 +6,8 @@ use bcsp_application::{
     OpenRuntimeSnapshotRegistry, PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH,
     PRODUCT_COURSE_SEARCH_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
     PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
-    RefreshPolicy, RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY,
-    SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand,
+    RefreshPolicy, RefreshPolicyProvider, RefreshPolicyReadError, RequestMethod, RouteExtension,
+    SHARED_PRODUCT_ROUTE_INVENTORY, SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand,
 };
 use bcsp_catalog::{normalize_target, to_catalog_refresh_command, to_discovery_refresh_command};
 use bcsp_contracts::{
@@ -64,16 +64,44 @@ fn trace(suffix: u8) -> TraceId {
 }
 
 fn publish_discovery(storage: &mut OperationalStorage) {
-    let body = br#"{
-      "sourceVersion":"synthetic-v1",
-      "terms":[{"termId":"92026","display":"Fall 2026","published":true}],
-      "campuses":[{"campusCode":"NB","display":"New Brunswick","enabled":true}],
-      "targets":[{"termId":"92026","campusCode":"NB","enabled":true}],
-      "subjects":[]
-    }"#;
+    publish_discovery_campuses(storage, &[("NB", "New Brunswick")]);
+}
+
+fn publish_discovery_campuses(storage: &mut OperationalStorage, campuses: &[(&str, &str)]) {
+    let body = serde_json::to_vec(&serde_json::json!({
+      "sourceVersion": "synthetic-v1",
+      "terms": [
+        {
+          "termId": "92026",
+          "year": 2026,
+          "termCode": "9",
+          "display": "Fall 2026",
+          "published": true
+        },
+        {
+          "termId": "12027",
+          "year": 2027,
+          "termCode": "1",
+          "display": "Spring 2027",
+          "published": false
+        }
+      ],
+      "campuses": campuses.iter().map(|(code, display)| serde_json::json!({
+        "campusCode": code,
+        "display": display,
+        "enabled": true
+      })).collect::<Vec<_>>(),
+      "targets": campuses.iter().map(|(code, _)| serde_json::json!({
+        "termId": "92026",
+        "campusCode": code,
+        "enabled": true
+      })).collect::<Vec<_>>(),
+      "subjects": []
+    }))
+    .expect("synthetic discovery JSON");
     let snapshot = DiscoverySnapshot::try_from_bundle(vec![DiscoverySourceInput::selector(
-        decode_discovery_payload(body).expect("synthetic discovery JSON"),
-        SourceProvenance::from_body("SYNTHETIC_DISCOVERY", STARTED, body),
+        decode_discovery_payload(&body).expect("synthetic discovery JSON"),
+        SourceProvenance::from_body("SYNTHETIC_DISCOVERY", STARTED, &body),
     )])
     .expect("synthetic discovery");
     storage
@@ -106,14 +134,14 @@ fn publish_catalog_subject(
     completed_at: &str,
 ) -> u64 {
     let body = serde_json::to_vec(&serde_json::json!([{
-        "campusCode": "NB",
+        "campusCode": target.campus().as_str(),
         "courseString": format!("01:{subject}:111"),
         "subject": subject,
         "subjectDescription": subject_description,
         "courseNumber": "111",
         "title": "Introduction to a Synthetic Subject",
         "sections": [{
-            "campusCode": "NB",
+            "campusCode": target.campus().as_str(),
             "index": "10001",
             "number": "01",
             "sectionCourseType": "LECTURE",
@@ -238,7 +266,11 @@ fn fixture() -> Fixture {
     }
 }
 
-fn post<Request, Response>(routes: &Routes, path: &'static str, request: Request) -> Response
+fn post<Request, Response>(
+    routes: &impl RouteExtension,
+    path: &'static str,
+    request: Request,
+) -> Response
 where
     Request: Serialize,
     Response: DeserializeOwned,
@@ -254,6 +286,22 @@ where
     serde_json::from_slice::<HttpSuccessEnvelope<Response>>(response.body())
         .expect("success envelope")
         .into_data()
+}
+
+#[derive(Clone)]
+struct StorageLockSensitivePolicy {
+    storage: Arc<Mutex<OperationalStorage>>,
+    policy: RefreshPolicy,
+}
+
+impl RefreshPolicyProvider for StorageLockSensitivePolicy {
+    fn refresh_policy(&self) -> Result<RefreshPolicy, RefreshPolicyReadError> {
+        let _storage = self
+            .storage
+            .try_lock()
+            .map_err(|_| RefreshPolicyReadError)?;
+        Ok(self.policy)
+    }
 }
 
 fn search_filters() -> FilterRequestV1 {
@@ -359,6 +407,41 @@ fn shared_inventory_serves_real_sqlite_catalog_query_detail_and_open_projections
 }
 
 #[test]
+fn product_routes_read_dynamic_policy_before_locking_the_shared_database() {
+    let fixture = fixture();
+    let policy = RefreshPolicy::try_new(Duration::from_secs(600), GeneralOpenInterval::public())
+        .expect("fixed public refresh policy");
+    let runtime = SharedRuntimeContext::new(
+        OpenCounterAudience::Public,
+        FixedClock(OffsetDateTime::from_unix_timestamp(1_893_456_005).expect("2030 timestamp")),
+        StorageLockSensitivePolicy {
+            storage: fixture.storage.clone(),
+            policy,
+        },
+    );
+    let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
+    let routes = SharedProductRoutes::new(fixture.storage.clone(), runtime, open_runtime);
+
+    let courses: CourseQueryResponseV1 = post(
+        &routes,
+        PRODUCT_COURSE_SEARCH_PATH,
+        CourseQueryRequestV1 {
+            filters: search_filters(),
+            page: PageRequestV1::default(),
+            sort: CourseSortV1::default(),
+        },
+    );
+    assert_eq!(courses.page.total, 1);
+
+    let open: OpenRefreshStatusV1 = post(
+        &routes,
+        PRODUCT_OPEN_STATUS_PATH,
+        OpenStatusRequestV1::new(OpenBatchKey::from(fixture.target)),
+    );
+    assert!(open.last_valid_observation.is_some());
+}
+
+#[test]
 fn discovery_subject_dictionary_follows_the_current_catalog_publication() {
     let fixture = fixture();
     let first: CatalogDiscoveryResponseV1 = post(
@@ -420,6 +503,74 @@ fn discovery_subject_dictionary_follows_the_current_catalog_publication() {
             .subjects
             .iter()
             .all(|subject| subject.code.as_str() != "198")
+    );
+}
+
+#[test]
+fn discovery_never_exposes_a_partial_latest_term_catalog_subject_dictionary() {
+    let directory = TempDir::new().expect("temporary directory");
+    let database = directory.path().join("subject-hydration.sqlite");
+    let mut storage = OperationalStorage::open(database).expect("operational SQLite");
+    publish_discovery_campuses(&mut storage, &[("NB", "New Brunswick"), ("NWK", "Newark")]);
+    let first_target = TermCampusKey::try_new("92026", "NB").expect("first target");
+    let second_target = TermCampusKey::try_new("92026", "NWK").expect("second target");
+    publish_catalog_subject(
+        &mut storage,
+        &first_target,
+        "198",
+        "Computer Science",
+        6,
+        STARTED,
+        COMPLETED,
+    );
+
+    let now = OffsetDateTime::from_unix_timestamp(1_893_456_005).expect("2030 timestamp");
+    let policy = RefreshPolicy::try_new(Duration::from_secs(600), GeneralOpenInterval::public())
+        .expect("fixed public refresh policy");
+    let runtime = SharedRuntimeContext::new(
+        OpenCounterAudience::Public,
+        FixedClock(now),
+        FixedRefreshPolicyProvider::new(policy),
+    );
+    let routes = SharedProductRoutes::new(
+        Arc::new(Mutex::new(storage)),
+        runtime,
+        Arc::new(OpenRuntimeSnapshotRegistry::default()),
+    );
+
+    let partial: CatalogDiscoveryResponseV1 = post(
+        &routes,
+        PRODUCT_CATALOG_DISCOVERY_PATH,
+        CatalogDiscoveryRequestV1::new(),
+    );
+    assert!(partial.subjects.is_empty());
+
+    publish_catalog_subject(
+        &mut routes.storage().lock().expect("operational storage lock"),
+        &second_target,
+        "640",
+        "Statistics",
+        7,
+        "2030-01-02T00:00:00Z",
+        "2030-01-02T00:00:01Z",
+    );
+    let complete: CatalogDiscoveryResponseV1 = post(
+        &routes,
+        PRODUCT_CATALOG_DISCOVERY_PATH,
+        CatalogDiscoveryRequestV1::new(),
+    );
+    assert_eq!(complete.subjects.len(), 2);
+    assert!(
+        complete
+            .subjects
+            .iter()
+            .any(|subject| { subject.target == first_target && subject.code.as_str() == "198" })
+    );
+    assert!(
+        complete
+            .subjects
+            .iter()
+            .any(|subject| { subject.target == second_target && subject.code.as_str() == "640" })
     );
 }
 

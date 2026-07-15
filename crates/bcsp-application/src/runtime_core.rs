@@ -14,7 +14,7 @@ use bcsp_open::{
     GeneralOpenInterval, OpenCounterAudience, OpenProjectionError, OpenProjectionRuntime,
     ProjectedOpenStatusV1, project_open_status,
 };
-use bcsp_operational_storage::{OperationalStorage, StorageError};
+use bcsp_operational_storage::{DiscoverySnapshot, OperationalStorage, StorageError};
 use bcsp_query::OpenEvidence;
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -272,7 +272,18 @@ where
         target: &TermCampusKey,
         snapshot: &OpenRuntimeSnapshot,
     ) -> Result<ProjectedOpenStatusV1, SharedRuntimeError> {
-        let runtime = self.projection_runtime(snapshot)?;
+        let policy = self.refresh_policy()?;
+        self.open_status_with_policy(storage, target, snapshot, policy)
+    }
+
+    pub(crate) fn open_status_with_policy(
+        &self,
+        storage: &mut OperationalStorage,
+        target: &TermCampusKey,
+        snapshot: &OpenRuntimeSnapshot,
+        policy: RefreshPolicy,
+    ) -> Result<ProjectedOpenStatusV1, SharedRuntimeError> {
+        let runtime = self.projection_runtime_at(self.clock.now(), policy, snapshot);
         project_open_status(storage, target, &runtime).map_err(|source| {
             SharedRuntimeError::OpenProjection {
                 target: target.clone(),
@@ -288,7 +299,20 @@ where
         request: &CourseQueryRequestV1,
         runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
     ) -> Result<CourseQueryResponseV1, SharedRuntimeError> {
-        let (now, evidence) = self.query_evidence(storage, targets, runtime_for)?;
+        let policy = self.refresh_policy()?;
+        self.course_search_with_policy(storage, targets, request, runtime_for, policy)
+    }
+
+    pub(crate) fn course_search_with_policy(
+        &self,
+        storage: &mut OperationalStorage,
+        targets: &[TermCampusKey],
+        request: &CourseQueryRequestV1,
+        runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
+        policy: RefreshPolicy,
+    ) -> Result<CourseQueryResponseV1, SharedRuntimeError> {
+        let (now, evidence) =
+            self.query_evidence_with_policy(storage, targets, runtime_for, policy)?;
         SharedQueryService::new(storage)
             .course_search(targets, request, now, &evidence)
             .map_err(SharedRuntimeError::Query)
@@ -301,7 +325,20 @@ where
         request: &SectionQueryRequestV1,
         runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
     ) -> Result<SectionQueryResponseV1, SharedRuntimeError> {
-        let (now, evidence) = self.query_evidence(storage, targets, runtime_for)?;
+        let policy = self.refresh_policy()?;
+        self.section_search_with_policy(storage, targets, request, runtime_for, policy)
+    }
+
+    pub(crate) fn section_search_with_policy(
+        &self,
+        storage: &mut OperationalStorage,
+        targets: &[TermCampusKey],
+        request: &SectionQueryRequestV1,
+        runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
+        policy: RefreshPolicy,
+    ) -> Result<SectionQueryResponseV1, SharedRuntimeError> {
+        let (now, evidence) =
+            self.query_evidence_with_policy(storage, targets, runtime_for, policy)?;
         SharedQueryService::new(storage)
             .section_search(targets, request, now, &evidence)
             .map_err(SharedRuntimeError::Query)
@@ -314,7 +351,20 @@ where
         request: &CourseDetailRequestV1,
         runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
     ) -> Result<CourseDetailResponseV1, SharedRuntimeError> {
-        let (now, evidence) = self.query_evidence(storage, targets, runtime_for)?;
+        let policy = self.refresh_policy()?;
+        self.course_detail_with_policy(storage, targets, request, runtime_for, policy)
+    }
+
+    pub(crate) fn course_detail_with_policy(
+        &self,
+        storage: &mut OperationalStorage,
+        targets: &[TermCampusKey],
+        request: &CourseDetailRequestV1,
+        runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
+        policy: RefreshPolicy,
+    ) -> Result<CourseDetailResponseV1, SharedRuntimeError> {
+        let (now, evidence) =
+            self.query_evidence_with_policy(storage, targets, runtime_for, policy)?;
         SharedQueryService::new(storage)
             .course_detail(targets, request, now, &evidence)
             .map_err(SharedRuntimeError::Query)
@@ -327,7 +377,20 @@ where
         request: &SectionDetailRequestV1,
         runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
     ) -> Result<SectionDetailResponseV1, SharedRuntimeError> {
-        let (now, evidence) = self.query_evidence(storage, targets, runtime_for)?;
+        let policy = self.refresh_policy()?;
+        self.section_detail_with_policy(storage, targets, request, runtime_for, policy)
+    }
+
+    pub(crate) fn section_detail_with_policy(
+        &self,
+        storage: &mut OperationalStorage,
+        targets: &[TermCampusKey],
+        request: &SectionDetailRequestV1,
+        runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
+        policy: RefreshPolicy,
+    ) -> Result<SectionDetailResponseV1, SharedRuntimeError> {
+        let (now, evidence) =
+            self.query_evidence_with_policy(storage, targets, runtime_for, policy)?;
         SharedQueryService::new(storage)
             .section_detail(targets, request, now, &evidence)
             .map_err(SharedRuntimeError::Query)
@@ -341,36 +404,63 @@ where
         &self,
         storage: &mut OperationalStorage,
     ) -> Result<CatalogDiscoveryResponseV1, SharedRuntimeError> {
+        let observed_at = self.clock.now();
         let published = storage
             .published_discovery_snapshot()
             .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?;
-        let targets = published
-            .snapshot
-            .campuses
+        let selector = to_catalog_discovery_response_v1(&published, &[], observed_at)
+            .map_err(SharedRuntimeError::CatalogDiscoveryProjection)?;
+        let selectable_terms = selector
+            .targets
             .iter()
-            .map(|campus| campus.target.clone())
+            .map(|target| target.key.term().clone())
             .collect::<BTreeSet<_>>();
+        let latest_term = latest_automatic_term(&published.snapshot, &selectable_terms);
+        if !selector.targets.is_empty() && latest_term.is_none() {
+            return Ok(selector);
+        }
+        let automatic_targets = selector
+            .targets
+            .iter()
+            .map(|target| target.key.clone())
+            .filter(|target| latest_term.is_some_and(|term| target.term() == term))
+            .collect::<BTreeSet<_>>();
+
+        // Catalog publications arrive target by target. Returning the partial merge would make a
+        // browser freeze whichever subject subset happened to publish first. Check the cheap
+        // publication states for the whole automatically refreshed term before loading any full
+        // snapshot; valid-empty targets have a nonzero content version and count as complete.
+        for target in &automatic_targets {
+            let ready = storage
+                .target_state(target)
+                .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?
+                .is_some_and(|state| state.current_content_version > 0);
+            if !ready {
+                return Ok(selector);
+            }
+        }
+
         let mut catalogs = Vec::new();
-        for target in targets {
+        for target in selector.targets.iter().map(|target| &target.key) {
             if let Some(catalog) = storage
-                .published_catalog_snapshot(&target)
+                .published_catalog_snapshot(target)
                 .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?
             {
                 catalogs.push(catalog);
             }
         }
-        to_catalog_discovery_response_v1(&published, &catalogs, self.clock.now())
+        to_catalog_discovery_response_v1(&published, &catalogs, observed_at)
             .map_err(SharedRuntimeError::CatalogDiscoveryProjection)
     }
 
-    fn query_evidence(
+    fn query_evidence_with_policy(
         &self,
         storage: &mut OperationalStorage,
         targets: &[TermCampusKey],
         runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
+        policy: RefreshPolicy,
     ) -> Result<(OffsetDateTime, Vec<OpenEvidence>), SharedRuntimeError> {
         let now = self.clock.now();
-        let policy = self.refresh_policy()?;
         let mut evidence = Vec::new();
         for target in targets {
             let snapshot = runtime_for(target);
@@ -412,6 +502,25 @@ where
             circuit: snapshot.circuit.clone(),
         }
     }
+}
+
+fn latest_automatic_term<'a>(
+    snapshot: &'a DiscoverySnapshot,
+    selectable_terms: &BTreeSet<bcsp_contracts::TermId>,
+) -> Option<&'a bcsp_contracts::TermId> {
+    snapshot
+        .terms
+        .iter()
+        .filter(|term| selectable_terms.contains(&term.term_id))
+        .filter_map(|term| {
+            Some((
+                term.year?,
+                term.term_code.as_deref()?.parse::<u8>().ok()?,
+                &term.term_id,
+            ))
+        })
+        .max_by_key(|(year, term_code, _)| (*year, *term_code))
+        .map(|(_, _, term)| term)
 }
 
 fn open_evidence(status: bcsp_contracts::OpenSectionStatusV1) -> OpenEvidence {

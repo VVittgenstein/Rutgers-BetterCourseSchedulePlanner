@@ -663,6 +663,68 @@ fn large_synthetic_corpus_has_stable_complete_nonduplicated_pages() {
 }
 
 #[test]
+fn large_nested_course_result_preserves_total_sort_and_only_returns_page_shape() {
+    const GROUP_COUNT: u32 = 600;
+    const SECTIONS_PER_GROUP: u32 = 6;
+    const PAGE: u32 = 7;
+    const PAGE_SIZE: u16 = 25;
+
+    let mut catalog = empty_catalog("NB", 1);
+    let mut expected_keys = Vec::new();
+    for ordinal in 0..GROUP_COUNT {
+        let subject = 100 + ordinal / 100;
+        let course_number = ordinal % 100;
+        let course_string = format!("01:{subject:03}:{course_number:03}");
+        let first_index = ordinal * SECTIONS_PER_GROUP + 1;
+        let keys = add_course(
+            &mut catalog,
+            &course_string,
+            &format!("{first_index:05}"),
+            'a',
+        );
+        for extra in 1..SECTIONS_PER_GROUP {
+            add_section(
+                &mut catalog,
+                &keys.variant,
+                &format!("{:05}", first_index + extra),
+            );
+        }
+        expected_keys.push(keys.group);
+    }
+
+    let catalogs = vec![catalog];
+    let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
+    let request = course_request(
+        neutral_input(),
+        PageRequestV1::try_new(PAGE, PAGE_SIZE).unwrap(),
+        CourseSortV1::default(),
+    );
+    let response = engine.course_search(&request, None).unwrap();
+    let start = usize::try_from((PAGE - 1) * u32::from(PAGE_SIZE)).unwrap();
+    let end = start + usize::from(PAGE_SIZE);
+
+    assert_eq!(response.page.total, u64::from(GROUP_COUNT));
+    assert_eq!(response.items.len(), usize::from(PAGE_SIZE));
+    assert_eq!(
+        response
+            .items
+            .iter()
+            .map(|item| item.group.key.clone())
+            .collect::<Vec<_>>(),
+        expected_keys[start..end]
+    );
+    assert_eq!(
+        response
+            .items
+            .iter()
+            .flat_map(|item| &item.variants)
+            .flat_map(|variant| &variant.sections)
+            .count(),
+        usize::from(PAGE_SIZE) * usize::try_from(SECTIONS_PER_GROUP).unwrap()
+    );
+}
+
+#[test]
 fn unknown_course_knowledge_remains_uncertain_and_reasons_are_stable() {
     let mut catalog = empty_catalog("NB", 1);
     let matched = add_course(&mut catalog, "01:198:111", "00001", 'a');

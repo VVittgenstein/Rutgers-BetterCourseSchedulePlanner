@@ -95,18 +95,129 @@ impl<'a> QueryEngine<'a> {
         let mut candidates = Vec::new();
 
         for group in self.corpus.groups() {
-            let exact_identifier = filters.text().is_some_and(|text| {
-                text.tokens().len() == 1
-                    && text
-                        .as_str()
-                        .eq_ignore_ascii_case(group.key.course_string().as_str())
-            });
-            let mut variants = Vec::new();
+            let exact_identifier = exact_course_identifier(filters, &group.key);
             let mut variant_evaluations = Vec::new();
             let mut best_rank = u32::MAX;
-            let mut title = None::<String>;
+            let mut title = None::<&str>;
 
             for variant in self.corpus.variants_for(group) {
+                let (course_evaluation, _) =
+                    evaluate_course_filter_matches(&group.key, variant, filters, text_hits);
+                let section_witness = if section_filters_active {
+                    let sections = self.corpus.sections_for(variant);
+                    if sections.is_empty() {
+                        PredicateEvaluation::no_match("section.witness")
+                    } else {
+                        or_active(
+                            sections
+                                .into_iter()
+                                .map(|section| self.section_evaluation(section, filters)),
+                        )
+                    }
+                } else {
+                    PredicateEvaluation::matched()
+                };
+                let variant_evaluation = and_all([course_evaluation.clone(), section_witness]);
+                if variant_evaluation.outcome() != MatchOutcome::NoMatch {
+                    if let Some(rank) = text_hits.and_then(|plan| plan.rank(&variant.key)) {
+                        best_rank = best_rank.min(rank);
+                    }
+                    if let Some(candidate) =
+                        known_string(&variant.title).filter(|value| !value.is_empty())
+                        && title.is_none_or(|current| candidate < current)
+                    {
+                        title = Some(candidate);
+                    }
+                }
+                variant_evaluations.push(variant_evaluation);
+            }
+
+            let group_evaluation = or_nonempty(variant_evaluations, "variant.witness");
+            if group_evaluation.outcome() != MatchOutcome::NoMatch {
+                candidates.push(CourseCandidate {
+                    group,
+                    evaluation: group_evaluation,
+                    exact_identifier,
+                    best_rank,
+                    title,
+                });
+            }
+        }
+
+        candidates.sort_by(|left, right| compare_course(left, right, request));
+        let (page, items) = paginate_and_materialize(candidates, request.page, |candidate| {
+            self.materialize_course_candidate(candidate, filters, text_hits, section_filters_active)
+        });
+        Ok(CourseQueryResponseV1 {
+            contract_version: QUERY_CONTRACT_VERSION,
+            page,
+            items,
+        })
+    }
+
+    pub fn section_search(
+        &self,
+        request: &SectionQueryRequestV1,
+        text_hits: Option<&TextHitPlan>,
+    ) -> Result<SectionQueryResponseV1, QueryError> {
+        let filters = request.filters.values();
+        self.validate_filters(filters)?;
+        self.validate_text_plan(filters, text_hits)?;
+        let mut candidates = Vec::new();
+        for section in self.corpus.sections() {
+            let variant = self
+                .corpus
+                .variant(&section.variant_key)
+                .expect("validated corpus contains the section variant");
+            let (course_evaluation, _) =
+                evaluate_course_filter_matches(variant.key.group(), variant, filters, text_hits);
+            let section_evaluation = self.section_evaluation(section, filters);
+            let overall = and_all([course_evaluation, section_evaluation]);
+            if overall.outcome() == MatchOutcome::NoMatch {
+                continue;
+            }
+            candidates.push(SectionCandidate {
+                section,
+                variant,
+                evaluation: overall,
+                section_number: known_string(&section.section_number).unwrap_or_default(),
+                exact_identifier: exact_course_identifier(filters, variant.key.group()),
+                text_rank: text_hits
+                    .and_then(|plan| plan.rank(&variant.key))
+                    .unwrap_or(u32::MAX),
+                open_state: self.open_state_for(&section.key),
+            });
+        }
+
+        candidates.sort_by(|left, right| compare_section(left, right, request));
+        let (page, items) = paginate_and_materialize(candidates, request.page, |candidate| {
+            self.materialize_section_candidate(candidate, filters, text_hits)
+        });
+        Ok(SectionQueryResponseV1 {
+            contract_version: QUERY_CONTRACT_VERSION,
+            page,
+            items,
+        })
+    }
+
+    fn materialize_course_candidate(
+        &self,
+        candidate: CourseCandidate<'a>,
+        filters: &NormalizedFilterValuesV1,
+        text_hits: Option<&TextHitPlan>,
+        section_filters_active: bool,
+    ) -> CourseQueryItemV1 {
+        let CourseCandidate {
+            group,
+            evaluation,
+            exact_identifier,
+            ..
+        } = candidate;
+        let variants = self
+            .corpus
+            .variants_for(group)
+            .into_iter()
+            .map(|variant| {
                 let (course_evaluation, course_filter_matches) =
                     evaluate_course_filter_matches(&group.key, variant, filters, text_hits);
                 let section_evaluations = self
@@ -129,20 +240,9 @@ impl<'a> QueryEngine<'a> {
                     PredicateEvaluation::matched()
                 };
                 let variant_evaluation = and_all([course_evaluation.clone(), section_witness]);
-                if variant_evaluation.outcome() != MatchOutcome::NoMatch {
-                    if let Some(rank) = text_hits.and_then(|plan| plan.rank(&variant.key)) {
-                        best_rank = best_rank.min(rank);
-                    }
-                    if let Some(candidate) =
-                        known_string(&variant.title).filter(|value| !value.is_empty())
-                        && title.as_deref().is_none_or(|current| candidate < current)
-                    {
-                        title = Some(candidate.to_owned());
-                    }
-                }
-                let item = CourseVariantQueryItemV1 {
+                CourseVariantQueryItemV1 {
                     variant: variant.clone(),
-                    explanation: variant_evaluation.clone().into_explanation(),
+                    explanation: variant_evaluation.into_explanation(),
                     filter_matches: course_filter_matches,
                     text_match: filters.text().and_then(|text| {
                         text_hits.and_then(|plan| plan.rank(&variant.key)).map(|_| {
@@ -161,103 +261,47 @@ impl<'a> QueryEngine<'a> {
                             item
                         })
                         .collect(),
-                };
-                variant_evaluations.push(variant_evaluation.clone());
-                variants.push(item);
-            }
-
-            let group_evaluation = or_nonempty(variant_evaluations, "variant.witness");
-            if group_evaluation.outcome() != MatchOutcome::NoMatch {
-                candidates.push(CourseCandidate {
-                    key: group.key.clone(),
-                    item: CourseQueryItemV1 {
-                        group: group.clone(),
-                        explanation: group_evaluation.into_explanation(),
-                        variants,
-                    },
-                    exact_identifier,
-                    best_rank,
-                    title,
-                });
-            }
+                }
+            })
+            .collect();
+        CourseQueryItemV1 {
+            group: group.clone(),
+            explanation: evaluation.into_explanation(),
+            variants,
         }
-
-        candidates.sort_by(|left, right| compare_course(left, right, request));
-        let (page, candidates) = paginate(candidates, request.page);
-        Ok(CourseQueryResponseV1 {
-            contract_version: QUERY_CONTRACT_VERSION,
-            page,
-            items: candidates
-                .into_iter()
-                .map(|candidate| candidate.item)
-                .collect(),
-        })
     }
 
-    pub fn section_search(
+    fn materialize_section_candidate(
         &self,
-        request: &SectionQueryRequestV1,
+        candidate: SectionCandidate<'a>,
+        filters: &NormalizedFilterValuesV1,
         text_hits: Option<&TextHitPlan>,
-    ) -> Result<SectionQueryResponseV1, QueryError> {
-        let filters = request.filters.values();
-        self.validate_filters(filters)?;
-        self.validate_text_plan(filters, text_hits)?;
-        let mut candidates = Vec::new();
-        for section in self.corpus.sections() {
-            let variant = self
-                .corpus
-                .variant(&section.variant_key)
-                .expect("validated corpus contains the section variant");
-            let (course_evaluation, course_filter_matches) =
-                evaluate_course_filter_matches(variant.key.group(), variant, filters, text_hits);
-            let (mut item, section_evaluation) = self.section_item(section, filters);
-            let overall = and_all([course_evaluation, section_evaluation]);
-            if overall.outcome() == MatchOutcome::NoMatch {
-                continue;
-            }
-            item.explanation = overall.clone().into_explanation();
-            let exact_identifier = filters.text().is_some_and(|text| {
-                text.tokens().len() == 1
-                    && text
-                        .as_str()
-                        .eq_ignore_ascii_case(variant.key.group().course_string().as_str())
-            });
-            candidates.push(SectionCandidate {
-                key: section.key.clone(),
-                course_key: variant.key.group().clone(),
-                section_number: known_string(&section.section_number)
-                    .unwrap_or_default()
-                    .to_owned(),
-                exact_identifier,
-                text_rank: text_hits
+    ) -> SectionSearchItemV1 {
+        let SectionCandidate {
+            section,
+            variant,
+            evaluation,
+            exact_identifier,
+            ..
+        } = candidate;
+        let (course_evaluation, course_filter_matches) =
+            evaluate_course_filter_matches(variant.key.group(), variant, filters, text_hits);
+        let (mut item, section_evaluation) = self.section_item(section, filters);
+        debug_assert_eq!(evaluation, and_all([course_evaluation, section_evaluation]));
+        item.explanation = evaluation.into_explanation();
+        SectionSearchItemV1 {
+            variant: variant.clone(),
+            section: item,
+            course_filter_matches,
+            text_match: filters.text().and_then(|text| {
+                text_hits
                     .and_then(|plan| plan.rank(&variant.key))
-                    .unwrap_or(u32::MAX),
-                item: SectionSearchItemV1 {
-                    variant: variant.clone(),
-                    section: item,
-                    course_filter_matches,
-                    text_match: filters.text().and_then(|text| {
-                        text_hits.and_then(|plan| plan.rank(&variant.key)).map(|_| {
-                            TextMatchEvidenceV1 {
-                                exact_course_identifier: exact_identifier,
-                                matched_tokens: text.tokens().to_vec(),
-                            }
-                        })
-                    }),
-                },
-            });
+                    .map(|_| TextMatchEvidenceV1 {
+                        exact_course_identifier: exact_identifier,
+                        matched_tokens: text.tokens().to_vec(),
+                    })
+            }),
         }
-
-        candidates.sort_by(|left, right| compare_section(left, right, request));
-        let (page, candidates) = paginate(candidates, request.page);
-        Ok(SectionQueryResponseV1 {
-            contract_version: QUERY_CONTRACT_VERSION,
-            page,
-            items: candidates
-                .into_iter()
-                .map(|candidate| candidate.item)
-                .collect(),
-        })
     }
 
     pub fn course_detail(
@@ -342,6 +386,16 @@ impl<'a> QueryEngine<'a> {
         )
     }
 
+    fn section_evaluation(
+        &self,
+        section: &bcsp_contracts::NormalizedSectionV1,
+        filters: &NormalizedFilterValuesV1,
+    ) -> PredicateEvaluation {
+        let occurrences = self.corpus.known_occurrences_for(section);
+        let open = self.open_for(&section.key);
+        evaluate_section_filters(section, occurrences.as_deref(), &open, self.now, filters).0
+    }
+
     fn unfiltered_section_item(
         &self,
         section: &bcsp_contracts::NormalizedSectionV1,
@@ -368,6 +422,13 @@ impl<'a> QueryEngine<'a> {
             fresh_until: None,
             uncertainty: Some(MatchReasonCode::MissingReliableData),
         })
+    }
+
+    fn open_state_for(&self, key: &SectionKey) -> LiveOpenStateV1 {
+        self.open
+            .get(key)
+            .map(|evidence| evidence.state)
+            .unwrap_or(LiveOpenStateV1::Unknown)
     }
 
     fn validate_filters(&self, filters: &NormalizedFilterValuesV1) -> Result<(), QueryError> {
@@ -422,30 +483,31 @@ impl<'a> QueryEngine<'a> {
     }
 }
 
-struct CourseCandidate {
-    key: CourseGroupKey,
-    item: CourseQueryItemV1,
+struct CourseCandidate<'a> {
+    group: &'a bcsp_contracts::NormalizedCourseGroupV1,
+    evaluation: PredicateEvaluation,
     exact_identifier: bool,
     best_rank: u32,
-    title: Option<String>,
+    title: Option<&'a str>,
 }
 
-struct SectionCandidate {
-    key: SectionKey,
-    course_key: CourseGroupKey,
-    section_number: String,
+struct SectionCandidate<'a> {
+    section: &'a bcsp_contracts::NormalizedSectionV1,
+    variant: &'a bcsp_contracts::NormalizedCourseVariantV1,
+    evaluation: PredicateEvaluation,
+    section_number: &'a str,
     exact_identifier: bool,
     text_rank: u32,
-    item: SectionSearchItemV1,
+    open_state: LiveOpenStateV1,
 }
 
 fn compare_course(
-    left: &CourseCandidate,
-    right: &CourseCandidate,
+    left: &CourseCandidate<'_>,
+    right: &CourseCandidate<'_>,
     request: &CourseQueryRequestV1,
 ) -> Ordering {
-    outcome_order(left.item.explanation.outcome())
-        .cmp(&outcome_order(right.item.explanation.outcome()))
+    outcome_order(left.evaluation.outcome())
+        .cmp(&outcome_order(right.evaluation.outcome()))
         .then_with(|| right.exact_identifier.cmp(&left.exact_identifier))
         .then_with(|| match request.sort.field {
             CourseSortFieldV1::Relevance => directed(
@@ -453,43 +515,46 @@ fn compare_course(
                 request.sort.direction,
             ),
             CourseSortFieldV1::CourseIdentifier => directed(
-                compare_course_identifier(&left.key, &right.key),
+                compare_course_identifier(&left.group.key, &right.group.key),
                 request.sort.direction,
             ),
             CourseSortFieldV1::Title => {
                 compare_titles(&left.title, &right.title, request.sort.direction)
             }
         })
-        .then_with(|| left.key.cmp(&right.key))
+        .then_with(|| left.group.key.cmp(&right.group.key))
 }
 
 fn compare_section(
-    left: &SectionCandidate,
-    right: &SectionCandidate,
+    left: &SectionCandidate<'_>,
+    right: &SectionCandidate<'_>,
     request: &SectionQueryRequestV1,
 ) -> Ordering {
-    outcome_order(left.item.section.explanation.outcome())
-        .cmp(&outcome_order(right.item.section.explanation.outcome()))
+    outcome_order(left.evaluation.outcome())
+        .cmp(&outcome_order(right.evaluation.outcome()))
         .then_with(|| right.exact_identifier.cmp(&left.exact_identifier))
         .then_with(|| {
             let ordering = match request.sort.field {
-                SectionSortFieldV1::SectionIndex => left.key.index().cmp(right.key.index()),
-                SectionSortFieldV1::SectionNumber => left.section_number.cmp(&right.section_number),
-                SectionSortFieldV1::CourseIdentifier => {
-                    compare_course_identifier(&left.course_key, &right.course_key)
+                SectionSortFieldV1::SectionIndex => {
+                    left.section.key.index().cmp(right.section.key.index())
                 }
-                SectionSortFieldV1::OpenStatus => open_order(left.item.section.open.state)
-                    .cmp(&open_order(right.item.section.open.state)),
+                SectionSortFieldV1::SectionNumber => left.section_number.cmp(right.section_number),
+                SectionSortFieldV1::CourseIdentifier => {
+                    compare_course_identifier(left.variant.key.group(), right.variant.key.group())
+                }
+                SectionSortFieldV1::OpenStatus => {
+                    open_order(left.open_state).cmp(&open_order(right.open_state))
+                }
             };
             directed(ordering, request.sort.direction)
         })
         .then_with(|| relevance(right.text_rank).cmp(&relevance(left.text_rank)))
-        .then_with(|| left.key.cmp(&right.key))
+        .then_with(|| left.section.key.cmp(&right.section.key))
 }
 
 fn compare_titles(
-    left: &Option<String>,
-    right: &Option<String>,
+    left: &Option<&str>,
+    right: &Option<&str>,
     direction: SortDirectionV1,
 ) -> Ordering {
     match (left, right) {
@@ -560,6 +625,24 @@ fn paginate<T>(mut values: Vec<T>, request: PageRequestV1) -> (PageInfoV1, Vec<T
     )
 }
 
+fn paginate_and_materialize<T, U>(
+    values: Vec<T>,
+    request: PageRequestV1,
+    materialize: impl FnMut(T) -> U,
+) -> (PageInfoV1, Vec<U>) {
+    let (page, values) = paginate(values, request);
+    (page, values.into_iter().map(materialize).collect())
+}
+
+fn exact_course_identifier(filters: &NormalizedFilterValuesV1, key: &CourseGroupKey) -> bool {
+    filters.text().is_some_and(|text| {
+        text.tokens().len() == 1
+            && text
+                .as_str()
+                .eq_ignore_ascii_case(key.course_string().as_str())
+    })
+}
+
 fn known_string(value: &CatalogFieldKnowledge<String>) -> Option<&str> {
     match value {
         CatalogFieldKnowledge::Known {
@@ -577,5 +660,28 @@ fn or_nonempty(
         PredicateEvaluation::no_match(empty_reason)
     } else {
         or_active(values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    #[test]
+    fn pagination_invokes_materialization_only_for_the_selected_large_result_page() {
+        let materialized = Cell::new(0_u32);
+        let request = PageRequestV1::try_new(137, 25).expect("valid page request");
+        let (page, items) =
+            paginate_and_materialize((0_u32..8_037).collect(), request, |candidate| {
+                materialized.set(materialized.get() + 1);
+                candidate
+            });
+
+        assert_eq!(page.total, 8_037);
+        assert_eq!(page.total_pages, 322);
+        assert_eq!(materialized.get(), 25);
+        assert_eq!(items, (3_400_u32..3_425).collect::<Vec<_>>());
     }
 }

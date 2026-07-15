@@ -1602,28 +1602,41 @@ pub fn catalog_content_sha256_v1(
     target: &TermCampusKey,
     snapshot: &CatalogSnapshot,
 ) -> StorageResult<String> {
+    let mut variants_by_group = BTreeMap::new();
+    for variant in &snapshot.course_variants {
+        variants_by_group
+            .entry(variant.key.group().clone())
+            .or_insert_with(Vec::new)
+            .push(variant);
+    }
+    for variants in variants_by_group.values_mut() {
+        variants.sort_by(|left, right| left.key.cmp(&right.key));
+    }
+    let mut sections_by_variant = BTreeMap::new();
+    for section in &snapshot.sections {
+        sections_by_variant
+            .entry(section.variant_key.clone())
+            .or_insert_with(Vec::new)
+            .push(section);
+    }
+    for sections in sections_by_variant.values_mut() {
+        sections.sort_by(|left, right| left.key.cmp(&right.key));
+    }
+
     let mut group_rows = snapshot.course_groups.iter().collect::<Vec<_>>();
     group_rows.sort_by(|left, right| left.key.cmp(&right.key));
     let groups = group_rows
         .into_iter()
         .map(|group| {
-            let mut variant_rows = snapshot
-                .course_variants
-                .iter()
-                .filter(|variant| variant.key.group() == &group.key)
-                .collect::<Vec<_>>();
-            variant_rows.sort_by(|left, right| left.key.cmp(&right.key));
-            let variants = variant_rows
+            let variants = variants_by_group
+                .get(&group.key)
                 .into_iter()
+                .flatten()
                 .map(|variant| {
-                    let mut section_rows = snapshot
-                        .sections
-                        .iter()
-                        .filter(|section| section.variant_key == variant.key)
-                        .collect::<Vec<_>>();
-                    section_rows.sort_by(|left, right| left.key.cmp(&right.key));
-                    let sections = section_rows
+                    let sections = sections_by_variant
+                        .get(&variant.key)
                         .into_iter()
+                        .flatten()
                         .map(|section| {
                             serde_json::json!({
                                 "term": section.key.term().as_str(),
