@@ -126,6 +126,16 @@ function batchIdentity(batch: { readonly term: string; readonly campus: string }
   return `${batch.term}\u0000${batch.campus}`;
 }
 
+function sectionTelemetryFailureKey(sectionKey: SectionKey): string {
+  return `section:${sectionIdentity(sectionKey)}`;
+}
+
+function batchTelemetryFailureKey(
+  batch: { readonly term: string; readonly campus: string },
+): string {
+  return `batch:${batchIdentity(batch)}`;
+}
+
 function expireFreshness(freshness: OpenFreshnessV1, now: number): OpenFreshnessV1 {
   if (freshness.state !== 'FRESH' || freshness.freshUntil === null) return freshness;
   const freshUntil = Date.parse(freshness.freshUntil);
@@ -221,6 +231,8 @@ export function LiveWatchProvider({
   const sectionRequestRevisions = useRef(new Map<string, number>());
   const hadConnection = useRef(runtime.watch.state === 'OPEN');
   const announcedAlerts = useRef(new Set<string>());
+  const announcedAudioCaps = useRef(new Set<ActiveWatchId>());
+  const telemetryFailures = useRef(new Set<string>());
   const audioProviderMounted = useRef(false);
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
@@ -244,6 +256,12 @@ export function LiveWatchProvider({
       ...(detail === undefined ? {} : { detail }),
     };
     setNotices((current) => [...current.slice(-5), notice]);
+  }, []);
+
+  const setTelemetryFailure = useCallback((key: string, failed: boolean) => {
+    if (failed) telemetryFailures.current.add(key);
+    else telemetryFailures.current.delete(key);
+    setTelemetryError(telemetryFailures.current.size > 0);
   }, []);
 
   const send = useCallback((command: WatchClientCommandV1): boolean => {
@@ -282,13 +300,15 @@ export function LiveWatchProvider({
         status,
         (value) => batchIdentity(value.batch),
       ));
+      setTelemetryFailure(batchTelemetryFailureKey(batch), false);
     } catch {
-      if (telemetryEpoch.current === epoch
-        && batchRequestRevisions.current.get(identity) === revision) {
-        setTelemetryError(true);
-      }
+      const isCurrent = telemetryEpoch.current === epoch
+        && batchRequestRevisions.current.get(identity) === revision;
+      const isRelevant = selectedRef.current.some((section) => sameBatch(section, batch))
+        || activeRef.current.some((watch) => sameBatch(watch.sectionKey, batch));
+      if (isCurrent && isRelevant) setTelemetryFailure(batchTelemetryFailureKey(batch), true);
     }
-  }, [runtime]);
+  }, [runtime, setTelemetryFailure]);
 
   const startContinuousAudio = useCallback((nextVolume: number, nextMuted: boolean) => {
     const outcome = audioController.startContinuous(nextVolume, nextMuted);
@@ -340,6 +360,7 @@ export function LiveWatchProvider({
       return;
     }
     if (event.type === 'WATCH_STOPPED') {
+      announcedAudioCaps.current.delete(event.stopped.activeWatchId);
       setActive((current) => current.filter((watch) => watch.activeWatchId !== event.stopped.activeWatchId));
       setObservations((current) => current.filter((observation) =>
         !sameSection(observation.sectionKey, event.stopped.sectionKey)));
@@ -381,6 +402,7 @@ export function LiveWatchProvider({
         projected,
         (value) => sectionIdentity(value.sectionKey),
       ));
+      setTelemetryFailure(sectionTelemetryFailureKey(observation.sectionKey), false);
       void loadBatchStatus(observation.batch);
       return;
     }
@@ -410,6 +432,7 @@ export function LiveWatchProvider({
     if (event.type === 'AUDIO_DISPOSITION') {
       const disposition = event.audio;
       if (disposition.disposition === 'CUE_REQUESTED') {
+        announcedAudioCaps.current.delete(disposition.cue.activeWatchId);
         const outcome = audioController.play(disposition.cue, volumeRef.current, mutedRef.current);
         if (outcome === 'AUTOPLAY_BLOCKED') {
           setAudioState('BLOCKED');
@@ -431,7 +454,10 @@ export function LiveWatchProvider({
       } else if (disposition.disposition === 'CUE_QUEUED') {
         addNotice('AUDIO_CUE_QUEUED', 'STATUS', disposition.sectionKey);
       } else if (disposition.disposition === 'SILENT_MAX_AUDIBLE') {
-        addNotice('AUDIO_CAP_REACHED', 'ALERT', disposition.sectionKey, `${disposition.audibleCount}/${disposition.maxAudible}`);
+        if (!announcedAudioCaps.current.has(disposition.activeWatchId)) {
+          announcedAudioCaps.current.add(disposition.activeWatchId);
+          addNotice('AUDIO_CAP_REACHED', 'ALERT', disposition.sectionKey, `${disposition.audibleCount}/${disposition.maxAudible}`);
+        }
       } else if (disposition.disposition === 'CONTINUOUS_MIXER_ACTIVE') {
         continuousEpisodeIdsRef.current = disposition.episodeIds;
         setContinuousEpisodeIds(disposition.episodeIds);
@@ -442,7 +468,7 @@ export function LiveWatchProvider({
         audioController.stopContinuous();
       }
     }
-  }, [addNotice, audioController, loadBatchStatus, send, startContinuousAudio]);
+  }, [addNotice, audioController, loadBatchStatus, send, setTelemetryFailure, startContinuousAudio]);
 
   useEffect(() => {
     const unsubscribeEvents = runtime.watch.subscribe(handleServerEvent);
@@ -460,6 +486,9 @@ export function LiveWatchProvider({
         telemetryEpoch.current += 1;
         batchRequestRevisions.current.clear();
         sectionRequestRevisions.current.clear();
+        telemetryFailures.current.clear();
+        setTelemetryError(false);
+        announcedAudioCaps.current.clear();
         queuedStart.current = null;
         pendingPolicies.current.clear();
         setPending([]);
@@ -486,6 +515,8 @@ export function LiveWatchProvider({
       telemetryEpoch.current += 1;
       batchRequestRevisions.current.clear();
       sectionRequestRevisions.current.clear();
+      telemetryFailures.current.clear();
+      announcedAudioCaps.current.clear();
       audioProviderMounted.current = false;
       queueMicrotask(() => {
         if (!audioProviderMounted.current) audioController.dispose();
@@ -512,7 +543,9 @@ export function LiveWatchProvider({
     telemetryEpoch.current += 1;
     batchRequestRevisions.current.clear();
     sectionRequestRevisions.current.clear();
+    telemetryFailures.current.clear();
     telemetryAbort.current?.abort();
+    setTelemetryError(false);
     setSelected(next);
     onSelectedChange?.(next);
   }, [onSelectedChange]);
@@ -579,6 +612,7 @@ export function LiveWatchProvider({
       watch: { activeWatchId: watch.activeWatchId, sectionKey: watch.sectionKey },
       policy,
     })) {
+      announcedAudioCaps.current.delete(watch.activeWatchId);
       setActive((current) => current.map((value) =>
         value.activeWatchId === watch.activeWatchId ? { ...value, policy } : value));
     }
@@ -611,10 +645,10 @@ export function LiveWatchProvider({
   }, [send]);
 
   const resetAudibleCount = useCallback((watch: ActiveWatchView) => {
-    send({
+    if (send({
       type: 'RESET_AUDIBLE_COUNT',
       watch: { activeWatchId: watch.activeWatchId, sectionKey: watch.sectionKey },
-    });
+    })) announcedAudioCaps.current.delete(watch.activeWatchId);
   }, [send]);
 
   const dismissAlert = useCallback((alert: WatchAlertV1) => {
@@ -656,6 +690,7 @@ export function LiveWatchProvider({
     telemetryEpoch.current = epoch;
     batchRequestRevisions.current.clear();
     sectionRequestRevisions.current.clear();
+    telemetryFailures.current.clear();
     const keys = [...selectedRef.current];
     for (const watch of activeRef.current) {
       if (!keys.some((key) => sameSection(key, watch.sectionKey))) keys.push(watch.sectionKey);
@@ -694,14 +729,20 @@ export function LiveWatchProvider({
     if (abort.signal.aborted || telemetryEpoch.current !== epoch) return;
     const relevantSections = new Set(keys.map(sectionIdentity));
     const relevantBatches = new Set(batches.map(batchIdentity));
-    const hadCurrentFailure = sectionResults.some((result, index) =>
-      sectionRequestRevisions.current.get(sectionTickets[index]!.identity)
-        === sectionTickets[index]!.revision
-      && result.status === 'rejected')
-      || batchResults.some((result, index) =>
-        batchRequestRevisions.current.get(batchTickets[index]!.identity)
-          === batchTickets[index]!.revision
-        && result.status === 'rejected');
+    sectionResults.forEach((result, index) => {
+      const ticket = sectionTickets[index]!;
+      if (sectionRequestRevisions.current.get(ticket.identity) !== ticket.revision) return;
+      const failureKey = sectionTelemetryFailureKey(ticket.sectionKey);
+      if (result.status === 'rejected') telemetryFailures.current.add(failureKey);
+      else telemetryFailures.current.delete(failureKey);
+    });
+    batchResults.forEach((result, index) => {
+      const ticket = batchTickets[index]!;
+      if (batchRequestRevisions.current.get(ticket.identity) !== ticket.revision) return;
+      const failureKey = batchTelemetryFailureKey(ticket.batch);
+      if (result.status === 'rejected') telemetryFailures.current.add(failureKey);
+      else telemetryFailures.current.delete(failureKey);
+    });
     setSectionStatuses((current) => {
       let next: readonly OpenSectionStatusV1[] = current.filter((status) =>
         relevantSections.has(sectionIdentity(status.sectionKey)));
@@ -726,7 +767,7 @@ export function LiveWatchProvider({
       });
       return next;
     });
-    setTelemetryError(hadCurrentFailure);
+    setTelemetryError(telemetryFailures.current.size > 0);
     setTelemetryLoading(false);
   }, [runtime]);
 
@@ -773,6 +814,7 @@ export function LiveWatchProvider({
       telemetryEpoch.current += 1;
       batchRequestRevisions.current.clear();
       sectionRequestRevisions.current.clear();
+      telemetryFailures.current.clear();
       setBatchStatuses([]);
       setSectionStatuses([]);
       setTelemetryLoading(false);

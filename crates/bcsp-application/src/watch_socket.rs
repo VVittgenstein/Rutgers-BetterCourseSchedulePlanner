@@ -43,6 +43,13 @@ pub trait WatchDispatchSink: Send + Sync + 'static {
     fn record_dispatch(&self, dispatch: &WatchDispatch);
 
     fn record_cleanup(&self, cleanup: &WatchCleanupReport);
+
+    /// Waits until all records accepted before this call have been processed.
+    ///
+    /// Most sinks are synchronous and need no extra work. Local durable sinks can
+    /// override this barrier after moving storage writes off the watch transport
+    /// path.
+    fn flush(&self) {}
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -237,6 +244,11 @@ where
         for report in reports {
             self.sink.record_cleanup(&report);
         }
+    }
+
+    /// Flushes the configured dispatch sink without changing in-memory watch state.
+    pub fn flush_dispatch_sink(&self) {
+        self.sink.flush();
     }
 
     fn lock_state(&self) -> Option<MutexGuard<'_, SocketState<C, I, E>>> {

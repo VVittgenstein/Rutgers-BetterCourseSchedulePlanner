@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::{self, JoinHandle};
 
 use bcsp_application::WatchDispatchSink;
 use bcsp_contracts::{
@@ -19,6 +20,17 @@ use crate::LocalPrimaryDatabase;
 
 /// Projects the shared in-memory watch reducer into local-only durable episode history.
 pub(crate) struct LocalWatchHistorySink {
+    sender: Option<mpsc::Sender<LocalWatchHistoryWork>>,
+    worker: Option<JoinHandle<()>>,
+}
+
+enum LocalWatchHistoryWork {
+    Dispatch(WatchDispatch),
+    Cleanup(WatchCleanupReport),
+    Flush(mpsc::SyncSender<()>),
+}
+
+struct LocalWatchHistoryWriter {
     database: Arc<Mutex<LocalPrimaryDatabase>>,
     run_id: TraceId,
 }
@@ -29,8 +41,78 @@ impl LocalWatchHistorySink {
         Self::with_run_id(database, ids.next_trace_id())
     }
 
-    const fn with_run_id(database: Arc<Mutex<LocalPrimaryDatabase>>, run_id: TraceId) -> Self {
-        Self { database, run_id }
+    fn with_run_id(database: Arc<Mutex<LocalPrimaryDatabase>>, run_id: TraceId) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let worker = thread::Builder::new()
+            .name("bcsp-watch-history".to_owned())
+            .spawn(move || LocalWatchHistoryWriter { database, run_id }.run(receiver))
+            .expect("local watch history worker must start");
+        Self {
+            sender: Some(sender),
+            worker: Some(worker),
+        }
+    }
+
+    fn enqueue(&self, work: LocalWatchHistoryWork) {
+        let Some(sender) = &self.sender else {
+            tracing::error!("local watch history worker is unavailable");
+            return;
+        };
+        if sender.send(work).is_err() {
+            tracing::error!("local watch history worker stopped unexpectedly");
+        }
+    }
+
+    fn flush_queue(&self) {
+        let (completed, waiting) = mpsc::sync_channel(0);
+        let Some(sender) = &self.sender else {
+            tracing::error!("local watch history worker is unavailable during flush");
+            return;
+        };
+        if sender
+            .send(LocalWatchHistoryWork::Flush(completed))
+            .is_err()
+        {
+            tracing::error!("local watch history worker stopped before flush");
+            return;
+        }
+        if waiting.recv().is_err() {
+            tracing::error!("local watch history worker failed during flush");
+        }
+    }
+}
+
+impl Drop for LocalWatchHistorySink {
+    fn drop(&mut self) {
+        self.flush_queue();
+        self.sender.take();
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            tracing::error!("local watch history worker panicked");
+        }
+    }
+}
+
+impl LocalWatchHistoryWriter {
+    fn run(self, receiver: mpsc::Receiver<LocalWatchHistoryWork>) {
+        while let Ok(work) = receiver.recv() {
+            match work {
+                LocalWatchHistoryWork::Dispatch(dispatch) => {
+                    if let Err(error) = self.persist_dispatch(&dispatch) {
+                        tracing::error!(?error, "failed to persist local watch dispatch history");
+                    }
+                }
+                LocalWatchHistoryWork::Cleanup(cleanup) => {
+                    if let Err(error) = self.persist_cleanup(&cleanup) {
+                        tracing::error!(?error, "failed to persist local watch cleanup history");
+                    }
+                }
+                LocalWatchHistoryWork::Flush(completed) => {
+                    let _ = completed.send(());
+                }
+            }
+        }
     }
 
     fn persist_dispatch(&self, dispatch: &WatchDispatch) -> PersonalStateResult<()> {
@@ -153,15 +235,15 @@ impl LocalWatchHistorySink {
 
 impl WatchDispatchSink for LocalWatchHistorySink {
     fn record_dispatch(&self, dispatch: &WatchDispatch) {
-        if let Err(error) = self.persist_dispatch(dispatch) {
-            tracing::error!(?error, "failed to persist local watch dispatch history");
-        }
+        self.enqueue(LocalWatchHistoryWork::Dispatch(dispatch.clone()));
     }
 
     fn record_cleanup(&self, cleanup: &WatchCleanupReport) {
-        if let Err(error) = self.persist_cleanup(cleanup) {
-            tracing::error!(?error, "failed to persist local watch cleanup history");
-        }
+        self.enqueue(LocalWatchHistoryWork::Cleanup(cleanup.clone()));
+    }
+
+    fn flush(&self) {
+        self.flush_queue();
     }
 }
 
@@ -295,8 +377,11 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Duration;
 
     use bcsp_contracts::{ActiveWatchId, OpenEpisodeId, SectionKey, WatchStoppedV1};
+    use rusqlite::Connection;
 
     use super::*;
     use crate::{LocalRuntimePaths, OperationalGate};
@@ -501,6 +586,7 @@ mod tests {
             ],
             vec![action(0x13, WatchActionKind::EpisodeClosed, &closed)],
         ));
+        sink.flush_queue();
 
         let database = database.lock().unwrap();
         let page = database
@@ -577,6 +663,7 @@ mod tests {
             sections: vec![timed_out.section_key.clone()],
             actions: vec![action(0x23, WatchActionKind::EpisodeClosed, &timed_out)],
         });
+        sink.flush_queue();
 
         let database = database.lock().unwrap();
         let page = database
@@ -595,5 +682,130 @@ mod tests {
             })
         );
         assert_eq!(summary.action_count, 3);
+    }
+
+    #[test]
+    fn stop_history_enqueue_does_not_wait_for_sqlite_writer_and_flush_preserves_fifo() {
+        let (_temp, gate, database, sink) = sink();
+        let sink = Arc::new(sink);
+        let opened = episode(
+            (0x300, 3),
+            OpenEpisodeState::Unacknowledged,
+            1,
+            trace(30),
+            "1970-01-01T00:00:01Z",
+            "1970-01-01T00:00:01Z",
+            "1970-01-01T00:00:01Z",
+            None,
+        );
+        sink.record_dispatch(&dispatch(
+            &opened,
+            vec![WatchServerEventV1::EpisodeUpdated {
+                episode: opened.clone(),
+            }],
+            vec![action(0x31, WatchActionKind::EpisodeOpened, &opened)],
+        ));
+        sink.flush_queue();
+
+        let blocker = Connection::open(gate.paths().database()).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let updated = episode(
+            (0x300, 3),
+            OpenEpisodeState::Unacknowledged,
+            2,
+            trace(32),
+            "1970-01-01T00:00:01Z",
+            "1970-01-01T00:00:02Z",
+            "1970-01-01T00:00:01Z",
+            None,
+        );
+        let closed = episode(
+            (0x300, 3),
+            OpenEpisodeState::Closed,
+            2,
+            trace(32),
+            "1970-01-01T00:00:01Z",
+            "1970-01-01T00:00:02Z",
+            "1970-01-01T00:00:03Z",
+            Some("1970-01-01T00:00:03Z"),
+        );
+        let (enqueued, observe_enqueue) = mpsc::sync_channel(0);
+        let enqueue_sink = sink.clone();
+        let enqueue = thread::spawn(move || {
+            enqueue_sink.record_dispatch(&dispatch(
+                &updated,
+                vec![WatchServerEventV1::EpisodeUpdated {
+                    episode: updated.clone(),
+                }],
+                Vec::new(),
+            ));
+            enqueue_sink.record_dispatch(&dispatch(
+                &closed,
+                vec![
+                    WatchServerEventV1::EpisodeUpdated {
+                        episode: closed.clone(),
+                    },
+                    WatchServerEventV1::WatchStopped {
+                        stopped: WatchStoppedV1 {
+                            contract_version: bcsp_contracts::WATCH_CONTRACT_VERSION,
+                            active_watch_id: closed.active_watch_id,
+                            section_key: closed.section_key.clone(),
+                            reason: WatchStopReason::UserRequested,
+                            stopped_at: closed.state_changed_at,
+                        },
+                    },
+                ],
+                vec![action(0x33, WatchActionKind::EpisodeClosed, &closed)],
+            ));
+            let _ = enqueued.send(());
+        });
+        let enqueue_returned = observe_enqueue.recv_timeout(Duration::from_secs(1)).is_ok();
+        enqueue.join().unwrap();
+
+        let (flushed, observe_flush) = mpsc::sync_channel(0);
+        let flush_sink = sink.clone();
+        let flush = thread::spawn(move || {
+            flush_sink.flush_queue();
+            let _ = flushed.send(());
+        });
+        let flush_waited_for_writer = matches!(
+            observe_flush.recv_timeout(Duration::from_millis(100)),
+            Err(RecvTimeoutError::Timeout)
+        );
+
+        blocker.execute_batch("ROLLBACK").unwrap();
+        let flush_completed = observe_flush.recv_timeout(Duration::from_secs(5)).is_ok();
+        flush.join().unwrap();
+
+        assert!(
+            enqueue_returned,
+            "record_dispatch waited for the SQLite writer"
+        );
+        assert!(
+            flush_waited_for_writer,
+            "flush did not wait for queued persistence"
+        );
+        assert!(
+            flush_completed,
+            "flush did not complete after the writer lock was released"
+        );
+
+        let database = database.lock().unwrap();
+        let page = database
+            .personal()
+            .episode_history(&HistoryFilter::default(), PageRequest::DEFAULT)
+            .unwrap();
+        assert_eq!(page.total, 1);
+        let summary = &page.items[0];
+        assert_eq!(summary.state, OpenEpisodeState::Closed);
+        assert_eq!(summary.observation_count.get(), 2);
+        assert_eq!(summary.action_count, 3);
+        assert_eq!(
+            summary.disposition,
+            Some(EpisodeDisposition::WatchStopped {
+                reason: WatchStopReason::UserRequested
+            })
+        );
     }
 }

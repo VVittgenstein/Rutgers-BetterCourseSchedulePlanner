@@ -57,6 +57,16 @@ function section(index: number, campus = 'NB'): SectionKey {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
 class FakeWatchClient implements WatchClientPort {
   state: WatchConnectionState;
   readonly commands: WatchClientCommandV1[] = [];
@@ -273,7 +283,7 @@ function sectionStatus(sectionKey: SectionKey): OpenSectionStatusV1 {
   };
 }
 
-function productApi(): ProductApiPort {
+function productApi(overrides: Partial<ProductApiPort> = {}): ProductApiPort {
   const unused = vi.fn(async () => {
     throw new Error('unused product API');
   });
@@ -286,13 +296,17 @@ function productApi(): ProductApiPort {
     searchCourses: unused,
     searchSections: unused,
     sectionDetail: unused,
+    ...overrides,
   } as ProductApiPort;
 }
 
-function runtime(watch: FakeWatchClient): ProductRuntimePort {
+function runtime(
+  watch: FakeWatchClient,
+  productOverrides: Partial<ProductApiPort> = {},
+): ProductRuntimePort {
   return {
     dispose: vi.fn(),
-    product: productApi(),
+    product: productApi(productOverrides),
     watch,
   };
 }
@@ -312,10 +326,11 @@ function renderWatch(
   watch = new FakeWatchClient(),
   audio = new FakeAudioController(),
   locale: SupportedLocale = 'en-US',
+  productOverrides: Partial<ProductApiPort> = {},
 ) {
   const result = render(
     <BcspI18nProvider initialLocale={locale}>
-      <LiveWatchProvider audio={audio} runtime={runtime(watch)}>
+      <LiveWatchProvider audio={audio} runtime={runtime(watch, productOverrides)}>
         <SelectionActions sections={sections} />
         <WatchWorkspace />
         <WatchToastRegion />
@@ -602,6 +617,34 @@ describe('Watch workspace product flow', () => {
       '42 attempted / 36 succeeded / 4 failed / 2 empty',
     )).toHaveLength(3);
     expect(screen.getByLabelText('Selected Section Open status')).toBeTruthy();
+  });
+
+  it('does not show the empty telemetry instruction while a selected Section is loading', async () => {
+    const sectionKey = section(1);
+    const pendingBatch = deferred<OpenRefreshStatusV1>();
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(() => pendingBatch.promise);
+    renderWatch(
+      [sectionKey],
+      new FakeWatchClient(),
+      new FakeAudioController(),
+      'en-US',
+      { openStatus },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Section 00001 for watch' }));
+    await waitFor(() => expect(openStatus).toHaveBeenCalledOnce());
+
+    const telemetry = screen.getByRole('region', {
+      name: 'Freshness / lag / circuit / counters',
+    });
+    expect(within(telemetry).queryByText(
+      /Select a Section to read its current BCSP Open status/u,
+    )).toBeNull();
+
+    await act(async () => {
+      pendingBatch.resolve(batchStatus(sectionKey));
+      await pendingBatch.promise;
+    });
   });
 
   it('clears telemetry after the final Section is removed', async () => {

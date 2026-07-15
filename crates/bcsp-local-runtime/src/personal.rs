@@ -394,6 +394,7 @@ impl LocalSurfaceState for PersonalSurface {
         )?;
 
         self.watch.stop();
+        self.watch.flush_dispatch_sink();
         let reset = self.with_store(|store| store.clear_personal_data(expected_state_revision))?;
         encode(&reset)
     }

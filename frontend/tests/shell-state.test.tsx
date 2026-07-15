@@ -256,6 +256,52 @@ describe('shell data state', () => {
     expect(filterSchema).toHaveBeenCalledTimes(1);
   });
 
+  it('recovers a first-start EMPTY discovery without reloading schema or requiring user retry', async () => {
+    vi.useFakeTimers();
+    const initial = discovery('UNAVAILABLE_NO_FIRST_SUCCESS', 0, 'first-start-empty');
+    const stillEmpty = discovery('CURRENT', 0, 'discovery-in-progress');
+    const recovered = catalogHydratedDiscovery(discovery('CURRENT', 1, 'discovery-published'));
+    const responses = [initial, stillEmpty, recovered];
+    let discoveryCall = 0;
+    const filterSchema = vi.fn<ProductApiPort['filterSchema']>(async () => FILTER_SCHEMA);
+    const catalogDiscovery = vi.fn<ProductApiPort['catalogDiscovery']>(async () => {
+      const response = responses[discoveryCall];
+      discoveryCall += 1;
+      if (response === undefined) throw new Error('unexpected discovery poll');
+      return response;
+    });
+    const runtime = runtimeWith({ catalogDiscovery, filterSchema });
+
+    const { result } = renderHook(() => useShellDataState(runtime));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.state).toMatchObject({ status: 'EMPTY', discovery: initial });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(result.current.state).toMatchObject({ status: 'EMPTY', discovery: initial });
+    expect(catalogDiscovery).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(result.current.state).toMatchObject({
+      status: 'READY',
+      discovery: recovered,
+      filterSchema: FILTER_SCHEMA,
+    });
+    expect(catalogDiscovery).toHaveBeenCalledTimes(3);
+    expect(filterSchema).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(catalogDiscovery).toHaveBeenCalledTimes(3);
+  });
+
   it('cancels an in-flight discovery hydration when the shell unmounts', async () => {
     vi.useFakeTimers();
     const hydrationRequest = deferred<CatalogDiscoveryResponseV1>();

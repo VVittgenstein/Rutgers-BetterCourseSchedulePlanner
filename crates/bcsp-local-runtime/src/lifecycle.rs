@@ -230,6 +230,7 @@ impl RunningLocalRuntime {
         } = self;
         refresh.shutdown().await;
         prepared.watch.stop();
+        prepared.watch.flush_dispatch_sink();
         server.shutdown().await?;
         prepared.extension.checkpoint_wal()?;
         Ok(())

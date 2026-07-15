@@ -44,6 +44,7 @@ export function useShellDataState(runtime: ProductRuntimePort): ShellDataResourc
   const [state, setState] = useState<ShellDataState>({ status: 'LOADING' });
 
   const retry = useCallback(() => {
+    setState({ status: 'LOADING' });
     setRequestGeneration((generation) => generation + 1);
   }, []);
 
@@ -84,12 +85,12 @@ export function useShellDataState(runtime: ProductRuntimePort): ShellDataResourc
   }, [requestGeneration, runtime]);
 
   useEffect(() => {
-    if (
-      state.status !== 'READY'
-      || state.discoveryState !== 'CURRENT'
-      || state.discovery.targets.length === 0
-      || state.discovery.subjects.length > 0
-    ) {
+    const recoveringDiscovery = state.status === 'EMPTY';
+    const hydratingSubjects = state.status === 'READY'
+      && state.discoveryState === 'CURRENT'
+      && state.discovery.targets.length > 0
+      && state.discovery.subjects.length === 0;
+    if (!recoveringDiscovery && !hydratingSubjects) {
       return undefined;
     }
 
@@ -107,14 +108,35 @@ export function useShellDataState(runtime: ProductRuntimePort): ShellDataResourc
       try {
         // This product route reads the local operational store. It never starts
         // a Rutgers refresh, so multiple browser sessions cannot fan out to the
-        // upstream origin while waiting for the first Catalog publication.
+        // upstream origin while waiting for discovery or Catalog publication.
         const discovery = await runtime.product.catalogDiscovery(
           { contractVersion: 1 },
           abort.signal,
         );
         if (!active) return;
+        const discoveryState = classifyDiscovery(discovery);
         if (
-          discovery.status.availability === 'CURRENT'
+          state.status === 'EMPTY'
+          && discoveryState !== 'UNAVAILABLE'
+          && discovery.targets.length > 0
+        ) {
+          setState((current) => {
+            if (current.status !== 'EMPTY' || current.discovery !== state.discovery) {
+              return current;
+            }
+            return {
+              status: 'READY',
+              discovery,
+              discoveryState,
+              filterCount: current.filterCount,
+              filterSchema: current.filterSchema,
+            };
+          });
+          return;
+        }
+        if (
+          state.status === 'READY'
+          && discoveryState === 'CURRENT'
           && discovery.targets.length > 0
           && discovery.subjects.length > 0
         ) {
@@ -125,7 +147,7 @@ export function useShellDataState(runtime: ProductRuntimePort): ShellDataResourc
             return {
               ...current,
               discovery,
-              discoveryState: classifyDiscovery(discovery),
+              discoveryState,
             };
           });
           return;

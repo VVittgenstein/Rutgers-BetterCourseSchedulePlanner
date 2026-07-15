@@ -157,6 +157,7 @@ function SectionTelemetry({ status }: { readonly status: OpenSectionStatusV1 }) 
 function OpenTelemetryPanel() {
   const i18n = useBcspI18n();
   const watch = useLiveWatch();
+  const hasTelemetryTargets = watch.selected.length > 0 || watch.active.length > 0;
   return (
     <section className="watch-telemetry" aria-labelledby="watch-telemetry-title">
       <header className="watch-workspace__section-head">
@@ -171,15 +172,15 @@ function OpenTelemetryPanel() {
       {watch.telemetryError ? (
         <p className="watch-workspace__confirm" role="alert">{i18n.t('watch.telemetry.error')}</p>
       ) : null}
-      {watch.batchStatuses.length === 0 ? (
+      {watch.batchStatuses.length === 0 && !hasTelemetryTargets ? (
         <p className="watch-workspace__empty">{i18n.t('watch.telemetry.empty')}</p>
-      ) : (
+      ) : watch.batchStatuses.length > 0 ? (
         <div className="watch-telemetry__grid">
           {watch.batchStatuses.map((status) => (
             <BatchTelemetry key={`${status.batch.term}-${status.batch.campus}`} status={status} />
           ))}
         </div>
-      )}
+      ) : null}
       {watch.sectionStatuses.length === 0 ? null : (
         <div className="watch-telemetry__sections" aria-label={i18n.t('watch.telemetry.sections_label')}>
           {watch.sectionStatuses.map((status) => (

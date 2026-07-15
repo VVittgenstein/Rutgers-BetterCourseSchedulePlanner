@@ -278,6 +278,25 @@ function stopped(sectionKey: SectionKey, activeWatchId: string): WatchServerEven
   };
 }
 
+function audibleCap(
+  ordinal: number,
+  sectionKey: SectionKey = SECTION_A,
+  activeWatchId: string = ACTIVE_A,
+): WatchServerEventV1 {
+  return {
+    type: 'AUDIO_DISPOSITION',
+    audio: {
+      disposition: 'SILENT_MAX_AUDIBLE',
+      activeWatchId,
+      sectionKey,
+      observationId: `20000000-0000-4000-8000-${ordinal.toString().padStart(12, '0')}`,
+      audibleCount: 3,
+      maxAudible: 3,
+      emittedAt: LATER,
+    },
+  };
+}
+
 function observationEvent(
   freshUntil = LATER,
   observedAt = AT,
@@ -443,6 +462,56 @@ describe('LiveWatchProvider', () => {
     expect(harness.value().batchStatuses[0]?.scheduler.schedulerLagMilliseconds).toBe(987);
   });
 
+  it('clears recovered telemetry failures after an observation and batch reread both succeed', async () => {
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async ({ sectionKey }) => {
+      if (sectionKey.index === SECTION_A.index) throw new Error('initial Section telemetry failure');
+      return sectionStatus(sectionKey);
+    });
+    const openStatus = vi.fn<ProductApiPort['openStatus']>()
+      .mockRejectedValueOnce(new Error('initial batch telemetry failure'))
+      .mockImplementation(async ({ batch }) => refreshStatus(batch));
+    const harness = createHarness('OPEN', false, { openSectionStatus, openStatus });
+
+    await act(async () => {
+      harness.value().select(SECTION_A);
+      harness.value().select(SECTION_C);
+    });
+    await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
+    expect(harness.value().telemetryError).toBe(true);
+    expect(harness.value().sectionStatuses.map((status) => status.sectionKey)).toEqual([SECTION_C]);
+    expect(harness.value().batchStatuses).toEqual([]);
+
+    await emit(harness, observationEvent());
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(harness.value().batchStatuses).toHaveLength(1));
+    expect(harness.value().sectionStatuses.map((status) => status.sectionKey)).toEqual([
+      SECTION_C,
+      SECTION_A,
+    ]);
+    expect(harness.value().telemetryError).toBe(false);
+  });
+
+  it('keeps the telemetry error while another Section resource is still failed', async () => {
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async () => {
+      throw new Error('Section telemetry failure');
+    });
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => refreshStatus(batch));
+    const harness = createHarness('OPEN', false, { openSectionStatus, openStatus });
+
+    await act(async () => {
+      harness.value().select(SECTION_A);
+      harness.value().select(SECTION_D);
+    });
+    await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
+    expect(harness.value().telemetryError).toBe(true);
+
+    await emit(harness, observationEvent());
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(2));
+    expect(harness.value().sectionStatuses.map((status) => status.sectionKey)).toEqual([SECTION_A]);
+    expect(harness.value().batchStatuses).toHaveLength(1);
+    expect(harness.value().telemetryError).toBe(true);
+  });
+
   it('does not resurrect telemetry after the final Section is removed', async () => {
     const slow = deferred<OpenRefreshStatusV1>();
     const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => refreshStatus(batch));
@@ -507,18 +576,7 @@ describe('LiveWatchProvider', () => {
       policy: DEFAULT_WATCH_POLICY,
     }]);
 
-    await emit(harness, {
-      type: 'AUDIO_DISPOSITION',
-      audio: {
-        disposition: 'SILENT_MAX_AUDIBLE',
-        activeWatchId: ACTIVE_A,
-        sectionKey: SECTION_A,
-        observationId: '20000000-0000-4000-8000-000000000001',
-        audibleCount: 3,
-        maxAudible: 3,
-        emittedAt: LATER,
-      },
-    });
+    await emit(harness, audibleCap(1));
     expect(harness.value().active).toHaveLength(1);
     expect(harness.value().notices).toContainEqual(expect.objectContaining({
       code: 'AUDIO_CAP_REACHED',
@@ -538,6 +596,41 @@ describe('LiveWatchProvider', () => {
       code: 'WATCH_STOPPED',
       sectionKey: SECTION_A,
     }));
+  });
+
+  it('deduplicates repeated audible-cap notices for the same active watch', async () => {
+    const harness = createHarness();
+    await selectAndStart(harness, [SECTION_A]);
+    await emit(harness, startResult([[SECTION_A, ACTIVE_A]]));
+
+    for (let ordinal = 1; ordinal <= 6; ordinal += 1) {
+      await emit(harness, audibleCap(ordinal));
+    }
+
+    expect(harness.value().notices.filter((notice) => notice.code === 'AUDIO_CAP_REACHED'))
+      .toHaveLength(1);
+  });
+
+  it('allows a new audible-cap notice after reset and after the watch stops', async () => {
+    const harness = createHarness();
+    await selectAndStart(harness, [SECTION_A]);
+    await emit(harness, startResult([[SECTION_A, ACTIVE_A]]));
+    await emit(harness, audibleCap(1));
+
+    await act(async () => harness.value().resetAudibleCount(harness.value().active[0]!));
+    expect(harness.watch.commands.at(-1)).toMatchObject({
+      type: 'RESET_AUDIBLE_COUNT',
+      watch: { activeWatchId: ACTIVE_A, sectionKey: SECTION_A },
+    });
+    await emit(harness, audibleCap(2));
+    expect(harness.value().notices.filter((notice) => notice.code === 'AUDIO_CAP_REACHED'))
+      .toHaveLength(2);
+
+    await emit(harness, stopped(SECTION_A, ACTIVE_A));
+    await emit(harness, startResult([[SECTION_A, ACTIVE_A]]));
+    await emit(harness, audibleCap(3));
+    expect(harness.value().notices.filter((notice) => notice.code === 'AUDIO_CAP_REACHED'))
+      .toHaveLength(3);
   });
 
   it('reports every cue outcome and makes autoplay/device failures visible', async () => {
