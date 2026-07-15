@@ -1,0 +1,12 @@
+{
+  "task": "P7.5-002-R1",
+  "status": "FAIL_REQUEST_BUDGET_OPERATOR_SEQUENCE",
+  "parent": "822a0022da9d50af681a3bdc5b4d690bd13db657",
+  "recordedAtUtc": "2026-07-15T09:12:08.8204194Z",
+  "chromeProductFlow": "PASS",
+  "requestBudget": "FAIL_OPEN_AND_TOTAL_PLUS_5",
+  "cleanup": "PASS_ZERO_RETAINED_STATE",
+  "retryNeedsNewAuthority": true,
+  "p7Completed": false,
+  "gate": "P7_5_WINDOWS_ONE_SHOT_RETRY_AUTHORITY_REQUIRED"
+}
