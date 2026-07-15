@@ -1,0 +1,28 @@
+{
+  "task": "P7.5-002",
+  "status": "FAIL_RETURN_TO_EARLIEST_OWNER",
+  "candidateSha256": "eb85374bbf97215124b4f2b64be4c51c96bc2af0502fc79b5230024709590610",
+  "candidateEligibleForRetry": false,
+  "standardUserAndPackageRelativeFirstStart": "PASS",
+  "chromeRealUi": "PASS_PRIMARY_EVIDENCE_SURFACE",
+  "n": 15,
+  "requests": {
+    "discovery": { "observed": 2, "maximum": 2 },
+    "catalog": { "observed": 15, "maximum": 15 },
+    "open": { "observed": 45, "maximum": 18 },
+    "total": { "observed": 62, "maximum": 35 }
+  },
+  "catalogGroups": 8037,
+  "catalogSections": 18272,
+  "catalogSubjectRows": 0,
+  "searchReturned": false,
+  "mandatoryUiFlowPassed": false,
+  "gracefulExitPassed": false,
+  "secondsAfterLiveDeadline": 14.165,
+  "sqliteIntegrityAfterStop": "ok",
+  "disposableStateRemoved": true,
+  "rawRutgersEvidenceRetained": false,
+  "p7Completed": false,
+  "gate": "P7_5_RETURN_TO_EARLIEST_OWNER",
+  "nextTask": "P7-REPAIR-001"
+}
