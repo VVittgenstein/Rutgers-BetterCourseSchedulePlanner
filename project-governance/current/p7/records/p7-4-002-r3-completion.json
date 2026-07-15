@@ -1,0 +1,8 @@
+{
+  "task": "P7.4-002-R3",
+  "status": "P7_4_WINDOWS_LOCAL_REPRODUCIBLE_PASS",
+  "builds": 2,
+  "verifierPasses": 2,
+  "byteIdentical": true,
+  "canonicalCandidate": false
+}
