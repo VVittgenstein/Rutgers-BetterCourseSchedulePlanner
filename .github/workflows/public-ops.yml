@@ -11,6 +11,10 @@ on:
       - 'Cargo.lock'
       - 'Cargo.toml'
       - 'LICENSE'
+      - 'packaging/about.toml'
+      - 'packaging/generate-release-metadata.mjs'
+      - 'packaging/licenses/**'
+      - 'packaging/linux/**'
       - 'packaging/release-inputs.json'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
@@ -24,6 +28,10 @@ on:
       - 'Cargo.lock'
       - 'Cargo.toml'
       - 'LICENSE'
+      - 'packaging/about.toml'
+      - 'packaging/generate-release-metadata.mjs'
+      - 'packaging/licenses/**'
+      - 'packaging/linux/**'
       - 'packaging/release-inputs.json'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
@@ -40,7 +48,7 @@ jobs:
   disposable-ubuntu:
     name: Ubuntu 24.04 disposable host
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
       RUSTUP_TOOLCHAIN: 1.97.0
@@ -52,6 +60,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Select the locked Node runtime
         uses: actions/setup-node@v6
@@ -65,58 +74,64 @@ jobs:
           sudo chmod 0755 /usr/sbin/policy-rc.d
           trap 'sudo rm -f /usr/sbin/policy-rc.d' EXIT
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends caddy jq shellcheck sqlite3
+          sudo apt-get install --yes --no-install-recommends \
+            binutils caddy file gzip jq shellcheck sqlite3
           npm install --global npm@11.16.0
           test "$(node --version)" = 'v24.18.0'
           test "$(npm --version)" = '11.16.0'
 
-      - name: Build and verify the public frontend
-        working-directory: frontend
-        run: |
-          npm ci --no-audit --no-fund
-          npm run build:public
-
-      - name: Build the real Linux service binary
+      - name: Install the pinned Rust build and metadata tools
         run: |
           rustup toolchain install 1.97.0 --profile minimal --target x86_64-unknown-linux-gnu
-          cargo build --locked --release -p bcsp-server
-
-      - name: Assemble a disposable candidate root
-        id: candidate
-        run: |
-          candidate="$RUNNER_TEMP/bcsp-public-candidate"
-          install -d "$candidate/bin"
-          install -m 0755 target/release/bcsp-server "$candidate/bin/bcsp-server"
-          for directory in systemd caddy config ops docs; do
-            cp -a "deploy/public/$directory" "$candidate/"
-          done
-          # These are disposable rehearsal inputs, not a release artifact. The
-          # canonical package builder owns their final P7.4-003 content.
-          release_version="$(jq -er '.releaseVersion' packaging/release-inputs.json)"
-          install -m 0644 LICENSE "$candidate/LICENSE"
-          printf '%s\n' "$release_version" > "$candidate/VERSION"
-          printf '%s\n' '{"kind":"bcsp-disposable-operations-rehearsal"}' > \
-            "$candidate/BUILD-PROVENANCE.json"
-          printf '%s\n' '{"kind":"bcsp-disposable-operations-rehearsal","files":[]}' > \
-            "$candidate/MANIFEST.json"
-          printf '%s\n' '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[]}' > \
-            "$candidate/SBOM.cdx.json"
-          printf '%s\n' 'Generated only for the disposable operations rehearsal.' > \
-            "$candidate/THIRD-PARTY-NOTICES.txt"
-          (
-            cd "$candidate"
-            find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
-          ) > "$candidate/SHA256SUMS"
-          printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+          cargo install cargo-about --version 0.9.1 --locked
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          test "$(rustc --version | awk '{print $2}')" = '1.97.0'
+          test "$(cargo --version | awk '{print $2}')" = '1.97.0'
+          test "$(cargo-about --version)" = 'cargo-about 0.9.1'
+          test "$(cargo-cyclonedx cyclonedx --version)" = \
+            'cargo-cyclonedx-cyclonedx 0.5.9'
 
       - name: Validate public package inputs
         run: |
           find deploy/public -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+          find packaging/linux -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
           shellcheck -x -P SCRIPTDIR deploy/public/ops/*.sh deploy/public/tests/*.sh
+          shellcheck --severity=error -x -P SCRIPTDIR packaging/linux/*.sh
+          node --check packaging/generate-release-metadata.mjs
           node tools/architecture/verify-public-rust-zero-surface.mjs
+
+      - name: Build and verify the frozen 20-file Linux package
+        id: candidate
+        run: |
+          source_root="$RUNNER_TEMP/rbcsp-frozen-source"
+          output_root="$RUNNER_TEMP/rbcsp-release"
+          candidate="$RUNNER_TEMP/bcsp-public-candidate"
+          git worktree add --detach "$source_root" \
+            7aa314def7947d1e1160e3417a9b52cbf26e1058
+          cargo fetch --locked --manifest-path "$source_root/Cargo.toml" \
+            --target x86_64-unknown-linux-gnu
+          bash packaging/linux/build.sh \
+            --source-root "$source_root" \
+            --output-root "$output_root"
+          archive="$output_root/rbcsp-linux-x86_64-0.1.0.tar.gz"
+          bash packaging/linux/verify.sh --archive "$archive"
+          install -d "$candidate"
+          tar -xzf "$archive" -C "$candidate" --no-same-owner
+          test "$(find "$candidate" -type f | wc -l)" -eq 20
+          printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 
       - name: Rehearse install, restore, upgrade, and rollback
         run: >-
           sudo env BCSP_DISPOSABLE_HOST_CONFIRM=YES BCSP_CI_NO_RUTGERS=1
           bash deploy/public/tests/disposable-host.sh
           --candidate-root "${{ steps.candidate.outputs.candidate }}"
+
+      - name: Upload the verified Linux deployment package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rbcsp-linux-x86_64-0.1.0
+          path: ${{ steps.candidate.outputs.archive }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
