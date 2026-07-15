@@ -301,6 +301,7 @@ jobs:
             $runnerScript = Join-Path $userRoot 'run-acceptance.ps1'
             $runnerOutput = Join-Path $userRoot 'stdout.log'
             $runnerError = Join-Path $userRoot 'stderr.log'
+            $runnerPass = Join-Path $userRoot 'acceptance.pass'
             $script = @'
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
@@ -346,6 +347,10 @@ jobs:
             -BrowserSmokeScript 'C:\rbcsp-final-candidate\tools\packaging\tests\final-candidate-browser.mjs' `
             -PlaywrightRoot 'C:\rbcsp-final-candidate\source\frontend' `
             -NodePath '__NODE_PATH__'
+          [IO.File]::WriteAllText(
+            'C:\rbcsp-standard-user\acceptance.pass', 'PASS',
+            (New-Object Text.UTF8Encoding($false))
+          )
           '@
             $node = (Get-Command node.exe).Source
             $script = $script.Replace('__NODE_PATH__', $node.Replace("'", "''"))
@@ -364,8 +369,9 @@ jobs:
             $process.WaitForExit()
             Get-Content -LiteralPath $runnerOutput
             if (Test-Path -LiteralPath $runnerError) { Get-Content -LiteralPath $runnerError }
-            if ($process.ExitCode -ne 0) {
-              throw "Standard-user candidate acceptance failed with exit $($process.ExitCode)."
+            if (-not (Test-Path -LiteralPath $runnerPass -PathType Leaf) -or
+                [IO.File]::ReadAllText($runnerPass) -cne 'PASS') {
+              throw 'Standard-user candidate acceptance did not publish its PASS marker.'
             }
           }
           finally {
