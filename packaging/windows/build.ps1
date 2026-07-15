@@ -22,6 +22,26 @@ function Resolve-FullPath {
     return [System.IO.Path]::GetFullPath($Path)
 }
 
+function Resolve-ShortDirectoryPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $fileSystem = New-Object -ComObject Scripting.FileSystemObject
+    try {
+        $shortPath = [string]$fileSystem.GetFolder($Path).ShortPath
+        if ([string]::IsNullOrWhiteSpace($shortPath)) {
+            throw "Windows did not return a short path for $Path."
+        }
+        if (-not [System.IO.Path]::IsPathRooted($shortPath) -or
+            -not (Test-Path -LiteralPath $shortPath -PathType Container)) {
+            throw "Windows returned an invalid short path for $Path."
+        }
+        return $shortPath
+    }
+    finally {
+        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($fileSystem)
+    }
+}
+
 function Assert-File {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -303,7 +323,12 @@ finally {
 
 $env:BCSP_LOCAL_WEB_DIST = Join-Path $frontendRoot 'dist\local'
 $env:CARGO_TARGET_DIR = $TargetRoot
-$pathMapFlags = "/experimental:deterministic /pathmap:$CargoHome=.cargo"
+$pathMapFlags = @('/experimental:deterministic', "/pathmap:$CargoHome=.cargo")
+$shortCargoHome = Resolve-ShortDirectoryPath $CargoHome
+if (-not $shortCargoHome.Equals($CargoHome, [StringComparison]::OrdinalIgnoreCase)) {
+    $pathMapFlags += "/pathmap:$shortCargoHome=.cargo"
+}
+$pathMapFlags = $pathMapFlags -join ' '
 $env:CL = if ([string]::IsNullOrWhiteSpace($env:CL)) { $pathMapFlags } else { "$env:CL $pathMapFlags" }
 $rustFlags = @(
     '-C', 'target-feature=+crt-static',
