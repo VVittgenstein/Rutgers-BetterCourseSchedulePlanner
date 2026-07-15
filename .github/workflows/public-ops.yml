@@ -111,7 +111,7 @@ jobs:
           output_root="$RUNNER_TEMP/rbcsp-release"
           candidate="$RUNNER_TEMP/bcsp-public-candidate"
           git worktree add --detach "$source_root" \
-            7aa314def7947d1e1160e3417a9b52cbf26e1058
+            7d8297404d033e79b514333748b7072ebd3a0099
           cargo fetch --locked --manifest-path "$source_root/Cargo.toml"
           bash packaging/linux/build.sh \
             --source-root "$source_root" \
@@ -211,7 +211,7 @@ jobs:
           git -c core.autocrlf=false worktree add --detach $toolRoot $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Could not create the candidate tool worktree.' }
           git -c core.autocrlf=false worktree add --detach $sourceRoot `
-            7aa314def7947d1e1160e3417a9b52cbf26e1058
+            7d8297404d033e79b514333748b7072ebd3a0099
           if ($LASTEXITCODE -ne 0) { throw 'Could not create the frozen source worktree.' }
 
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
