@@ -347,7 +347,7 @@ where
             policy.catalog_interval(),
             now,
         )?;
-        self.scheduler.register_open(
+        self.scheduler.register_open_initial(
             registration.target.clone(),
             policy.open_general_interval(),
             active_watch_count,
@@ -357,6 +357,21 @@ where
         self.targets
             .insert(registration.target.clone(), registration.open_request);
         self.publish_open_snapshot(&registration.target, now, None)?;
+        self.publish_status(false);
+        Ok(())
+    }
+
+    /// Promotes an already discovered target from its bounded initial Open observation to the
+    /// normal recurring cadence demanded by product traffic.
+    pub fn activate_open_target(&mut self, target: &TermCampusKey) -> Result<(), CoordinatorError> {
+        if !self.targets.contains_key(target) {
+            return Err(CoordinatorError::Scheduler(SchedulerError::UnknownJob));
+        }
+        let policy = self.refresh_policy()?;
+        let now = self.clock.monotonic_now();
+        self.scheduler
+            .activate_open(target, policy.open_general_interval(), now)?;
+        self.publish_open_snapshot(target, now, None)?;
         self.publish_status(false);
         Ok(())
     }
@@ -396,14 +411,20 @@ where
                 let completed_at = self.clock.monotonic_now();
                 self.scheduler
                     .finish(dispatch.token, completed_at, completion)?;
-                if let Some(lane) = immediate_open_lane
-                    && self
-                        .scheduler
-                        .next_due(&OriginJobKey::open(dispatch.key.target.clone()))
-                        .is_some_and(|due| due > completed_at)
-                {
-                    self.scheduler
-                        .request_open_due(&dispatch.key.target, completed_at, lane)?;
+                if let Some(lane) = immediate_open_lane {
+                    let open_key = OriginJobKey::open(dispatch.key.target.clone());
+                    if !self.scheduler.is_active(&open_key)
+                        || self
+                            .scheduler
+                            .next_due(&open_key)
+                            .is_some_and(|due| due > completed_at)
+                    {
+                        self.scheduler.request_open_due(
+                            &dispatch.key.target,
+                            completed_at,
+                            lane,
+                        )?;
+                    }
                 }
                 self.publish_all_open_snapshots(completed_at, None)?;
                 self.publish_status(false);

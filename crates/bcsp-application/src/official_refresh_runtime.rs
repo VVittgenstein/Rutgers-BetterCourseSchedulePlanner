@@ -113,8 +113,13 @@ impl OfficialRefreshRuntime {
                             if let Some(runtime) = &coordinator_runtime {
                                 let demanded = target_refresh_demand.snapshot().unwrap_or_default();
                                 for target in demanded_refresh_targets(&current_targets, &demanded) {
+                                    let key = target.target().clone();
                                     if runtime.register_target(target).is_err() {
                                         tracing::error!(code = "SHARED_REFRESH_REGISTRATION_FAILED");
+                                        continue;
+                                    }
+                                    if runtime.activate_open(&key).is_err() {
+                                        tracing::error!(code = "SHARED_OPEN_ACTIVATION_FAILED");
                                     }
                                 }
                             }

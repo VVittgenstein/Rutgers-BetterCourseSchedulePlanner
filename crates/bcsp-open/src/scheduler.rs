@@ -77,13 +77,22 @@ impl OriginSchedulerLane {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct JobSchedule {
+    active: bool,
     interval: Duration,
     next_due: MonotonicTime,
     lane: OriginSchedulerLane,
     normal_lane: OriginSchedulerLane,
     active_watch_count: u64,
+    recurring: bool,
+    one_shot_pending: bool,
     last_start: Option<MonotonicTime>,
     failure_streak: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum JobRegistrationMode {
+    Recurring,
+    OneShot,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -168,6 +177,7 @@ impl OriginEdfScheduler {
             first_due,
             OriginSchedulerLane::Catalog,
             0,
+            JobRegistrationMode::Recurring,
         )
     }
 
@@ -178,6 +188,33 @@ impl OriginEdfScheduler {
         active_watch_count: u64,
         now: MonotonicTime,
         first_due: MonotonicTime,
+    ) -> Result<(), SchedulerError> {
+        self.register_open_with_mode(target, interval, active_watch_count, now, first_due, true)
+    }
+
+    /// Registers one mandatory Open observation without making an otherwise idle target recur.
+    ///
+    /// A later call to [`Self::activate_open`] promotes the same job to the normal recurring
+    /// cadence. An active watch also keeps it scheduled after the one-shot observation.
+    pub fn register_open_initial(
+        &mut self,
+        target: TermCampusKey,
+        interval: GeneralOpenInterval,
+        active_watch_count: u64,
+        now: MonotonicTime,
+        first_due: MonotonicTime,
+    ) -> Result<(), SchedulerError> {
+        self.register_open_with_mode(target, interval, active_watch_count, now, first_due, false)
+    }
+
+    fn register_open_with_mode(
+        &mut self,
+        target: TermCampusKey,
+        interval: GeneralOpenInterval,
+        active_watch_count: u64,
+        now: MonotonicTime,
+        first_due: MonotonicTime,
+        recurring: bool,
     ) -> Result<(), SchedulerError> {
         let watched = active_watch_count > 0;
         let normal_lane = if watched {
@@ -193,6 +230,11 @@ impl OriginEdfScheduler {
             first_due,
             normal_lane,
             active_watch_count,
+            if recurring {
+                JobRegistrationMode::Recurring
+            } else {
+                JobRegistrationMode::OneShot
+            },
         )?;
         if existed {
             self.update_due_for_interval_change(&key, now);
@@ -207,31 +249,70 @@ impl OriginEdfScheduler {
         first_due: MonotonicTime,
         normal_lane: OriginSchedulerLane,
         active_watch_count: u64,
+        registration_mode: JobRegistrationMode,
     ) -> Result<(), SchedulerError> {
         if interval.is_zero() {
             return Err(SchedulerError::ZeroInterval);
         }
         match self.jobs.get_mut(&key) {
             Some(schedule) => {
+                schedule.active = true;
                 schedule.interval = interval;
                 schedule.normal_lane = normal_lane;
                 schedule.lane = normal_lane;
                 schedule.active_watch_count = active_watch_count;
+                schedule.recurring |= registration_mode == JobRegistrationMode::Recurring;
+                schedule.one_shot_pending |= registration_mode == JobRegistrationMode::OneShot;
             }
             None => {
                 self.jobs.insert(
                     key,
                     JobSchedule {
+                        active: true,
                         interval,
                         next_due: first_due,
                         lane: normal_lane,
                         normal_lane,
                         active_watch_count,
+                        recurring: registration_mode == JobRegistrationMode::Recurring,
+                        one_shot_pending: registration_mode == JobRegistrationMode::OneShot,
                         last_start: None,
                         failure_streak: 0,
                     },
                 );
             }
+        }
+        Ok(())
+    }
+
+    /// Promotes a registered Open target to its recurring general/watch cadence exactly once.
+    ///
+    /// Promotion preserves the stored next due time, including retry/circuit cooldowns. If the
+    /// target has been parked long enough for that due time to pass, it becomes immediately due
+    /// without creating catch-up dispatches.
+    pub fn activate_open(
+        &mut self,
+        target: &TermCampusKey,
+        interval: GeneralOpenInterval,
+        now: MonotonicTime,
+    ) -> Result<(), SchedulerError> {
+        let key = OriginJobKey::open(target.clone());
+        let schedule = self.jobs.get_mut(&key).ok_or(SchedulerError::UnknownJob)?;
+        let watched = schedule.active_watch_count > 0;
+        let was_active = schedule.active;
+        schedule.active = true;
+        schedule.recurring = true;
+        schedule.interval = interval.effective(watched);
+        schedule.normal_lane = if watched {
+            OriginSchedulerLane::OpenActiveWatch
+        } else {
+            OriginSchedulerLane::OpenGeneral
+        };
+        if !schedule.one_shot_pending || !was_active {
+            schedule.lane = schedule.normal_lane;
+        }
+        if !was_active && schedule.next_due < now {
+            schedule.next_due = now;
         }
         Ok(())
     }
@@ -261,6 +342,7 @@ impl OriginEdfScheduler {
         let key = OriginJobKey::open(target.clone());
         let schedule = self.jobs.get_mut(&key).ok_or(SchedulerError::UnknownJob)?;
         let previously_watched = schedule.active_watch_count > 0;
+        let was_active = schedule.active;
         let watched = active_watch_count > 0;
         schedule.active_watch_count = active_watch_count;
         schedule.interval = interval.effective(watched);
@@ -269,15 +351,22 @@ impl OriginEdfScheduler {
         } else {
             OriginSchedulerLane::OpenGeneral
         };
-        schedule.lane = schedule.normal_lane;
+        if watched || !schedule.one_shot_pending {
+            schedule.lane = schedule.normal_lane;
+        }
         let anchored = schedule
             .last_start
             .unwrap_or(now)
             .saturating_add(schedule.interval);
         if watched && !previously_watched {
+            schedule.active = true;
             schedule.next_due = schedule.next_due.min(anchored);
+            if !was_active && schedule.next_due < now {
+                schedule.next_due = now;
+            }
         } else if !watched && previously_watched {
             schedule.next_due = anchored;
+            schedule.active = schedule.recurring || schedule.one_shot_pending;
         }
         Ok(())
     }
@@ -297,7 +386,16 @@ impl OriginEdfScheduler {
         {
             return Ok(());
         }
-        schedule.next_due = schedule.next_due.min(due);
+        let was_active = schedule.active;
+        schedule.active = true;
+        if !schedule.recurring {
+            schedule.one_shot_pending = true;
+        }
+        schedule.next_due = if was_active {
+            schedule.next_due.min(due)
+        } else {
+            due
+        };
         schedule.lane = lane;
         Ok(())
     }
@@ -331,7 +429,7 @@ impl OriginEdfScheduler {
             let (key, schedule) = self
                 .jobs
                 .iter()
-                .filter(|(_, schedule)| schedule.next_due <= now)
+                .filter(|(_, schedule)| schedule.active && schedule.next_due <= now)
                 .min_by(|(left_key, left), (right_key, right)| {
                     compare_due_jobs(left_key, left, right_key, right)
                 })?;
@@ -446,6 +544,10 @@ impl OriginEdfScheduler {
                 }
             }
         }
+        if in_flight.key.kind == OriginJobKind::Open && completion == CompletionSchedule::Success {
+            schedule.one_shot_pending = false;
+            schedule.active = schedule.recurring || schedule.active_watch_count > 0;
+        }
         Ok(())
     }
 
@@ -476,7 +578,14 @@ impl OriginEdfScheduler {
     }
 
     pub fn next_due(&self, key: &OriginJobKey) -> Option<MonotonicTime> {
-        self.jobs.get(key).map(|schedule| schedule.next_due)
+        self.jobs
+            .get(key)
+            .filter(|schedule| schedule.active)
+            .map(|schedule| schedule.next_due)
+    }
+
+    pub fn is_active(&self, key: &OriginJobKey) -> bool {
+        self.jobs.get(key).is_some_and(|schedule| schedule.active)
     }
 
     pub fn active_watch_count(&self, target: &TermCampusKey) -> Option<u64> {
@@ -637,6 +746,248 @@ mod tests {
             .expect("finish");
         assert_eq!(scheduler.next_due(&key), Some(seconds(12)));
         assert!(scheduler.start_next(seconds(10)).is_none());
+    }
+
+    #[test]
+    fn initial_open_parks_after_success_and_demand_reactivates_normal_cadence() {
+        let mut scheduler = OriginEdfScheduler::new();
+        let scope = target("NB");
+        let key = OriginJobKey::open(scope.clone());
+        let general = GeneralOpenInterval::local(30).expect("interval");
+        scheduler
+            .register_open_initial(
+                scope.clone(),
+                general,
+                0,
+                MonotonicTime::ZERO,
+                MonotonicTime::ZERO,
+            )
+            .expect("initial registration");
+
+        let initial = scheduler
+            .start_next(MonotonicTime::ZERO)
+            .expect("initial dispatch");
+        scheduler
+            .finish(
+                initial.token,
+                MonotonicTime::ZERO,
+                CompletionSchedule::Success,
+            )
+            .expect("initial success");
+        assert_eq!(scheduler.next_due(&key), None);
+        assert!(scheduler.start_next(seconds(90)).is_none());
+
+        scheduler
+            .activate_open(&scope, general, seconds(90))
+            .expect("product demand");
+        let demanded = scheduler
+            .start_next(seconds(90))
+            .expect("stale parked target is immediately due");
+        assert_eq!(demanded.lane, OriginSchedulerLane::OpenGeneral);
+        scheduler
+            .finish(demanded.token, seconds(90), CompletionSchedule::Success)
+            .expect("recurring success");
+        assert_eq!(scheduler.next_due(&key), Some(seconds(120)));
+    }
+
+    #[test]
+    fn initial_sweep_is_bounded_to_one_success_per_idle_target() {
+        let mut scheduler = OriginEdfScheduler::new();
+        let general = GeneralOpenInterval::local(30).expect("interval");
+        for campus in 0..15 {
+            scheduler
+                .register_open_initial(
+                    target(&format!("C{campus:02}")),
+                    general,
+                    0,
+                    MonotonicTime::ZERO,
+                    MonotonicTime::ZERO,
+                )
+                .expect("initial registration");
+        }
+
+        let mut attempts = 0;
+        while let Some(dispatch) = scheduler.start_next(MonotonicTime::ZERO) {
+            attempts += 1;
+            scheduler
+                .finish(
+                    dispatch.token,
+                    MonotonicTime::ZERO,
+                    CompletionSchedule::Success,
+                )
+                .expect("initial success");
+        }
+        assert_eq!(attempts, 15);
+        assert!(scheduler.start_next(seconds(480)).is_none());
+    }
+
+    #[test]
+    fn demand_before_initial_success_keeps_the_target_recurring() {
+        let mut scheduler = OriginEdfScheduler::new();
+        let scope = target("NB");
+        let key = OriginJobKey::open(scope.clone());
+        let general = GeneralOpenInterval::local(30).expect("interval");
+        scheduler
+            .register_open_initial(
+                scope.clone(),
+                general,
+                0,
+                MonotonicTime::ZERO,
+                MonotonicTime::ZERO,
+            )
+            .expect("initial registration");
+        scheduler
+            .activate_open(&scope, general, MonotonicTime::ZERO)
+            .expect("early demand");
+
+        let initial = scheduler
+            .start_next(MonotonicTime::ZERO)
+            .expect("initial dispatch");
+        scheduler
+            .finish(
+                initial.token,
+                MonotonicTime::ZERO,
+                CompletionSchedule::Success,
+            )
+            .expect("initial success");
+        assert_eq!(scheduler.next_due(&key), Some(seconds(30)));
+    }
+
+    #[test]
+    fn initial_catalog_race_and_retry_remain_active_until_success() {
+        let mut scheduler = OriginEdfScheduler::new();
+        let scope = target("NB");
+        let key = OriginJobKey::open(scope.clone());
+        scheduler
+            .register_open_initial(
+                scope,
+                GeneralOpenInterval::local(30).expect("interval"),
+                0,
+                MonotonicTime::ZERO,
+                MonotonicTime::ZERO,
+            )
+            .expect("initial registration");
+
+        let raced = scheduler
+            .start_next(MonotonicTime::ZERO)
+            .expect("initial dispatch");
+        scheduler
+            .finish(
+                raced.token,
+                MonotonicTime::ZERO,
+                CompletionSchedule::CatalogRace,
+            )
+            .expect("catalog race");
+        assert_eq!(scheduler.next_due(&key), Some(seconds(30)));
+
+        let retried = scheduler.start_next(seconds(30)).expect("race retry");
+        let directive = retry_directive(
+            &retried.key.target,
+            Duration::from_secs(30),
+            retried.failure_streak,
+            OpenFailureKind::Transient,
+        );
+        scheduler
+            .finish(
+                retried.token,
+                seconds(30),
+                CompletionSchedule::Retry(directive),
+            )
+            .expect("transient retry");
+        let retry_due = scheduler.next_due(&key).expect("retry remains active");
+        assert!(retry_due > seconds(60));
+
+        let succeeded = scheduler.start_next(retry_due).expect("retry dispatch");
+        scheduler
+            .finish(succeeded.token, retry_due, CompletionSchedule::Success)
+            .expect("valid terminal success");
+        assert_eq!(scheduler.next_due(&key), None);
+    }
+
+    #[test]
+    fn demand_does_not_bypass_an_initial_origin_retry_cooldown() {
+        let mut scheduler = OriginEdfScheduler::new();
+        let scope = target("NB");
+        let key = OriginJobKey::open(scope.clone());
+        let general = GeneralOpenInterval::local(30).expect("interval");
+        scheduler
+            .register_open_initial(
+                scope.clone(),
+                general,
+                0,
+                MonotonicTime::ZERO,
+                MonotonicTime::ZERO,
+            )
+            .expect("initial registration");
+        let initial = scheduler
+            .start_next(MonotonicTime::ZERO)
+            .expect("initial dispatch");
+        let directive = retry_directive(
+            &scope,
+            Duration::from_secs(30),
+            initial.failure_streak,
+            OpenFailureKind::RateLimited { retry_after: None },
+        );
+        scheduler
+            .finish(
+                initial.token,
+                MonotonicTime::ZERO,
+                CompletionSchedule::Retry(directive),
+            )
+            .expect("origin retry");
+        let retry_due = scheduler.next_due(&key).expect("retry due");
+
+        scheduler
+            .activate_open(&scope, general, seconds(10))
+            .expect("product demand");
+        assert_eq!(scheduler.next_due(&key), Some(retry_due));
+        assert!(scheduler.start_next(seconds(899)).is_none());
+        assert!(scheduler.start_next(retry_due).is_some());
+    }
+
+    #[test]
+    fn watch_activates_a_parked_initial_target_and_demotion_parks_it_again() {
+        let mut scheduler = OriginEdfScheduler::new();
+        let scope = target("NB");
+        let key = OriginJobKey::open(scope.clone());
+        let general = GeneralOpenInterval::local(30).expect("interval");
+        scheduler
+            .register_open_initial(
+                scope.clone(),
+                general,
+                0,
+                MonotonicTime::ZERO,
+                MonotonicTime::ZERO,
+            )
+            .expect("initial registration");
+        let initial = scheduler
+            .start_next(MonotonicTime::ZERO)
+            .expect("initial dispatch");
+        scheduler
+            .finish(
+                initial.token,
+                MonotonicTime::ZERO,
+                CompletionSchedule::Success,
+            )
+            .expect("initial success");
+        assert_eq!(scheduler.next_due(&key), None);
+
+        scheduler
+            .set_open_watch_count(&scope, general, 1, seconds(40))
+            .expect("watch promotion");
+        let watched = scheduler
+            .start_next(seconds(40))
+            .expect("parked watch is immediately due");
+        assert_eq!(watched.lane, OriginSchedulerLane::OpenActiveWatch);
+        scheduler
+            .finish(watched.token, seconds(40), CompletionSchedule::Success)
+            .expect("watched success");
+        assert_eq!(scheduler.next_due(&key), Some(seconds(50)));
+
+        scheduler
+            .set_open_watch_count(&scope, general, 0, seconds(40))
+            .expect("watch demotion");
+        assert_eq!(scheduler.next_due(&key), None);
     }
 
     #[test]

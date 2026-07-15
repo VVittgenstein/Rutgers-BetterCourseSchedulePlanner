@@ -14,11 +14,17 @@ use crate::{
 
 const REFRESH_COORDINATOR_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+enum RefreshRuntimeCommand {
+    Register(ScheduledRefreshTarget),
+    ActivateOpen(TermCampusKey),
+}
+
 /// Lifecycle handle for the one shared Catalog/Open origin loop owned by an entrypoint.
 pub struct RefreshRuntime {
     shutdown: watch::Sender<bool>,
-    registration_sender: mpsc::UnboundedSender<ScheduledRefreshTarget>,
+    command_sender: mpsc::UnboundedSender<RefreshRuntimeCommand>,
     registered_targets: Arc<Mutex<BTreeSet<TermCampusKey>>>,
+    active_open_targets: Arc<Mutex<BTreeSet<TermCampusKey>>>,
     task: Option<JoinHandle<()>>,
 }
 
@@ -39,10 +45,12 @@ impl RefreshRuntime {
             }
         }
         let (shutdown, mut shutdown_receiver) = watch::channel(false);
-        let (registration_sender, mut registration_receiver) =
-            mpsc::unbounded_channel::<ScheduledRefreshTarget>();
+        let (command_sender, mut command_receiver) =
+            mpsc::unbounded_channel::<RefreshRuntimeCommand>();
         let registered_targets = Arc::new(Mutex::new(initial_targets));
         let task_registered_targets = registered_targets.clone();
+        let active_open_targets = Arc::new(Mutex::new(BTreeSet::new()));
+        let task_active_open_targets = active_open_targets.clone();
         let task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(REFRESH_COORDINATOR_POLL_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -53,16 +61,28 @@ impl RefreshRuntime {
                             break;
                         }
                     }
-                    registration = registration_receiver.recv() => {
-                        let Some(registration) = registration else {
+                    command = command_receiver.recv() => {
+                        let Some(command) = command else {
                             break;
                         };
-                        let target = registration.target().clone();
-                        if coordinator.register_target(registration).is_err() {
-                            if let Ok(mut registered) = task_registered_targets.lock() {
-                                registered.remove(&target);
+                        match command {
+                            RefreshRuntimeCommand::Register(registration) => {
+                                let target = registration.target().clone();
+                                if coordinator.register_target(registration).is_err() {
+                                    if let Ok(mut registered) = task_registered_targets.lock() {
+                                        registered.remove(&target);
+                                    }
+                                    tracing::error!(code = "SHARED_REFRESH_REGISTRATION_FAILED");
+                                }
                             }
-                            tracing::error!(code = "SHARED_REFRESH_REGISTRATION_FAILED");
+                            RefreshRuntimeCommand::ActivateOpen(target) => {
+                                if coordinator.activate_open_target(&target).is_err() {
+                                    if let Ok(mut active) = task_active_open_targets.lock() {
+                                        active.remove(&target);
+                                    }
+                                    tracing::error!(code = "SHARED_OPEN_ACTIVATION_FAILED");
+                                }
+                            }
                         }
                     }
                     _ = interval.tick() => {
@@ -76,8 +96,9 @@ impl RefreshRuntime {
         });
         Ok(Self {
             shutdown,
-            registration_sender,
+            command_sender,
             registered_targets,
+            active_open_targets,
             task: Some(task),
         })
     }
@@ -98,8 +119,38 @@ impl RefreshRuntime {
         if !registered.insert(key.clone()) {
             return Ok(false);
         }
-        if self.registration_sender.send(target).is_err() {
+        if self
+            .command_sender
+            .send(RefreshRuntimeCommand::Register(target))
+            .is_err()
+        {
             registered.remove(&key);
+            return Err(RefreshRuntimeRegistrationError::Stopped);
+        }
+        Ok(true)
+    }
+
+    /// Activates recurring Open refresh for a registered target exactly once.
+    ///
+    /// Product demand is level-triggered and process-local, so duplicate browser requests do not
+    /// enqueue duplicate activation commands or amplify upstream work.
+    pub fn activate_open(
+        &self,
+        target: &TermCampusKey,
+    ) -> Result<bool, RefreshRuntimeRegistrationError> {
+        let mut active = self
+            .active_open_targets
+            .lock()
+            .map_err(|_| RefreshRuntimeRegistrationError::Unavailable)?;
+        if !active.insert(target.clone()) {
+            return Ok(false);
+        }
+        if self
+            .command_sender
+            .send(RefreshRuntimeCommand::ActivateOpen(target.clone()))
+            .is_err()
+        {
+            active.remove(target);
             return Err(RefreshRuntimeRegistrationError::Stopped);
         }
         Ok(true)
@@ -166,11 +217,12 @@ mod tests {
     fn dynamic_registration_accepts_each_target_once() {
         let registration = registration();
         let (shutdown, _) = watch::channel(false);
-        let (registration_sender, mut registration_receiver) = mpsc::unbounded_channel();
+        let (command_sender, mut command_receiver) = mpsc::unbounded_channel();
         let runtime = RefreshRuntime {
             shutdown,
-            registration_sender,
+            command_sender,
             registered_targets: Arc::new(Mutex::new(BTreeSet::new())),
+            active_open_targets: Arc::new(Mutex::new(BTreeSet::new())),
             task: None,
         };
 
@@ -184,7 +236,36 @@ mod tests {
                 .register_target(registration)
                 .expect("duplicate registration")
         );
-        assert!(registration_receiver.try_recv().is_ok());
-        assert!(registration_receiver.try_recv().is_err());
+        assert!(matches!(
+            command_receiver.try_recv(),
+            Ok(RefreshRuntimeCommand::Register(_))
+        ));
+        assert!(command_receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn open_activation_accepts_each_target_once() {
+        let target = registration().target().clone();
+        let (shutdown, _) = watch::channel(false);
+        let (command_sender, mut command_receiver) = mpsc::unbounded_channel();
+        let runtime = RefreshRuntime {
+            shutdown,
+            command_sender,
+            registered_targets: Arc::new(Mutex::new(BTreeSet::from([target.clone()]))),
+            active_open_targets: Arc::new(Mutex::new(BTreeSet::new())),
+            task: None,
+        };
+
+        assert!(runtime.activate_open(&target).expect("first activation"));
+        assert!(
+            !runtime
+                .activate_open(&target)
+                .expect("duplicate activation")
+        );
+        assert!(matches!(
+            command_receiver.try_recv(),
+            Ok(RefreshRuntimeCommand::ActivateOpen(received)) if received == target
+        ));
+        assert!(command_receiver.try_recv().is_err());
     }
 }

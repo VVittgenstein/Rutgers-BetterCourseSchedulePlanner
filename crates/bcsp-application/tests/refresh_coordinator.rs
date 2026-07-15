@@ -431,6 +431,79 @@ fn watch_events(receiver: &mut mpsc::UnboundedReceiver<String>) -> Vec<WatchServ
 }
 
 #[tokio::test]
+async fn initial_open_is_one_shot_until_product_demand_activates_recurring() {
+    let fixture = fixture();
+    let clock = FakeClock::default();
+    let upstream_state = Arc::new(FakeUpstream::new(
+        Arc::clone(&fixture.storage),
+        [Ok(fixture.catalog_response.clone())],
+        [
+            FakeOpenResult::Success(vec![fixture.section.index().clone()]),
+            FakeOpenResult::Success(vec![fixture.section.index().clone()]),
+        ],
+    ));
+    let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
+    let mut coordinator = SharedRefreshCoordinator::with_parts(
+        Arc::clone(&fixture.storage),
+        FakeUpstreamHandle(Arc::clone(&upstream_state)),
+        FixedRefreshPolicyProvider::new(policy(GeneralOpenInterval::public())),
+        clock.clone(),
+        FakeIds(350),
+        trace(94),
+        OpenCounterAudience::Public,
+        create_socket(),
+        Arc::clone(&open_runtime),
+        Arc::new(RecordingStatus::default()),
+    );
+    coordinator
+        .register_target(
+            ScheduledRefreshTarget::try_new(fixture.target.clone(), fixture.open_request)
+                .expect("registration"),
+        )
+        .expect("register target");
+
+    coordinator.run_next().await.expect("initial Catalog");
+    coordinator.run_next().await.expect("initial Open");
+    assert_eq!(upstream_state.open_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        open_runtime
+            .snapshot(&fixture.target)
+            .expect("parked runtime")
+            .next_due_at,
+        None
+    );
+
+    clock.advance(Duration::from_secs(95));
+    assert!(
+        coordinator
+            .run_next()
+            .await
+            .expect("parked target")
+            .is_none()
+    );
+    assert_eq!(upstream_state.open_calls.load(Ordering::SeqCst), 1);
+
+    coordinator
+        .activate_open_target(&fixture.target)
+        .expect("product demand activation");
+    assert!(matches!(
+        coordinator.run_next().await.expect("demanded Open"),
+        Some(CoordinatorDispatchOutcome::OpenCompleted {
+            terminal: OpenDispatchTerminal::Valid,
+            ..
+        })
+    ));
+    assert_eq!(upstream_state.open_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        open_runtime
+            .snapshot(&fixture.target)
+            .expect("recurring runtime")
+            .next_due_at,
+        Some(clock.expected_wall(125))
+    );
+}
+
+#[tokio::test]
 async fn fake_upstream_drives_all_product_routes_and_watch_without_client_amplification() {
     let fixture = fixture();
     let clock = FakeClock::default();
