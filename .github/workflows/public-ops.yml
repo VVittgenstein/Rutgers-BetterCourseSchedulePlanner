@@ -356,7 +356,12 @@ jobs:
                 '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
                 '-File', $runnerScript
               ) -RedirectStandardOutput $runnerOutput -RedirectStandardError $runnerError `
-              -Wait -PassThru
+              -PassThru
+            if (-not $process.WaitForExit(1200000)) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              throw 'Standard-user candidate acceptance exceeded 20 minutes.'
+            }
+            $process.WaitForExit()
             Get-Content -LiteralPath $runnerOutput
             if (Test-Path -LiteralPath $runnerError) { Get-Content -LiteralPath $runnerError }
             if ($process.ExitCode -ne 0) {
