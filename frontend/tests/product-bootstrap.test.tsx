@@ -150,6 +150,7 @@ describe('product bootstrap contract', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('runtime-state').textContent).toBe('READY'));
+    await waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
     expect(requests[0]?.url).toBe('https://planner.invalid/api/v1/local/bootstrap');
     expect(requests[0]?.init).toMatchObject({
       cache: 'no-store',
