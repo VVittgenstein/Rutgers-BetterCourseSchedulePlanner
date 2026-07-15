@@ -1,0 +1,13 @@
+{
+  "task": "P7.4-005-R2",
+  "status": "PASS_P7_5_ELIGIBLE",
+  "sourceCommit": "7d5debef005277e4d8f2ed2b9fb2f72c495e62f1",
+  "successfulRunIds": [29408621103, 29409582329],
+  "windows": { "sha256": "eabdc3b5f4a705d8c22e6941831f55e0bb5b5c2a1c33e648e545f86007cab577", "bytes": 5574364, "files": 11, "artifactIds": [8340442271, 8340797311] },
+  "linux": { "sha256": "9bebd35808497e40ae36cb459c681ffb2ffe29c3b824988e460745d29f03605d", "bytes": 6424698, "files": 20, "artifactIds": [8340297212, 8340689864] },
+  "twoIndependentRuns": true,
+  "byteIdenticalAcrossRuns": true,
+  "realWorldE2ECompleted": false,
+  "gate": "P7_5_ELIGIBLE_R2",
+  "nextTask": "P7.5-001-R2"
+}
