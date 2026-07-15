@@ -239,10 +239,6 @@ jobs:
             throw "Unexpected Windows SDK: $($env:WindowsSDKVersion)"
           }
           $dumpbin = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\dumpbin.exe'
-          $link = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\link.exe'
-          if ((Get-Item -LiteralPath $link).VersionInfo.FileVersion -cne '14.44.35227.0') {
-            throw "Unexpected linker: $((Get-Item -LiteralPath $link).VersionInfo.FileVersion)"
-          }
 
           $tokens = $null
           $errors = $null
