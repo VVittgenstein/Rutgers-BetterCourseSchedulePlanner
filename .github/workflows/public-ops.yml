@@ -710,6 +710,7 @@ jobs:
           sudo systemctl stop bcsp.service
           database=/var/lib/bcsp/rbcsp.sqlite
           query() { sudo sqlite3 "$database" '.timeout 10000' "$1"; }
+          set -x
           test ! -e "$RUNNER_TEMP/rbcsp-live-deadline"
           test "$(query 'PRAGMA integrity_check;')" = ok
           discovery="$(query 'SELECT count(*) FROM catalog_discovery_observations
@@ -789,6 +790,7 @@ jobs:
           printf 'P7_5_LINUX_REAL_WORLD_DATA_PASS discovery=%s catalog=%s open_attempts=%s current_open=%s general30=%s watched10=%s duration_seconds=%s\n' \
             "$discovery" "$catalog" "$attempts" "$current_open" \
             "$general_records" "$watch_records" "$duration_seconds"
+          set +x
 
       - name: Clean the disposable runner
         if: always()
