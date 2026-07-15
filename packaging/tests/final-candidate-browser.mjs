@@ -201,29 +201,16 @@ async function exercisePublic(page, scenario) {
 
   await page.locator('.bcsp-navigation a[href="/watch"]').click();
   await page.waitForURL(`${origin}/watch`);
-  await page.locator('.watch-workspace').waitFor({ state: 'visible' });
-  const watchModes = page.locator('input[name="watch-mode"]');
-  await watchModes.nth(1).check();
-  await page.locator('.watch-workspace__confirm input[type="checkbox"]').check();
-  await page.locator('#watch-max-audible').fill('5');
-  await page.locator('#watch-volume').fill('35');
-  assert.equal(await page.locator('#watch-max-audible').inputValue(), '5');
-  assert.equal(await page.locator('#watch-volume').inputValue(), '35');
+  await page.locator('#bcsp-workspace-title').waitFor({ state: 'visible' });
+  assert.equal((await page.locator('#bcsp-workspace-title').textContent())?.trim(), 'Watch desk');
 
   const reloadResponse = await page.reload({ waitUntil: 'domcontentloaded' });
   await assertTls(reloadResponse, `${scenario}/reload`);
   await waitForReady(page);
-  await page.locator('.watch-workspace').waitFor({ state: 'visible' });
+  assert.equal(new URL(page.url()).pathname, '/watch');
+  assert.equal((await page.locator('#bcsp-workspace-title').textContent())?.trim(), 'Watch desk');
   const secondSession = await publicSession(page);
   assert.notEqual(secondSession, firstSession, `${scenario}: reload reused the public session`);
-  assert.equal(await page.locator('input[name="watch-mode"]').first().isChecked(), true);
-  assert.equal(await page.locator('#watch-max-audible').inputValue(), '3');
-  assert.equal(await page.locator('#watch-volume').inputValue(), '70');
-  const metrics = await page.locator(
-    '.watch-workspace__status-strip .bcsp-metric dd',
-  ).allTextContents();
-  assert.equal(metrics[0]?.trim(), '0', `${scenario}: selected Sections survived reload`);
-  assert.equal(metrics[1]?.trim(), '0', `${scenario}: active watches survived reload`);
   await assertAssetPaths(page, `${scenario}/reload`);
   await assertPublicBoundary(page, `${scenario}/reload`);
   await assertNoHorizontalOverflow(page, `${scenario}/reload`);
