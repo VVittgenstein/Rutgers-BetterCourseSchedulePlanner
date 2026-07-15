@@ -269,14 +269,34 @@ async function selectCurrentOpenSection(page) {
   const restoredCard = standalone.locator('.search-results__section').filter({
     has: page.locator('.search-results__badge--open'),
   }).first();
-  const selection = restoredCard.locator('.watch-selection-action');
+  const detailUrl = `${origin}/sections/${encodeURIComponent(termValue)}`
+    + `/${encodeURIComponent(campusValue)}/${encodeURIComponent(index)}`;
+  const detailResponsePromise = page.waitForResponse((response) => {
+    try {
+      return new URL(response.url()).pathname === '/api/v1/query/section-detail'
+        && response.request().method() === 'POST';
+    } catch {
+      return false;
+    }
+  }, { timeout: 30_000 });
+  const [, detailResponse] = await Promise.all([
+    page.waitForURL(detailUrl, { timeout: 30_000 }),
+    detailResponsePromise,
+    restoredCard.locator('.search-results__section-link').click(),
+  ]);
+  requireGate(detailResponse.ok(), 'E2E_SECTION_DETAIL_HTTP');
+  const detail = page.locator(
+    '.bcsp-search-workspace[data-detail-route="true"] .search-results__detail',
+  );
+  await detail.waitFor({ state: 'visible', timeout: 30_000 });
+
+  const selection = detail.locator('.watch-selection-action');
   await selection.click();
+  await detail.locator('.watch-selection-action[aria-pressed="true"]').waitFor({
+    state: 'visible', timeout: 30_000,
+  });
   requireGate(await selection.getAttribute('aria-pressed') === 'true',
     'E2E_WATCH_SELECTION_FAILED');
-  await restoredCard.locator('.search-results__section-link').click();
-  await page.locator(
-    '.bcsp-search-workspace[data-detail-route="true"] .search-results__detail',
-  ).waitFor({ state: 'visible', timeout: 30_000 });
 
   return `${termValue}\u0000${campusValue}`;
 }
