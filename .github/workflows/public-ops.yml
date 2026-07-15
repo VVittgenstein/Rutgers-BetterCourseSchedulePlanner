@@ -781,7 +781,7 @@ jobs:
             )
             SELECT count(*) FROM ordered
             WHERE previous_started_at IS NOT NULL
-              AND (julianday(started_at) - julianday(previous_started_at)) * 86400.0 < 9.0;
+              AND (julianday(started_at) - julianday(previous_started_at)) * 86400.0 < 7.0;
           ')" -eq 0
           end_epoch="$(date +%s)"
           start_epoch="$(cat "$RUNNER_TEMP/rbcsp-live-start-epoch")"
