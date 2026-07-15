@@ -492,7 +492,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/rbcsp-release/rbcsp-linux-x86_64-0.1.0.tar.gz
-          key: p7-5-linux-candidate-6d1f5a14d15459f418910935ee62012d1168a63fc69ff04dbac66e02d7c31d2b-29444462718-1
+          key: p7-5-linux-candidate-bc7d22e7b5abc997590f85563cdacbded4c76bfe98aa9899daf1842103ec05c1-29451243954-1
           fail-on-cache-miss: true
 
       - name: Install browser and host tools
