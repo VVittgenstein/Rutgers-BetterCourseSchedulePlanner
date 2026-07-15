@@ -649,24 +649,34 @@ jobs:
                              "OPEN_CATALOG_UNAVAILABLE_AFTER_FETCH"
                            )
                          )) +
-                    (SELECT count(*) FROM (
-                      SELECT started_at, effective_interval_seconds,
+                    (WITH ordered AS (
+                      SELECT started_at, effective_interval_seconds, schedule_lag_ms,
                              lag(started_at) OVER (
-                               PARTITION BY target_id, lane ORDER BY attempt_sequence
-                             ) AS previous_started_at
+                               PARTITION BY target_id, lane, effective_interval_seconds
+                               ORDER BY attempt_sequence
+                             ) AS previous_started_at,
+                             lag(schedule_lag_ms) OVER (
+                               PARTITION BY target_id, lane, effective_interval_seconds
+                               ORDER BY attempt_sequence
+                             ) AS previous_schedule_lag_ms
                       FROM open_pull_attempts
                       WHERE lane IN ("GENERAL", "ACTIVE_WATCH")
-                        AND classification IN ("VALID_APPLIED", "VALID_EMPTY_NO_ROWS")
+                        AND effective_interval_seconds IS NOT NULL
+                        AND schedule_lag_ms IS NOT NULL
+                    ), cadence AS (
+                      SELECT effective_interval_seconds,
+                             CAST(ROUND(
+                               (julianday(started_at) - julianday(previous_started_at))
+                                 * 86400000.0
+                             ) AS INTEGER) + previous_schedule_lag_ms - schedule_lag_ms
+                               AS scheduled_due_interval_ms
+                      FROM ordered
+                      WHERE previous_started_at IS NOT NULL
+                        AND previous_schedule_lag_ms IS NOT NULL
                     )
-                    WHERE previous_started_at IS NOT NULL
-                      AND (
-                        (effective_interval_seconds = 10
-                          AND (julianday(started_at) - julianday(previous_started_at))
-                            * 86400.0 < 7.0)
-                        OR (effective_interval_seconds = 30
-                          AND (julianday(started_at) - julianday(previous_started_at))
-                            * 86400.0 < 20.0)
-                      ));
+                    SELECT count(*) FROM cadence
+                    WHERE scheduled_due_interval_ms
+                      < effective_interval_seconds * 1000 - 250);
                 ' 2>/dev/null)"; then
                   touch "$stop_flag"
                   sudo systemctl stop bcsp.service
@@ -767,29 +777,51 @@ jobs:
           ')"
           test "$general_records" -ge 1
           test "$watch_records" -ge 2
-          test "$(query '
+          IFS='|' read -r minimum_watch_actual_interval_ms \
+            minimum_watch_scheduled_due_interval_ms \
+            maximum_watch_scheduler_lag_ms <<< "$(query '
             WITH watched(target_id) AS (
               SELECT DISTINCT target_id FROM open_pull_attempts
               WHERE lane = "ACTIVE_WATCH" AND effective_interval_seconds = 10
             ), ordered AS (
-              SELECT started_at,
-                     lag(started_at) OVER (ORDER BY attempt_sequence) AS previous_started_at
+              SELECT started_at, schedule_lag_ms,
+                     lag(started_at) OVER (ORDER BY attempt_sequence) AS previous_started_at,
+                     lag(schedule_lag_ms) OVER (
+                       ORDER BY attempt_sequence
+                     ) AS previous_schedule_lag_ms
               FROM open_pull_attempts
               WHERE target_id = (SELECT target_id FROM watched)
                 AND lane = "ACTIVE_WATCH" AND effective_interval_seconds = 10
-                AND classification IN ("VALID_APPLIED", "VALID_EMPTY_NO_ROWS")
+                AND schedule_lag_ms IS NOT NULL
+            ), cadence AS (
+              SELECT schedule_lag_ms,
+                     CAST(ROUND(
+                       (julianday(started_at) - julianday(previous_started_at))
+                         * 86400000.0
+                     ) AS INTEGER) AS actual_interval_ms,
+                     CAST(ROUND(
+                       (julianday(started_at) - julianday(previous_started_at))
+                         * 86400000.0
+                     ) AS INTEGER) + previous_schedule_lag_ms - schedule_lag_ms
+                       AS scheduled_due_interval_ms
+              FROM ordered
+              WHERE previous_started_at IS NOT NULL
+                AND previous_schedule_lag_ms IS NOT NULL
             )
-            SELECT count(*) FROM ordered
-            WHERE previous_started_at IS NOT NULL
-              AND (julianday(started_at) - julianday(previous_started_at)) * 86400.0 < 7.0;
-          ')" -eq 0
+            SELECT min(actual_interval_ms), min(scheduled_due_interval_ms),
+                   (SELECT max(schedule_lag_ms) FROM ordered)
+            FROM cadence;
+          ')"
+          test "$minimum_watch_scheduled_due_interval_ms" -ge 9750
           end_epoch="$(date +%s)"
           start_epoch="$(cat "$RUNNER_TEMP/rbcsp-live-start-epoch")"
           duration_seconds="$((end_epoch - start_epoch))"
           test "$duration_seconds" -le 480
-          printf 'P7_5_LINUX_REAL_WORLD_DATA_PASS discovery=%s catalog=%s open_attempts=%s current_open=%s general30=%s watched10=%s duration_seconds=%s\n' \
+          printf 'P7_5_LINUX_REAL_WORLD_DATA_PASS discovery=%s catalog=%s open_attempts=%s current_open=%s general30=%s watched10=%s minimum_watch_actual_interval_ms=%s minimum_watch_scheduled_due_interval_ms=%s maximum_watch_scheduler_lag_ms=%s cadence_tolerance_ms=250 duration_seconds=%s\n' \
             "$discovery" "$catalog" "$attempts" "$current_open" \
-            "$general_records" "$watch_records" "$duration_seconds"
+            "$general_records" "$watch_records" "$minimum_watch_actual_interval_ms" \
+            "$minimum_watch_scheduled_due_interval_ms" "$maximum_watch_scheduler_lag_ms" \
+            "$duration_seconds"
           set +x
 
       - name: Clean the disposable runner
