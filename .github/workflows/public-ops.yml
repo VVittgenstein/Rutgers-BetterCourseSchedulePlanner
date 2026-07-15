@@ -111,7 +111,7 @@ jobs:
           output_root="$RUNNER_TEMP/rbcsp-release"
           candidate="$RUNNER_TEMP/bcsp-public-candidate"
           git worktree add --detach "$source_root" \
-            7d8297404d033e79b514333748b7072ebd3a0099
+            476565cbe8e19075214cdc1427c86cf2dcf4e966
           cargo fetch --locked --manifest-path "$source_root/Cargo.toml"
           bash packaging/linux/build.sh \
             --source-root "$source_root" \
@@ -218,7 +218,7 @@ jobs:
           git -c core.autocrlf=false worktree add --detach $toolRoot $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Could not create the candidate tool worktree.' }
           git -c core.autocrlf=false worktree add --detach $sourceRoot `
-            7d8297404d033e79b514333748b7072ebd3a0099
+            476565cbe8e19075214cdc1427c86cf2dcf4e966
           if ($LASTEXITCODE -ne 0) { throw 'Could not create the frozen source worktree.' }
 
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -261,7 +261,7 @@ jobs:
             -SourceRoot $sourceRoot -OutputRoot $outputRoot
           $archive = Join-Path $outputRoot 'rbcsp-windows-x86_64-0.1.0.zip'
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -cne 'eb85374bbf97215124b4f2b64be4c51c96bc2af0502fc79b5230024709590610') {
+          if ($hash -cne '6118cde5db6efad68be11c907671b76bd83d831e8ad93567bbc20cd4c9c6fe30') {
             throw "The Windows candidate hash drifted: $hash"
           }
           $utf8 = New-Object Text.UTF8Encoding($false)

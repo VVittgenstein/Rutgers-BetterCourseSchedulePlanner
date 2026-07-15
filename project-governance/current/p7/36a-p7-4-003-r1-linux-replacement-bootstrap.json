@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "task": "P7.4-003-R1",
+  "status": "P7_4_LINUX_HASH_DISCOVERY_QUEUED",
+  "sourceCommit": "476565cbe8e19075214cdc1427c86cf2dcf4e966",
+  "sourceDateEpoch": 1784101290,
+  "windowsSha256": "6118cde5db6efad68be11c907671b76bd83d831e8ad93567bbc20cd4c9c6fe30",
+  "linuxBuildEnvironment": "GITHUB_ACTIONS_UBUNTU_24_04",
+  "discoveryRunCountsAsAcceptance": false,
+  "nextTask": "P7.4-003-R2"
+}

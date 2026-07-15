@@ -4,7 +4,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 022
 
-readonly EXPECTED_SOURCE_COMMIT='7d8297404d033e79b514333748b7072ebd3a0099'
+readonly EXPECTED_SOURCE_COMMIT='476565cbe8e19075214cdc1427c86cf2dcf4e966'
 readonly PACKAGE_ID='LINUX_PUBLIC_DEPLOYMENT_PACKAGE'
 readonly TARGET='x86_64-unknown-linux-gnu'
 readonly RELEASE_VERSION='0.1.0'
