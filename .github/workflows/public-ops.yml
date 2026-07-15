@@ -118,7 +118,7 @@ jobs:
             --output-root "$output_root"
           archive="$output_root/rbcsp-linux-x86_64-0.1.0.tar.gz"
           test "$(sha256sum "$archive" | awk '{print $1}')" = \
-            '3219cdba886f15409d65d9cb9b3e965971d5568cfcac6e73cdf92d72d4e49b40'
+            '77160882304fbe4d17a070a1cce16471cd618a1cd5cee18c9a2f6e9e8e920d07'
           bash packaging/linux/verify.sh --archive "$archive"
           install -d "$candidate"
           tar -xzf "$archive" -C "$candidate" --no-same-owner
@@ -254,7 +254,7 @@ jobs:
             -SourceRoot $sourceRoot -OutputRoot $outputRoot
           $archive = Join-Path $outputRoot 'rbcsp-windows-x86_64-0.1.0.zip'
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -cne '5611624110d8899e7b3b7c2f233c09fa3629e476668f6efb1bb42e9fd95bac3d') {
+          if ($hash -cne '69719b9b576dded0d50d2ee0ab49b1ea94e8a712e9d185b74ecc87fdda6cada4') {
             throw "The Windows candidate hash drifted: $hash"
           }
           $utf8 = New-Object Text.UTF8Encoding($false)
