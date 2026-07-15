@@ -2,7 +2,7 @@ use std::fmt;
 
 use bcsp_contracts::{SystemTraceIdSource, TraceId, TraceIdSource};
 
-use crate::LocalRuntimeError;
+use crate::{LocalInstanceError, LocalRuntimeError};
 
 /// A user-facing startup failure that is safe to show or copy into a support report.
 ///
@@ -19,10 +19,24 @@ impl StartupFailureReport {
         let summary = match error {
             LocalRuntimeError::Path(_)
             | LocalRuntimeError::Bootstrap(_)
-            | LocalRuntimeError::Surface(_) => {
+            | LocalRuntimeError::Surface(_)
+            | LocalRuntimeError::Instance(
+                LocalInstanceError::CreateDataDirectory(_)
+                | LocalInstanceError::CanonicalizeDataDirectory(_)
+                | LocalInstanceError::DataDirectoryEscapesPackageRoot
+                | LocalInstanceError::InspectLockTarget(_)
+                | LocalInstanceError::InvalidLockTarget
+                | LocalInstanceError::AcquireLock(_)
+                | LocalInstanceError::WriteLockRecord(_),
+            ) => {
                 "RBCSP could not prepare its local data directory. Check that the extracted package is in a writable folder."
             }
-            LocalRuntimeError::Instance(_) => {
+            LocalRuntimeError::Instance(
+                LocalInstanceError::ReadLockRecord(_)
+                | LocalInstanceError::InvalidLockRecord
+                | LocalInstanceError::InvalidBrowserUrl
+                | LocalInstanceError::ExistingInstanceUnavailable,
+            ) => {
                 "RBCSP could not start or reconnect to the existing local instance. Close any stale RBCSP process and try again."
             }
             LocalRuntimeError::OpenBrowser { .. } => {
@@ -33,6 +47,7 @@ impl StartupFailureReport {
             | LocalRuntimeError::Refresh(_)
             | LocalRuntimeError::ShutdownSignal(_)
             | LocalRuntimeError::ShutdownRequestChannelClosed
+            | LocalRuntimeError::Instance(LocalInstanceError::LeaseReleased)
             | LocalRuntimeError::RuntimeBuild(_)
             | LocalRuntimeError::InjectedNetworkStart => {
                 "RBCSP could not start its local service. Close any stale RBCSP process and try again."
@@ -82,5 +97,31 @@ mod tests {
         assert!(!rendered.contains(sensitive_url));
         assert!(!rendered.contains("Users"));
         assert_eq!(report.trace_id().to_string().len(), 36);
+    }
+
+    #[test]
+    fn instance_storage_failure_points_to_the_writable_package_folder() {
+        let private_path = "C:\\Users\\Example\\RBCSP\\data";
+        let error = LocalRuntimeError::Instance(LocalInstanceError::CreateDataDirectory(
+            io::Error::new(io::ErrorKind::PermissionDenied, private_path),
+        ));
+
+        let rendered = StartupFailureReport::from_error(&error).to_string();
+
+        assert!(rendered.contains("writable folder"));
+        assert!(rendered.contains("Trace ID: "));
+        assert!(!rendered.contains(private_path));
+        assert!(!rendered.contains("stale RBCSP process"));
+    }
+
+    #[test]
+    fn unavailable_existing_instance_keeps_the_instance_recovery_guidance() {
+        let error = LocalRuntimeError::Instance(LocalInstanceError::ExistingInstanceUnavailable);
+
+        let rendered = StartupFailureReport::from_error(&error).to_string();
+
+        assert!(rendered.contains("stale RBCSP process"));
+        assert!(rendered.contains("Trace ID: "));
+        assert!(!rendered.contains("writable folder"));
     }
 }
