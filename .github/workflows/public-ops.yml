@@ -1,4 +1,4 @@
-name: Public operations rehearsal
+name: Final candidate acceptance
 
 on:
   push:
@@ -15,6 +15,7 @@ on:
       - 'packaging/generate-release-metadata.mjs'
       - 'packaging/licenses/**'
       - 'packaging/linux/**'
+      - 'packaging/windows/**'
       - 'packaging/release-inputs.json'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
@@ -32,6 +33,7 @@ on:
       - 'packaging/generate-release-metadata.mjs'
       - 'packaging/licenses/**'
       - 'packaging/linux/**'
+      - 'packaging/windows/**'
       - 'packaging/release-inputs.json'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
@@ -46,7 +48,7 @@ concurrency:
 
 jobs:
   disposable-ubuntu:
-    name: Ubuntu 24.04 disposable host
+    name: Linux package, Caddy, and browser acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -75,7 +77,7 @@ jobs:
           trap 'sudo rm -f /usr/sbin/policy-rc.d' EXIT
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            binutils caddy file gzip jq shellcheck sqlite3
+            binutils ca-certificates caddy file gzip jq libnss3-tools shellcheck sqlite3
           npm install --global npm@11.16.0
           test "$(node --version)" = 'v24.18.0'
           test "$(npm --version)" = '11.16.0'
@@ -113,16 +115,30 @@ jobs:
             --source-root "$source_root" \
             --output-root "$output_root"
           archive="$output_root/rbcsp-linux-x86_64-0.1.0.tar.gz"
+          test "$(sha256sum "$archive" | awk '{print $1}')" = \
+            '3219cdba886f15409d65d9cb9b3e965971d5568cfcac6e73cdf92d72d4e49b40'
           bash packaging/linux/verify.sh --archive "$archive"
           install -d "$candidate"
           tar -xzf "$archive" -C "$candidate" --no-same-owner
           test "$(find "$candidate" -type f | wc -l)" -eq 20
           printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
           printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+          printf 'source_root=%s\n' "$source_root" >> "$GITHUB_OUTPUT"
+
+      - name: Install the candidate browser
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
+        run: >-
+          "${{ steps.candidate.outputs.source_root }}/frontend/node_modules/.bin/playwright"
+          install --with-deps chromium
 
       - name: Rehearse install, restore, upgrade, and rollback
         run: >-
           sudo env BCSP_DISPOSABLE_HOST_CONFIRM=YES BCSP_CI_NO_RUTGERS=1
+          BCSP_BROWSER_ACCEPTANCE_SCRIPT="$GITHUB_WORKSPACE/deploy/public/tests/final-candidate-browser.mjs"
+          BCSP_PLAYWRIGHT_ROOT="${{ steps.candidate.outputs.source_root }}/frontend"
+          BCSP_NODE_BIN="$(command -v node)"
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/ms-playwright"
           bash deploy/public/tests/disposable-host.sh
           --candidate-root "${{ steps.candidate.outputs.candidate }}"
 
@@ -134,3 +150,308 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  windows-candidate:
+    name: Windows package and standard-user acceptance
+    runs-on: windows-2025
+    timeout-minutes: 75
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: 1.97.0
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Select the locked Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+          package-manager-cache: false
+
+      - name: Install the pinned Windows build and metadata tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --global npm@11.16.0
+          rustup toolchain install 1.97.0 --profile minimal --target x86_64-pc-windows-msvc
+          cargo install cargo-about --version 0.9.1 --locked --features cli
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          if ((node --version) -cne 'v24.18.0') { throw 'Unexpected Node version.' }
+          if ((npm --version) -cne '11.16.0') { throw 'Unexpected npm version.' }
+          if ((rustc --version).Split(' ')[1] -cne '1.97.0') { throw 'Unexpected rustc version.' }
+          if ((cargo --version).Split(' ')[1] -cne '1.97.0') { throw 'Unexpected cargo version.' }
+          if ((cargo-about --version) -cne 'cargo-about 0.9.1') { throw 'Unexpected cargo-about version.' }
+          if ((cargo-cyclonedx cyclonedx --version) -cne 'cargo-cyclonedx-cyclonedx 0.5.9') {
+            throw 'Unexpected cargo-cyclonedx version.'
+          }
+
+      - name: Build and freeze the Windows candidate
+        id: windows_candidate
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ciRoot = 'C:\rbcsp-final-candidate'
+          $toolRoot = Join-Path $ciRoot 'tools'
+          $sourceRoot = Join-Path $ciRoot 'source'
+          $outputRoot = Join-Path $ciRoot 'release'
+          if (Test-Path -LiteralPath $ciRoot) {
+            Remove-Item -LiteralPath $ciRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $ciRoot | Out-Null
+          & icacls.exe $ciRoot /inheritance:r /grant:r `
+            '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not establish the clean-root ACL.' }
+
+          git -c core.autocrlf=false worktree add --detach $toolRoot $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the candidate tool worktree.' }
+          git -c core.autocrlf=false worktree add --detach $sourceRoot `
+            7aa314def7947d1e1160e3417a9b52cbf26e1058
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the frozen source worktree.' }
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsRoot = (& $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath).Trim()
+          if (-not $vsRoot) { throw 'Visual Studio 2022 C++ tools were not found.' }
+          $vcvars = Join-Path $vsRoot 'VC\Auxiliary\Build\vcvars64.bat'
+          $environment = @(& $env:ComSpec /d /s /c ('"' + $vcvars + '" >nul && set'))
+          if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the MSVC environment.' }
+          foreach ($line in $environment) {
+            $separator = $line.IndexOf('=')
+            if ($separator -gt 0) {
+              [Environment]::SetEnvironmentVariable(
+                $line.Substring(0, $separator), $line.Substring($separator + 1), 'Process'
+              )
+            }
+          }
+          if ($env:VCToolsVersion -cne '14.44.35207') {
+            throw "Unexpected MSVC tools: $($env:VCToolsVersion)"
+          }
+          if ($env:WindowsSDKVersion -cne '10.0.26100.0\') {
+            throw "Unexpected Windows SDK: $($env:WindowsSDKVersion)"
+          }
+          $dumpbin = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\dumpbin.exe'
+          $link = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\link.exe'
+          if ((Get-Item -LiteralPath $link).VersionInfo.FileVersion -cne '14.44.35227.0') {
+            throw "Unexpected linker: $((Get-Item -LiteralPath $link).VersionInfo.FileVersion)"
+          }
+
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $toolRoot 'packaging\windows\build.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) { throw 'Windows builder did not parse under PowerShell 5.1.' }
+
+          cargo fetch --locked --manifest-path (Join-Path $sourceRoot 'Cargo.toml')
+          & (Join-Path $toolRoot 'packaging\windows\build.ps1') `
+            -SourceRoot $sourceRoot -OutputRoot $outputRoot
+          $archive = Join-Path $outputRoot 'rbcsp-windows-x86_64-0.1.0.zip'
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -cne '325794d064fdb4af3c16146e1ebdad21febcebe76f5a284f46bcde28f50bf479') {
+            throw "The Windows candidate hash drifted: $hash"
+          }
+          $utf8 = New-Object Text.UTF8Encoding($false)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "archive=$archive`n", $utf8)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "dumpbin=$dumpbin`n", $utf8)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "source_root=$sourceRoot`n", $utf8)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "tool_root=$toolRoot`n", $utf8)
+
+      - name: Verify the candidate as a standard Windows user
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $userName = 'bcsp-ci-user'
+          $plainPassword = [Guid]::NewGuid().ToString('N') + 'aA1!'
+          $securePassword = ConvertTo-SecureString $plainPassword -AsPlainText -Force
+          $credential = New-Object Management.Automation.PSCredential(
+            "$env:COMPUTERNAME\$userName", $securePassword
+          )
+          $userRoot = 'C:\rbcsp-standard-user'
+          $readOnlyRoot = 'C:\rbcsp-final-candidate\read-only-package'
+          try {
+            $acceptanceUser = New-LocalUser -Name $userName -Password $securePassword `
+              -AccountNeverExpires -PasswordNeverExpires
+            $usersGroup = Get-LocalGroup -SID 'S-1-5-32-545'
+            $usersMember = @(Get-LocalGroupMember -Group $usersGroup | Where-Object {
+              $_.SID -eq $acceptanceUser.SID
+            })
+            if ($usersMember.Count -eq 0) {
+              Add-LocalGroupMember -Group $usersGroup -Member $acceptanceUser
+            }
+            $administratorMember = @(Get-LocalGroupMember -SID 'S-1-5-32-544' | Where-Object {
+              $_.SID -eq $acceptanceUser.SID
+            })
+            if ($administratorMember.Count -ne 0) {
+              throw 'The acceptance account unexpectedly belongs to Administrators.'
+            }
+            New-Item -ItemType Directory -Path $userRoot | Out-Null
+            & icacls.exe $userRoot /inheritance:r /grant:r `
+              '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' `
+              "${env:COMPUTERNAME}\${userName}:(OI)(CI)M"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not grant the standard-user work ACL.' }
+
+            Expand-Archive -LiteralPath '${{ steps.windows_candidate.outputs.archive }}' `
+              -DestinationPath $readOnlyRoot
+            $runnerScript = Join-Path $userRoot 'run-acceptance.ps1'
+            $runnerOutput = Join-Path $userRoot 'stdout.log'
+            $runnerError = Join-Path $userRoot 'stderr.log'
+            $script = @'
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $principal = New-Object Security.Principal.WindowsPrincipal(
+            [Security.Principal.WindowsIdentity]::GetCurrent()
+          )
+          if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Candidate acceptance is running with an elevated token.'
+          }
+          $env:TEMP = 'C:\rbcsp-standard-user\temp'
+          $env:TMP = $env:TEMP
+          $env:BCSP_BROWSER_EXECUTABLE = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+          New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
+
+          $readOnlyExecutable = 'C:\rbcsp-final-candidate\read-only-package\RBCSP.exe'
+          $startInfo = New-Object Diagnostics.ProcessStartInfo
+          $startInfo.FileName = $readOnlyExecutable
+          $startInfo.UseShellExecute = $false
+          $startInfo.CreateNoWindow = $true
+          $startInfo.RedirectStandardOutput = $true
+          $startInfo.RedirectStandardError = $true
+          $startInfo.EnvironmentVariables['BCSP_CI_NO_RUTGERS'] = '1'
+          $readOnly = New-Object Diagnostics.Process
+          $readOnly.StartInfo = $startInfo
+          if (-not $readOnly.Start()) { throw 'Read-only-root candidate did not start.' }
+          if (-not $readOnly.WaitForExit(10000)) {
+            $readOnly.Kill()
+            throw 'Read-only-root candidate did not fail fast.'
+          }
+          $diagnostic = $readOnly.StandardOutput.ReadToEnd() + $readOnly.StandardError.ReadToEnd()
+          if ($readOnly.ExitCode -eq 0 -or
+              $diagnostic -notmatch 'writable folder' -or
+              $diagnostic -notmatch 'Trace ID:') {
+            throw "Read-only-root diagnostic was not actionable: $diagnostic"
+          }
+          if (Test-Path -LiteralPath 'C:\rbcsp-final-candidate\read-only-package\data') {
+            throw 'Read-only-root launch created a data directory.'
+          }
+
+          & 'C:\rbcsp-final-candidate\tools\packaging\windows\verify.ps1' `
+            -ArchivePath 'C:\rbcsp-final-candidate\release\rbcsp-windows-x86_64-0.1.0.zip' `
+            -DumpBinPath '${{ steps.windows_candidate.outputs.dumpbin }}' `
+            -BrowserSmokeScript 'C:\rbcsp-final-candidate\tools\deploy\public\tests\final-candidate-browser.mjs' `
+            -PlaywrightRoot 'C:\rbcsp-final-candidate\source\frontend' `
+            -NodePath '__NODE_PATH__'
+          '@
+            $node = (Get-Command node.exe).Source
+            $script = $script.Replace('__NODE_PATH__', $node.Replace("'", "''"))
+            [IO.File]::WriteAllText($runnerScript, $script, (New-Object Text.UTF8Encoding($false)))
+            $process = Start-Process `
+              -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+              -Credential $credential -ArgumentList @(
+                '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                '-File', $runnerScript
+              ) -RedirectStandardOutput $runnerOutput -RedirectStandardError $runnerError `
+              -Wait -PassThru
+            Get-Content -LiteralPath $runnerOutput
+            if (Test-Path -LiteralPath $runnerError) { Get-Content -LiteralPath $runnerError }
+            if ($process.ExitCode -ne 0) {
+              throw "Standard-user candidate acceptance failed with exit $($process.ExitCode)."
+            }
+          }
+          finally {
+            Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
+          }
+
+      - name: Probe Microsoft Defender and scan when available
+        id: defender
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $status = Get-MpComputerStatus -ErrorAction SilentlyContinue
+          if ($status -and $status.AntivirusEnabled) {
+            Start-MpScan -ScanType CustomScan -ScanPath '${{ steps.windows_candidate.outputs.archive }}'
+            Start-MpScan -ScanType CustomScan -ScanPath `
+              'C:\rbcsp-final-candidate\read-only-package\RBCSP.exe'
+            if (@(Get-MpThreatDetection -ErrorAction SilentlyContinue).Count -ne 0) {
+              throw 'Microsoft Defender reported a candidate threat.'
+            }
+            [IO.File]::AppendAllText(
+              $env:GITHUB_OUTPUT, "scanner=MICROSOFT_DEFENDER`n", (New-Object Text.UTF8Encoding($false))
+            )
+          }
+          else {
+            Write-Output 'Microsoft Defender is unavailable on this hosted runner; equivalent scan follows in Ubuntu.'
+            [IO.File]::AppendAllText(
+              $env:GITHUB_OUTPUT, "scanner=HOSTED_DEFENDER_UNAVAILABLE`n", (New-Object Text.UTF8Encoding($false))
+            )
+          }
+
+      - name: Upload the verified Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rbcsp-windows-x86_64-0.1.0
+          path: ${{ steps.windows_candidate.outputs.archive }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  targeted-product-test:
+    name: Targeted fake-upstream product flow
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BCSP_CI_NO_RUTGERS: '1'
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: 1.97.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run the targeted product test
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal
+          cargo test --locked -p bcsp-application --test refresh_coordinator \
+            fake_upstream_drives_all_product_routes_and_watch_without_client_amplification \
+            -- --exact --nocapture
+
+  malware-scan:
+    name: Equivalent malware scan for both candidates
+    needs:
+      - disposable-ubuntu
+      - windows-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download both accepted candidates
+        uses: actions/download-artifact@v5
+        with:
+          path: ${{ runner.temp }}/candidates
+
+      - name: Scan both candidates with current ClamAV signatures
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clamav
+          sudo systemctl stop clamav-freshclam.service || true
+          signatures_ready=0
+          for attempt in 1 2 3; do
+            if sudo freshclam; then
+              signatures_ready=1
+              break
+            fi
+            sleep "$((attempt * 10))"
+          done
+          test "$signatures_ready" -eq 1
+          test "$(find "$RUNNER_TEMP/candidates" -type f | wc -l)" -eq 2
+          clamscan --infected --recursive "$RUNNER_TEMP/candidates"

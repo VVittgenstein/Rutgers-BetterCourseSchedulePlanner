@@ -30,6 +30,22 @@ function Assert-File {
     }
 }
 
+function Resolve-ReleaseTool {
+    param(
+        [Parameter(Mandatory = $true)][string]$PinnedPath,
+        [Parameter(Mandatory = $true)][string]$CommandName
+    )
+
+    if (Test-Path -LiteralPath $PinnedPath -PathType Leaf) {
+        return (Resolve-FullPath $PinnedPath)
+    }
+    $command = Get-Command $CommandName -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $command) {
+        throw "Required release tool was not found: $CommandName"
+    }
+    return $command.Source
+}
+
 function Invoke-Native {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -76,6 +92,15 @@ function Invoke-NativeCapture {
 }
 
 function Import-MsvcEnvironment {
+    $existingCompiler = Get-Command cl.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    $existingLinker = Get-Command link.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not [string]::IsNullOrWhiteSpace($env:VCToolsVersion) -and
+        -not [string]::IsNullOrWhiteSpace($env:VCToolsInstallDir) -and
+        $existingCompiler -and $existingLinker) {
+        Write-Host "==> Reusing the initialized MSVC $($env:VCToolsVersion) environment"
+        return
+    }
+
     $candidates = @(
         'C:\Software\VSBuildTools\VC\Auxiliary\Build\vcvars64.bat',
         'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat',
@@ -209,14 +234,37 @@ if ($package.target -ne $Target -or $package.allowlist.Count -ne 11) {
     throw 'The frozen Windows release target or eleven-file allowlist changed unexpectedly.'
 }
 
-$NodeRoot = Join-Path $RepositoryRoot '.cache\p7-1-002-node-24.18.0-win-x64\runtime\node-v24.18.0-win-x64'
-$Node = Join-Path $NodeRoot 'node.exe'
-$Npm = Join-Path $NodeRoot 'npm.cmd'
-$CargoHome = Join-Path $RepositoryRoot '.cache\p7-1-002\cargo'
-$RustupHome = Join-Path $RepositoryRoot '.cache\p7-1-002\rustup'
-$Cargo = Join-Path $CargoHome 'bin\cargo.exe'
-$CargoCycloneDx = Join-Path $RepositoryRoot '.cache\p7-1-002\tools\cargo-cyclonedx\bin\cargo-cyclonedx.exe'
-$CargoAbout = Join-Path $RepositoryRoot '.cache\p7-1-002\tools\cargo-about\bin\cargo-about.exe'
+$PinnedNodeRoot = Join-Path $RepositoryRoot '.cache\p7-1-002-node-24.18.0-win-x64\runtime\node-v24.18.0-win-x64'
+$Node = Resolve-ReleaseTool (Join-Path $PinnedNodeRoot 'node.exe') 'node.exe'
+$Npm = Resolve-ReleaseTool (Join-Path $PinnedNodeRoot 'npm.cmd') 'npm.cmd'
+$NodeRoot = Split-Path -Parent $Node
+$PinnedCargoHome = Join-Path $RepositoryRoot '.cache\p7-1-002\cargo'
+$Cargo = Resolve-ReleaseTool (Join-Path $PinnedCargoHome 'bin\cargo.exe') 'cargo.exe'
+$CargoHome = if (Test-Path -LiteralPath (Join-Path $PinnedCargoHome 'bin\cargo.exe') -PathType Leaf) {
+    $PinnedCargoHome
+}
+elseif (-not [string]::IsNullOrWhiteSpace($env:CARGO_HOME)) {
+    Resolve-FullPath $env:CARGO_HOME
+}
+else {
+    Resolve-FullPath (Join-Path $env:USERPROFILE '.cargo')
+}
+$PinnedRustupHome = Join-Path $RepositoryRoot '.cache\p7-1-002\rustup'
+$RustupHome = if (Test-Path -LiteralPath $PinnedRustupHome -PathType Container) {
+    $PinnedRustupHome
+}
+elseif (-not [string]::IsNullOrWhiteSpace($env:RUSTUP_HOME)) {
+    Resolve-FullPath $env:RUSTUP_HOME
+}
+else {
+    Resolve-FullPath (Join-Path $env:USERPROFILE '.rustup')
+}
+$CargoCycloneDx = Resolve-ReleaseTool `
+    (Join-Path $RepositoryRoot '.cache\p7-1-002\tools\cargo-cyclonedx\bin\cargo-cyclonedx.exe') `
+    'cargo-cyclonedx.exe'
+$CargoAbout = Resolve-ReleaseTool `
+    (Join-Path $RepositoryRoot '.cache\p7-1-002\tools\cargo-about\bin\cargo-about.exe') `
+    'cargo-about.exe'
 foreach ($tool in @($Node, $Npm, $Cargo, $CargoCycloneDx, $CargoAbout)) {
     Assert-File $tool
 }

@@ -3,7 +3,13 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ArchivePath,
 
-    [string]$DumpBinPath
+    [string]$DumpBinPath,
+
+    [string]$BrowserSmokeScript,
+
+    [string]$PlaywrightRoot,
+
+    [string]$NodePath
 )
 
 Set-StrictMode -Version Latest
@@ -230,8 +236,63 @@ function Stop-CandidateAfterFailure {
     Stop-TestProcessTree $Run.Process
 }
 
+function Assert-EmptyPersonalState {
+    param(
+        [Parameter(Mandatory = $true)]$Bootstrap,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    Assert-Condition (@($Bootstrap.data.state.savedViews).Count -eq 0) "$Label Saved views are not empty."
+    Assert-Condition (@($Bootstrap.data.state.selectedSections).Count -eq 0) "$Label selected Sections are not empty."
+    Assert-Condition (@($Bootstrap.data.state.episodeHistory.items).Count -eq 0) "$Label local history is not empty."
+    Assert-Condition ($null -eq $Bootstrap.data.state.currentFilters.value) "$Label current filters are not empty."
+    Assert-Condition ([int]$Bootstrap.data.state.activeWatchCount -eq 0) "$Label active watch count is not zero."
+}
+
+function Invoke-BrowserSmoke {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][string]$Script,
+        [Parameter(Mandatory = $true)][string]$Playwright,
+        [Parameter(Mandatory = $true)][string]$Node
+    )
+
+    Write-Host '==> Running the shared local candidate browser acceptance'
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $Node $Script `
+            --mode local `
+            --base-url $BaseUrl.TrimEnd('/') `
+            --playwright-root $Playwright 2>&1 |
+            ForEach-Object { Write-Host ([string]$_) }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    Assert-Condition ($exitCode -eq 0) "Shared local candidate browser acceptance failed with exit code $exitCode."
+}
+
 Assert-Condition (Test-Path -LiteralPath $ArchivePath -PathType Leaf) "Archive was not found: $ArchivePath"
 Assert-Condition ([System.IO.Path]::GetFileName($ArchivePath) -eq $package.archiveName) "Archive name must be $($package.archiveName)."
+
+$browserOptions = @($BrowserSmokeScript, $PlaywrightRoot, $NodePath)
+$configuredBrowserOptions = @($browserOptions | Where-Object {
+    -not [string]::IsNullOrWhiteSpace([string]$_)
+})
+Assert-Condition (
+    $configuredBrowserOptions.Count -eq 0 -or $configuredBrowserOptions.Count -eq 3
+) 'BrowserSmokeScript, PlaywrightRoot, and NodePath must be supplied together or omitted together.'
+$runBrowserSmoke = $configuredBrowserOptions.Count -eq 3
+if ($runBrowserSmoke) {
+    $BrowserSmokeScript = [System.IO.Path]::GetFullPath($BrowserSmokeScript)
+    $PlaywrightRoot = [System.IO.Path]::GetFullPath($PlaywrightRoot)
+    $NodePath = [System.IO.Path]::GetFullPath($NodePath)
+    Assert-Condition (Test-Path -LiteralPath $BrowserSmokeScript -PathType Leaf) "Browser smoke script was not found: $BrowserSmokeScript"
+    Assert-Condition (Test-Path -LiteralPath $PlaywrightRoot -PathType Container) "Playwright root was not found: $PlaywrightRoot"
+    Assert-Condition (Test-Path -LiteralPath $NodePath -PathType Leaf) "Node executable was not found: $NodePath"
+}
 
 $tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
 $verificationRoot = Join-Path $tempBase ("rbcsp-p7-4-002-" + [Guid]::NewGuid().ToString('N'))
@@ -244,11 +305,12 @@ $candidateRoot = Join-Path $verificationRoot $unicodePath
 $upgradeRoot = Join-Path $verificationRoot 'upgrade files'
 $outsideOne = Join-Path $verificationRoot 'outside one'
 $outsideTwo = Join-Path $verificationRoot 'outside two'
+$outsideThree = Join-Path $verificationRoot 'outside three'
 $logRoot = Join-Path $verificationRoot 'logs'
 $run = $null
 $verificationSucceeded = $false
 
-New-Item -ItemType Directory -Path $candidateRoot, $upgradeRoot, $outsideOne, $outsideTwo, $logRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $candidateRoot, $upgradeRoot, $outsideOne, $outsideTwo, $outsideThree, $logRoot -Force | Out-Null
 
 try {
     Add-Type -AssemblyName System.IO.Compression
@@ -364,6 +426,14 @@ try {
     Assert-Condition ($null -eq $first.data.state.currentFilters.value) 'First-run current filters are not empty.'
     Assert-Condition ([int]$first.data.state.activeWatchCount -eq 0) 'First-run active watch count is not zero.'
 
+    if ($runBrowserSmoke) {
+        Invoke-BrowserSmoke $run.Origin $BrowserSmokeScript $PlaywrightRoot $NodePath
+        $postBrowser = Read-Bootstrap $run.Origin
+        Assert-Condition ([string]$postBrowser.data.sessionNonce -ceq $firstNonce) 'Browser acceptance changed the local session nonce.'
+        Assert-EmptyPersonalState $postBrowser 'Post-browser Reset'
+        $first = $postBrowser
+    }
+
     $marker = [ordered]@{ term = 'T2099F'; campus = 'TEST'; index = '99999' }
     $selectionBody = [ordered]@{
         protocolVersion = 1
@@ -410,7 +480,59 @@ try {
     ) 'Restart did not restore the package-local synthetic selection marker.'
     $sqliteFiles = @(Get-ChildItem -LiteralPath $candidateRoot -Recurse -File | Where-Object { $_.Name -match '(?i)\.(db|sqlite|sqlite3)$' })
     Assert-Condition ($sqliteFiles.Count -eq 1 -and $sqliteFiles[0].FullName -eq $databasePath) 'The candidate did not use exactly one package-local database.'
+
+    $secondHeaders = @{
+        Origin = $run.Origin.TrimEnd('/')
+        'x-bcsp-session' = $secondNonce
+    }
+    $prepareResetBody = [ordered]@{
+        protocolVersion = 1
+        payload = [ordered]@{
+            expectedUserStateRevision = [long]$second.data.state.stateRevision
+        }
+    } | ConvertTo-Json -Depth 6 -Compress
+    $preparedReset = Invoke-RestMethod -UseBasicParsing -Method Post `
+        -Uri ($run.Origin + 'api/v1/local/user-data-reset/prepare') -Headers $secondHeaders `
+        -ContentType 'application/json' -Body $prepareResetBody -TimeoutSec 10
+    Assert-Condition ([int]$preparedReset.protocolVersion -eq 1) 'Full Reset preparation did not return protocol version 1.'
+    $confirmationToken = [string]$preparedReset.data.confirmationToken
+    Assert-Condition ($confirmationToken -match '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') 'Full Reset preparation did not return a UUIDv4 confirmation token.'
+    Assert-Condition (
+        [long]$preparedReset.data.expectedUserStateRevision -eq [long]$second.data.state.stateRevision
+    ) 'Full Reset preparation returned the wrong user-state revision.'
+    Assert-Condition ([long]$preparedReset.data.expiresInSeconds -gt 0) 'Full Reset confirmation token is already expired.'
+
+    $confirmResetBody = [ordered]@{
+        protocolVersion = 1
+        payload = [ordered]@{ confirmationToken = $confirmationToken }
+    } | ConvertTo-Json -Depth 6 -Compress
+    $confirmedReset = Invoke-RestMethod -UseBasicParsing -Method Post `
+        -Uri ($run.Origin + 'api/v1/local/user-data-reset/confirm') -Headers $secondHeaders `
+        -ContentType 'application/json' -Body $confirmResetBody -TimeoutSec 10
+    Assert-Condition ([int]$confirmedReset.protocolVersion -eq 1) 'Full Reset confirmation did not return protocol version 1.'
+    Assert-Condition ([long]$confirmedReset.data.deletedSelectedSections -eq 1) 'Full Reset did not delete the synthetic selected Section.'
+    Assert-Condition (
+        [long]$confirmedReset.data.stateRevision -gt [long]$second.data.state.stateRevision
+    ) 'Full Reset did not advance the user-state revision.'
+
+    $afterReset = Read-Bootstrap $run.Origin
+    Assert-EmptyPersonalState $afterReset 'Post-Reset'
+    Assert-Condition (Test-Path -LiteralPath $databasePath -PathType Leaf) 'Full Reset deleted the package-local database.'
+    $sqliteFilesAfterReset = @(Get-ChildItem -LiteralPath $candidateRoot -Recurse -File | Where-Object { $_.Name -match '(?i)\.(db|sqlite|sqlite3)$' })
+    Assert-Condition ($sqliteFilesAfterReset.Count -eq 1 -and $sqliteFilesAfterReset[0].FullName -eq $databasePath) 'Full Reset changed the exactly-one package-local database boundary.'
     Stop-CandidateGracefully $run $secondNonce
+    $run = $null
+
+    $run = Start-Candidate $candidateRoot $outsideThree 'third' $logRoot -UseLauncher
+    $third = Read-Bootstrap $run.Origin
+    $thirdNonce = [string]$third.data.sessionNonce
+    Assert-Condition ($thirdNonce -match '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') 'Third-launch session nonce is not a UUIDv4.'
+    Assert-Condition ($thirdNonce -ne $firstNonce -and $thirdNonce -ne $secondNonce) 'Third launch reused an earlier local session nonce.'
+    Assert-EmptyPersonalState $third 'Restart-after-Reset'
+    Assert-Condition (Test-Path -LiteralPath $databasePath -PathType Leaf) 'Restart after full Reset lost the package-local database.'
+    $finalSqliteFiles = @(Get-ChildItem -LiteralPath $candidateRoot -Recurse -File | Where-Object { $_.Name -match '(?i)\.(db|sqlite|sqlite3)$' })
+    Assert-Condition ($finalSqliteFiles.Count -eq 1 -and $finalSqliteFiles[0].FullName -eq $databasePath) 'Restart after full Reset did not retain exactly one package-local database.'
+    Stop-CandidateGracefully $run $thirdNonce
     $run = $null
 
     $archiveHash = Get-LowerSha256 $ArchivePath
@@ -420,7 +542,7 @@ try {
         archive = [System.IO.Path]::GetFileName($ArchivePath)
         sha256 = $archiveHash
         files = $expectedFiles.Count
-        restarts = 1
+        restarts = 2
     } | ConvertTo-Json -Compress
 }
 finally {

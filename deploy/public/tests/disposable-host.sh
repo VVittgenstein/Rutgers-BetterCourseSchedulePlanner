@@ -113,7 +113,28 @@ caddy validate --config "$CANDIDATE_ROOT/caddy/Caddyfile.example" --adapter cadd
 
 TEST_TMP="$(mktemp -d)"
 DROP_IN_ROOT=/etc/systemd/system/bcsp.service.d
+CADDY_ACCEPTANCE_STARTED=0
+ACCEPTANCE_CA_PATH=""
+ACCEPTANCE_HOSTS_ADDED=0
+CADDY_DATA_ROOT="$TEST_TMP/caddy-data"
+CADDY_CONFIG_ROOT="$TEST_TMP/caddy-config"
+
+caddy_acceptance() {
+  env XDG_DATA_HOME="$CADDY_DATA_ROOT" XDG_CONFIG_HOME="$CADDY_CONFIG_ROOT" \
+    caddy "$@"
+}
+
 cleanup() {
+  if [[ "$CADDY_ACCEPTANCE_STARTED" -eq 1 ]]; then
+    caddy_acceptance stop >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$ACCEPTANCE_CA_PATH" && -e "$ACCEPTANCE_CA_PATH" ]]; then
+    rm -f -- "$ACCEPTANCE_CA_PATH"
+    update-ca-certificates >/dev/null 2>&1 || true
+  fi
+  if [[ "$ACCEPTANCE_HOSTS_ADDED" -eq 1 ]]; then
+    sed -i '\|^127\.0\.0\.1 planner\.test # bcsp-final-candidate$|d' /etc/hosts || true
+  fi
   systemctl stop bcsp.service >/dev/null 2>&1 || true
   systemctl disable bcsp.service >/dev/null 2>&1 || true
   rm -rf -- /opt/bcsp /etc/bcsp /var/lib/bcsp /var/backups/bcsp
@@ -138,6 +159,7 @@ fi
 install -d -m 0755 "$DROP_IN_ROOT"
 cat > "$DROP_IN_ROOT/90-disposable-network.conf" <<'DROPIN'
 [Service]
+Environment=BCSP_CI_NO_RUTGERS=1
 IPAddressDeny=any
 IPAddressAllow=127.0.0.0/8
 IPAddressAllow=::1/128
@@ -274,4 +296,134 @@ bash "$OPS_ROOT/verify.sh"
 [[ "$(stat -c '%U:%G %a' /var/backups/bcsp)" == "root:root 700" ]]
 [[ "$(stat -c '%U:%G %a' /var/backups/bcsp/.ops/last-upgrade)" == "root:root 600" ]]
 [[ ! -e /etc/caddy/Caddyfile.d/rbcsp ]]
+
+if [[ -n "${BCSP_BROWSER_ACCEPTANCE_SCRIPT:-}" ]]; then
+  [[ -f "$BCSP_BROWSER_ACCEPTANCE_SCRIPT" && ! -L "$BCSP_BROWSER_ACCEPTANCE_SCRIPT" ]] || {
+    printf 'disposable-host: browser acceptance script is not a regular file\n' >&2
+    exit 1
+  }
+  [[ -n "${BCSP_PLAYWRIGHT_ROOT:-}" && -f "$BCSP_PLAYWRIGHT_ROOT/package.json" ]] || {
+    printf 'disposable-host: BCSP_PLAYWRIGHT_ROOT is not a frontend package root\n' >&2
+    exit 1
+  }
+  BROWSER_NODE="${BCSP_NODE_BIN:-$(command -v node || true)}"
+  [[ -n "$BROWSER_NODE" ]] || {
+    printf 'disposable-host: Node.js is required for browser acceptance\n' >&2
+    exit 1
+  }
+  for command_name in awk certutil getent install sed update-ca-certificates; do
+    command -v "$command_name" >/dev/null 2>&1 || {
+      printf 'disposable-host: browser acceptance command is absent: %s\n' "$command_name" >&2
+      exit 1
+    }
+  done
+  if getent hosts planner.test >/dev/null 2>&1; then
+    printf 'disposable-host: planner.test already resolves on the disposable host\n' >&2
+    exit 1
+  fi
+
+  printf '%s\n' '127.0.0.1 planner.test # bcsp-final-candidate' >> /etc/hosts
+  ACCEPTANCE_HOSTS_ADDED=1
+  NO_PROXY="${NO_PROXY:+$NO_PROXY,}planner.test,127.0.0.1,localhost"
+  no_proxy="$NO_PROXY"
+  export NO_PROXY no_proxy
+  printf '%s\n' 'BCSP_PUBLIC_ORIGIN=https://planner.test' > /etc/bcsp/bcsp.env
+  chmod 0640 /etc/bcsp/bcsp.env
+  chown root:bcsp /etc/bcsp/bcsp.env
+  systemctl restart bcsp.service
+  bash "$OPS_ROOT/verify.sh"
+
+  CADDY_CONFIG="$TEST_TMP/Caddyfile.final-candidate"
+  awk '
+    /^planner\.invalid[[:space:]]*\{$/ {
+      replacements += 1
+      print "planner.test {"
+      print "\ttls internal"
+      next
+    }
+    { print }
+    END { if (replacements != 1) exit 42 }
+  ' "$CANDIDATE_ROOT/caddy/Caddyfile.example" > "$CADDY_CONFIG" || {
+    printf 'disposable-host: Caddy example did not contain one planner.invalid site\n' >&2
+    exit 1
+  }
+  caddy validate --config "$CADDY_CONFIG" --adapter caddyfile >/dev/null
+  caddy_acceptance start --config "$CADDY_CONFIG" --adapter caddyfile
+  CADDY_ACCEPTANCE_STARTED=1
+
+  CADDY_CA_SOURCE="$CADDY_DATA_ROOT/caddy/pki/authorities/local/root.crt"
+  for _ in {1..40}; do
+    [[ -f "$CADDY_CA_SOURCE" ]] && break
+    sleep 0.25
+  done
+  [[ -f "$CADDY_CA_SOURCE" ]] || {
+    printf 'disposable-host: Caddy test CA was not generated\n' >&2
+    exit 1
+  }
+  ACCEPTANCE_CA_PATH=/usr/local/share/ca-certificates/bcsp-final-candidate.crt
+  install -m 0644 "$CADDY_CA_SOURCE" "$ACCEPTANCE_CA_PATH"
+  update-ca-certificates >/dev/null
+  BROWSER_HOME="$TEST_TMP/browser-home"
+  BROWSER_NSSDB="$BROWSER_HOME/.pki/nssdb"
+  install -d -m 0700 "$BROWSER_NSSDB"
+  certutil -N --empty-password -d "sql:$BROWSER_NSSDB"
+  certutil -A -d "sql:$BROWSER_NSSDB" -n bcsp-final-candidate -t 'C,,' \
+    -i "$CADDY_CA_SOURCE"
+  for _ in {1..40}; do
+    if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+      https://planner.test/ >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.25
+  done
+  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+    https://planner.test/ >/dev/null
+
+  env HOME="$BROWSER_HOME" "$BROWSER_NODE" "$BCSP_BROWSER_ACCEPTANCE_SCRIPT" \
+    --mode public \
+    --base-url https://planner.test \
+    --playwright-root "$BCSP_PLAYWRIGHT_ROOT"
+
+  sqlite3 "$DATABASE" '.timeout 10000' \
+    'CREATE TABLE caddy_cycle_proof(value TEXT NOT NULL); INSERT INTO caddy_cycle_proof VALUES ("preserve");'
+  SERVICE_PID="$(systemctl show --property MainPID --value bcsp.service)"
+  [[ "$SERVICE_PID" =~ ^[1-9][0-9]*$ ]] || {
+    printf 'disposable-host: bcsp.service has no stable MainPID\n' >&2
+    exit 1
+  }
+
+  caddy_acceptance stop
+  CADDY_ACCEPTANCE_STARTED=0
+  if curl --fail --silent --connect-timeout 1 --max-time 2 \
+    https://planner.test/ >/dev/null 2>&1; then
+    printf 'disposable-host: HTTPS remained available after Caddy stopped\n' >&2
+    exit 1
+  fi
+  [[ "$(systemctl show --property MainPID --value bcsp.service)" == "$SERVICE_PID" ]]
+  [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --header 'Host: planner.test' http://127.0.0.1:8080/health/live)" == "200" ]]
+  [[ "$(sqlite3 "$DATABASE" '.timeout 10000' 'SELECT value FROM caddy_cycle_proof;')" == "preserve" ]]
+  [[ "$(sqlite3 "$DATABASE" '.timeout 10000' 'PRAGMA integrity_check;')" == "ok" ]]
+
+  caddy_acceptance start --config "$CADDY_CONFIG" --adapter caddyfile
+  CADDY_ACCEPTANCE_STARTED=1
+  for _ in {1..40}; do
+    if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+      https://planner.test/ >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.25
+  done
+  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+    https://planner.test/ >/dev/null
+  [[ "$(systemctl show --property MainPID --value bcsp.service)" == "$SERVICE_PID" ]]
+  [[ "$(sqlite3 "$DATABASE" '.timeout 10000' 'SELECT value FROM caddy_cycle_proof;')" == "preserve" ]]
+  [[ "$(sqlite3 "$DATABASE" '.timeout 10000' 'PRAGMA integrity_check;')" == "ok" ]]
+  env HOME="$BROWSER_HOME" "$BROWSER_NODE" "$BCSP_BROWSER_ACCEPTANCE_SCRIPT" \
+    --mode public \
+    --base-url https://planner.test \
+    --playwright-root "$BCSP_PLAYWRIGHT_ROOT"
+  bash "$OPS_ROOT/verify.sh"
+fi
+
 printf 'P7_1_014_DISPOSABLE_HOST_PASS\n'
