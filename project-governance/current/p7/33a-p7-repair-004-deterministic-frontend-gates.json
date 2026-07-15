@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "task": "P7-REPAIR-004",
+  "scope": "TEST_ONLY",
+  "fixedClockFixture": true,
+  "fieldInteractionTimeoutMilliseconds": 10000,
+  "productSourceChanged": false,
+  "dependenciesChanged": false,
+  "nextTask": "P7-REPAIR-GATE"
+}

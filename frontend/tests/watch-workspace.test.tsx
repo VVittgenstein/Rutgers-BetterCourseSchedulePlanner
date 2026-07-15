@@ -403,6 +403,7 @@ function metricValue(label: string): string | null | undefined {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   document.documentElement.lang = '';
 });
 
@@ -560,6 +561,8 @@ describe('Watch workspace product flow', () => {
   });
 
   it('exposes freshness, cadence, lag, circuit, and run/today counters as labelled text', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(NOW));
     const sections = [section(1, 'NB'), section(2, 'NK'), section(3, 'CM')];
     renderWatch(sections);
     for (const sectionKey of sections) {

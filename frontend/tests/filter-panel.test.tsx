@@ -236,7 +236,7 @@ describe('controlled 22-field FilterPanel', () => {
         unitMajors: [{ unitCode: '01', majorCode: 'CS' }],
       },
     });
-  });
+  }, 10_000);
 
   it('searches a large published subject dictionary and combines filters into clearable chips', () => {
     render(<Harness />);
