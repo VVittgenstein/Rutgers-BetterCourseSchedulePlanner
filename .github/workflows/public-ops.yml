@@ -1,6 +1,6 @@
 name: Final candidate acceptance
 
-# Replacement hash-discovery run for repaired source 7d5debe.
+# Replacement candidate hashes locked for repaired source 7d5debe.
 
 on:
   push:
@@ -263,7 +263,7 @@ jobs:
             -SourceRoot $sourceRoot -OutputRoot $outputRoot
           $archive = Join-Path $outputRoot 'rbcsp-windows-x86_64-0.1.0.zip'
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -cne '2c807e475779f9d3f7e8549921655dad87c4dff3b06286d05ac2a985fa2907d2') {
+          if ($hash -cne 'eabdc3b5f4a705d8c22e6941831f55e0bb5b5c2a1c33e648e545f86007cab577') {
             throw "The Windows candidate hash drifted: $hash"
           }
           $utf8 = New-Object Text.UTF8Encoding($false)
