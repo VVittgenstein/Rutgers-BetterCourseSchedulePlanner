@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 
 $PackageId = 'WINDOWS_LOCAL_RELEASE_ARCHIVE'
 $ExpectedSourceCommit = '7d8297404d033e79b514333748b7072ebd3a0099'
-$ExpectedSourceDateEpoch = 1784072665
+$ExpectedSourceDateEpoch = 1784085032
 $RepositoryRoot = [System.IO.Path]::GetFullPath(
     (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 )
