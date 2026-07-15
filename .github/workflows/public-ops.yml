@@ -1,6 +1,6 @@
 name: Final candidate acceptance
 
-# Independent replay marker after accepted run 29408621103.
+# P7.5 candidate reset: prior real-world acceptance was invalidated by ordinary-user testing.
 
 on:
   push:
@@ -121,7 +121,7 @@ jobs:
           output_root="$RUNNER_TEMP/rbcsp-release"
           candidate="$RUNNER_TEMP/bcsp-public-candidate"
           git worktree add --detach "$source_root" \
-            7d5debef005277e4d8f2ed2b9fb2f72c495e62f1
+            0f093edcc76c6e169196e6aa2161d9a09954f934
           cargo fetch --locked --manifest-path "$source_root/Cargo.toml"
           bash packaging/linux/build.sh \
             --source-root "$source_root" \
@@ -229,7 +229,7 @@ jobs:
           git -c core.autocrlf=false worktree add --detach $toolRoot $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Could not create the candidate tool worktree.' }
           git -c core.autocrlf=false worktree add --detach $sourceRoot `
-            7d5debef005277e4d8f2ed2b9fb2f72c495e62f1
+            0f093edcc76c6e169196e6aa2161d9a09954f934
           if ($LASTEXITCODE -ne 0) { throw 'Could not create the frozen source worktree.' }
 
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
