@@ -110,6 +110,10 @@ function sha256File(file) {
   return sha256Buffer(fs.readFileSync(file));
 }
 
+function sha256TextFile(file) {
+  return sha256Buffer(fs.readFileSync(file, "utf8").replace(/\r\n?/g, "\n"));
+}
+
 function normalizeText(value) {
   assert(typeof value === "string", "expected text input");
   const normalized = value
@@ -772,7 +776,7 @@ function buildFinalSbom({ cargo, npm, packageConfig, binaryInfo, sourceCommit, t
 function inputHash(root, relativePath, recordedPath = relativePath) {
   const file = path.join(root, ...relativePath.split("/"));
   assert(fs.statSync(file).isFile(), `provenance input is missing: ${recordedPath}`);
-  return { path: recordedPath, sha256: sha256File(file) };
+  return { path: recordedPath, sha256: sha256TextFile(file) };
 }
 
 function buildProvenance({ sourceRoot, packageConfig, releaseInputs, sourceCommit, sourceDateEpoch, timestamp, target, tools, binaryInfo }) {

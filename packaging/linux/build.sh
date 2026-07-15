@@ -174,8 +174,13 @@ mkdir -p -- "$PACKAGE_ROOT" "$TARGET_ROOT" "$METADATA_ROOT" \
 export BCSP_PUBLIC_WEB_DIST="$SOURCE_ROOT/frontend/dist/public"
 export CARGO_TARGET_DIR="$TARGET_ROOT"
 export CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}"
+cargo_home_root="$(realpath -e -- "${CARGO_HOME:-$HOME/.cargo}")"
+readonly cargo_home_root
+path_remap_cflags="-ffile-prefix-map=$SOURCE_ROOT=. -ffile-prefix-map=$cargo_home_root=.cargo"
+export CFLAGS="${CFLAGS:+$CFLAGS }$path_remap_cflags"
+export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }$path_remap_cflags"
 unit_separator=$'\x1f'
-export CARGO_ENCODED_RUSTFLAGS="-C${unit_separator}link-arg=-Wl,--build-id=none${unit_separator}--remap-path-prefix=$SOURCE_ROOT=."
+export CARGO_ENCODED_RUSTFLAGS="-C${unit_separator}link-arg=-Wl,--build-id=none${unit_separator}--remap-path-prefix=$SOURCE_ROOT=.${unit_separator}--remap-path-prefix=$cargo_home_root=.cargo"
 "$CARGO_BIN" build \
   --manifest-path "$SOURCE_ROOT/Cargo.toml" \
   --package bcsp-server \

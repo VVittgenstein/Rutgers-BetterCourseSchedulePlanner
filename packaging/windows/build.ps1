@@ -255,10 +255,13 @@ finally {
 
 $env:BCSP_LOCAL_WEB_DIST = Join-Path $frontendRoot 'dist\local'
 $env:CARGO_TARGET_DIR = $TargetRoot
+$pathMapFlags = "/experimental:deterministic /pathmap:$CargoHome=.cargo"
+$env:CL = if ([string]::IsNullOrWhiteSpace($env:CL)) { $pathMapFlags } else { "$env:CL $pathMapFlags" }
 $rustFlags = @(
     '-C', 'target-feature=+crt-static',
     '-C', 'link-arg=/Brepro',
-    "--remap-path-prefix=$SourceRoot=."
+    "--remap-path-prefix=$SourceRoot=.",
+    "--remap-path-prefix=$CargoHome=.cargo"
 )
 $env:CARGO_ENCODED_RUSTFLAGS = $rustFlags -join [char]0x1f
 Invoke-Native $Cargo @(
