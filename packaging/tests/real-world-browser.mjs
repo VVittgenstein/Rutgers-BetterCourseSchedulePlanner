@@ -22,7 +22,9 @@ function requireGate(value, code) {
 async function step(code, action) {
   try {
     return await action();
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${code}: ${detail}\n`);
     fail(code);
   }
 }
