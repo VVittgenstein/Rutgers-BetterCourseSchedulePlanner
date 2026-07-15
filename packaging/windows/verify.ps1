@@ -16,8 +16,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $PackageId = 'WINDOWS_LOCAL_RELEASE_ARCHIVE'
-$ExpectedSourceCommit = '554c6cafcfaae59eaf3835cabfb4063d1e04b41f'
-$ExpectedSourceDateEpoch = 1784141916
+$ExpectedSourceCommit = 'ceeeabb798cc262475c4d2fe220a4a7921995cde'
+$ExpectedSourceDateEpoch = 1784148947
 $RepositoryRoot = [System.IO.Path]::GetFullPath(
     (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 )
