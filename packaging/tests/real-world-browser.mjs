@@ -19,6 +19,24 @@ function requireGate(value, code) {
   if (!value) fail(code);
 }
 
+function classifyNetworkError(value) {
+  const httpStatus = /(?:response|status)[^0-9]{0,12}([345][0-9]{2})/iu.exec(value);
+  if (httpStatus !== null) return `HTTP_${httpStatus[1]}`;
+  const networkCode = /\b(?:net::)?(ERR_[A-Z0-9_]+)\b/u.exec(value);
+  return networkCode === null ? 'OTHER' : `NET_${networkCode[1]}`;
+}
+
+function watchFrameType(payload) {
+  try {
+    const text = typeof payload === 'string' ? payload : payload.toString('utf8');
+    if (text.length > 65_536) return 'OTHER';
+    const envelope = JSON.parse(text);
+    return typeof envelope?.payload?.type === 'string' ? envelope.payload.type : 'OTHER';
+  } catch {
+    return 'OTHER';
+  }
+}
+
 async function step(code, action) {
   try {
     return await action();
@@ -144,7 +162,20 @@ async function assertPublicBoundary(page) {
 }
 
 async function attachNetworkGuard(context, page) {
-  const state = { offOrigin: 0, watchSockets: 0 };
+  const state = {
+    offOrigin: 0,
+    pageErrors: 0,
+    consoleErrors: 0,
+    watchSockets: 0,
+    watchSocketCloses: 0,
+    watchSocketErrors: [],
+    watchRequestFailures: [],
+    watchFramesSent: 0,
+    watchFramesReceived: 0,
+    watchStartFramesSent: 0,
+    watchStartResultFramesReceived: 0,
+    watchObservationFramesReceived: 0,
+  };
   await context.route('**/*', async (route) => {
     try {
       const url = new URL(route.request().url());
@@ -168,12 +199,49 @@ async function attachNetworkGuard(context, page) {
       state.offOrigin += 1;
     }
   });
+  page.on('console', (message) => {
+    if (message.type() === 'error') state.consoleErrors += 1;
+  });
+  page.on('pageerror', () => {
+    state.pageErrors += 1;
+  });
+  page.on('requestfailed', (request) => {
+    try {
+      const url = new URL(request.url());
+      if (url.host !== parsedBaseUrl.host || url.pathname !== '/api/v1/watch') return;
+      const category = classifyNetworkError(request.failure()?.errorText ?? '');
+      if (!state.watchRequestFailures.includes(category)) {
+        state.watchRequestFailures.push(category);
+      }
+    } catch {
+      // The network boundary counter above owns malformed URL failures.
+    }
+  });
   page.on('websocket', (socket) => {
     try {
       const url = new URL(socket.url());
       if (url.protocol === 'wss:' && url.host === parsedBaseUrl.host
         && url.pathname === '/api/v1/watch') {
         state.watchSockets += 1;
+        socket.on('close', () => {
+          state.watchSocketCloses += 1;
+        });
+        socket.on('socketerror', (error) => {
+          const category = classifyNetworkError(error);
+          if (!state.watchSocketErrors.includes(category)) {
+            state.watchSocketErrors.push(category);
+          }
+        });
+        socket.on('framesent', ({ payload }) => {
+          state.watchFramesSent += 1;
+          if (watchFrameType(payload) === 'START_WATCH') state.watchStartFramesSent += 1;
+        });
+        socket.on('framereceived', ({ payload }) => {
+          state.watchFramesReceived += 1;
+          const type = watchFrameType(payload);
+          if (type === 'START_RESULT') state.watchStartResultFramesReceived += 1;
+          if (type === 'OPEN_OBSERVATION') state.watchObservationFramesReceived += 1;
+        });
       } else {
         state.offOrigin += 1;
       }
@@ -182,6 +250,55 @@ async function attachNetworkGuard(context, page) {
     }
   });
   return state;
+}
+
+async function watchOpenDiagnostic(page, network) {
+  let metricError = false;
+  let metrics;
+  try {
+    metrics = await metricsSnapshot();
+  } catch {
+    metricError = true;
+    metrics = new Map();
+  }
+  const dom = await page.evaluate(() => {
+    const workspace = document.querySelector('.watch-workspace');
+    const badges = [...document.querySelectorAll('.watch-workspace__badge')];
+    const startButton = [...document.querySelectorAll('button')].find((button) => (
+      button.textContent?.trim().startsWith('Start selected')
+    ));
+    const toastTitles = [...document.querySelectorAll('.watch-toast__title')]
+      .map((title) => title.textContent?.trim() ?? '');
+    return {
+      connection: workspace?.getAttribute('data-watch-connection') ?? 'MISSING',
+      itemCount: document.querySelectorAll('.watch-workspace__item').length,
+      selectedBadges: badges.filter((badge) => badge.getAttribute('data-state') === 'SELECTED').length,
+      readyBadges: badges.filter((badge) => badge.getAttribute('data-state') === 'READY').length,
+      openBadges: badges.filter((badge) => badge.getAttribute('data-state') === 'OPEN').length,
+      startingBadges: badges.filter((badge) => badge.textContent?.trim() === 'Starting').length,
+      startButtonDisabled: startButton instanceof HTMLButtonElement ? startButton.disabled : null,
+      connectionLostNotice: toastTitles.includes('Watch connection ended'),
+      commandFailedNotice: toastTitles.includes('Watch command failed'),
+      startRejectedNotice: toastTitles.includes('Watch could not start'),
+    };
+  });
+  return {
+    ...dom,
+    watchSocketsSeen: network.watchSockets,
+    socketCloseCount: network.watchSocketCloses,
+    socketErrorCategories: network.watchSocketErrors,
+    requestFailureCategories: network.watchRequestFailures,
+    framesSent: network.watchFramesSent,
+    framesReceived: network.watchFramesReceived,
+    startFramesSent: network.watchStartFramesSent,
+    startResultFramesReceived: network.watchStartResultFramesReceived,
+    observationFramesReceived: network.watchObservationFramesReceived,
+    consoleErrorCount: network.consoleErrors,
+    pageErrorCount: network.pageErrors,
+    serviceWebsocketConnections: metrics.get('bcsp_websocket_connections') ?? null,
+    serviceActiveWatches: metrics.get('bcsp_active_watches') ?? null,
+    metricError,
+  };
 }
 
 async function openSectionsWorkspace(page) {
@@ -301,7 +418,7 @@ async function selectCurrentOpenSection(page) {
   return `${termValue}\u0000${campusValue}`;
 }
 
-async function startWatch(page) {
+async function startWatch(page, network) {
   await page.locator('.bcsp-navigation a[href="/watch"]').click();
   await page.waitForURL(`${origin}/watch`);
   await page.locator('.watch-workspace').waitFor({ state: 'visible', timeout: 30_000 });
@@ -314,9 +431,14 @@ async function startWatch(page) {
   }, undefined, { timeout: 15_000 });
 
   await page.getByRole('button', { name: /^Start selected/u }).click();
-  await page.locator('.watch-workspace[data-watch-connection="OPEN"]').waitFor({
-    state: 'visible', timeout: 30_000,
-  });
+  try {
+    await page.locator('.watch-workspace[data-watch-connection="OPEN"]').waitFor({
+      state: 'visible', timeout: 30_000,
+    });
+  } catch {
+    const diagnostic = await watchOpenDiagnostic(page, network);
+    throw new Error(`watch connection did not open diagnostic=${JSON.stringify(diagnostic)}`);
+  }
   const item = page.locator('.watch-workspace__item').first();
   await item.locator('.watch-workspace__badge[data-state="READY"]').waitFor({
     state: 'visible', timeout: 30_000,
@@ -439,7 +561,7 @@ try {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 32_000));
   for (const scenario of scenarios) {
     await step(`E2E_${scenario.name.toUpperCase()}_WATCH`, async () => {
-      await startWatch(scenario.page);
+      await startWatch(scenario.page, scenario.network);
     });
   }
 
