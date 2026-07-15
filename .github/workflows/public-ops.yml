@@ -132,7 +132,7 @@ jobs:
           printf 'Linux candidate SHA256: %s\n' "$actual_hash"
           printf 'Linux candidate bytes: %s\n' "$actual_bytes"
           test "$actual_hash" = \
-            '6d1f5a14d15459f418910935ee62012d1168a63fc69ff04dbac66e02d7c31d2b'
+            'bc7d22e7b5abc997590f85563cdacbded4c76bfe98aa9899daf1842103ec05c1'
           bash packaging/linux/verify.sh --archive "$archive"
           install -d "$candidate"
           tar -xzf "$archive" -C "$candidate" --no-same-owner
@@ -172,7 +172,7 @@ jobs:
         with:
           path: ${{ steps.candidate.outputs.archive }}
           key: >-
-            p7-5-linux-candidate-6d1f5a14d15459f418910935ee62012d1168a63fc69ff04dbac66e02d7c31d2b-${{ github.run_id }}-${{ github.run_attempt }}
+            p7-5-linux-candidate-bc7d22e7b5abc997590f85563cdacbded4c76bfe98aa9899daf1842103ec05c1-${{ github.run_id }}-${{ github.run_attempt }}
 
   windows-candidate:
     if: github.event_name != 'workflow_dispatch' || !inputs.p75_linux_real_world
@@ -279,7 +279,7 @@ jobs:
           $bytes = (Get-Item -LiteralPath $archive).Length
           Write-Host "Windows candidate SHA256: $hash"
           Write-Host "Windows candidate bytes: $bytes"
-          if ($hash -cne '87d9b1dfc788846f4eff1518b0e1ec41ac699ef4ba979cdcda944c5a89f4d9b5') {
+          if ($hash -cne '2948b9289a6a80e31b5db16c0b1ffb2721f19bd723b30eff37a8a0d40eaa41f9') {
             throw "The Windows candidate hash drifted: $hash"
           }
           $utf8 = New-Object Text.UTF8Encoding($false)
@@ -511,8 +511,8 @@ jobs:
           archive="$RUNNER_TEMP/rbcsp-release/rbcsp-linux-x86_64-0.1.0.tar.gz"
           candidate="$RUNNER_TEMP/rbcsp-live-candidate"
           test "$(sha256sum "$archive" | awk '{print $1}')" = \
-            '6d1f5a14d15459f418910935ee62012d1168a63fc69ff04dbac66e02d7c31d2b'
-          test "$(stat -c '%s' "$archive")" -eq 6424513
+            'bc7d22e7b5abc997590f85563cdacbded4c76bfe98aa9899daf1842103ec05c1'
+          test "$(stat -c '%s' "$archive")" -eq 6457771
           install -d "$candidate"
           tar -xzf "$archive" -C "$candidate" --no-same-owner
           test "$(find "$candidate" -type f | wc -l)" -eq 20

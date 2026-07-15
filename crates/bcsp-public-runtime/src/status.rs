@@ -504,9 +504,10 @@ mod tests {
 
     use bcsp_contracts::{CourseGroupKey, CourseVariantKey, SectionKey, TraceId};
     use bcsp_operational_storage::{
-        CatalogRefreshCommand, CatalogSnapshot, EmptySnapshotDecision, OpenCircuitState,
-        OpenOriginState, OperationalStorage, StoredCourseGroup, StoredCourseVariant, StoredSection,
-        catalog_content_sha256_v1,
+        CatalogRefreshCommand, CatalogSnapshot, DiscoveredCampus, DiscoveredTerm,
+        DiscoveryRefreshCommand, DiscoverySnapshot, DiscoverySourceKind, DiscoverySourceVersion,
+        EmptySnapshotDecision, OpenCircuitState, OpenOriginState, OperationalStorage,
+        StoredCourseGroup, StoredCourseVariant, StoredSection, catalog_content_sha256_v1,
     };
     use serde_json::json;
     use tempfile::TempDir;
@@ -557,6 +558,47 @@ mod tests {
 
     fn publish_one_catalog_target(storage: &mut OperationalStorage) -> TermCampusKey {
         let target = TermCampusKey::try_new("TERM_2026_FALL", "CAMPUS_A").expect("target");
+        let source_version_id =
+            "selector:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_owned();
+        storage
+            .apply_discovery_refresh(DiscoveryRefreshCommand {
+                observation_id: "00000000-0000-4000-8000-000000000002"
+                    .parse::<TraceId>()
+                    .expect("discovery observation"),
+                started_at: "2026-07-15T00:00:00Z".to_owned(),
+                completed_at: "2026-07-15T00:00:01Z".to_owned(),
+                snapshot: DiscoverySnapshot {
+                    sources: vec![DiscoverySourceVersion {
+                        source_version_id: source_version_id.clone(),
+                        source_kind: DiscoverySourceKind::Selector,
+                        source_identity: "RUTGERS_SELECTOR".to_owned(),
+                        content_sha256:
+                            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                                .to_owned(),
+                        canonical_facts: json!({"fixture": "lock-order"}),
+                        observed_at: "2026-07-15T00:00:01Z".to_owned(),
+                    }],
+                    terms: vec![DiscoveredTerm {
+                        term_id: target.term().clone(),
+                        year: Some(2026),
+                        term_code: Some("9".to_owned()),
+                        display_name: Some("Synthetic Fall 2026".to_owned()),
+                        published: Some(true),
+                        canonical_facts: json!({"fixture": "lock-order"}),
+                        source_version_id: source_version_id.clone(),
+                    }],
+                    campuses: vec![DiscoveredCampus {
+                        target: target.clone(),
+                        display_name: Some("Synthetic Campus".to_owned()),
+                        category: Some("SYNTHETIC".to_owned()),
+                        enabled: Some(true),
+                        canonical_facts: json!({"fixture": "lock-order"}),
+                        source_version_id,
+                    }],
+                    subjects: Vec::new(),
+                },
+            })
+            .expect("publish discovery");
         let group =
             CourseGroupKey::try_new("TERM_2026_FALL", "CAMPUS_A", "SYN:101").expect("group");
         let variant = CourseVariantKey::try_new(
