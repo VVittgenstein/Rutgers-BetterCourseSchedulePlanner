@@ -1,0 +1,23 @@
+{
+  "task": "P7.4-005-R1",
+  "status": "PRECOMMIT_CANDIDATE_ACCEPTANCE_VERIFIED",
+  "parent": "616de30551d13b202f3d68d9822ec2ae3670adb2",
+  "verifiedAtUtc": "2026-07-15T08:57:57.7601602Z",
+  "successfulRunIds": [29400462225, 29401683685],
+  "jobs": {
+    "first": { "windows": 87303585497, "linux": 87303585410, "productFlow": 87303585433, "malware": 87306269827 },
+    "second": { "windows": 87307452918, "linux": 87307452917, "productFlow": 87307452935, "malware": 87310044480 }
+  },
+  "checks": {
+    "twoIndependentHostedRuns": "PASS",
+    "candidateBytes": "PASS_IDENTICAL",
+    "jointAudit": "PASS_BOTH_PAIRS",
+    "malware": "PASS_BOTH_RUNS_ZERO_INFECTED"
+  },
+  "realWorldE2ECompleted": false,
+  "githubReleaseCreated": false,
+  "productionDeploymentAuthorized": false,
+  "gate": "P7_5_ELIGIBLE_R1",
+  "postPushMarker": "P7_4_005_R1_PASS_POST_PUSH",
+  "nextTask": "P7.5-001-R1"
+}
