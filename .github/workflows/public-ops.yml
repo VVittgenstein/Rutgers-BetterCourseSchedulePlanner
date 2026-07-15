@@ -83,7 +83,7 @@ jobs:
       - name: Install the pinned Rust build and metadata tools
         run: |
           rustup toolchain install 1.97.0 --profile minimal --target x86_64-unknown-linux-gnu
-          cargo install cargo-about --version 0.9.1 --locked
+          cargo install cargo-about --version 0.9.1 --locked --features cli
           cargo install cargo-cyclonedx --version 0.5.9 --locked
           test "$(rustc --version | awk '{print $2}')" = '1.97.0'
           test "$(cargo --version | awk '{print $2}')" = '1.97.0'
