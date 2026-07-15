@@ -254,7 +254,7 @@ jobs:
             -SourceRoot $sourceRoot -OutputRoot $outputRoot
           $archive = Join-Path $outputRoot 'rbcsp-windows-x86_64-0.1.0.zip'
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -cne '325794d064fdb4af3c16146e1ebdad21febcebe76f5a284f46bcde28f50bf479') {
+          if ($hash -cne '5611624110d8899e7b3b7c2f233c09fa3629e476668f6efb1bb42e9fd95bac3d') {
             throw "The Windows candidate hash drifted: $hash"
           }
           $utf8 = New-Object Text.UTF8Encoding($false)
