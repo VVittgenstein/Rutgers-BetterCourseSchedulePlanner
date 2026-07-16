@@ -373,8 +373,7 @@ async function selectAndStart(
     sections.forEach((sectionKey) => harness.value().select(sectionKey));
   });
   await act(async () => {
-    harness.value().startSelected(policy);
-    await Promise.resolve();
+    await harness.value().startSelected(policy);
   });
 }
 
@@ -407,6 +406,72 @@ describe('LiveWatchProvider', () => {
     expect(harness.audio.unlock).toHaveBeenCalledOnce();
     expect(harness.audio.preview).not.toHaveBeenCalled();
     expect(harness.watch.commands).toContainEqual(expect.objectContaining({ type: 'START_WATCH' }));
+  });
+
+  it('settles the user-gesture audio unlock before sending START_WATCH', async () => {
+    const unlock = deferred<WatchAudioUnlockResult>();
+    const harness = createHarness();
+    harness.audio.unlock.mockImplementationOnce(async () => unlock.promise);
+    await act(async () => harness.value().select(SECTION_A));
+
+    let start!: Promise<void>;
+    act(() => {
+      start = harness.value().startSelected(DEFAULT_WATCH_POLICY);
+    });
+
+    expect(harness.value().starting).toBe(true);
+    expect(harness.value().pending).toEqual([SECTION_A]);
+    expect(harness.watch.commands).toEqual([]);
+
+    await act(async () => {
+      unlock.resolve('READY');
+      await start;
+    });
+    expect(harness.value().starting).toBe(false);
+    expect(harness.watch.commands).toContainEqual(expect.objectContaining({ type: 'START_WATCH' }));
+  });
+
+  it.each(['BLOCKED', 'FAILED'] as const)(
+    'starts live watch after a %s audio unlock and keeps the warning state visible',
+    async (unlockResult) => {
+      const harness = createHarness();
+      harness.audio.unlock.mockResolvedValueOnce(unlockResult);
+      await selectAndStart(harness, [SECTION_A]);
+
+      expect(harness.watch.commands).toContainEqual(expect.objectContaining({ type: 'START_WATCH' }));
+      expect(harness.value().audioState).toBe(unlockResult);
+      expect(harness.value().notices).toContainEqual(expect.objectContaining({
+        code: unlockResult === 'BLOCKED' ? 'AUDIO_BLOCKED' : 'AUDIO_FAILED',
+      }));
+    },
+  );
+
+  it('does not lose the first fresh OPEN cue after the ordered start', async () => {
+    const harness = createHarness();
+    await selectAndStart(harness, [SECTION_A]);
+    await emit(harness, startResult([[SECTION_A, ACTIVE_A]]));
+    await emit(harness, {
+      type: 'AUDIO_DISPOSITION',
+      audio: {
+        disposition: 'CUE_REQUESTED',
+        cue: {
+          cueId: '30000000-0000-4000-8000-000000000001',
+          activeWatchId: ACTIVE_A,
+          sectionKey: SECTION_A,
+          trigger: {
+            kind: 'ONE_SHOT_OBSERVATION',
+            observationId: '40000000-0000-4000-8000-000000000001',
+          },
+          emittedAt: LATER,
+        },
+      },
+    });
+
+    expect(harness.audio.play).toHaveBeenCalledOnce();
+    expect(harness.watch.commands.at(-1)).toMatchObject({
+      type: 'REPORT_CUE_OUTCOME',
+      report: { outcome: 'STARTED', sectionKey: SECTION_A },
+    });
   });
 
   it('plays a local preview only when the user explicitly tests sound', async () => {
@@ -462,9 +527,31 @@ describe('LiveWatchProvider', () => {
     expect(harness.value().batchStatuses[0]?.scheduler.schedulerLagMilliseconds).toBe(987);
   });
 
-  it('clears recovered telemetry failures after an observation and batch reread both succeed', async () => {
+  it('keeps successful UNKNOWN telemetry as no-data without inventing a success time', async () => {
+    const harness = createHarness();
+    await act(async () => harness.value().select(SECTION_A));
+    await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
+
+    expect(harness.value().telemetryResources).toHaveLength(2);
+    expect(harness.value().telemetryResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        availability: 'ERROR_NO_DATA',
+        error: null,
+        lastSuccessAt: null,
+      }),
+    ]));
+    expect(harness.value().telemetryResources.every((resource) =>
+      resource.availability === 'ERROR_NO_DATA'
+      && resource.error === null
+      && resource.lastSuccessAt === null)).toBe(true);
+  });
+
+  it('tracks telemetry failures per resource and clears only the resource that recovered', async () => {
+    let sectionAFails = true;
     const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async ({ sectionKey }) => {
-      if (sectionKey.index === SECTION_A.index) throw new Error('initial Section telemetry failure');
+      if (sectionKey.index === SECTION_A.index && sectionAFails) {
+        throw new Error('initial Section telemetry failure');
+      }
       return sectionStatus(sectionKey);
     });
     const openStatus = vi.fn<ProductApiPort['openStatus']>()
@@ -477,7 +564,8 @@ describe('LiveWatchProvider', () => {
       harness.value().select(SECTION_C);
     });
     await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
-    expect(harness.value().telemetryError).toBe(true);
+    expect(harness.value().telemetryResources.filter((resource) => resource.error !== null))
+      .toHaveLength(2);
     expect(harness.value().sectionStatuses.map((status) => status.sectionKey)).toEqual([SECTION_C]);
     expect(harness.value().batchStatuses).toEqual([]);
 
@@ -488,7 +576,18 @@ describe('LiveWatchProvider', () => {
       SECTION_C,
       SECTION_A,
     ]);
-    expect(harness.value().telemetryError).toBe(false);
+    expect(harness.value().telemetryResources.filter((resource) => resource.error !== null))
+      .toHaveLength(1);
+    expect(harness.value().telemetryResources.find((resource) =>
+      resource.kind === 'SECTION' && resource.sectionKey?.index === SECTION_A.index))
+      .toMatchObject({ availability: 'ERROR_NO_DATA' });
+
+    sectionAFails = false;
+    const sectionResource = harness.value().telemetryResources.find((resource) =>
+      resource.kind === 'SECTION' && resource.sectionKey?.index === SECTION_A.index);
+    await act(async () => harness.value().retryTelemetryResource(sectionResource!.key));
+    expect(harness.value().telemetryResources.filter((resource) => resource.error !== null))
+      .toHaveLength(0);
   });
 
   it('keeps the telemetry error while another Section resource is still failed', async () => {
@@ -503,13 +602,17 @@ describe('LiveWatchProvider', () => {
       harness.value().select(SECTION_D);
     });
     await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
-    expect(harness.value().telemetryError).toBe(true);
+    expect(harness.value().telemetryResources.filter((resource) => resource.error !== null))
+      .toHaveLength(2);
 
     await emit(harness, observationEvent());
     await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(2));
     expect(harness.value().sectionStatuses.map((status) => status.sectionKey)).toEqual([SECTION_A]);
     expect(harness.value().batchStatuses).toHaveLength(1);
-    expect(harness.value().telemetryError).toBe(true);
+    expect(harness.value().telemetryResources.some((resource) =>
+      resource.kind === 'SECTION'
+      && resource.sectionKey?.index === SECTION_D.index
+      && resource.error !== null)).toBe(true);
   });
 
   it('does not resurrect telemetry after the final Section is removed', async () => {
@@ -529,7 +632,7 @@ describe('LiveWatchProvider', () => {
     await act(async () => Promise.resolve());
     expect(harness.value().batchStatuses).toEqual([]);
     expect(harness.value().sectionStatuses).toEqual([]);
-    expect(harness.value().telemetryError).toBe(false);
+    expect(harness.value().telemetryResources).toEqual([]);
   });
 
   it('expires a FRESH observation at freshUntil before the status reread completes', async () => {

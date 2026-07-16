@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { ActionButton, StatePanel } from '../design-system';
 import { filterSerializationIssueMessageKeys } from '../i18n/presenter';
@@ -6,32 +6,34 @@ import { useBcspI18n } from '../i18n/runtime';
 import {
   FilterSerializationError,
   ProductClientError,
+  coerceFilterStateV2,
   createCourseQueryRequestV1,
   createNeutralFilterState,
-  createSectionQueryRequestV1,
+  isSearchDataReady,
   type CourseDetailResponseV1,
   type CourseGroupKey,
-  type CourseQueryResponseV1,
   type FilterSerializationIssue,
+  type FilterOptionsFieldV2,
   type FilterStateV1,
   type ProductRuntimePort,
   type SectionDetailResponseV1,
   type SectionKey,
-  type SectionQueryResponseV1,
   type ServiceStatusV1,
 } from '../product';
 import type { ShellDataState } from '../shell';
 import { RouterLink, useAppRouter } from '../routing';
 import { FilterPanel } from './filters';
 import {
+  SearchSessionProvider,
+  useOptionalSearchSession,
+  useSearchSession,
+} from './SearchSession';
+import {
   CourseDetailView,
   CourseResultsView,
   SectionDetailView,
-  SectionResultsView,
 } from './results';
 import { SearchWorkspaceStyles } from './searchStyles';
-
-type SearchMode = 'COURSES' | 'SECTIONS';
 
 type QueryState =
   | { readonly kind: 'IDLE' }
@@ -42,8 +44,7 @@ type QueryState =
   }
   | { readonly kind: 'ERROR' }
   | { readonly kind: 'NOT_READY' }
-  | { readonly kind: 'COURSES'; readonly response: CourseQueryResponseV1 }
-  | { readonly kind: 'SECTIONS'; readonly response: SectionQueryResponseV1 };
+  | { readonly kind: 'COURSES' };
 
 type CourseDetailState =
   | { readonly kind: 'CLOSED' }
@@ -216,7 +217,7 @@ function DirectSectionRoute({
     const abort = new AbortController();
     setState({ kind: 'LOADING' });
     void runtime.product.sectionDetail(
-      { contractVersion: 1, key: sectionKey },
+      { contractVersion: 2, key: sectionKey },
       abort.signal,
     ).then((response) => {
       setState({ kind: 'READY', response });
@@ -231,8 +232,8 @@ function DirectSectionRoute({
       <SearchWorkspaceStyles />
       <section className="bcsp-search-workspace__results">
         <div className="bcsp-search-workspace__detail-actions">
-          <RouterLink className="bcsp-search-workspace__back" to="/sections">
-            &lt;&lt; {t('search.back_to_sections')}
+          <RouterLink className="bcsp-search-workspace__back" to="/">
+            &lt;&lt; {t('search.back_to_courses')}
           </RouterLink>
           <p className="bcsp-search-workspace__route-meta">/sections/term/campus/index</p>
         </div>
@@ -243,7 +244,7 @@ function DirectSectionRoute({
         ) : state.kind === 'ERROR' ? (
           <div className="bcsp-search-workspace__state">
             <StatePanel
-              action={<ActionButton onClick={() => navigate('/sections')} tone="accent">{t('action.back')}</ActionButton>}
+              action={<ActionButton onClick={() => navigate('/')} tone="accent">{t('action.back')}</ActionButton>}
               detail={t('search.direct_route_error')}
               heading={t('search.section_detail_title')}
               kind="error"
@@ -261,7 +262,7 @@ function DirectSectionRoute({
   );
 }
 
-export function SearchWorkspace({
+function SearchWorkspaceController({
   initialFilters,
   onFiltersChange,
   runtime,
@@ -270,28 +271,33 @@ export function SearchWorkspace({
 }: SearchWorkspaceProps) {
   const i18n = useBcspI18n();
   const { navigate, pathname } = useAppRouter();
+  const session = useSearchSession();
   const directSection = useMemo(() => parseSectionRoute(pathname), [pathname]);
-  const mode: SearchMode = pathname === '/sections' || directSection !== null
-    ? 'SECTIONS'
-    : 'COURSES';
-  const [filters, setFilters] = useState<FilterStateV1>(() =>
-    initialFilters ?? createInitialFilters(shellState));
+  const fallbackFilters = useMemo(() =>
+    initialFilters === undefined
+      ? createInitialFilters(shellState)
+      : coerceFilterStateV2(initialFilters, createInitialFilters(shellState).term),
+  [initialFilters, shellState]);
+  const filters = session.state.draftFilters ?? fallbackFilters;
   const [query, setQuery] = useState<QueryState>({ kind: 'IDLE' });
   const [courseDetail, setCourseDetail] = useState<CourseDetailState>({ kind: 'CLOSED' });
-  const userEditedFilters = useRef(false);
   const searchAbort = useRef<AbortController | null>(null);
   const detailAbort = useRef<AbortController | null>(null);
+  const filtersRef = useRef<HTMLElement | null>(null);
   const resultsRef = useRef<HTMLElement | null>(null);
   const resultsHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const pendingFocus = useRef<PendingSearchFocus>(null);
   const courseDetailReturnTarget = useRef<CourseDetailReturnTarget | null>(null);
-  const searchAvailable = serviceStatus === undefined
-    ? true
-    : serviceStatus !== null
-      && filters.term !== null
-      && filters.campuses.length > 0
-      && filters.campuses.every((campus) => serviceStatus.targets.some(({ target, searchAvailable: available }) =>
-        target.term === filters.term && target.campus === campus && available));
+  const searchDataReady = isSearchDataReady(serviceStatus);
+  const searchAvailable = searchDataReady
+    && filters.term !== null
+    && filters.campuses.length > 0;
+
+  useLayoutEffect(() => {
+    if (filtersRef.current !== null) {
+      filtersRef.current.scrollTop = session.restoreFilterScrollTop();
+    }
+  }, [session.restoreFilterScrollTop]);
 
   useEffect(() => () => {
     searchAbort.current?.abort();
@@ -299,7 +305,11 @@ export function SearchWorkspace({
   }, []);
 
   useEffect(() => {
-    if (initialFilters !== undefined || userEditedFilters.current) return;
+    if (session.state.draftFilters === null) {
+      session.setDraftFilters(fallbackFilters, false);
+      return;
+    }
+    if (initialFilters !== undefined || session.state.draftWasEdited) return;
     const next = createInitialFilters(shellState);
     if (
       filters.term === next.term
@@ -312,19 +322,20 @@ export function SearchWorkspace({
     detailAbort.current?.abort();
     pendingFocus.current = null;
     courseDetailReturnTarget.current = null;
-    setFilters(next);
+    session.setDraftFilters(next, false);
     setQuery({ kind: 'IDLE' });
     setCourseDetail({ kind: 'CLOSED' });
     onFiltersChange?.(next);
-  }, [filters, initialFilters, onFiltersChange, shellState]);
-
-  useEffect(() => {
-    if (directSection !== null) return;
-    searchAbort.current?.abort();
-    detailAbort.current?.abort();
-    setQuery({ kind: 'IDLE' });
-    setCourseDetail({ kind: 'CLOSED' });
-  }, [mode, directSection]);
+  }, [
+    fallbackFilters,
+    filters,
+    initialFilters,
+    onFiltersChange,
+    session.setDraftFilters,
+    session.state.draftFilters,
+    session.state.draftWasEdited,
+    shellState,
+  ]);
 
   useEffect(() => {
     if (query.kind === 'NOT_READY' && searchAvailable) setQuery({ kind: 'IDLE' });
@@ -363,8 +374,8 @@ export function SearchWorkspace({
     results.scrollIntoView?.({ behavior: 'auto', block: 'start' });
   }, [courseDetail.kind, query.kind]);
 
-  const runSearch = useCallback(async (page = 1) => {
-    if (!searchAvailable) {
+  const runSearch = useCallback(async (page = 1, fromSuccessfulRequest = false) => {
+    if (!searchDataReady || (!fromSuccessfulRequest && !searchAvailable)) {
       setQuery({ kind: 'NOT_READY' });
       return;
     }
@@ -376,28 +387,40 @@ export function SearchWorkspace({
     setCourseDetail({ kind: 'CLOSED' });
     setQuery({ kind: 'LOADING' });
     try {
-      if (mode === 'COURSES') {
-        const response = await runtime.product.searchCourses(
-          createCourseQueryRequestV1(filters, { page, pageSize: 25 }),
-          abort.signal,
-        );
-        if (!abort.signal.aborted) setQuery({ kind: 'COURSES', response });
-      } else {
-        const response = await runtime.product.searchSections(
-          createSectionQueryRequestV1(filters, { page, pageSize: 25 }),
-          abort.signal,
-        );
-        if (!abort.signal.aborted) setQuery({ kind: 'SECTIONS', response });
+      const successfulRequest = session.state.lastSuccessfulRequest;
+      const request = fromSuccessfulRequest && successfulRequest !== null
+        ? {
+          ...successfulRequest,
+          page: { ...successfulRequest.page, page },
+          sort: { ...successfulRequest.sort },
+        }
+        : createCourseQueryRequestV1(filters, { page, pageSize: 25 });
+      session.recordSubmission(request);
+      const response = await runtime.product.searchCourses(request, abort.signal);
+      if (!abort.signal.aborted) {
+        session.recordSuccess(request, response);
+        setQuery({ kind: 'COURSES' });
       }
     } catch (error) {
       if (abort.signal.aborted) return;
       setQuery(error instanceof FilterSerializationError
         ? { kind: 'VALIDATION_ERROR', issue: error.issue }
-        : error instanceof ProductClientError && error.apiError?.error.code === 'CATALOG_NOT_READY'
+        : error instanceof ProductClientError && (
+          error.apiError?.error.code === 'CATALOG_NOT_READY'
+          || error.apiError?.error.code === 'SEARCH_DATA_NOT_READY'
+        )
           ? { kind: 'NOT_READY' }
           : { kind: 'ERROR' });
     }
-  }, [filters, mode, runtime, searchAvailable]);
+  }, [
+    filters,
+    runtime,
+    searchAvailable,
+    searchDataReady,
+    session.recordSubmission,
+    session.recordSuccess,
+    session.state.lastSuccessfulRequest,
+  ]);
 
   const openCourseDetail = useCallback((key: CourseGroupKey) => {
     detailAbort.current?.abort();
@@ -419,7 +442,7 @@ export function SearchWorkspace({
     pendingFocus.current = 'OUTPUT';
     setCourseDetail({ kind: 'LOADING' });
     void runtime.product.courseDetail(
-      { contractVersion: 1, key },
+      { contractVersion: 2, key },
       abort.signal,
     ).then((response) => {
       if (!abort.signal.aborted) setCourseDetail({ kind: 'READY', response });
@@ -428,12 +451,39 @@ export function SearchWorkspace({
     });
   }, [runtime]);
 
-  if (directSection !== null) {
-    return <DirectSectionRoute runtime={runtime} sectionKey={directSection} />;
-  }
+  const loadFilterOptions = useCallback((
+    field: FilterOptionsFieldV2,
+    optionQuery?: string,
+    signal?: AbortSignal,
+  ) => {
+    if (filters.term === null || filters.campuses.length === 0) {
+      return Promise.reject(new Error('Filter options require a selected target.'));
+    }
+    const response = runtime.product.filterOptions?.({
+      contractVersion: 2,
+      term: filters.term,
+      campuses: filters.campuses,
+      field,
+      ...(optionQuery === undefined || optionQuery.trim() === '' ? {} : { query: optionQuery }),
+      limit: 50,
+    }, signal);
+    return response ?? Promise.reject(new Error('Filter options are unavailable.'));
+  }, [filters.campuses, filters.term, runtime]);
 
-  const empty = (query.kind === 'COURSES' || query.kind === 'SECTIONS')
-    && query.response.items.length === 0;
+  const retainedResponse = session.state.lastSuccessfulResponse;
+  const empty = retainedResponse !== null && retainedResponse.items.length === 0;
+  const retainedFeedback = query.kind === 'ERROR'
+    || query.kind === 'NOT_READY'
+    || query.kind === 'VALIDATION_ERROR'
+    ? (
+      <SearchState
+        kind={query.kind}
+        message={query.kind === 'VALIDATION_ERROR'
+          ? i18n.t(filterSerializationIssueMessageKeys[query.issue])
+          : undefined}
+      />
+    )
+    : null;
 
   let results;
   if (courseDetail.kind === 'LOADING') {
@@ -453,35 +503,15 @@ export function SearchWorkspace({
           <p className="bcsp-search-workspace__route-meta">{i18n.t('search.course_detail_title')}</p>
         </div>
         <CourseDetailView
+          expandedSectionDisclosures={session.state.expandedSectionDisclosures}
+          onSectionDisclosureChange={session.setSectionDisclosureExpanded}
           onSectionNavigate={(key) => navigate(sectionHref(key))}
           response={courseDetail.response}
           sectionHref={sectionHref}
         />
       </>
     );
-  } else if (empty) {
-    results = <EmptySearchState />;
-  } else if (query.kind === 'COURSES') {
-    results = (
-      <CourseResultsView
-        onCourseDetail={openCourseDetail}
-        onPageChange={(page) => void runSearch(page)}
-        onSectionNavigate={(key) => navigate(sectionHref(key))}
-        response={query.response}
-        sectionHref={sectionHref}
-      />
-    );
-  } else if (query.kind === 'SECTIONS') {
-    results = (
-      <SectionResultsView
-        onCourseDetail={openCourseDetail}
-        onPageChange={(page) => void runSearch(page)}
-        onSectionNavigate={(key) => navigate(sectionHref(key))}
-        response={query.response}
-        sectionHref={sectionHref}
-      />
-    );
-  } else {
+  } else if (retainedResponse === null) {
     results = (
       <SearchState
         kind={query.kind}
@@ -490,23 +520,46 @@ export function SearchWorkspace({
           : undefined}
       />
     );
+  } else if (empty) {
+    results = <>{retainedFeedback}<EmptySearchState /></>;
+  } else {
+    results = (
+      <>
+        {retainedFeedback}
+        <CourseResultsView
+          expandedSectionDisclosures={session.state.expandedSectionDisclosures}
+          onCourseDetail={openCourseDetail}
+          onPageChange={(page) => void runSearch(page, true)}
+          onSectionDisclosureChange={session.setSectionDisclosureExpanded}
+          onSectionNavigate={(key) => navigate(sectionHref(key))}
+          response={retainedResponse}
+          sectionHref={sectionHref}
+        />
+      </>
+    );
   }
 
   return (
-    <div className="bcsp-search-workspace" data-search-mode={mode.toLowerCase()}>
+    <>
+    {directSection === null ? null : <DirectSectionRoute runtime={runtime} sectionKey={directSection} />}
+    <div className="bcsp-search-workspace" data-search-mode="courses" hidden={directSection !== null}>
       <SearchWorkspaceStyles />
-      <section className="bcsp-search-workspace__filters" aria-labelledby="bcsp-search-filter-title">
+      <section
+        aria-labelledby="bcsp-search-filter-title"
+        className="bcsp-search-workspace__filters"
+        onScroll={(event) => session.saveFilterScrollTop(event.currentTarget.scrollTop)}
+        ref={filtersRef}
+      >
         <header className="bcsp-search-workspace__header">
           <h3 id="bcsp-search-filter-title">{i18n.t('search.filters_title')}</h3>
-          <p>{mode === 'COURSES' ? i18n.t('search.course_intro') : i18n.t('search.section_intro')}</p>
+          <p>{i18n.t('search.course_intro')}</p>
         </header>
         <FilterPanel
-          disabled={query.kind === 'LOADING'}
+          disabled={query.kind === 'LOADING' || !searchAvailable}
           discovery={shellState.discovery}
-          mode={mode}
+          loadOptions={loadFilterOptions}
           onChange={(next) => {
-            userEditedFilters.current = true;
-            setFilters(next);
+            session.setDraftFilters(next, true);
             onFiltersChange?.(next);
             setQuery({ kind: 'IDLE' });
             setCourseDetail({ kind: 'CLOSED' });
@@ -541,5 +594,16 @@ export function SearchWorkspace({
         </div>
       </section>
     </div>
+    </>
+  );
+}
+
+export function SearchWorkspace(props: SearchWorkspaceProps) {
+  const existingSession = useOptionalSearchSession();
+  if (existingSession !== null) return <SearchWorkspaceController {...props} />;
+  return (
+    <SearchSessionProvider>
+      <SearchWorkspaceController {...props} />
+    </SearchSessionProvider>
   );
 }

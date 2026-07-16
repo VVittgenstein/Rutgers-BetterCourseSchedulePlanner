@@ -13,6 +13,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BcspI18nProvider } from '../src/ui/shared/i18n/runtime';
+import { AppRouterProvider } from '../src/ui/shared/routing';
 import type { SupportedLocale } from '../src/ui/shared/i18n/contract';
 import type {
   OpenCircuitReason,
@@ -30,11 +31,13 @@ import type {
   WatchClientCommandV1,
   WatchConnectionState,
   WatchCueOutcome,
+  WatchPolicyV1,
   WatchServerEventV1,
   WatchServerListener,
   WatchStateListener,
   WsServerEnvelope,
 } from '../src/ui/shared/product';
+import { ProductClientError } from '../src/ui/shared/product';
 import {
   LiveWatchProvider,
   SectionSelectionAction,
@@ -329,13 +332,15 @@ function renderWatch(
   productOverrides: Partial<ProductApiPort> = {},
 ) {
   const result = render(
-    <BcspI18nProvider initialLocale={locale}>
-      <LiveWatchProvider audio={audio} runtime={runtime(watch, productOverrides)}>
-        <SelectionActions sections={sections} />
-        <WatchWorkspace />
-        <WatchToastRegion />
-      </LiveWatchProvider>
-    </BcspI18nProvider>,
+    <AppRouterProvider initialPath="/">
+      <BcspI18nProvider initialLocale={locale}>
+        <LiveWatchProvider audio={audio} runtime={runtime(watch, productOverrides)}>
+          <SelectionActions sections={sections} />
+          <WatchWorkspace />
+          <WatchToastRegion />
+        </LiveWatchProvider>
+      </BcspI18nProvider>
+    </AppRouterProvider>,
   );
   return { ...result, audio, watch };
 }
@@ -435,7 +440,7 @@ describe('Watch workspace product flow', () => {
     expect(screen.getByRole('heading', { name: '实时监看控制台' })).toBeTruthy();
     expect(screen.getByText('提醒方式')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', {
-      name: '选择课节 00001 以进行监看',
+      name: '将课节 00001 加入监看列表',
     }));
     expect(screen.getByLabelText('已选 1 / 9')).toBeTruthy();
     expect(screen.getByText('00001')).toBeTruthy();
@@ -448,24 +453,24 @@ describe('Watch workspace product flow', () => {
 
     for (const sectionKey of sections.slice(0, 9)) {
       fireEvent.click(screen.getByRole('button', {
-        name: `Select Section ${sectionKey.index} for watch`,
+        name: `Add Section ${sectionKey.index} to the watch list`,
       }));
     }
 
     expect(screen.getByLabelText('9 of 9 selected')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', {
-      name: 'Select Section 00010 for watch',
+      name: 'Add Section 00010 to the watch list',
     }));
 
     expect(await screen.findByRole('heading', { name: 'Selection limit reached' })).toBeTruthy();
     expect(screen.getByText(/00010 \/ 2026-9 \/ NB/u)).toBeTruthy();
     for (const sectionKey of sections.slice(0, 9)) {
       expect(screen.getByRole('button', {
-        name: `Remove Section ${sectionKey.index} for watch`,
+        name: `Remove Section ${sectionKey.index} from the watch list`,
       }).getAttribute('aria-pressed')).toBe('true');
     }
     expect(screen.getByRole('button', {
-      name: 'Select Section 00010 for watch',
+      name: 'Add Section 00010 to the watch list',
     }).getAttribute('aria-pressed')).toBe('false');
     expect(screen.getByLabelText('9 of 9 selected')).toBeTruthy();
   });
@@ -474,12 +479,14 @@ describe('Watch workspace product flow', () => {
     const sectionKey = section(1);
     const { audio, container, watch } = renderWatch([sectionKey]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select Section 00001 for watch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00001 to the watch list' }));
     expect(metricValue('Selected')).toBe('1');
     expect(metricValue('Active')).toBe('0');
-    expect(container.querySelector('[data-state="SELECTED"]')?.textContent).toBe('Selected');
+    expect(container.querySelector('[data-state="SELECTED"]')?.textContent).toBe('Added · not watching');
+    expect(screen.getByRole('link', { name: 'Go to Watch desk to configure alerts and start' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /Start selected/u }));
+    await waitFor(() => expect(watch.commands).toHaveLength(1));
     expect(watch.commands).toEqual([{
       type: 'START_WATCH',
       items: [{
@@ -495,7 +502,7 @@ describe('Watch workspace product flow', () => {
     expect(metricValue('Selected')).toBe('1');
     expect(metricValue('Active')).toBe('0');
     expect(container.querySelector('.watch-workspace__item [data-state="SELECTED"]')?.textContent)
-      .toBe('Starting');
+      .toBe('Starting watch');
 
     act(() => watch.emit(activeStart(sectionKey, 1)));
     await waitFor(() => expect(metricValue('Active')).toBe('1'));
@@ -512,6 +519,39 @@ describe('Watch workspace product flow', () => {
     expect(audio.previewCalls).toHaveBeenCalledWith(70);
   });
 
+  it('does not persist an unchanged policy when the parent callback identity changes', async () => {
+    const watch = new FakeWatchClient();
+    const audio = new FakeAudioController();
+    const watchRuntime = runtime(watch);
+    const firstCallback = vi.fn<(policy: WatchPolicyV1) => void>();
+    const secondCallback = vi.fn<(policy: WatchPolicyV1) => void>();
+    const tree = (onPolicyChange: (policy: WatchPolicyV1) => void) => (
+      <AppRouterProvider initialPath="/">
+        <BcspI18nProvider initialLocale="en-US">
+          <LiveWatchProvider audio={audio} runtime={watchRuntime}>
+            <WatchWorkspace onPolicyChange={onPolicyChange} />
+          </LiveWatchProvider>
+        </BcspI18nProvider>
+      </AppRouterProvider>
+    );
+    const view = render(tree(firstCallback));
+
+    expect(firstCallback).not.toHaveBeenCalled();
+    view.rerender(tree(secondCallback));
+    expect(firstCallback).not.toHaveBeenCalled();
+    expect(secondCallback).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByRole('spinbutton', {
+      name: 'Maximum audible cues per Section',
+    }), { target: { value: '4' } });
+    await waitFor(() => expect(secondCallback).toHaveBeenCalledOnce());
+    expect(secondCallback).toHaveBeenCalledWith({
+      notificationMode: 'ONE_SHOT',
+      maxAudible: 4,
+      continuousDuration: { kind: 'FINITE', seconds: 600 },
+    });
+  });
+
   it('keeps the empty Watch path compact until a Section or alert needs batch actions', () => {
     renderWatch([]);
 
@@ -521,11 +561,39 @@ describe('Watch workspace product flow', () => {
     expect(screen.queryByRole('button', { name: 'Acknowledge all' })).toBeNull();
   });
 
+  it('uses plain-language connection state and keeps WebSocket in diagnostics', () => {
+    const watch = new FakeWatchClient('IDLE');
+    const view = renderWatch([], watch);
+
+    const status = view.container.querySelector('.watch-workspace__status-strip');
+    if (!(status instanceof HTMLElement)) throw new Error('Watch status strip was not rendered');
+    expect(within(status).getByText('Live watch has not started')).toBeTruthy();
+    expect(within(status).queryByText('WebSocket')).toBeNull();
+    expect(view.container.querySelector('.watch-workspace__diagnostics')?.textContent)
+      .toContain('WebSocket / IDLE');
+  });
+
+  it('keeps a blocked-audio warning visible after live watch becomes active', async () => {
+    const sectionKey = section(1);
+    const audio = new FakeAudioController();
+    audio.unlockCalls.mockResolvedValueOnce('BLOCKED');
+    const view = renderWatch([sectionKey], new FakeWatchClient(), audio);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00001 to the watch list' }));
+    fireEvent.click(screen.getByRole('button', { name: /Start selected/u }));
+    await waitFor(() => expect(view.watch.commands).toHaveLength(1));
+    act(() => view.watch.emit(activeStart(sectionKey, 1)));
+
+    expect(await screen.findByText(/Live watch is active, but browser sound is not enabled/u))
+      .toBeTruthy();
+    expect(screen.getByText('Watching 1 Section (sound muted)')).toBeTruthy();
+  });
+
   it('gates continuous starts on confirmation and supports finite ten-minute and unlimited policies', async () => {
     const first = section(1);
     const second = section(2);
     const { watch } = renderWatch([first, second]);
-    fireEvent.click(screen.getByRole('button', { name: 'Select Section 00001 for watch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00001 to the watch list' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Continuous episode alarm' }));
 
     const start = screen.getByRole('button', { name: /Start selected/u });
@@ -544,7 +612,7 @@ describe('Watch workspace product flow', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /I understand that CONTINUOUS sound persists/u }));
     expect(start.hasAttribute('disabled')).toBe(false);
     fireEvent.click(start);
-
+    await waitFor(() => expect(watch.commands).toHaveLength(1));
     expect(watch.commands[0]).toEqual({
       type: 'START_WATCH',
       items: [{
@@ -559,7 +627,7 @@ describe('Watch workspace product flow', () => {
     act(() => watch.emit(activeStart(first, 1)));
     await waitFor(() => expect(metricValue('Active')).toBe('1'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select Section 00002 for watch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00002 to the watch list' }));
     fireEvent.change(duration, { target: { value: 'UNLIMITED' } });
     fireEvent.click(screen.getByRole('button', { name: /Start selected/u }));
     expect(watch.commands[1]).toEqual({
@@ -582,7 +650,7 @@ describe('Watch workspace product flow', () => {
     renderWatch(sections);
     for (const sectionKey of sections) {
       fireEvent.click(screen.getByRole('button', {
-        name: `Select Section ${sectionKey.index} for watch`,
+        name: `Add Section ${sectionKey.index} to the watch list`,
       }));
     }
 
@@ -596,6 +664,9 @@ describe('Watch workspace product flow', () => {
     expect(telemetry.querySelector('[data-freshness="FRESH"]')).toBeTruthy();
     expect(telemetry.querySelector('[data-freshness="STALE"]')).toBeTruthy();
     expect(telemetry.querySelector('[data-freshness="UNKNOWN"]')).toBeTruthy();
+    expect(within(telemetry).getAllByText(
+      'No valid live status has been observed yet.',
+    )).toHaveLength(2);
     expect(within(telemetry).getAllByText('Requested general')).toHaveLength(3);
     expect(within(telemetry).getAllByText('Requested effective')).toHaveLength(3);
     expect(within(telemetry).getAllByText('Actual interval')).toHaveLength(3);
@@ -631,7 +702,7 @@ describe('Watch workspace product flow', () => {
       { openStatus },
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select Section 00001 for watch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00001 to the watch list' }));
     await waitFor(() => expect(openStatus).toHaveBeenCalledOnce());
 
     const telemetry = screen.getByRole('region', {
@@ -647,16 +718,58 @@ describe('Watch workspace product flow', () => {
     });
   });
 
+  it('shows status, API code, and trace ID for one failed resource and retries only it', async () => {
+    const sectionKey = section(1);
+    const failure = new ProductClientError(503, {
+      protocolVersion: 1,
+      error: {
+        code: 'UPSTREAM_UNAVAILABLE',
+        messageKey: 'error.upstream_unavailable',
+        traceId: 'trace-section-00001',
+        details: [],
+      },
+    });
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>()
+      .mockRejectedValueOnce(failure)
+      .mockImplementation(async ({ sectionKey: key }) => sectionStatus(key));
+    renderWatch(
+      [sectionKey],
+      new FakeWatchClient(),
+      new FakeAudioController(),
+      'en-US',
+      { openSectionStatus },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00001 to the watch list' }));
+    const telemetry = screen.getByRole('region', {
+      name: 'Freshness / lag / circuit / counters',
+    });
+    expect(await within(telemetry).findByText(
+      'Live status is temporarily unavailable; no result is available yet.',
+    )).toBeTruthy();
+    const resource = within(telemetry).getByText('Section 00001 status').closest('article');
+    if (!(resource instanceof HTMLElement)) throw new Error('Section telemetry resource was not rendered');
+    fireEvent.click(within(resource).getByText('Technical diagnostics'));
+    expect(within(resource).getByText('503')).toBeTruthy();
+    expect(within(resource).getByText('UPSTREAM_UNAVAILABLE')).toBeTruthy();
+    expect(within(resource).getByText('trace-section-00001')).toBeTruthy();
+
+    fireEvent.click(within(resource).getByRole('button', { name: 'Retry this status' }));
+    await waitFor(() => expect(openSectionStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(within(resource).queryByRole('alert')).toBeNull());
+    expect(within(resource).getByText(/Showing the latest valid result from/u)).toBeTruthy();
+  });
+
   it('clears telemetry after the final Section is removed', async () => {
     const sectionKey = section(1);
     renderWatch([sectionKey]);
-    fireEvent.click(screen.getByRole('button', { name: 'Select Section 00001 for watch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00001 to the watch list' }));
     const telemetry = screen.getByRole('region', {
       name: 'Freshness / lag / circuit / counters',
     });
     await waitFor(() => expect(telemetry.querySelectorAll('.watch-telemetry__batch')).toHaveLength(1));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove Section 00001 for watch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Section 00001 from the watch list' }));
     await waitFor(() => expect(telemetry.querySelectorAll('.watch-telemetry__batch')).toHaveLength(0));
     expect(within(telemetry).getByText(/Select a Section to read its current BCSP Open status/u)).toBeTruthy();
   });
@@ -754,13 +867,14 @@ describe('Watch workspace product flow', () => {
     const stale = section(2, 'NK');
     const unknown = section(3, 'CM');
     const view = renderWatch([stale, unknown]);
-    fireEvent.click(screen.getByRole('button', { name: 'Select Section 00002 for watch' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Select Section 00003 for watch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00002 to the watch list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00003 to the watch list' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Continuous episode alarm' }));
     fireEvent.click(screen.getByRole('checkbox', {
       name: /I understand that CONTINUOUS sound persists/u,
     }));
     fireEvent.click(screen.getByRole('button', { name: /Start selected/u }));
+    await waitFor(() => expect(view.watch.commands.some((command) => command.type === 'START_WATCH')).toBe(true));
 
     act(() => {
       view.watch.emit(activeStart(stale, 1));

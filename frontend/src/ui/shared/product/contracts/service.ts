@@ -44,6 +44,9 @@ export interface ServiceOperationV1 {
 export interface ServiceDatasetSummaryV1 {
   readonly totalTargetCount: number;
   readonly availableTargetCount: number;
+  readonly currentTargetCount: number;
+  readonly staleTargetCount: number;
+  readonly unavailableTargetCount: number;
 }
 
 export interface ServiceTargetStatusV1 {

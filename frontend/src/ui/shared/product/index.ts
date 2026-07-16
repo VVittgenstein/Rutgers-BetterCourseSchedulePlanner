@@ -10,6 +10,7 @@ export * from './ProductApi';
 export * from './ProductClient';
 export * from './ProductRuntimeContext';
 export * from './runtime';
+export * from './serviceReadiness';
 export * from './WatchClient';
 
 export const PRODUCT_PROTOCOL_VERSION = 1 as const;

@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type AnchorHTMLAttributes,
   type MouseEvent,
@@ -30,12 +31,27 @@ export function AppRouterProvider({ children, initialPath }: AppRouterProviderPr
   const [pathname, setPathname] = useState(() =>
     pathnameFrom(initialPath ?? globalThis.location?.pathname ?? '/'));
   const [workspaceFocusRequest, setWorkspaceFocusRequest] = useState(0);
+  const scrollPositions = useRef(new Map<string, number>());
+  const pendingScroll = useRef<number | null | undefined>(undefined);
+  const currentPathname = useRef(pathname);
 
   useEffect(() => {
     if (initialPath !== undefined) return undefined;
-    const syncFromBrowser = () => setPathname(pathnameFrom(globalThis.location.pathname));
+    const previousScrollRestoration = globalThis.history.scrollRestoration;
+    globalThis.history.scrollRestoration = 'manual';
+    const syncFromBrowser = () => {
+      const nextPathname = pathnameFrom(globalThis.location.pathname);
+      scrollPositions.current.set(currentPathname.current, globalThis.scrollY ?? 0);
+      pendingScroll.current = scrollPositions.current.get(nextPathname) ?? null;
+      currentPathname.current = nextPathname;
+      setPathname(nextPathname);
+      setWorkspaceFocusRequest((request) => request + 1);
+    };
     globalThis.addEventListener('popstate', syncFromBrowser);
-    return () => globalThis.removeEventListener('popstate', syncFromBrowser);
+    return () => {
+      globalThis.history.scrollRestoration = previousScrollRestoration;
+      globalThis.removeEventListener('popstate', syncFromBrowser);
+    };
   }, [initialPath]);
 
   useEffect(() => {
@@ -43,18 +59,28 @@ export function AppRouterProvider({ children, initialPath }: AppRouterProviderPr
     const workspace = globalThis.document?.getElementById('bcsp-workspace');
     if (workspace === null || workspace === undefined) return;
     workspace.focus({ preventScroll: true });
-    workspace.scrollIntoView?.({ behavior: 'auto', block: 'start' });
+    const restore = pendingScroll.current;
+    pendingScroll.current = undefined;
+    if (typeof restore === 'number') {
+      globalThis.scrollTo?.({ behavior: 'auto', left: 0, top: restore });
+      return;
+    }
+    globalThis.document?.querySelector<HTMLElement>('.bcsp-navigation')
+      ?.scrollIntoView?.({ behavior: 'auto', block: 'start' });
   }, [workspaceFocusRequest]);
 
   const navigate = useCallback((to: string, options?: { readonly replace?: boolean }) => {
     const nextPathname = pathnameFrom(to);
+    scrollPositions.current.set(pathname, globalThis.scrollY ?? 0);
+    pendingScroll.current = scrollPositions.current.get(nextPathname) ?? null;
     if (initialPath === undefined) {
       if (options?.replace === true) globalThis.history.replaceState(null, '', to);
       else globalThis.history.pushState(null, '', to);
     }
     setPathname(nextPathname);
+    currentPathname.current = nextPathname;
     setWorkspaceFocusRequest((request) => request + 1);
-  }, [initialPath]);
+  }, [initialPath, pathname]);
 
   const value = useMemo<AppRouterRuntime>(() => ({ navigate, pathname }), [navigate, pathname]);
   return <AppRouterContext.Provider value={value}>{children}</AppRouterContext.Provider>;

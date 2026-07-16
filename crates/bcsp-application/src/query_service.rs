@@ -1,10 +1,12 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bcsp_catalog::{ProjectionError, to_normalized_catalog_v1};
 use bcsp_contracts::{
-    CourseDetailRequestV1, CourseDetailResponseV1, CourseQueryRequestV1, CourseQueryResponseV1,
-    NormalizedCatalogV1, NormalizedFilterValuesV1, SectionDetailRequestV1, SectionDetailResponseV1,
-    SectionQueryRequestV1, SectionQueryResponseV1, TermCampusKey,
+    CatalogFieldKnowledge, CatalogFieldPresence, CourseDetailRequestV1, CourseDetailResponseV1,
+    CourseQueryRequestV1, CourseQueryResponseV1, FilterOptionTargetVersionV2, FilterOptionV2,
+    FilterOptionsFieldV2, FilterOptionsRequestV2, FilterOptionsResponseV2, FilterTokenV1,
+    NormalizedCatalogV1, NormalizedFilterValuesV1, QUERY_CONTRACT_VERSION, SectionDetailRequestV1,
+    SectionDetailResponseV1, SectionQueryRequestV1, SectionQueryResponseV1, TermCampusKey,
 };
 use bcsp_operational_storage::{CourseTextSearchTokens, OperationalStorage, StorageError};
 use bcsp_query::{
@@ -49,6 +51,11 @@ pub enum SharedQueryError {
     InvalidTextTokens {
         #[source]
         source: StorageError,
+    },
+    #[error("filter option {value:?} is not published for {field:?}")]
+    InvalidFilterOption {
+        field: FilterOptionsFieldV2,
+        value: String,
     },
     #[error("storage failed for Catalog target {target:?}")]
     Storage {
@@ -140,6 +147,100 @@ impl<'storage> SharedQueryService<'storage> {
             .and_then(|engine| engine.section_detail(request))
             .map_err(query_error)
     }
+
+    pub fn filter_options(
+        &mut self,
+        targets: &[TermCampusKey],
+        request: &FilterOptionsRequestV2,
+    ) -> Result<FilterOptionsResponseV2, SharedQueryError> {
+        let targets = canonical_targets(targets)?;
+        if targets != request.targets() {
+            return Err(SharedQueryError::FilterCampusSetMismatch);
+        }
+        let catalogs = load_catalogs(self.storage, &targets)?;
+        let requested_limit = request.effective_limit();
+        let fetch_limit = requested_limit.saturating_add(1);
+        let mut options = match request.field {
+            FilterOptionsFieldV2::Keyword => {
+                let mut values = BTreeMap::new();
+                for catalog in &catalogs {
+                    let terms = self
+                        .storage
+                        .published_course_fts_terms(
+                            &catalog.target,
+                            catalog.content_version.get(),
+                            request.query.as_deref(),
+                            fetch_limit,
+                        )
+                        .map_err(|source| {
+                            map_storage_error(
+                                catalog.target.clone(),
+                                Some(catalog.content_version.get()),
+                                source,
+                            )
+                        })?;
+                    for term in terms {
+                        insert_option(&mut values, term.clone(), term);
+                    }
+                    for group in &catalog.course_groups {
+                        let identifier = group.key.course_string().as_str();
+                        if query_matches(identifier, request.query.as_deref()) {
+                            insert_option(
+                                &mut values,
+                                identifier.to_owned(),
+                                identifier.to_owned(),
+                            );
+                        }
+                    }
+                }
+                values
+            }
+            field => collect_catalog_options(&catalogs, field, request.query.as_deref()),
+        }
+        .into_values()
+        .collect::<Vec<_>>();
+        options.sort_by(|left, right| {
+            left.label
+                .to_lowercase()
+                .cmp(&right.label.to_lowercase())
+                .then_with(|| left.value.cmp(&right.value))
+        });
+        let truncated = options.len() > requested_limit;
+        options.truncate(requested_limit);
+        verify_current_versions(self.storage, &catalogs)?;
+        Ok(FilterOptionsResponseV2 {
+            contract_version: QUERY_CONTRACT_VERSION,
+            field: request.field,
+            target_versions: catalogs
+                .iter()
+                .map(|catalog| FilterOptionTargetVersionV2 {
+                    target: catalog.target.clone(),
+                    content_version: catalog.content_version,
+                })
+                .collect(),
+            options,
+            truncated,
+        })
+    }
+
+    /// Revalidates selected dynamic-dictionary values against the currently
+    /// published Catalog snapshots without executing a search.
+    ///
+    /// Saved-view migration uses this application-layer seam so personal-state
+    /// storage remains independent of Catalog storage. Callers must treat
+    /// publication/storage failures as indeterminate; only
+    /// [`SharedQueryError::InvalidFilterOption`] proves a stored selection is
+    /// no longer present in the active dictionary.
+    pub fn validate_dynamic_filter_options(
+        &mut self,
+        targets: &[TermCampusKey],
+        filters: &NormalizedFilterValuesV1,
+    ) -> Result<(), SharedQueryError> {
+        let targets = validate_search_targets(targets, filters)?;
+        let catalogs = load_catalogs(self.storage, &targets)?;
+        validate_dynamic_filter_values(self.storage, &catalogs, filters)?;
+        verify_current_versions(self.storage, &catalogs)
+    }
 }
 
 struct SearchContext {
@@ -155,6 +256,8 @@ fn prepare_search(
 ) -> Result<SearchContext, SharedQueryError> {
     let targets = validate_search_targets(targets, filters)?;
     let catalogs = load_catalogs(storage, &targets)?;
+
+    validate_dynamic_filter_values(storage, &catalogs, filters)?;
 
     // This seam keeps the version-race behavior directly testable. Production
     // callers always supply the no-op closure through the public methods.
@@ -328,13 +431,211 @@ fn query_error(source: QueryError) -> SharedQueryError {
     SharedQueryError::Query { source }
 }
 
+fn known_value<T>(knowledge: &CatalogFieldKnowledge<T>) -> Option<&T> {
+    match knowledge {
+        CatalogFieldKnowledge::Known {
+            presence: CatalogFieldPresence::Present { value },
+        } => Some(value),
+        CatalogFieldKnowledge::Known { .. } | CatalogFieldKnowledge::Unknown { .. } => None,
+    }
+}
+
+fn insert_option(options: &mut BTreeMap<String, FilterOptionV2>, value: String, label: String) {
+    let key = value.to_lowercase();
+    options
+        .entry(key)
+        .and_modify(|existing| {
+            if label.len() > existing.label.len() {
+                existing.label.clone_from(&label);
+            }
+        })
+        .or_insert(FilterOptionV2 { value, label });
+}
+
+fn query_matches(value: &str, query: Option<&str>) -> bool {
+    query.is_none_or(|query| value.to_lowercase().contains(&query.to_lowercase()))
+}
+
+fn collect_catalog_options(
+    catalogs: &[NormalizedCatalogV1],
+    field: FilterOptionsFieldV2,
+    query: Option<&str>,
+) -> BTreeMap<String, FilterOptionV2> {
+    let mut options = BTreeMap::new();
+    match field {
+        FilterOptionsFieldV2::Keyword => {}
+        FilterOptionsFieldV2::CourseLevel => {
+            for variant in catalogs.iter().flat_map(|catalog| &catalog.course_variants) {
+                if let Some(value) = known_value(&variant.level) {
+                    let value = value.trim().to_ascii_uppercase();
+                    if !value.is_empty() {
+                        let label = match value.as_str() {
+                            "U" => "U · Undergraduate".to_owned(),
+                            "G" => "G · Graduate".to_owned(),
+                            _ => value.clone(),
+                        };
+                        insert_option(&mut options, value, label);
+                    }
+                }
+            }
+        }
+        FilterOptionsFieldV2::Instructor => {
+            for section in catalogs.iter().flat_map(|catalog| &catalog.sections) {
+                if let Some(values) = known_value(&section.instructors) {
+                    for value in values {
+                        let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+                        if !normalized.is_empty() && query_matches(&normalized, query) {
+                            insert_option(&mut options, normalized.clone(), normalized);
+                        }
+                    }
+                }
+            }
+        }
+        FilterOptionsFieldV2::MeetingLocation => {
+            for occurrence in catalogs.iter().flat_map(|catalog| &catalog.occurrences) {
+                let code = known_value(&occurrence.campus)
+                    .map(|value| value.trim().to_ascii_uppercase())
+                    .filter(|value| !value.is_empty());
+                let name = known_value(&occurrence.campus_name)
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty());
+                match (code, name) {
+                    (Some(code), Some(name)) => {
+                        insert_option(&mut options, code.clone(), format!("{code} · {name}"));
+                    }
+                    (Some(code), None) => insert_option(&mut options, code.clone(), code),
+                    (None, Some(name)) => {
+                        insert_option(&mut options, name.to_ascii_uppercase(), name)
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+        FilterOptionsFieldV2::ExamCode => {
+            for section in catalogs.iter().flat_map(|catalog| &catalog.sections) {
+                let code = known_value(&section.exam_code)
+                    .map(|value| value.trim().to_ascii_uppercase())
+                    .filter(|value| !value.is_empty());
+                let description = known_value(&section.exam_code_text)
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty());
+                match (code, description) {
+                    (Some(code), Some(description)) => insert_option(
+                        &mut options,
+                        code.clone(),
+                        format!("{code} · {description}"),
+                    ),
+                    (Some(code), None) => insert_option(&mut options, code.clone(), code),
+                    (None, Some(description)) => {
+                        insert_option(&mut options, description.to_ascii_uppercase(), description)
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+    }
+    options
+}
+
+fn contains_selected_option(options: &BTreeMap<String, FilterOptionV2>, selected: &str) -> bool {
+    options.contains_key(&selected.to_lowercase())
+}
+
+fn validate_tokens(
+    options: &BTreeMap<String, FilterOptionV2>,
+    values: &[FilterTokenV1],
+    field: FilterOptionsFieldV2,
+) -> Result<(), SharedQueryError> {
+    for value in values {
+        if !contains_selected_option(options, value.as_str()) {
+            return Err(SharedQueryError::InvalidFilterOption {
+                field,
+                value: value.as_str().to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_dynamic_filter_values(
+    storage: &mut OperationalStorage,
+    catalogs: &[NormalizedCatalogV1],
+    filters: &NormalizedFilterValuesV1,
+) -> Result<(), SharedQueryError> {
+    if let Some(keywords) = filters.keywords() {
+        for keyword in keywords.tokens() {
+            let mut found = false;
+            for catalog in catalogs {
+                if catalog.course_groups.iter().any(|group| {
+                    group
+                        .key
+                        .course_string()
+                        .as_str()
+                        .eq_ignore_ascii_case(keyword)
+                }) {
+                    found = true;
+                    break;
+                }
+                let terms = storage
+                    .published_course_fts_terms(
+                        &catalog.target,
+                        catalog.content_version.get(),
+                        Some(keyword),
+                        100,
+                    )
+                    .map_err(|source| {
+                        map_storage_error(
+                            catalog.target.clone(),
+                            Some(catalog.content_version.get()),
+                            source,
+                        )
+                    })?;
+                found |= terms.iter().any(|term| term.eq_ignore_ascii_case(keyword));
+                if found {
+                    break;
+                }
+            }
+            if !found {
+                return Err(SharedQueryError::InvalidFilterOption {
+                    field: FilterOptionsFieldV2::Keyword,
+                    value: keyword.clone(),
+                });
+            }
+        }
+    }
+
+    validate_tokens(
+        &collect_catalog_options(catalogs, FilterOptionsFieldV2::CourseLevel, None),
+        filters.levels(),
+        FilterOptionsFieldV2::CourseLevel,
+    )?;
+    validate_tokens(
+        &collect_catalog_options(catalogs, FilterOptionsFieldV2::Instructor, None),
+        filters.instructors(),
+        FilterOptionsFieldV2::Instructor,
+    )?;
+    validate_tokens(
+        &collect_catalog_options(catalogs, FilterOptionsFieldV2::MeetingLocation, None),
+        &filters.meeting_locations().locations,
+        FilterOptionsFieldV2::MeetingLocation,
+    )?;
+    validate_tokens(
+        &collect_catalog_options(catalogs, FilterOptionsFieldV2::ExamCode, None),
+        filters.exam_codes(),
+        FilterOptionsFieldV2::ExamCode,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use bcsp_catalog::{normalize_target, to_catalog_refresh_command};
     use bcsp_contracts::{
-        CourseDetailRequestV1, CourseQueryRequestV1, CourseSortV1, FilterRequestV1,
-        FilterSearchTextV1, FilterValuesInputV1, NormalizedFilterValuesV1, PageRequestV1,
-        SectionDetailRequestV1, SectionKey, SectionQueryRequestV1, SectionSortV1, TermId, TraceId,
+        CampusCode, CourseDetailRequestV1, CourseQueryRequestV1, CourseSortV1,
+        FilterOptionsFieldV2, FilterOptionsRequestV2, FilterRequestV1, FilterSearchTextV1,
+        FilterTokenV1, FilterValuesInputV1, NormalizedFilterValuesV1, PageRequestV1,
+        QUERY_CONTRACT_VERSION, SectionDetailRequestV1, SectionKey, SectionQueryRequestV1,
+        SectionSortV1, TermId, TraceId,
     };
     use bcsp_operational_storage::{EmptySnapshotDecision, OperationalStorage, PublishOutcome};
     use bcsp_rutgers_client::{SourceProvenance, decode_catalog_payload};
@@ -370,13 +671,17 @@ mod tests {
             "subject": subject,
             "courseNumber": course_number,
             "title": title,
+            "level": "U",
             "sections": [{
                 "campusCode": campus,
                 "index": index,
                 "number": "01",
                 "sectionCourseType": "LECTURE",
                 "openStatus": true,
-                "meetingTimes": []
+                "meetingTimes": [],
+                "instructors": [{"name": "Pat Smith"}],
+                "examCode": "F",
+                "examCodeText": "Final exam"
             }]
         })
     }
@@ -469,6 +774,74 @@ mod tests {
             2,
         );
         (storage, nb, nwk)
+    }
+
+    #[test]
+    fn filter_options_use_published_fts_and_case_insensitive_instructor_substrings() {
+        let (mut storage, nb, _) = fixture_storage();
+        let mut service = SharedQueryService::new(&mut storage);
+        for query in ["smi", "Smi", "SMI"] {
+            let mut request = FilterOptionsRequestV2 {
+                contract_version: QUERY_CONTRACT_VERSION,
+                term: TermId::try_from("92026").unwrap(),
+                campuses: vec![CampusCode::try_from("NB").unwrap()],
+                field: FilterOptionsFieldV2::Instructor,
+                query: Some(query.to_owned()),
+                limit: None,
+            };
+            request.validate().unwrap();
+            let response = service
+                .filter_options(std::slice::from_ref(&nb), &request)
+                .expect("published instructor options");
+            assert_eq!(response.options.len(), 1);
+            assert_eq!(response.options[0].value, "Pat Smith");
+        }
+
+        let mut request = FilterOptionsRequestV2 {
+            contract_version: QUERY_CONTRACT_VERSION,
+            term: TermId::try_from("92026").unwrap(),
+            campuses: vec![CampusCode::try_from("NB").unwrap()],
+            field: FilterOptionsFieldV2::Keyword,
+            query: Some("comp".to_owned()),
+            limit: Some(10),
+        };
+        request.validate().unwrap();
+        let response = service
+            .filter_options(&[nb], &request)
+            .expect("published FTS terms");
+        assert!(
+            response
+                .options
+                .iter()
+                .any(|option| option.value == "computer")
+        );
+    }
+
+    #[test]
+    fn dynamic_filter_revalidation_distinguishes_published_and_removed_values() {
+        let (mut storage, nb, _) = fixture_storage();
+        let mut input =
+            FilterValuesInputV1::for_term(TermId::try_from("92026").expect("synthetic term"));
+        input.campuses = vec![CampusCode::try_from("NB").expect("synthetic campus")];
+        input.instructors = vec![FilterTokenV1::try_from("Pat Smith").expect("valid token")];
+        let valid = NormalizedFilterValuesV1::try_new(input.clone()).expect("valid filters");
+        SharedQueryService::new(&mut storage)
+            .validate_dynamic_filter_options(std::slice::from_ref(&nb), &valid)
+            .expect("published instructor remains valid");
+
+        input.instructors =
+            vec![FilterTokenV1::try_from("Removed Instructor").expect("valid token")];
+        let invalid = NormalizedFilterValuesV1::try_new(input).expect("valid filters");
+        let error = SharedQueryService::new(&mut storage)
+            .validate_dynamic_filter_options(std::slice::from_ref(&nb), &invalid)
+            .expect_err("removed instructor must be rejected");
+        assert!(matches!(
+            error,
+            SharedQueryError::InvalidFilterOption {
+                field: FilterOptionsFieldV2::Instructor,
+                ref value,
+            } if value == "Removed Instructor"
+        ));
     }
 
     #[test]

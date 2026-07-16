@@ -309,7 +309,10 @@ pub fn contract_manifest() -> ContractManifest {
                 exact_bytes: None,
                 max_bytes: None,
                 pattern: None,
-                semantic: Some("only integer 1 is accepted".to_owned()),
+                semantic: Some(
+                    "integer 2 is the active query contract; integer 1 is accepted only for explicit legacy migration"
+                        .to_owned(),
+                ),
             },
             ScalarConstraint {
                 id: "catalog-contract-version".to_owned(),
@@ -452,15 +455,6 @@ pub fn contract_manifest() -> ContractManifest {
                 Some(256),
                 None,
                 Some("normalized nonempty trim-stable control-free UTF-8 filter token"),
-            ),
-            string_constraint(
-                "filter-search-text",
-                None,
-                Some(512),
-                None,
-                Some(
-                    "1..=32 tokens; each <=128 UTF-8 bytes and containing Unicode alphanumeric; whitespace collapsed; total <=512 bytes",
-                ),
             ),
         ],
         schemas: vec![
@@ -1575,25 +1569,21 @@ pub fn contract_manifest() -> ContractManifest {
                     "TERM_ID",
                     "CAMPUS_CODE_SET",
                     "SUBJECT_CODE_SET",
-                    "TEXT_QUERY",
+                    "KEYWORD_SET",
                     "COURSE_NUMBER_SET",
                     "LEVEL_SET",
                     "CREDIT_RANGE",
                     "CORE_CODE_SET",
                     "PREREQUISITE_PRESENCE",
-                    "COURSE_LOCATION_SET",
                     "SECTION_INDEX_SET",
-                    "SECTION_NUMBER_SET",
                     "OPEN_STATUS_SET",
                     "MODALITY_SET",
                     "SYNCHRONICITY_SET",
                     "INSTRUCTOR_NAME_SET",
                     "AVAILABILITY_WINDOWS",
                     "MEETING_LOCATION_SET",
-                    "BUILDING_ROOM",
                     "EXAM_CODE_SET",
                     "PERMISSION_REQUIREMENT",
-                    "ELIGIBILITY",
                 ]
                 .map(str::to_owned),
             ),
@@ -1602,7 +1592,6 @@ pub fn contract_manifest() -> ContractManifest {
                 [
                     "REQUIRED",
                     "EMPTY_SET",
-                    "EMPTY_TEXT",
                     "UNBOUNDED_RANGE",
                     "ANY",
                     "EMPTY_WINDOWS",
@@ -1645,7 +1634,7 @@ pub fn contract_manifest() -> ContractManifest {
                 [
                     "EXACT_ONE",
                     "EXACT_ANY",
-                    "TEXT_TOKEN_AND_EXACT_IDENTIFIER_PRIORITY",
+                    "KEYWORD_TOKEN_AND_EXACT_IDENTIFIER_PRIORITY",
                     "INCLUSIVE_RANGE",
                     "EXPLICIT_ANY_ALL",
                     "TERNARY_PRESENCE",
@@ -1767,36 +1756,19 @@ pub fn contract_manifest() -> ContractManifest {
                     ("mode", "$schema:bcsp.query.set-mode.v1"),
                 ],
             ),
-            schema(
-                "bcsp.query.building-room-filter.v1",
-                SchemaDirection::ClientToServer,
-                UnknownFieldPolicy::Reject,
-                &[
-                    ("buildingCodes", "$array:$scalar:filter-token"),
-                    ("roomNumbers", "$array:$scalar:filter-token"),
-                ],
+            enum_schema(
+                "bcsp.query.meeting-location-match-mode.v2",
+                ["ANY_MEETING", "ALL_REQUIRED_MEETINGS"].map(str::to_owned),
             ),
             schema(
-                "bcsp.query.eligibility-unit-major.v1",
+                "bcsp.query.meeting-location-filter.v2",
                 SchemaDirection::ClientToServer,
                 UnknownFieldPolicy::Reject,
                 &[
-                    ("unitCode", "$scalar:filter-token"),
-                    ("majorCode", "$scalar:filter-token"),
-                ],
-            ),
-            schema(
-                "bcsp.query.eligibility-filter.v1",
-                SchemaDirection::ClientToServer,
-                UnknownFieldPolicy::Reject,
-                &[
-                    ("majorCodes", "$array:$scalar:filter-token"),
-                    ("minorCodes", "$array:$scalar:filter-token"),
-                    ("honorProgramCodes", "$array:$scalar:filter-token"),
-                    ("unitCodes", "$array:$scalar:filter-token"),
+                    ("locations", "$array:$scalar:filter-token"),
                     (
-                        "unitMajors",
-                        "$array:$schema:bcsp.query.eligibility-unit-major.v1",
+                        "mode",
+                        "$schema:bcsp.query.meeting-location-match-mode.v2",
                     ),
                 ],
             ),
@@ -1808,15 +1780,13 @@ pub fn contract_manifest() -> ContractManifest {
                     ("term", "$scalar:term-id"),
                     ("campuses", "$array:$scalar:campus-code"),
                     ("subjects", "$array:$scalar:catalog-subject-code"),
-                    ("text", "$optional:$scalar:filter-search-text"),
+                    ("keywords", "$array:$scalar:filter-token"),
                     ("courseNumbers", "$array:$scalar:filter-token"),
                     ("levels", "$array:$scalar:filter-token"),
                     ("credits", "$optional:$schema:bcsp.query.credit-range.v1"),
                     ("core", "$schema:bcsp.query.core-filter.v1"),
                     ("prerequisite", "$schema:bcsp.query.prerequisite-filter.v1"),
-                    ("courseLocations", "$array:$scalar:filter-token"),
                     ("sectionIndexes", "$array:$scalar:section-index"),
-                    ("sectionNumbers", "$array:$scalar:filter-token"),
                     (
                         "openStatuses",
                         "$array:$schema:bcsp.query.live-open-state.v1",
@@ -1831,11 +1801,12 @@ pub fn contract_manifest() -> ContractManifest {
                         "availability",
                         "$array:$schema:bcsp.query.availability-window.v1",
                     ),
-                    ("meetingLocations", "$array:$scalar:filter-token"),
-                    ("buildingRoom", "$schema:bcsp.query.building-room-filter.v1"),
+                    (
+                        "meetingLocations",
+                        "$schema:bcsp.query.meeting-location-filter.v2",
+                    ),
                     ("examCodes", "$array:$scalar:filter-token"),
                     ("permission", "$schema:bcsp.query.permission-filter.v1"),
-                    ("eligibility", "$schema:bcsp.query.eligibility-filter.v1"),
                 ],
             ),
             schema(
@@ -1907,6 +1878,63 @@ pub fn contract_manifest() -> ContractManifest {
                     ("filters", "$schema:bcsp.query.filter-request.v1"),
                     ("page", "$schema:bcsp.query.page-request.v1"),
                     ("sort", "$schema:bcsp.query.section-sort.v1"),
+                ],
+            ),
+            enum_schema(
+                "bcsp.query.filter-options-field.v2",
+                [
+                    "KEYWORD",
+                    "COURSE_LEVEL",
+                    "INSTRUCTOR",
+                    "MEETING_LOCATION",
+                    "EXAM_CODE",
+                ]
+                .map(str::to_owned),
+            ),
+            schema(
+                "bcsp.query.filter-options-request.v2",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    ("term", "$scalar:term-id"),
+                    ("campuses", "$array:$scalar:campus-code"),
+                    ("field", "$schema:bcsp.query.filter-options-field.v2"),
+                    ("query", "$optional:$primitive:string"),
+                    ("limit", "$optional:$primitive:u16"),
+                ],
+            ),
+            schema(
+                "bcsp.query.filter-option-target-version.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("target", "$schema:bcsp.identity.term-campus-key.v1"),
+                    ("contentVersion", "$scalar:catalog-content-version"),
+                ],
+            ),
+            schema(
+                "bcsp.query.filter-option.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("value", "$primitive:string"),
+                    ("label", "$primitive:string"),
+                ],
+            ),
+            schema(
+                "bcsp.query.filter-options-response.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    ("field", "$schema:bcsp.query.filter-options-field.v2"),
+                    (
+                        "targetVersions",
+                        "$array:$schema:bcsp.query.filter-option-target-version.v2",
+                    ),
+                    ("options", "$array:$schema:bcsp.query.filter-option.v2"),
+                    ("truncated", "$primitive:bool"),
                 ],
             ),
             schema(
@@ -2555,6 +2583,9 @@ pub fn contract_manifest() -> ContractManifest {
                 UnknownFieldPolicy::Ignore,
                 &[
                     ("totalTargetCount", "$primitive:u64"),
+                    ("currentTargetCount", "$primitive:u64"),
+                    ("staleTargetCount", "$primitive:u64"),
+                    ("unavailableTargetCount", "$primitive:u64"),
                     ("availableTargetCount", "$primitive:u64"),
                 ],
             ),

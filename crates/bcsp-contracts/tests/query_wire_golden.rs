@@ -1,11 +1,10 @@
 use bcsp_contracts::{
-    AvailabilityWindowV1, BuildingRoomFilterV1, CampusCode, CatalogSubjectCode,
-    CatalogSynchronicity, CoreFilterV1, CourseQueryRequestV1, CourseQueryResponseV1,
-    CourseSortFieldV1, CourseSortV1, CreditRangeV1, EligibilityFilterV1, EligibilityUnitMajorV1,
+    AvailabilityWindowV1, CampusCode, CatalogSubjectCode, CatalogSynchronicity, CoreFilterV1,
+    CourseQueryRequestV1, CourseQueryResponseV1, CourseSortFieldV1, CourseSortV1, CreditRangeV1,
     FilterRequestV1, FilterSearchTextV1, FilterSetModeV1, FilterTokenV1, FilterValuesInputV1,
-    LiveOpenStateV1, ModalityFilterV1, NormalizedFilterValuesV1, PageInfoV1, PageRequestV1,
-    PermissionFilterV1, PrerequisiteFilterV1, QUERY_CONTRACT_VERSION, SectionIndex,
-    SortDirectionV1, TermId, WeekdayV1, filter_schema_v1,
+    LiveOpenStateV1, MeetingLocationFilterV2, ModalityFilterV1, NormalizedFilterValuesV1,
+    PageInfoV1, PageRequestV1, PermissionFilterV1, PrerequisiteFilterV1, QUERY_CONTRACT_VERSION,
+    SectionIndex, SortDirectionV1, TermId, WeekdayV1, filter_schema_v1,
 };
 use serde::Serialize;
 
@@ -34,31 +33,18 @@ fn representative_request() -> CourseQueryRequestV1 {
         mode: FilterSetModeV1::All,
     };
     input.prerequisite = PrerequisiteFilterV1::Has;
-    input.course_locations = vec![token("nb")];
     input.section_indexes = vec![SectionIndex::try_from("12345").unwrap()];
-    input.section_numbers = vec![token("01")];
     input.open_statuses = vec![LiveOpenStateV1::Open];
     input.modalities = vec![ModalityFilterV1::Online];
     input.synchronicities = vec![CatalogSynchronicity::Sync];
     input.instructors = vec![token("  Ada   Lovelace  ")];
     input.availability = vec![AvailabilityWindowV1::try_new(WeekdayV1::Monday, 540, 720).unwrap()];
-    input.meeting_locations = vec![token("cac")];
-    input.building_room = BuildingRoomFilterV1 {
-        building_codes: vec![token("hill")],
-        room_numbers: vec![token("114")],
+    input.meeting_locations = MeetingLocationFilterV2 {
+        locations: vec![token("cac")],
+        ..MeetingLocationFilterV2::default()
     };
     input.exam_codes = vec![token("a")];
     input.permission = PermissionFilterV1::Required;
-    input.eligibility = EligibilityFilterV1 {
-        major_codes: vec![token("198")],
-        minor_codes: vec![token("cs")],
-        honor_program_codes: vec![token("hon")],
-        unit_codes: vec![token("01")],
-        unit_majors: vec![EligibilityUnitMajorV1 {
-            unit_code: token("01"),
-            major_code: token("198"),
-        }],
-    };
 
     CourseQueryRequestV1 {
         filters: FilterRequestV1::new(NormalizedFilterValuesV1::try_new(input).unwrap()),
@@ -71,7 +57,7 @@ fn representative_request() -> CourseQueryRequestV1 {
 }
 
 #[test]
-fn filter_schema_golden_locks_all_twenty_two_metadata_rows() {
+fn filter_schema_golden_locks_all_eighteen_v2_metadata_rows() {
     let golden = include_str!("golden/filter-schema-v1.json");
     let value = filter_schema_v1();
     assert_eq!(pretty(&value), canonical_golden(golden));

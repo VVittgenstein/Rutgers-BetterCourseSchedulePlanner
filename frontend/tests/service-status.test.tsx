@@ -27,7 +27,13 @@ function status(
   phase: ServiceStatusV1['operation']['phase'],
 ): ServiceStatusV1 {
   return {
-    catalog: { availableTargetCount: level === 'INITIALIZING' ? 0 : 1, totalTargetCount: 1 },
+    catalog: {
+      availableTargetCount: level === 'INITIALIZING' ? 0 : 1,
+      currentTargetCount: level === 'INITIALIZING' ? 0 : 1,
+      staleTargetCount: 0,
+      totalTargetCount: 1,
+      unavailableTargetCount: level === 'INITIALIZING' ? 1 : 0,
+    },
     contractVersion: 1,
     discovery: {
       availability: level === 'INITIALIZING' ? 'UNAVAILABLE_NO_FIRST_SUCCESS' : 'CURRENT',
@@ -39,7 +45,13 @@ function status(
     issues: [],
     level,
     observedAt: OBSERVED_AT,
-    open: { availableTargetCount: level === 'READY' ? 1 : 0, totalTargetCount: 1 },
+    open: {
+      availableTargetCount: level === 'READY' ? 1 : 0,
+      currentTargetCount: level === 'READY' ? 1 : 0,
+      staleTargetCount: 0,
+      totalTargetCount: 1,
+      unavailableTargetCount: level === 'READY' ? 0 : 1,
+    },
     operation: { nextRetryAt: null, phase, startedAt: OBSERVED_AT, target: null },
     runtime: 'LOCAL',
     targets: [{
@@ -146,6 +158,8 @@ describe('service status polling', () => {
   it('turns a hung read into an interrupted retained snapshot without overlapping requests', async () => {
     const ready = status('READY', 'IDLE');
     let hungSignal: AbortSignal | undefined;
+    let resolveRecovery!: (value: ServiceStatusV1) => void;
+    const recovery = new Promise<ServiceStatusV1>((resolve) => { resolveRecovery = resolve; });
     let inFlight = 0;
     let maximumInFlight = 0;
     const serviceStatus = vi.fn<ProductApiPort['serviceStatus']>((signal) => {
@@ -164,6 +178,7 @@ describe('service status polling', () => {
           }, { once: true });
         });
       }
+      if (serviceStatus.mock.calls.length === 3) return recovery.finally(() => { inFlight -= 1; });
       inFlight -= 1;
       return Promise.resolve(ready);
     });
@@ -182,6 +197,7 @@ describe('service status polling', () => {
     expect(view.result.current.snapshot).toBe(ready);
     expect(maximumInFlight).toBe(1);
     await waitFor(() => expect(serviceStatus).toHaveBeenCalledTimes(3));
+    act(() => resolveRecovery(ready));
     await waitFor(() => expect(view.result.current.connection).toBe('CONNECTED'));
     view.unmount();
   });

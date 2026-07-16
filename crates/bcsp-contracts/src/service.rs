@@ -167,6 +167,13 @@ pub struct ServiceIssueV1 {
 #[serde(rename_all = "camelCase")]
 pub struct ServiceAvailabilitySummaryV1 {
     pub total_target_count: u64,
+    /// Targets backed by a current, successful publication.
+    pub current_target_count: u64,
+    /// Targets whose last usable publication is retained after a failed refresh.
+    pub stale_target_count: u64,
+    /// Targets without any usable publication.
+    pub unavailable_target_count: u64,
+    /// Backwards-compatible aggregate of current and stale targets.
     pub available_target_count: u64,
 }
 

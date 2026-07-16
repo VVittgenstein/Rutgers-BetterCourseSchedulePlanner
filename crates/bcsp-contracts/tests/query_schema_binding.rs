@@ -1,22 +1,21 @@
 use std::collections::BTreeSet;
 
 use bcsp_contracts::{
-    AvailabilityWindowV1, BuildingRoomFilterV1, CatalogDiagnosticCode, CatalogFieldKnowledge,
+    AvailabilityWindowV1, CatalogDiagnosticCode, CatalogFieldKnowledge,
     CatalogInstructorReliability, CatalogModality, CatalogOccurrenceEvidence,
     CatalogOccurrenceKeyV1, CatalogOccurrenceKind, CatalogOpenStatusProvenance,
     CatalogPrerequisiteState, CatalogRequiredness, CatalogSnapshotOpenStatusV1,
     CatalogSynchronicity, CatalogTimeKnowledgeV1, CatalogUnknownReason, CoreFilterV1,
     CourseDetailRequestV1, CourseDetailResponseV1, CourseGroupKey, CourseQueryItemV1,
     CourseQueryRequestV1, CourseQueryResponseV1, CourseSortV1, CourseVariantKey,
-    CourseVariantQueryItemV1, CreditRangeV1, EligibilityFilterV1, EligibilityUnitMajorV1,
-    FilterCanonicalNeutralV1, FilterFieldId, FilterMatchV1, FilterRequestV1, FilterSchemaV1,
-    FilterSetModeV1, FilterTokenV1, LiveOpenEvidenceV1, LiveOpenStateV1, MatchExplanation,
-    NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedFilterValuesV1,
-    NormalizedOccurrenceV1, NormalizedSectionV1, PageInfoV1, PageRequestV1, QUERY_CONTRACT_VERSION,
-    SchemaDirection, SectionDetailRequestV1, SectionDetailResponseV1, SectionKey,
-    SectionQueryItemV1, SectionQueryRequestV1, SectionQueryResponseV1, SectionSearchItemV1,
-    SectionSortV1, TermId, TextMatchEvidenceV1, UnknownFieldPolicy, WeekdayV1, contract_manifest,
-    filter_schema_v1,
+    CourseVariantQueryItemV1, CreditRangeV1, FilterCanonicalNeutralV1, FilterFieldId,
+    FilterMatchV1, FilterRequestV1, FilterSchemaV1, FilterSetModeV1, FilterTokenV1,
+    LiveOpenEvidenceV1, LiveOpenStateV1, MatchExplanation, NormalizedCourseGroupV1,
+    NormalizedCourseVariantV1, NormalizedFilterValuesV1, NormalizedOccurrenceV1,
+    NormalizedSectionV1, PageInfoV1, PageRequestV1, QUERY_CONTRACT_VERSION, SchemaDirection,
+    SectionDetailRequestV1, SectionDetailResponseV1, SectionKey, SectionQueryItemV1,
+    SectionQueryRequestV1, SectionQueryResponseV1, SectionSearchItemV1, SectionSortV1, TermId,
+    TextMatchEvidenceV1, UnknownFieldPolicy, WeekdayV1, contract_manifest, filter_schema_v1,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -178,7 +177,7 @@ fn section_item() -> SectionQueryItemV1 {
         },
         explanation: MatchExplanation::matched(),
         filter_matches: vec![FilterMatchV1 {
-            field_id: FilterFieldId::SectionNumber,
+            field_id: FilterFieldId::SectionIndex,
             explanation: MatchExplanation::matched(),
         }],
     }
@@ -263,21 +262,6 @@ fn query_manifest_object_fields_match_serde_shapes() {
         codes: vec![FilterTokenV1::try_from("CC").unwrap()],
         mode: FilterSetModeV1::Any,
     };
-    let building_room = BuildingRoomFilterV1 {
-        building_codes: vec![FilterTokenV1::try_from("HILL").unwrap()],
-        room_numbers: vec![FilterTokenV1::try_from("114").unwrap()],
-    };
-    let unit_major = EligibilityUnitMajorV1 {
-        unit_code: FilterTokenV1::try_from("01").unwrap(),
-        major_code: FilterTokenV1::try_from("198").unwrap(),
-    };
-    let eligibility = EligibilityFilterV1 {
-        major_codes: vec![FilterTokenV1::try_from("198").unwrap()],
-        minor_codes: Vec::new(),
-        honor_program_codes: Vec::new(),
-        unit_codes: vec![FilterTokenV1::try_from("01").unwrap()],
-        unit_majors: vec![unit_major.clone()],
-    };
     let section_item = section_item();
     let live_open = section_item.open.clone();
     let filter_match = section_item.filter_matches[0].clone();
@@ -343,9 +327,6 @@ fn query_manifest_object_fields_match_serde_shapes() {
     assert_binding("bcsp.query.credit-range.v1", &credit_range);
     assert_binding("bcsp.query.availability-window.v1", &availability);
     assert_binding("bcsp.query.core-filter.v1", &core);
-    assert_binding("bcsp.query.building-room-filter.v1", &building_room);
-    assert_binding("bcsp.query.eligibility-unit-major.v1", &unit_major);
-    assert_binding("bcsp.query.eligibility-filter.v1", &eligibility);
     assert_binding("bcsp.query.live-open-evidence.v1", &live_open);
     assert_binding("bcsp.query.filter-match.v1", &filter_match);
     assert_binding("bcsp.query.text-match-evidence.v1", &text_match);

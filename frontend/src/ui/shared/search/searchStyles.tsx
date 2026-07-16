@@ -1,7 +1,7 @@
 export const SEARCH_WORKSPACE_CSS = String.raw`
 .bcsp-search-workspace {
   display: grid;
-  grid-template-columns: clamp(20rem, 22vw, 24rem) minmax(0, 1fr);
+  grid-template-columns: clamp(26rem, 28vw, 34rem) minmax(0, 1fr);
   margin-top: var(--bcsp-space-3);
   border-top: 1px solid var(--bcsp-line);
   border-right: 1px solid var(--bcsp-line);
@@ -21,9 +21,9 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
 .bcsp-search-workspace__filters {
   container-type: inline-size;
   position: sticky;
-  top: 0;
+  top: var(--bcsp-navigation-height, 3.5rem);
   align-self: start;
-  max-height: 100dvh;
+  max-height: calc(100dvh - var(--bcsp-navigation-height, 3.5rem));
   overflow: auto;
   border-right: 1px solid var(--bcsp-line);
   background: var(--bcsp-paper-raised);
@@ -31,6 +31,7 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
 
 .bcsp-search-workspace__results {
   padding: var(--bcsp-space-4);
+  background: var(--bcsp-paper);
 }
 
 .bcsp-search-workspace__header {
@@ -103,7 +104,7 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
 
 @media (max-width: 67.999rem) {
   .bcsp-search-workspace {
-    grid-template-columns: minmax(18rem, 21rem) minmax(0, 1fr);
+    grid-template-columns: minmax(24rem, 30rem) minmax(0, 1fr);
   }
 }
 

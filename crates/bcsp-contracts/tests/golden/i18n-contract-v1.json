@@ -30,6 +30,10 @@
       "messageKey": "error.invalid_filter"
     },
     {
+      "wire": "INVALID_FILTER_OPTION",
+      "messageKey": "error.invalid_filter_option"
+    },
+    {
       "wire": "SECTION_NOT_FOUND",
       "messageKey": "error.section_not_found"
     },
@@ -40,6 +44,10 @@
     {
       "wire": "CATALOG_NOT_READY",
       "messageKey": "error.catalog_not_ready"
+    },
+    {
+      "wire": "SEARCH_DATA_NOT_READY",
+      "messageKey": "error.search_data_not_ready"
     },
     {
       "wire": "UPSTREAM_UNAVAILABLE",

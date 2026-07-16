@@ -3,9 +3,8 @@ import type {
   CourseQueryRequestV1,
   CourseSortV1,
   CreditRangeV1,
-  EligibilityUnitMajorV1,
   FilterFieldId,
-  FilterRequestV1,
+  FilterRequestV2,
   FilterValuesV1,
   ModalityFilterV1,
   PageRequestV1,
@@ -16,17 +15,16 @@ import type { CatalogSynchronicity } from './contracts/catalog';
 
 export const FILTER_FIELD_IDS = Object.freeze([
   'FLT-C01', 'FLT-C02', 'FLT-C03', 'FLT-C04', 'FLT-C05',
-  'FLT-C06', 'FLT-C07', 'FLT-C08', 'FLT-C09', 'FLT-C10',
-  'FLT-S01', 'FLT-S02', 'FLT-S03', 'FLT-S04a', 'FLT-S04b',
-  'FLT-S05', 'FLT-S06', 'FLT-S07', 'FLT-S08', 'FLT-S09',
-  'FLT-S10', 'FLT-S11',
+  'FLT-C06', 'FLT-C07', 'FLT-C08', 'FLT-C09',
+  'FLT-S01', 'FLT-S03', 'FLT-S04a', 'FLT-S04b',
+  'FLT-S05', 'FLT-S06', 'FLT-S07', 'FLT-S09', 'FLT-S10',
 ] as const satisfies readonly FilterFieldId[]);
 
 export const FILTER_REQUEST_FIELDS = Object.freeze([
-  'term', 'campuses', 'subjects', 'text', 'courseNumbers', 'levels', 'credits',
-  'core', 'prerequisite', 'courseLocations', 'sectionIndexes', 'sectionNumbers',
+  'term', 'campuses', 'subjects', 'keywords', 'courseNumbers', 'levels', 'credits',
+  'core', 'prerequisite', 'sectionIndexes',
   'openStatuses', 'modalities', 'synchronicities', 'instructors', 'availability',
-  'meetingLocations', 'buildingRoom', 'examCodes', 'permission', 'eligibility',
+  'meetingLocations', 'examCodes', 'permission',
 ] as const satisfies readonly (keyof FilterValuesV1)[]);
 
 export interface FilterStateV1 extends Omit<FilterValuesV1, 'term'> {
@@ -58,31 +56,81 @@ export function createNeutralFilterState(term: string | null = null): FilterStat
     term,
     campuses: [],
     subjects: [],
-    text: null,
+    keywords: [],
     courseNumbers: [],
     levels: [],
     credits: null,
     core: { codes: [], mode: 'ANY' },
     prerequisite: 'ANY',
-    courseLocations: [],
     sectionIndexes: [],
-    sectionNumbers: [],
     openStatuses: [],
     modalities: [],
     synchronicities: [],
     instructors: [],
     availability: [],
-    meetingLocations: [],
-    buildingRoom: { buildingCodes: [], roomNumbers: [] },
+    meetingLocations: { locations: [], mode: 'ANY_MEETING' },
     examCodes: [],
     permission: 'ANY',
-    eligibility: {
-      majorCodes: [],
-      minorCodes: [],
-      honorProgramCodes: [],
-      unitCodes: [],
-      unitMajors: [],
-    },
+  };
+}
+
+/** Converts persisted V1 filter snapshots to the active V2 UI state without
+ * silently retaining fields that no longer exist in the product surface. */
+export function coerceFilterStateV2(candidate: unknown, fallbackTerm: string | null = null): FilterStateV1 {
+  const neutral = createNeutralFilterState(fallbackTerm);
+  if (candidate === null || typeof candidate !== 'object') return neutral;
+  const value = candidate as Record<string, unknown>;
+  const array = (key: string): string[] => Array.isArray(value[key])
+    ? value[key].filter((entry): entry is string => typeof entry === 'string')
+    : [];
+  const legacyText = typeof value.text === 'string'
+    ? value.text.trim().split(/\s+/u).filter(Boolean)
+    : [];
+  const meeting = value.meetingLocations;
+  const meetingLocations = Array.isArray(meeting)
+    ? { locations: meeting.filter((entry): entry is string => typeof entry === 'string'), mode: 'ANY_MEETING' as const }
+    : meeting !== null && typeof meeting === 'object'
+      ? {
+        locations: Array.isArray((meeting as { locations?: unknown }).locations)
+          ? (meeting as { locations: unknown[] }).locations.filter((entry): entry is string => typeof entry === 'string')
+          : [],
+        mode: (meeting as { mode?: unknown }).mode === 'ALL_REQUIRED_MEETINGS'
+          ? 'ALL_REQUIRED_MEETINGS' as const
+          : 'ANY_MEETING' as const,
+      }
+      : neutral.meetingLocations;
+  const credits = value.credits !== null && typeof value.credits === 'object'
+    ? value.credits as FilterStateV1['credits']
+    : null;
+  const core = value.core !== null && typeof value.core === 'object'
+    ? value.core as FilterStateV1['core']
+    : neutral.core;
+  return {
+    ...neutral,
+    term: typeof value.term === 'string' ? value.term : fallbackTerm,
+    campuses: array('campuses'),
+    subjects: array('subjects'),
+    keywords: array('keywords').length > 0 ? array('keywords') : legacyText,
+    courseNumbers: array('courseNumbers'),
+    levels: array('levels'),
+    credits,
+    core,
+    prerequisite: value.prerequisite === 'HAS' || value.prerequisite === 'NONE_REPORTED'
+      ? value.prerequisite
+      : 'ANY',
+    sectionIndexes: array('sectionIndexes'),
+    openStatuses: array('openStatuses') as FilterStateV1['openStatuses'],
+    modalities: array('modalities') as FilterStateV1['modalities'],
+    synchronicities: array('synchronicities') as FilterStateV1['synchronicities'],
+    instructors: array('instructors'),
+    availability: Array.isArray(value.availability)
+      ? value.availability as FilterStateV1['availability']
+      : [],
+    meetingLocations,
+    examCodes: array('examCodes'),
+    permission: value.permission === 'REQUIRED' || value.permission === 'NOT_REQUIRED'
+      ? value.permission
+      : 'ANY',
   };
 }
 
@@ -127,21 +175,15 @@ function canonicalStrings(
   return [...new Set(values.map((value) => normalize(value, field)))].sort(compareUtf8);
 }
 
-function normalizeText(value: string | null): string | null {
-  if (value === null || value.trim().length === 0) return null;
-  if ([...value].some((character) => /\p{Cc}/u.test(character) && !/\s/u.test(character))) {
-    fail('INVALID_TEXT', 'text contains a control character');
-  }
-  const tokens = value.trim().split(/\s+/u);
-  const normalized = tokens.join(' ');
-  if (
-    tokens.length > 32
-    || utf8.encode(normalized).length > 512
-    || tokens.some((token) => utf8.encode(token).length > 128 || !/[\p{L}\p{N}]/u.test(token))
-  ) {
-    fail('INVALID_TEXT', 'text does not satisfy the v1 token contract');
-  }
-  return normalized;
+function normalizeKeywords(values: readonly string[]): string[] {
+  if (values.length > 32) fail('TOO_MANY_VALUES', 'keywords exceeds 32 values');
+  return canonicalStrings(values, 'keywords', (value, field) => {
+    const normalized = normalizeToken(value, field, false);
+    if (utf8.encode(normalized).length > 128 || !/[\p{L}\p{N}]/u.test(normalized)) {
+      fail('INVALID_TEXT', 'keywords contains an invalid dictionary value');
+    }
+    return normalized;
+  });
 }
 
 function normalizeCredits(value: CreditRangeV1 | null): CreditRangeV1 | null {
@@ -186,16 +228,6 @@ function normalizeAvailability(values: readonly AvailabilityWindowV1[]): Availab
     || left.endMinute - right.endMinute);
 }
 
-function normalizeUnitMajors(values: readonly EligibilityUnitMajorV1[]): EligibilityUnitMajorV1[] {
-  if (values.length > 100) fail('TOO_MANY_VALUES', 'unitMajors exceeds 100 values');
-  const byIdentity = new Map(values.map((value) => {
-    const unitCode = normalizeToken(value.unitCode, 'unitMajors.unitCode', true);
-    const majorCode = normalizeToken(value.majorCode, 'unitMajors.majorCode', true);
-    return [`${unitCode}\u0000${majorCode}`, { unitCode, majorCode }] as const;
-  }));
-  return [...byIdentity.entries()].sort(([left], [right]) => compareUtf8(left, right)).map(([, value]) => value);
-}
-
 export function toFilterValuesV1(state: FilterStateV1): FilterValuesV1 {
   if (state.term === null) fail('TERM_REQUIRED', 'term is required');
   const term = canonicalIdentity(state.term, 'term');
@@ -210,7 +242,7 @@ export function toFilterValuesV1(state: FilterStateV1): FilterValuesV1 {
     term,
     campuses: canonicalStrings(state.campuses, 'campuses', canonicalIdentity),
     subjects: canonicalStrings(state.subjects, 'subjects', canonicalIdentity),
-    text: normalizeText(state.text),
+    keywords: normalizeKeywords(state.keywords),
     courseNumbers: canonicalStrings(state.courseNumbers, 'courseNumbers', (value, field) => normalizeToken(value, field, true)),
     levels: canonicalStrings(state.levels, 'levels', (value, field) => normalizeToken(value, field, true)),
     credits: normalizeCredits(state.credits),
@@ -219,9 +251,7 @@ export function toFilterValuesV1(state: FilterStateV1): FilterValuesV1 {
       mode: state.core.mode,
     },
     prerequisite: state.prerequisite,
-    courseLocations: canonicalStrings(state.courseLocations, 'courseLocations', (value, field) => normalizeToken(value, field, true)),
     sectionIndexes,
-    sectionNumbers: canonicalStrings(state.sectionNumbers, 'sectionNumbers', (value, field) => normalizeToken(value, field, true)),
     openStatuses: [...new Set(state.openStatuses)].sort((left, right) =>
       ['OPEN', 'CLOSED', 'UNKNOWN'].indexOf(left) - ['OPEN', 'CLOSED', 'UNKNOWN'].indexOf(right)),
     modalities: [...new Set<ModalityFilterV1>(state.modalities)].sort((left, right) =>
@@ -230,35 +260,25 @@ export function toFilterValuesV1(state: FilterStateV1): FilterValuesV1 {
     synchronicities: [...new Set<CatalogSynchronicity>(state.synchronicities)].sort(compareUtf8),
     instructors,
     availability: normalizeAvailability(state.availability),
-    meetingLocations: canonicalStrings(state.meetingLocations, 'meetingLocations', (value, field) => normalizeToken(value, field, true)),
-    buildingRoom: {
-      buildingCodes: canonicalStrings(state.buildingRoom.buildingCodes, 'buildingRoom.buildingCodes', (value, field) => normalizeToken(value, field, true)),
-      roomNumbers: canonicalStrings(state.buildingRoom.roomNumbers, 'buildingRoom.roomNumbers', (value, field) => normalizeToken(value, field, true)),
+    meetingLocations: {
+      locations: canonicalStrings(state.meetingLocations.locations, 'meetingLocations.locations', (value, field) => normalizeToken(value, field, true)),
+      mode: state.meetingLocations.mode,
     },
     examCodes: canonicalStrings(state.examCodes, 'examCodes', (value, field) => normalizeToken(value, field, true)),
     permission: state.permission,
-    eligibility: {
-      majorCodes: canonicalStrings(state.eligibility.majorCodes, 'eligibility.majorCodes', (value, field) => normalizeToken(value, field, true)),
-      minorCodes: canonicalStrings(state.eligibility.minorCodes, 'eligibility.minorCodes', (value, field) => normalizeToken(value, field, true)),
-      honorProgramCodes: canonicalStrings(state.eligibility.honorProgramCodes, 'eligibility.honorProgramCodes', (value, field) => normalizeToken(value, field, true)),
-      unitCodes: canonicalStrings(state.eligibility.unitCodes, 'eligibility.unitCodes', (value, field) => normalizeToken(value, field, true)),
-      unitMajors: normalizeUnitMajors(state.eligibility.unitMajors),
-    },
   };
   const total = [
-    values.campuses, values.subjects, values.courseNumbers, values.levels, values.core.codes,
-    values.courseLocations, values.sectionIndexes, values.sectionNumbers, values.openStatuses,
+    values.campuses, values.subjects, values.keywords, values.courseNumbers, values.levels, values.core.codes,
+    values.sectionIndexes, values.openStatuses,
     values.modalities, values.synchronicities, values.instructors, values.availability,
-    values.meetingLocations, values.buildingRoom.buildingCodes, values.buildingRoom.roomNumbers,
-    values.examCodes, values.eligibility.majorCodes, values.eligibility.minorCodes,
-    values.eligibility.honorProgramCodes, values.eligibility.unitCodes, values.eligibility.unitMajors,
+    values.meetingLocations.locations, values.examCodes,
   ].reduce((count, field) => count + field.length, 0);
   if (total > 512) fail('TOO_MANY_VALUES', 'filter request exceeds 512 values');
   return values;
 }
 
-export function toFilterRequestV1(state: FilterStateV1): FilterRequestV1 {
-  return { contractVersion: 1, values: toFilterValuesV1(state) };
+export function toFilterRequestV1(state: FilterStateV1): FilterRequestV2 {
+  return { contractVersion: 2, values: toFilterValuesV1(state) };
 }
 
 export function serializeFilterRequestV1(state: FilterStateV1): string {

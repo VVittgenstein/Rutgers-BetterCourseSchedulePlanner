@@ -11,6 +11,7 @@ mod official_refresh_runtime;
 mod product_routes;
 mod query_service;
 mod refresh_coordinator;
+mod refresh_generation;
 mod refresh_runtime;
 mod runtime_core;
 mod rutgers_refresh_upstream;
@@ -28,15 +29,14 @@ pub use host::{
     serve_websocket, spawn_loopback_server, spawn_loopback_server_with_socket,
 };
 pub use official_refresh_runtime::{
-    DISCOVERY_REFRESH_INTERVAL, DISCOVERY_RETRY_INTERVAL, OfficialRefreshRuntime,
-    OfficialRefreshRuntimeBuildError,
+    DISCOVERY_RETRY_INTERVAL, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,
 };
 pub use product_routes::{
     PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH, PRODUCT_COURSE_SEARCH_PATH,
-    PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH, PRODUCT_OPEN_STATUS_PATH,
-    PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH, PRODUCT_SERVICE_STATUS_PATH,
-    ProductStorageAccess, ProductStorageLockError, SHARED_PRODUCT_ROUTE_INVENTORY,
-    SharedProductRoutes, SharedProductStorage,
+    PRODUCT_FILTER_OPTIONS_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
+    PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
+    PRODUCT_SERVICE_STATUS_PATH, ProductStorageAccess, ProductStorageLockError,
+    SHARED_PRODUCT_ROUTE_INVENTORY, SharedProductRoutes, SharedProductStorage,
 };
 pub use query_service::{SharedQueryError, SharedQueryService};
 pub use refresh_coordinator::{
@@ -45,6 +45,7 @@ pub use refresh_coordinator::{
     OpenDispatchTerminal, RefreshFuture, RefreshUpstream, ScheduledRefreshTarget,
     SharedRefreshCoordinator, SystemCoordinatorClock,
 };
+pub use refresh_generation::DISCOVERY_REFRESH_INTERVAL;
 pub use refresh_runtime::{RefreshRuntime, RefreshRuntimeRegistrationError};
 pub use runtime_core::{
     ApplicationClock, FixedRefreshPolicyProvider, OpenRuntimeSnapshot, OpenRuntimeSnapshotRegistry,

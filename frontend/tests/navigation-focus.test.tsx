@@ -19,7 +19,7 @@ function RouterProbe() {
   const { pathname } = useAppRouter();
   return (
     <>
-      <RouterLink to="/watch">Forward</RouterLink>
+      <nav className="bcsp-navigation"><RouterLink to="/watch">Forward</RouterLink></nav>
       <button type="button">Keep focus</button>
       <main id="bcsp-workspace" tabIndex={-1}>{pathname}</main>
     </>
@@ -40,6 +40,7 @@ describe('workspace navigation focus', () => {
     const workspace = document.getElementById('bcsp-workspace') as HTMLElement;
     expect(document.activeElement).not.toBe(workspace);
     expect(screen.getByRole('link', { name: /Watch desk/u }).getAttribute('aria-current')).toBe('page');
+    expect(screen.queryByRole('link', { name: /Sections/u })).toBeNull();
     expect(screen.getByText(/Select up to nine Sections/u)).toBeTruthy();
     expect(screen.getAllByText('Copyright (c) 2026 VVittgenstein')).toHaveLength(1);
 
@@ -50,7 +51,7 @@ describe('workspace navigation focus', () => {
     expect(screen.getByRole('link', { name: /Watch desk/u }).hasAttribute('aria-current')).toBe(false);
   });
 
-  it('leaves focus and scroll restoration alone on initial render and popstate', async () => {
+  it('leaves initial focus alone, then focuses the workspace and restores per-page scroll', async () => {
     window.history.replaceState(null, '', '/');
     const view = render(
       <AppRouterProvider>
@@ -58,19 +59,78 @@ describe('workspace navigation focus', () => {
       </AppRouterProvider>,
     );
     const workspace = view.container.querySelector<HTMLElement>('#bcsp-workspace')!;
+    const navigation = view.container.querySelector<HTMLElement>('.bcsp-navigation')!;
     const scrollIntoView = vi.fn();
-    Object.defineProperty(workspace, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    Object.defineProperty(navigation, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    const scrollTo = vi.fn();
+    Object.defineProperty(window, 'scrollTo', { configurable: true, value: scrollTo });
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 320 });
     const focusKeeper = screen.getByRole('button', { name: 'Keep focus' });
     focusKeeper.focus();
 
     expect(document.activeElement).toBe(focusKeeper);
     expect(scrollIntoView).not.toHaveBeenCalled();
 
-    window.history.pushState(null, '', '/sections');
+    window.history.pushState(null, '', '/watch');
     window.dispatchEvent(new PopStateEvent('popstate'));
 
-    await screen.findByText('/sections');
-    expect(document.activeElement).toBe(focusKeeper);
-    expect(scrollIntoView).not.toHaveBeenCalled();
+    await screen.findByText('/watch');
+    await waitFor(() => expect(document.activeElement).toBe(workspace));
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
+
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 44 });
+    window.history.pushState(null, '', '/');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    await screen.findByText('/');
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({
+      behavior: 'auto',
+      left: 0,
+      top: 320,
+    }));
+  });
+
+  it('keeps an independent window scroll position for every top-level workspace', async () => {
+    window.history.replaceState(null, '', '/');
+    render(<AppRouterProvider><RouterProbe /></AppRouterProvider>);
+    const navigation = document.querySelector<HTMLElement>('.bcsp-navigation');
+    if (navigation === null) throw new Error('navigation is required');
+    Object.defineProperty(navigation, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const scrollTo = vi.fn();
+    Object.defineProperty(window, 'scrollTo', { configurable: true, value: scrollTo });
+    let currentScroll = 111;
+    Object.defineProperty(window, 'scrollY', {
+      configurable: true,
+      get: () => currentScroll,
+    });
+    const pages = [
+      ['/', 111],
+      ['/watch', 222],
+      ['/saved-views', 333],
+      ['/history', 444],
+      ['/settings', 555],
+    ] as const;
+
+    for (const [path, position] of pages.slice(1)) {
+      window.history.pushState(null, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      await screen.findByText(path);
+      currentScroll = position;
+    }
+
+    scrollTo.mockClear();
+    for (const [path, position] of pages.slice(0, -1)) {
+      window.history.pushState(null, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      await screen.findByText(path);
+      await waitFor(() => expect(scrollTo).toHaveBeenLastCalledWith({
+        behavior: 'auto',
+        left: 0,
+        top: position,
+      }));
+      currentScroll = position;
+    }
   });
 });

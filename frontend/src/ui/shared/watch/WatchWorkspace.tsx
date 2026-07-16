@@ -24,16 +24,28 @@ import {
   MAX_SELECTED_SECTIONS,
   useLiveWatch,
   type ActiveWatchView,
+  type WatchTelemetryResourceState,
 } from './LiveWatchProvider';
 
 function sectionLabel(sectionKey: SectionKey): string {
   return `${sectionKey.index} / ${sectionKey.term} / ${sectionKey.campus}`;
 }
 
-function connectionLabel(state: string, i18n: BcspI18nRuntime): string {
+function connectionLabel(
+  state: string,
+  activeCount: number,
+  muted: boolean,
+  i18n: BcspI18nRuntime,
+): string {
   switch (state) {
     case 'CONNECTING': return i18n.t('watch.connection.connecting');
-    case 'OPEN': return i18n.t('watch.connection.open');
+    case 'OPEN': {
+      if (activeCount === 0) return i18n.t('watch.connection.open');
+      const key = activeCount === 1
+        ? muted ? 'watch.connection.watching_one_muted' : 'watch.connection.watching_one'
+        : muted ? 'watch.connection.watching_muted' : 'watch.connection.watching';
+      return i18n.t(key, { count: i18n.formatNumber(activeCount) });
+    }
     case 'CLOSED': return i18n.t('watch.connection.closed');
     case 'ERROR': return i18n.t('watch.connection.error');
     default: return i18n.t('watch.connection.idle');
@@ -154,6 +166,78 @@ function SectionTelemetry({ status }: { readonly status: OpenSectionStatusV1 }) 
   );
 }
 
+function resourceLabel(resource: WatchTelemetryResourceState, i18n: BcspI18nRuntime): string {
+  if (resource.kind === 'SECTION' && resource.sectionKey !== null) {
+    return i18n.t('watch.telemetry.resource_section', { index: resource.sectionKey.index });
+  }
+  const batch = resource.batch;
+  return i18n.t('watch.telemetry.resource_batch', {
+    campus: batch?.campus ?? i18n.t('common.unknown'),
+    term: batch?.term ?? i18n.t('common.unknown'),
+  });
+}
+
+function resourceTime(resource: WatchTelemetryResourceState, i18n: BcspI18nRuntime): string {
+  if (resource.lastSuccessAt === null) return i18n.t('common.not_observed');
+  const timestamp = Date.parse(resource.lastSuccessAt);
+  return Number.isFinite(timestamp)
+    ? i18n.formatDate(timestamp, { hour: '2-digit', minute: '2-digit' })
+    : i18n.t('common.invalid_timestamp');
+}
+
+function TelemetryResourceState({ resource }: { readonly resource: WatchTelemetryResourceState }) {
+  const i18n = useBcspI18n();
+  const watch = useLiveWatch();
+  const lastSuccess = resourceTime(resource, i18n);
+  const message = resource.loading
+    ? i18n.t('watch.telemetry.resource_loading')
+    : resource.error !== null && resource.availability === 'LKG'
+      ? i18n.t('watch.telemetry.resource_lkg_error', { time: lastSuccess })
+      : resource.error !== null
+        ? i18n.t('watch.telemetry.resource_error_no_data')
+        : resource.availability === 'LKG'
+          ? i18n.t('watch.telemetry.resource_lkg', { time: lastSuccess })
+          : resource.availability === 'ERROR_NO_DATA'
+            ? i18n.t('watch.telemetry.resource_no_data')
+            : i18n.t('watch.telemetry.resource_current', { time: lastSuccess });
+  return (
+    <article
+      className="watch-telemetry__resource"
+      data-availability={resource.availability}
+      data-loading={resource.loading || undefined}
+    >
+      <div>
+        <h4>{resourceLabel(resource, i18n)}</h4>
+        <p aria-live="polite" className="watch-workspace__meta" role={resource.error === null ? 'status' : 'alert'}>
+          {message}
+        </p>
+      </div>
+      {resource.error === null ? null : (
+        <div className="watch-telemetry__resource-actions">
+          <ActionButton
+            busy={resource.loading}
+            busyLabel={i18n.t('watch.telemetry.resource_loading')}
+            onClick={() => void watch.retryTelemetryResource(resource.key)}
+            tone="quiet"
+          >
+            {i18n.t('watch.telemetry.retry')}
+          </ActionButton>
+          <details className="watch-workspace__diagnostics">
+            <summary>{i18n.t('watch.diagnostics.summary')}</summary>
+            <dl className="watch-workspace__diagnostic-facts">
+              <Fact label={i18n.t('watch.telemetry.http_status')} value={resource.error.httpStatus === null
+                ? i18n.t('common.not_exposed')
+                : i18n.formatNumber(resource.error.httpStatus)} />
+              <Fact label={i18n.t('watch.telemetry.api_code')} value={resource.error.apiCode ?? i18n.t('common.not_exposed')} />
+              <Fact label={i18n.t('watch.telemetry.trace_id')} value={resource.error.traceId ?? i18n.t('common.not_exposed')} />
+            </dl>
+          </details>
+        </div>
+      )}
+    </article>
+  );
+}
+
 function OpenTelemetryPanel() {
   const i18n = useBcspI18n();
   const watch = useLiveWatch();
@@ -169,9 +253,13 @@ function OpenTelemetryPanel() {
           {i18n.t('watch.telemetry.read')}
         </ActionButton>
       </header>
-      {watch.telemetryError ? (
-        <p className="watch-workspace__confirm" role="alert">{i18n.t('watch.telemetry.error')}</p>
-      ) : null}
+      {watch.telemetryResources.length === 0 ? null : (
+        <div className="watch-telemetry__resources">
+          {watch.telemetryResources.map((resource) => (
+            <TelemetryResourceState key={resource.key} resource={resource} />
+          ))}
+        </div>
+      )}
       {watch.batchStatuses.length === 0 && !hasTelemetryTargets ? (
         <p className="watch-workspace__empty">{i18n.t('watch.telemetry.empty')}</p>
       ) : watch.batchStatuses.length > 0 ? (
@@ -277,8 +365,10 @@ function SelectedSectionManager({
       {watch.selected.length === 0 ? null : (
         <div className="watch-workspace__actions">
           <ActionButton
-            disabled={!policyReady || inactiveCount === 0 || watch.pending.length > 0}
-            onClick={() => watch.startSelected(policy)}
+            busy={watch.starting}
+            busyLabel={i18n.t('watch.starting_selected')}
+            disabled={!policyReady || inactiveCount === 0 || watch.pending.length > 0 || watch.starting}
+            onClick={() => void watch.startSelected(policy)}
             tone="accent"
           >
             {i18n.t('watch.start_selected', { count: i18n.formatNumber(inactiveCount) })}
@@ -399,6 +489,8 @@ export function WatchWorkspace({
   );
   const [continuousConfirmed, setContinuousConfirmed] = useState(false);
   const initialPolicyRender = useRef(true);
+  const onPolicyChangeRef = useRef(onPolicyChange);
+  onPolicyChangeRef.current = onPolicyChange;
   const validMaximum = Number.isInteger(maxAudible) && maxAudible > 0;
   const policy = useMemo<WatchPolicyV1>(() => ({
     notificationMode,
@@ -413,15 +505,17 @@ export function WatchWorkspace({
       initialPolicyRender.current = false;
       return;
     }
-    if (policyReady) onPolicyChange?.(policy);
-  }, [onPolicyChange, policy, policyReady]);
+    if (policyReady) onPolicyChangeRef.current?.(policy);
+  }, [policy, policyReady]);
   const connectionSignal = watch.connection === 'OPEN'
     ? 'ready'
     : watch.connection === 'CONNECTING'
       ? 'refreshing'
       : watch.connection === 'ERROR'
         ? 'offline'
-        : 'unknown';
+      : 'unknown';
+  const watchAudioWarning = watch.active.length > 0
+    && (watch.audioState === 'BLOCKED' || watch.audioState === 'FAILED');
 
   return (
     <div className="watch-workspace" data-watch-connection={watch.connection}>
@@ -431,13 +525,23 @@ export function WatchWorkspace({
           <h3 className="watch-workspace__title">{i18n.t('watch.console_title')}</h3>
           <p className="watch-workspace__lede">{i18n.t('watch.desk_lede')}</p>
           <div className="watch-workspace__status-strip" aria-label={i18n.t('watch.session_status')}>
-            <StatusSignal detail="WebSocket" label={connectionLabel(watch.connection, i18n)} state={connectionSignal} />
+            <StatusSignal
+              detail={i18n.t('watch.connection.user_label')}
+              label={connectionLabel(watch.connection, watch.active.length, watch.muted, i18n)}
+              state={connectionSignal}
+            />
             <Metric label={i18n.t('watch.metric.selected')} value={i18n.formatNumber(watch.selected.length)} />
             <Metric label={i18n.t('watch.metric.active')} value={i18n.formatNumber(watch.active.length)} />
             <Metric label={i18n.t('watch.metric.open_episodes')} value={i18n.formatNumber(
               watch.episodes.filter((episode) => episode.state === 'UNACKNOWLEDGED').length,
             )} />
           </div>
+          <details className="watch-workspace__diagnostics">
+            <summary>{i18n.t('watch.diagnostics.summary')}</summary>
+            <dl className="watch-workspace__diagnostic-facts">
+              <Fact label={i18n.t('watch.diagnostics.transport')} value={`WebSocket / ${watch.connection}`} />
+            </dl>
+          </details>
         </div>
         <div className="watch-workspace__panel">
           <div className="watch-workspace__form">
@@ -491,7 +595,14 @@ export function WatchWorkspace({
               <input id="watch-volume" max="100" min="0" onChange={(event) => watch.setVolume(Number(event.currentTarget.value))} type="range" value={watch.volume} />
             </div>
             <div className="watch-workspace__actions">
-              <ActionButton onClick={() => void watch.testSound()} tone="accent">{i18n.t('watch.enable_test_sound')}</ActionButton>
+              <ActionButton
+                busy={watch.audioState === 'UNLOCKING'}
+                busyLabel={i18n.t('audio.state.unlocking')}
+                onClick={() => void watch.testSound()}
+                tone="accent"
+              >
+                {i18n.t('watch.enable_test_sound')}
+              </ActionButton>
               <ActionButton disabled={watch.audioState !== 'READY'} onClick={() => watch.setMuted(!watch.muted)} tone="quiet">
                 {i18n.t(watch.muted ? 'watch.unmute' : 'watch.mute')}
               </ActionButton>
@@ -506,6 +617,13 @@ export function WatchWorkspace({
                   count: i18n.formatNumber(watch.continuousEpisodeIds.length),
                 }),
             })}</p>
+            {watchAudioWarning ? (
+              <p className="watch-workspace__confirm" role="alert">
+                {i18n.t(watch.audioState === 'BLOCKED'
+                  ? 'watch.audio_watch_warning.blocked'
+                  : 'watch.audio_watch_warning.failed')}
+              </p>
+            ) : null}
             {!policyReady ? <p className="watch-workspace__inline-status" role="alert">{i18n.t('watch.continuous_required')}</p> : null}
           </div>
         </div>

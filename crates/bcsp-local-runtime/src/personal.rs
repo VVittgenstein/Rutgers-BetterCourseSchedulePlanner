@@ -1,18 +1,19 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use bcsp_application::SessionNonce;
-use bcsp_application::SharedWatchSocket;
+use bcsp_application::{SessionNonce, SharedQueryError, SharedQueryService, SharedWatchSocket};
 use bcsp_contracts::{
     ContractDecodeError, FilterRequestV1, HttpRequestEnvelope, HttpSuccessEnvelope, SectionKey,
-    SystemTraceIdSource, TraceId, TraceIdSource, decode_versioned_envelope_json,
+    SystemTraceIdSource, TermCampusKey, TraceId, TraceIdSource, decode_versioned_envelope_json,
 };
 use bcsp_local_user_state::{
     CurrentFiltersRevision, HistoryFilter, LocalSettings, PageRequest, PersonalStateError,
-    PersonalStateStore, SavedViewDefinition, SavedViewMatch, SavedViewRevision, SettingsRevision,
-    UnixMillis, UserStateRevision,
+    PersonalStateStore, SavedViewContent, SavedViewDefinition, SavedViewIncompatibility,
+    SavedViewMatch, SavedViewRevision, SettingsRevision, UnixMillis, UserStateRevision,
 };
+use bcsp_operational_storage::OperationalStorage;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 use crate::{LocalApiErrorCode, LocalPrimaryDatabase, LocalSurfaceFailure, LocalSurfaceState};
 
@@ -49,11 +50,14 @@ impl PersonalSurface {
         &self,
         operation: impl FnOnce(&PersonalStateStore) -> Result<T, PersonalStateError>,
     ) -> Result<T, LocalSurfaceFailure> {
-        let database = self
-            .database
-            .lock()
-            .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?;
+        let database = self.lock_database()?;
         operation(database.personal()).map_err(map_personal_error)
+    }
+
+    fn lock_database(&self) -> Result<MutexGuard<'_, LocalPrimaryDatabase>, LocalSurfaceFailure> {
+        self.database
+            .lock()
+            .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))
     }
 
     fn with_mutation_store<T>(
@@ -83,7 +87,19 @@ impl LocalSurfaceState for PersonalSurface {
             state: T,
         }
 
-        let mut state = self.with_store(|store| store.snapshot(PageRequest::DEFAULT))?;
+        let mut database = self.lock_database()?;
+        let mut state = database
+            .personal()
+            .snapshot(PageRequest::DEFAULT)
+            .map_err(map_personal_error)?;
+        let raw_snapshots = load_saved_view_raw_snapshots(database.personal(), &state.saved_views)
+            .map_err(map_personal_error)?;
+        project_legacy_saved_view_dynamic_compatibility(
+            database.operational_mut(),
+            &mut state.saved_views,
+            &raw_snapshots,
+        );
+        drop(database);
         state.active_watch_count = u8::try_from(self.watch.total_active_watch_count())
             .unwrap_or(bcsp_contracts::MAX_ACTIVE_WATCHES);
         encode(&Bootstrap {
@@ -190,24 +206,34 @@ impl LocalSurfaceState for PersonalSurface {
             views: Vec<SavedViewListItem>,
         }
 
-        let library = self.with_store(|store| {
-            store.consistent_read(|store| {
+        let mut database = self.lock_database()?;
+        let (current_filters, mut definitions, raw_snapshots) = database
+            .personal()
+            .consistent_read(|store| {
                 let current_filters = store.current_filters()?;
-                let views = store
-                    .saved_views()?
-                    .into_iter()
-                    .map(|definition| SavedViewListItem {
-                        match_state: definition.match_current(&current_filters),
-                        definition,
-                    })
-                    .collect();
-                Ok(SavedViewLibrary {
-                    state_revision: current_filters.state_revision,
-                    current_filters,
-                    views,
-                })
+                let definitions = store.saved_views()?;
+                let raw_snapshots = load_saved_view_raw_snapshots(store, &definitions)?;
+                Ok((current_filters, definitions, raw_snapshots))
             })
-        })?;
+            .map_err(map_personal_error)?;
+        project_legacy_saved_view_dynamic_compatibility(
+            database.operational_mut(),
+            &mut definitions,
+            &raw_snapshots,
+        );
+        drop(database);
+        let views = definitions
+            .into_iter()
+            .map(|definition| SavedViewListItem {
+                match_state: definition.match_current(&current_filters),
+                definition,
+            })
+            .collect();
+        let library = SavedViewLibrary {
+            state_revision: current_filters.state_revision,
+            current_filters,
+            views,
+        };
         encode(&library)
     }
 
@@ -237,6 +263,33 @@ impl LocalSurfaceState for PersonalSurface {
 
     fn apply_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let command: SavedViewCommand = decode_payload(body)?;
+        let dynamically_incompatible = {
+            let mut database = self.lock_database()?;
+            let definition = {
+                let store = database.personal();
+                let state_revision = store.user_state_revision().map_err(map_personal_error)?;
+                let current_filters = store.current_filters().map_err(map_personal_error)?;
+                if state_revision != command.expected_user_state_revision
+                    || current_filters.revision != command.expected_current_filters_revision
+                {
+                    None
+                } else {
+                    store.saved_view(command.id).map_err(map_personal_error)?
+                }
+            };
+            definition.is_some_and(|definition| {
+                definition.revision == command.expected_view_revision
+                    && legacy_saved_view_has_invalid_dynamic_option(
+                        database.operational_mut(),
+                        &definition,
+                    )
+            })
+        };
+        if dynamically_incompatible {
+            return Err(LocalSurfaceFailure::unprocessable(
+                LocalApiErrorCode::SavedViewIncompatible,
+            ));
+        }
         let current = self.with_mutation_store(|store| {
             store.apply_saved_view(
                 command.expected_user_state_revision,
@@ -441,6 +494,115 @@ impl LocalSurfaceState for PersonalSurface {
     }
 }
 
+type SavedViewRawSnapshots = Vec<(TraceId, SavedViewRevision, JsonValue)>;
+
+fn load_saved_view_raw_snapshots(
+    store: &PersonalStateStore,
+    definitions: &[SavedViewDefinition],
+) -> Result<SavedViewRawSnapshots, PersonalStateError> {
+    let mut snapshots = Vec::with_capacity(definitions.len());
+    for definition in definitions {
+        if definition.schema_version != 1 || definition.content.filters().is_none() {
+            continue;
+        }
+        if let Some((revision, raw)) = store.saved_view_raw_snapshot(definition.id)? {
+            snapshots.push((definition.id, revision, raw));
+        }
+    }
+    Ok(snapshots)
+}
+
+fn project_legacy_saved_view_dynamic_compatibility(
+    storage: &mut OperationalStorage,
+    definitions: &mut [SavedViewDefinition],
+    raw_snapshots: &SavedViewRawSnapshots,
+) {
+    project_legacy_saved_view_dynamic_compatibility_with(
+        definitions,
+        raw_snapshots,
+        |definition| legacy_saved_view_has_invalid_dynamic_option(storage, definition),
+    );
+}
+
+fn project_legacy_saved_view_dynamic_compatibility_with(
+    definitions: &mut [SavedViewDefinition],
+    raw_snapshots: &SavedViewRawSnapshots,
+    mut is_invalid: impl FnMut(&SavedViewDefinition) -> bool,
+) {
+    for definition in definitions {
+        if !is_invalid(definition) {
+            continue;
+        }
+        let Some((_, _, raw_snapshot)) = raw_snapshots
+            .iter()
+            .find(|(id, revision, _)| *id == definition.id && *revision == definition.revision)
+        else {
+            // A concurrent update can make a separately read raw snapshot
+            // ambiguous. Leaving the view compatible for this response is
+            // safer than attaching the wrong original snapshot; apply-time
+            // validation and the next library read still fail closed.
+            continue;
+        };
+        definition.content = SavedViewContent::Incompatible {
+            raw_snapshot: raw_snapshot.clone(),
+            reason: SavedViewIncompatibility::InvalidFieldData,
+        };
+    }
+}
+
+fn legacy_saved_view_has_invalid_dynamic_option(
+    storage: &mut OperationalStorage,
+    definition: &SavedViewDefinition,
+) -> bool {
+    if definition.schema_version != 1 {
+        return false;
+    }
+    let Some(filters) = definition.content.filters() else {
+        return false;
+    };
+    let values = filters.values();
+    if values.keywords().is_none()
+        && values.levels().is_empty()
+        && values.instructors().is_empty()
+        && values.meeting_locations().locations.is_empty()
+        && values.exam_codes().is_empty()
+    {
+        return false;
+    }
+    let Some(targets) = saved_view_search_targets(storage, filters) else {
+        // Missing discovery/publication is transient and cannot prove that a
+        // migrated dictionary value is invalid.
+        return false;
+    };
+    matches!(
+        SharedQueryService::new(storage).validate_dynamic_filter_options(&targets, values),
+        Err(SharedQueryError::InvalidFilterOption { .. })
+    )
+}
+
+fn saved_view_search_targets(
+    storage: &OperationalStorage,
+    filters: &FilterRequestV1,
+) -> Option<Vec<TermCampusKey>> {
+    let values = filters.values();
+    let targets: Vec<TermCampusKey> = if values.campuses().is_empty() {
+        storage
+            .discovered_targets()
+            .ok()?
+            .into_iter()
+            .filter(|target| target.term() == values.term())
+            .collect()
+    } else {
+        values
+            .campuses()
+            .iter()
+            .cloned()
+            .map(|campus| TermCampusKey::new(values.term().clone(), campus))
+            .collect()
+    };
+    (!targets.is_empty()).then_some(targets)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CurrentFiltersCommand {
@@ -576,6 +738,11 @@ fn map_personal_error(error: PersonalStateError) -> LocalSurfaceFailure {
 mod tests {
     use std::str::FromStr;
 
+    use bcsp_contracts::{
+        CampusCode, FilterTokenV1, FilterValuesInputV1, NormalizedFilterValuesV1, TermId,
+    };
+    use serde_json::json;
+
     use super::*;
 
     fn trace(value: u64) -> TraceId {
@@ -620,5 +787,62 @@ mod tests {
             Ok(expected)
         );
         assert!(pending.is_none());
+    }
+
+    #[test]
+    fn invalid_legacy_dynamic_option_projects_original_snapshot_as_incompatible() {
+        let id = trace(4);
+        let revision = SavedViewRevision::try_from(3).unwrap();
+        let mut input =
+            FilterValuesInputV1::for_term(TermId::try_from("92026").expect("synthetic term"));
+        input.campuses = vec![CampusCode::try_from("NB").expect("synthetic campus")];
+        input.instructors =
+            vec![FilterTokenV1::try_from("Removed Instructor").expect("valid token")];
+        let filters =
+            FilterRequestV1::new(NormalizedFilterValuesV1::try_new(input).expect("valid filters"));
+        let definition = SavedViewDefinition {
+            id,
+            name: "Legacy".to_owned(),
+            schema_version: 1,
+            revision,
+            content: SavedViewContent::Compatible {
+                filters: Box::new(filters),
+            },
+            created_at: UnixMillis::try_from(1).unwrap(),
+            updated_at: UnixMillis::try_from(2).unwrap(),
+        };
+        let raw = json!({
+            "codecVersion": 1,
+            "schemaVersion": 1,
+            "fields": {"FLT-S06": ["Removed Instructor"]},
+        });
+        let mut definitions = vec![definition.clone()];
+        project_legacy_saved_view_dynamic_compatibility_with(
+            &mut definitions,
+            &vec![(id, revision, raw.clone())],
+            |_| true,
+        );
+        assert_eq!(
+            definitions[0].content,
+            SavedViewContent::Incompatible {
+                raw_snapshot: raw,
+                reason: SavedViewIncompatibility::InvalidFieldData,
+            }
+        );
+
+        let mut raced = vec![definition.clone()];
+        project_legacy_saved_view_dynamic_compatibility_with(
+            &mut raced,
+            &vec![(
+                id,
+                SavedViewRevision::try_from(4).unwrap(),
+                json!({"wrongRevision": true}),
+            )],
+            |_| true,
+        );
+        assert_eq!(
+            raced[0], definition,
+            "a raw snapshot from another revision must never be attached"
+        );
     }
 }

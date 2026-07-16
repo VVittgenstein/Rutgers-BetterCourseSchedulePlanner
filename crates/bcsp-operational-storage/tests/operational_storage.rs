@@ -177,12 +177,70 @@ fn db_path(temp: &TempDir) -> std::path::PathBuf {
     temp.path().join("synthetic-operational.sqlite")
 }
 
+fn assert_catalog_variant_fk_indexes(path: &Path) {
+    let connection = Connection::open(path).expect("open schema inspection connection");
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .expect("enable foreign keys for cascade query plans");
+    for (index, expected_columns) in [
+        (
+            "catalog_staging_sections_variant_fk",
+            ["observation_id", "course_string", "fingerprint"],
+        ),
+        (
+            "catalog_sections_variant_fk",
+            ["target_id", "course_string", "fingerprint"],
+        ),
+    ] {
+        let mut statement = connection
+            .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
+            .expect("prepare index inspection");
+        let columns = statement
+            .query_map([index], |row| row.get::<_, String>(0))
+            .expect("read index columns")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect index columns");
+        assert_eq!(columns, expected_columns, "{index}");
+    }
+
+    for (sql, child_table, expected_index, full_lookup) in [
+        (
+            "DELETE FROM catalog_staging_course_variants WHERE observation_id = ?1",
+            "catalog_staging_sections",
+            "catalog_staging_sections_variant_fk",
+            "observation_id=? AND course_string=? AND fingerprint=?",
+        ),
+        (
+            "DELETE FROM catalog_course_variants WHERE target_id = ?1",
+            "catalog_sections",
+            "catalog_sections_variant_fk",
+            "target_id=? AND course_string=? AND fingerprint=?",
+        ),
+    ] {
+        let explain = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut statement = connection.prepare(&explain).expect("prepare cascade plan");
+        let details = statement
+            .query_map(["SYNTHETIC_SCOPE"], |row| row.get::<_, String>(3))
+            .expect("explain cascade")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect cascade plan");
+        let child_lookup = details
+            .iter()
+            .find(|detail| detail.contains(child_table))
+            .unwrap_or_else(|| panic!("missing {child_table} lookup in {details:#?}"));
+        assert!(
+            child_lookup.contains(expected_index) && child_lookup.contains(full_lookup),
+            "cascade child lookup must use the complete FK key: {child_lookup}"
+        );
+    }
+}
+
 #[test]
 fn fresh_schema_has_no_catalog_seed_and_migration_checksum_is_strict() {
     let temp = TempDir::new().expect("temp dir");
     let path = db_path(&temp);
     let storage = OperationalStorage::open(&path).expect("initialize schema");
-    assert_eq!(storage.migration_records().expect("migrations").len(), 2);
+    assert_eq!(storage.migration_records().expect("migrations").len(), 3);
     assert!(storage.discovered_targets().expect("targets").is_empty());
     let discovery = storage.discovery_state().expect("discovery state");
     assert_eq!((discovery.term_count, discovery.campus_count), (0, 0));
@@ -206,6 +264,55 @@ fn fresh_schema_has_no_catalog_seed_and_migration_checksum_is_strict() {
         OperationalStorage::open(&path),
         Err(StorageError::MigrationChecksumMismatch { migration_id: 1 })
     ));
+}
+
+#[test]
+fn catalog_variant_fk_child_indexes_cover_fresh_and_v2_upgraded_databases() {
+    let fresh = TempDir::new().expect("fresh temp dir");
+    let fresh_path = db_path(&fresh);
+    drop(OperationalStorage::open(&fresh_path).expect("initialize fresh schema"));
+    assert_catalog_variant_fk_indexes(&fresh_path);
+
+    let upgraded = TempDir::new().expect("upgrade temp dir");
+    let upgraded_path = db_path(&upgraded);
+    let connection = Connection::open(&upgraded_path).expect("raw v2 database");
+    for (migration_id, name, sql) in [
+        (
+            1,
+            "operational_catalog",
+            include_str!("../migrations/0001_operational_catalog.sql"),
+        ),
+        (
+            2,
+            "operational_open",
+            include_str!("../migrations/0002_operational_open.sql"),
+        ),
+    ] {
+        connection
+            .execute_batch(sql)
+            .expect("apply legacy migration");
+        connection
+            .execute(
+                "INSERT INTO bcsp_operational_migrations
+                    (migration_id, name, sha256, applied_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                (
+                    migration_id,
+                    name,
+                    format!("{:x}", Sha256::digest(sql.as_bytes())),
+                    COMPLETED,
+                ),
+            )
+            .expect("record legacy migration");
+    }
+    drop(connection);
+
+    let storage = OperationalStorage::open(&upgraded_path).expect("upgrade v2 database");
+    let migrations = storage.migration_records().expect("upgraded migrations");
+    assert_eq!(migrations.len(), 3);
+    assert_eq!(migrations[2].name, "catalog_variant_fk_indexes");
+    drop(storage);
+    assert_catalog_variant_fk_indexes(&upgraded_path);
 }
 
 #[test]
@@ -243,7 +350,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
         .execute(
             "INSERT INTO bcsp_operational_migrations
                 (migration_id, name, sha256, applied_at)
-             VALUES (3, 'future', ?1, ?2)",
+             VALUES (4, 'future', ?1, ?2)",
             [HASH_A, COMPLETED],
         )
         .expect("future migration");
@@ -251,7 +358,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
     assert!(matches!(
         OperationalStorage::open(&future_path),
         Err(StorageError::UnknownMigration {
-            migration_id: 3,
+            migration_id: 4,
             ..
         })
     ));
@@ -849,6 +956,18 @@ fn fts_search_uses_literal_token_and_and_returns_stable_variant_rank() {
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
         )
         .expect("publish FTS fixture");
+
+    let keyword_terms = storage
+        .published_course_fts_terms(&scope, 1, Some("ALP"), 10)
+        .expect("published FTS vocabulary is target/version scoped");
+    assert_eq!(keyword_terms, vec!["alpha"]);
+    assert!(matches!(
+        storage.published_course_fts_terms(&scope, 2, None, 10),
+        Err(StorageError::CatalogContentVersionMismatch {
+            requested: 2,
+            current: 1
+        })
+    ));
 
     let and_result = storage
         .search_course_variants(&scope, 1, &text_tokens(&["alpha", "beta"]))

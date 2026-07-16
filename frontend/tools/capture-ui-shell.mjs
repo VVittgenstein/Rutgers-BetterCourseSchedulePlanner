@@ -11,7 +11,7 @@ const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
     : undefined);
 const outputDirectory = resolve(
   process.cwd(),
-  process.env.BCSP_VISUAL_OUTPUT ?? '../.cache/rc-iteration/round-01/visual-shell',
+  process.env.BCSP_VISUAL_OUTPUT ?? '../.cache/rc-iteration/round-02/visual-shell',
 );
 const filterSchema = JSON.parse(await readFile(
   resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
@@ -98,13 +98,25 @@ function serviceStatus(level, phase, availability, targetCount = 5) {
     }]
     : [];
   return {
-    catalog: { availableTargetCount: catalogAvailable, totalTargetCount: targetCount },
+    catalog: {
+      availableTargetCount: catalogAvailable,
+      currentTargetCount: stale ? 0 : catalogAvailable,
+      staleTargetCount: stale ? catalogAvailable : 0,
+      totalTargetCount: targetCount,
+      unavailableTargetCount: targetCount - catalogAvailable,
+    },
     contractVersion: 1,
     discovery: discoveryStatus,
     issues,
     level,
     observedAt,
-    open: { availableTargetCount: openAvailable, totalTargetCount: targetCount },
+    open: {
+      availableTargetCount: openAvailable,
+      currentTargetCount: stale ? 0 : openAvailable,
+      staleTargetCount: stale ? openAvailable : 0,
+      totalTargetCount: targetCount,
+      unavailableTargetCount: targetCount - openAvailable,
+    },
     operation: {
       nextRetryAt: phase === 'RETRY_WAIT' ? '2026-07-14T16:31:00.000Z' : null,
       phase,
@@ -155,6 +167,24 @@ try {
         body: JSON.stringify(success(filterSchema)),
         contentType: 'application/json',
       }).catch(() => undefined);
+    });
+    await page.route('**/api/v1/query/filter-options', async (route) => {
+      const request = route.request().postDataJSON()?.payload ?? {};
+      const options = request.field === 'COURSE_LEVEL'
+        ? [{ value: 'U', label: 'Undergraduate' }, { value: 'G', label: 'Graduate' }]
+        : request.field === 'MEETING_LOCATION'
+          ? [{ value: 'NB', label: 'New Brunswick' }, { value: 'NK', label: 'Newark' }]
+          : [];
+      await route.fulfill({
+        body: JSON.stringify(success({
+          contractVersion: 2,
+          field: request.field,
+          options,
+          targetVersions: [],
+          truncated: false,
+        })),
+        contentType: 'application/json',
+      });
     });
     await page.route('**/api/v1/service/status', async (route) => {
       await route.fulfill({
@@ -256,4 +286,4 @@ try {
   await browser.close();
 }
 
-process.stdout.write(`RC Round 1 shell snapshots: PASS (${scenarios.length}/${scenarios.length})\n`);
+process.stdout.write(`RC Round 2 shell snapshots: PASS (${scenarios.length}/${scenarios.length})\n`);

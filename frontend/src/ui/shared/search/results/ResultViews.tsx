@@ -33,7 +33,12 @@ export interface ResultNavigationProps {
   readonly onSectionNavigate?: ((key: SectionKey) => void) | undefined;
 }
 
-export interface CourseResultsViewProps extends ResultNavigationProps {
+export interface SectionDisclosureStateProps {
+  readonly expandedSectionDisclosures?: ReadonlySet<string> | undefined;
+  readonly onSectionDisclosureChange?: ((disclosureId: string, expanded: boolean) => void) | undefined;
+}
+
+export interface CourseResultsViewProps extends ResultNavigationProps, SectionDisclosureStateProps {
   readonly response: CourseQueryResponseV1;
   readonly onPageChange: (page: number) => void;
 }
@@ -43,7 +48,7 @@ export interface SectionResultsViewProps extends ResultNavigationProps {
   readonly onPageChange: (page: number) => void;
 }
 
-export interface CourseDetailViewProps {
+export interface CourseDetailViewProps extends SectionDisclosureStateProps {
   readonly response: CourseDetailResponseV1;
   readonly sectionHref: (key: SectionKey) => string;
   readonly onSectionNavigate?: ((key: SectionKey) => void) | undefined;
@@ -61,6 +66,11 @@ function formatGroupKey(key: CourseGroupKey): string {
 
 function formatSectionKey(key: SectionKey): string {
   return `${key.index} / ${key.term} / ${key.campus}`;
+}
+
+function formatVariantDisclosureId(variant: NormalizedCourseVariantV1): string {
+  const { group, fingerprint } = variant.key;
+  return `${group.term}\u0000${group.campus}\u0000${group.courseString}\u0000${fingerprint}`;
 }
 
 function formatKnowledge<T>(
@@ -345,11 +355,15 @@ function SectionResult({
 }
 
 function VariantResult({
+  expandedSectionDisclosures,
   item,
+  onSectionDisclosureChange,
   sectionHref,
   onSectionNavigate,
 }: {
+  readonly expandedSectionDisclosures?: ReadonlySet<string> | undefined;
   readonly item: CourseVariantQueryItemV1;
+  readonly onSectionDisclosureChange?: ((disclosureId: string, expanded: boolean) => void) | undefined;
   readonly sectionHref: (key: SectionKey) => string;
   readonly onSectionNavigate?: ((key: SectionKey) => void) | undefined;
 }) {
@@ -369,6 +383,9 @@ function VariantResult({
       </header>
       <VariantFacts variant={item.variant} />
       <SectionDisclosure
+        disclosureId={formatVariantDisclosureId(item.variant)}
+        expandedSectionDisclosures={expandedSectionDisclosures}
+        onSectionDisclosureChange={onSectionDisclosureChange}
         onSectionNavigate={onSectionNavigate}
         sectionHref={sectionHref}
         sections={item.sections.filter(({ explanation }) => explanation.outcome !== 'NO_MATCH')}
@@ -378,31 +395,49 @@ function VariantResult({
 }
 
 function SectionDisclosure({
+  disclosureId,
+  expandedSectionDisclosures,
+  onSectionDisclosureChange,
   sections,
   sectionHref,
   onSectionNavigate,
 }: {
+  readonly disclosureId: string;
+  readonly expandedSectionDisclosures?: ReadonlySet<string> | undefined;
+  readonly onSectionDisclosureChange?: ((disclosureId: string, expanded: boolean) => void) | undefined;
   readonly sections: readonly SectionQueryItemV1[];
   readonly sectionHref: (key: SectionKey) => string;
   readonly onSectionNavigate?: ((key: SectionKey) => void) | undefined;
 }) {
   const i18n = useBcspI18n();
   const contentId = useId();
-  const [expanded, setExpanded] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const controlled = expandedSectionDisclosures !== undefined
+    && onSectionDisclosureChange !== undefined;
+  const expanded = controlled
+    ? expandedSectionDisclosures.has(disclosureId)
+    : localExpanded;
   const reflectOpen = (open: boolean) => {
-    setExpanded(open);
+    if (controlled) onSectionDisclosureChange(disclosureId, open);
+    else setLocalExpanded(open);
     if (open) setMounted(true);
   };
   return (
     <details
       className="search-results__section-disclosure"
-      onToggle={(event) => reflectOpen(event.currentTarget.open)}
+      onToggle={(event) => {
+        if (event.currentTarget.open !== expanded) reflectOpen(event.currentTarget.open);
+      }}
+      open={expanded}
     >
       <summary
-        aria-controls={mounted ? contentId : undefined}
+        aria-controls={mounted || expanded ? contentId : undefined}
         className="search-results__section-disclosure-summary"
-        onClick={(event) => reflectOpen(!(event.currentTarget.parentElement as HTMLDetailsElement).open)}
+        onClick={(event) => {
+          event.preventDefault();
+          reflectOpen(!expanded);
+        }}
       >
         <span>{i18n.t(expanded ? 'result.sections_collapse' : 'result.sections_expand', {
           count: i18n.formatNumber(sections.length),
@@ -411,7 +446,7 @@ function SectionDisclosure({
           {expanded ? '−' : '+'}
         </span>
       </summary>
-      {mounted ? (
+      {mounted || expanded ? (
         <div className="search-results__section-list" id={contentId}>
           {sections.map((section) => (
             <SectionResult
@@ -428,13 +463,17 @@ function SectionDisclosure({
 }
 
 function CourseGroupResult({
+  expandedSectionDisclosures,
   item,
   onCourseDetail,
+  onSectionDisclosureChange,
   sectionHref,
   onSectionNavigate,
 }: {
+  readonly expandedSectionDisclosures?: ReadonlySet<string> | undefined;
   readonly item: CourseQueryItemV1;
   readonly onCourseDetail: (key: CourseGroupKey) => void;
+  readonly onSectionDisclosureChange?: ((disclosureId: string, expanded: boolean) => void) | undefined;
   readonly sectionHref: (key: SectionKey) => string;
   readonly onSectionNavigate?: ((key: SectionKey) => void) | undefined;
 }) {
@@ -466,8 +505,10 @@ function CourseGroupResult({
       <div className="search-results__variant-list">
         {visibleVariants.map((variant) => (
           <VariantResult
+            expandedSectionDisclosures={expandedSectionDisclosures}
             item={variant}
             key={variant.variant.key.fingerprint}
+            onSectionDisclosureChange={onSectionDisclosureChange}
             onSectionNavigate={onSectionNavigate}
             sectionHref={sectionHref}
           />
@@ -529,8 +570,10 @@ function ResultsHeader({ kind, page }: { readonly kind: string; readonly page: P
 }
 
 export function CourseResultsView({
+  expandedSectionDisclosures,
   response,
   onCourseDetail,
+  onSectionDisclosureChange,
   sectionHref,
   onSectionNavigate,
   onPageChange,
@@ -548,9 +591,11 @@ export function CourseResultsView({
         <div className="search-results__list">
           {visibleItems.map((item) => (
             <CourseGroupResult
+              expandedSectionDisclosures={expandedSectionDisclosures}
               item={item}
               key={formatGroupKey(item.group.key)}
               onCourseDetail={onCourseDetail}
+              onSectionDisclosureChange={onSectionDisclosureChange}
               onSectionNavigate={onSectionNavigate}
               sectionHref={sectionHref}
             />
@@ -642,7 +687,13 @@ function DetailFields({ variant }: { readonly variant: NormalizedCourseVariantV1
   );
 }
 
-export function CourseDetailView({ response, sectionHref, onSectionNavigate }: CourseDetailViewProps) {
+export function CourseDetailView({
+  expandedSectionDisclosures,
+  onSectionDisclosureChange,
+  onSectionNavigate,
+  response,
+  sectionHref,
+}: CourseDetailViewProps) {
   const i18n = useBcspI18n();
   const course = response.course;
   return (
@@ -670,6 +721,9 @@ export function CourseDetailView({ response, sectionHref, onSectionNavigate }: C
             </header>
             <DetailFields variant={variant.variant} />
             <SectionDisclosure
+              disclosureId={formatVariantDisclosureId(variant.variant)}
+              expandedSectionDisclosures={expandedSectionDisclosures}
+              onSectionDisclosureChange={onSectionDisclosureChange}
               onSectionNavigate={onSectionNavigate}
               sectionHref={sectionHref}
               sections={variant.sections}

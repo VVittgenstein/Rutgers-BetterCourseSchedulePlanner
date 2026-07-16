@@ -13,20 +13,29 @@ import type {
   FilterSchemaV1,
   ProductApiPort,
   ProductRuntimePort,
+  ServiceStatusV1,
+  SectionDetailResponseV1,
 } from '../src/ui/shared/product';
-import { AppRouterProvider } from '../src/ui/shared/routing';
+import { AppRouterProvider, RouterLink, useAppRouter } from '../src/ui/shared/routing';
 import type {
   CourseDetailViewProps,
   CourseResultsViewProps,
   SectionDetailViewProps,
   SectionResultsViewProps,
 } from '../src/ui/shared/search/results';
-import { SearchWorkspace } from '../src/ui/shared/search';
+import { SearchSessionProvider, SearchWorkspace } from '../src/ui/shared/search';
 import type { ShellDataState } from '../src/ui/shared/shell';
 
 vi.mock('../src/ui/shared/search/results', () => ({
   CourseDetailView: (_props: CourseDetailViewProps) => <h2>Resolved course detail</h2>,
-  CourseResultsView: ({ onCourseDetail, onPageChange, response }: CourseResultsViewProps) => (
+  CourseResultsView: ({
+    expandedSectionDisclosures,
+    onCourseDetail,
+    onPageChange,
+    onSectionDisclosureChange,
+    onSectionNavigate,
+    response,
+  }: CourseResultsViewProps) => (
     <div data-course-group="01:198:211">
       <p>Course results page {response.page.page}</p>
       <button
@@ -37,6 +46,22 @@ vi.mock('../src/ui/shared/search/results', () => ({
         Open course detail
       </button>
       <button onClick={() => onPageChange(2)} type="button">Next result page</button>
+      <button
+        aria-expanded={expandedSectionDisclosures?.has('mock-variant') ?? false}
+        onClick={() => onSectionDisclosureChange?.(
+          'mock-variant',
+          !(expandedSectionDisclosures?.has('mock-variant') ?? false),
+        )}
+        type="button"
+      >
+        Toggle Section disclosure
+      </button>
+      <button
+        onClick={() => onSectionNavigate?.({ campus: 'NB', index: '12345', term: '2026-9' })}
+        type="button"
+      >
+        Open Section detail
+      </button>
     </div>
   ),
   SectionDetailView: (_props: SectionDetailViewProps) => <h2>Resolved section detail</h2>,
@@ -89,14 +114,14 @@ const discovery: CatalogDiscoveryResponseV1 = {
 const shellState: Extract<ShellDataState, { status: 'READY' }> = {
   discovery,
   discoveryState: 'CURRENT',
-  filterCount: 22,
+  filterCount: 18,
   filterSchema: SCHEMA,
   status: 'READY',
 };
 
 function response(page: number): CourseQueryResponseV1 {
   return {
-    contractVersion: 1,
+    contractVersion: 2,
     items: [{}] as CourseQueryResponseV1['items'],
     page: { page, pageSize: 25, total: 50, totalPages: 2 },
   };
@@ -110,6 +135,24 @@ function runtimeWith(product: Partial<ProductApiPort>): ProductRuntimePort {
   };
 }
 
+const readyStatus = {
+  catalog: {
+    availableTargetCount: 135,
+    currentTargetCount: 135,
+    staleTargetCount: 0,
+    totalTargetCount: 135,
+    unavailableTargetCount: 0,
+  },
+  open: {
+    availableTargetCount: 135,
+    currentTargetCount: 135,
+    staleTargetCount: 0,
+    totalTargetCount: 135,
+    unavailableTargetCount: 0,
+  },
+  issues: [],
+} as unknown as ServiceStatusV1;
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -121,12 +164,13 @@ describe('search focus continuity', () => {
       .mockResolvedValueOnce(response(1))
       .mockResolvedValueOnce(response(2));
     const courseDetail = vi.fn<ProductApiPort['courseDetail']>()
-      .mockResolvedValue({ contractVersion: 1, course: {} } as CourseDetailResponseV1);
+      .mockResolvedValue({ contractVersion: 2, course: {} } as CourseDetailResponseV1);
     const view = render(
       <BcspI18nProvider initialLocale="en-US">
         <AppRouterProvider initialPath="/">
           <SearchWorkspace
             runtime={runtimeWith({ courseDetail, searchCourses })}
+            serviceStatus={readyStatus}
             shellState={shellState}
           />
         </AppRouterProvider>
@@ -159,5 +203,103 @@ describe('search focus continuity', () => {
       screen.getByRole('button', { name: 'Open course detail' }),
     ));
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
+  });
+
+  it('keeps the successful session across failures, every top-level page, and Section detail', async () => {
+    const searchCourses = vi.fn<ProductApiPort['searchCourses']>()
+      .mockResolvedValueOnce(response(1))
+      .mockRejectedValueOnce(new Error('synthetic search failure'))
+      .mockResolvedValueOnce(response(2));
+    const sectionDetail = vi.fn<ProductApiPort['sectionDetail']>().mockResolvedValue({
+      contractVersion: 2,
+      section: {},
+      variant: {},
+    } as SectionDetailResponseV1);
+    const runtime = runtimeWith({ searchCourses, sectionDetail });
+
+    function RouteHarness() {
+      const { pathname } = useAppRouter();
+      const courseRoute = pathname === '/' || pathname.startsWith('/sections/');
+      return (
+        <>
+          <nav>
+            <RouterLink to="/">Courses</RouterLink>
+            <RouterLink to="/watch">Watch</RouterLink>
+            <RouterLink to="/saved-views">Saved</RouterLink>
+            <RouterLink to="/history">History</RouterLink>
+            <RouterLink to="/settings">Settings</RouterLink>
+          </nav>
+          {courseRoute ? (
+            <SearchWorkspace
+              runtime={runtime}
+              serviceStatus={readyStatus}
+              shellState={shellState}
+            />
+          ) : <p>Top-level page {pathname}</p>}
+        </>
+      );
+    }
+
+    const view = render(
+      <BcspI18nProvider initialLocale="en-US">
+        <AppRouterProvider initialPath="/">
+          <SearchSessionProvider>
+            <RouteHarness />
+          </SearchSessionProvider>
+        </AppRouterProvider>
+      </BcspI18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await screen.findByText('Course results page 1');
+
+    fireEvent.click(screen.getByText('Same-Section constraints'));
+    fireEvent.change(screen.getByLabelText('Section indexes'), { target: { value: '54321' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section indexes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByRole('heading', { name: 'Search could not be completed' })).toBeTruthy();
+    expect(screen.getByText('Course results page 1')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next result page' }));
+    await screen.findByText('Course results page 2');
+    expect(searchCourses.mock.calls[2]?.[0].filters.values.sectionIndexes).toEqual([]);
+    expect(searchCourses.mock.calls[2]?.[0].sort).toEqual({
+      direction: 'DESCENDING',
+      field: 'RELEVANCE',
+    });
+
+    const disclosure = screen.getByRole('button', { name: 'Toggle Section disclosure' });
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    const filterRegion = view.container.querySelector<HTMLElement>('.bcsp-search-workspace__filters');
+    if (filterRegion === null) throw new Error('filter region is required');
+    filterRegion.scrollTop = 176;
+    fireEvent.scroll(filterRegion);
+
+    for (const [label, path] of [
+      ['Watch', '/watch'],
+      ['Saved', '/saved-views'],
+      ['History', '/history'],
+      ['Settings', '/settings'],
+    ] as const) {
+      fireEvent.click(screen.getByRole('link', { name: label }));
+      await screen.findByText(`Top-level page ${path}`);
+      fireEvent.click(screen.getByRole('link', { name: 'Courses' }));
+      await screen.findByText('Course results page 2');
+      expect(screen.getAllByText('54321').length).toBeGreaterThan(0);
+      expect(screen.getByRole('button', { name: 'Toggle Section disclosure' })
+        .getAttribute('aria-expanded')).toBe('true');
+      expect(view.container.querySelector<HTMLElement>('.bcsp-search-workspace__filters')?.scrollTop)
+        .toBe(176);
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Section detail' }));
+    expect(await screen.findByRole('heading', { name: 'Resolved section detail' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: /Back to course results/iu }));
+    await screen.findByText('Course results page 2');
+    expect(screen.getAllByText('54321').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Toggle Section disclosure' })
+      .getAttribute('aria-expanded')).toBe('true');
+    expect(searchCourses).toHaveBeenCalledTimes(3);
   });
 });

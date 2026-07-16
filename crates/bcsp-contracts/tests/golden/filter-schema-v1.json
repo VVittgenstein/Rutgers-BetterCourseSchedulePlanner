@@ -1,5 +1,5 @@
 {
-  "contractVersion": 1,
+  "contractVersion": 2,
   "fields": [
     {
       "stableId": "FLT-C01",
@@ -68,26 +68,28 @@
     },
     {
       "stableId": "FLT-C04",
-      "requestField": "text",
+      "requestField": "keywords",
       "scope": "COURSE",
-      "valueKind": "TEXT_QUERY",
-      "neutral": "EMPTY_TEXT",
-      "default": "EMPTY_TEXT",
+      "valueKind": "KEYWORD_SET",
+      "neutral": "EMPTY_SET",
+      "default": "EMPTY_SET",
       "canonicalNeutral": {
         "kind": "JSON",
-        "value": null
+        "value": []
       },
       "normalization": [
         "TRIM_AND_COLLAPSE_WHITESPACE",
+        "SORT_DEDUPLICATE",
         "TOKEN_AND"
       ],
       "validation": [
+        "DYNAMIC_DICTIONARY",
         "NONEMPTY_WHEN_ACTIVE",
         "MAX32_TEXT_TOKENS",
         "MAX128_TOKEN_BYTES",
         "TOKEN_CONTAINS_ALPHANUMERIC"
       ],
-      "queryEncoding": "TEXT_TOKEN_AND_EXACT_IDENTIFIER_PRIORITY",
+      "queryEncoding": "KEYWORD_TOKEN_AND_EXACT_IDENTIFIER_PRIORITY",
       "i18nKey": "filter.flt-c04",
       "chipOrder": 3
     },
@@ -202,29 +204,6 @@
       "chipOrder": 8
     },
     {
-      "stableId": "FLT-C10",
-      "requestField": "courseLocations",
-      "scope": "COURSE",
-      "valueKind": "COURSE_LOCATION_SET",
-      "neutral": "EMPTY_SET",
-      "default": "EMPTY_SET",
-      "canonicalNeutral": {
-        "kind": "JSON",
-        "value": []
-      },
-      "normalization": [
-        "TRIM",
-        "ASCII_UPPERCASE",
-        "SORT_DEDUPLICATE"
-      ],
-      "validation": [
-        "DYNAMIC_DICTIONARY"
-      ],
-      "queryEncoding": "EXACT_ANY",
-      "i18nKey": "filter.flt-c10",
-      "chipOrder": 9
-    },
-    {
       "stableId": "FLT-S01",
       "requestField": "sectionIndexes",
       "scope": "SECTION",
@@ -244,30 +223,7 @@
       ],
       "queryEncoding": "SAME_SECTION_EXACT_ANY",
       "i18nKey": "filter.flt-s01",
-      "chipOrder": 10
-    },
-    {
-      "stableId": "FLT-S02",
-      "requestField": "sectionNumbers",
-      "scope": "SECTION",
-      "valueKind": "SECTION_NUMBER_SET",
-      "neutral": "EMPTY_SET",
-      "default": "EMPTY_SET",
-      "canonicalNeutral": {
-        "kind": "JSON",
-        "value": []
-      },
-      "normalization": [
-        "TRIM",
-        "ASCII_UPPERCASE",
-        "SORT_DEDUPLICATE"
-      ],
-      "validation": [
-        "NONEMPTY_WHEN_ACTIVE"
-      ],
-      "queryEncoding": "SAME_SECTION_EXACT_ANY",
-      "i18nKey": "filter.flt-s02",
-      "chipOrder": 11
+      "chipOrder": 9
     },
     {
       "stableId": "FLT-S03",
@@ -286,7 +242,7 @@
       "validation": [],
       "queryEncoding": "SAME_SECTION_EXACT_ANY",
       "i18nKey": "filter.flt-s03",
-      "chipOrder": 12
+      "chipOrder": 10
     },
     {
       "stableId": "FLT-S04a",
@@ -305,7 +261,7 @@
       "validation": [],
       "queryEncoding": "SAME_SECTION_EXACT_ANY",
       "i18nKey": "filter.flt-s04a",
-      "chipOrder": 13
+      "chipOrder": 11
     },
     {
       "stableId": "FLT-S04b",
@@ -324,7 +280,7 @@
       "validation": [],
       "queryEncoding": "SAME_SECTION_EXACT_ANY",
       "i18nKey": "filter.flt-s04b",
-      "chipOrder": 14
+      "chipOrder": 12
     },
     {
       "stableId": "FLT-S05",
@@ -346,7 +302,7 @@
       ],
       "queryEncoding": "SAME_SECTION_EXACT_ANY",
       "i18nKey": "filter.flt-s05",
-      "chipOrder": 15
+      "chipOrder": 13
     },
     {
       "stableId": "FLT-S06",
@@ -368,18 +324,21 @@
       ],
       "queryEncoding": "SAME_SECTION_AVAILABILITY_ALL",
       "i18nKey": "filter.flt-s06",
-      "chipOrder": 16
+      "chipOrder": 14
     },
     {
       "stableId": "FLT-S07",
       "requestField": "meetingLocations",
       "scope": "SECTION",
       "valueKind": "MEETING_LOCATION_SET",
-      "neutral": "EMPTY_SET",
-      "default": "EMPTY_SET",
+      "neutral": "EMPTY_COMPOSITE",
+      "default": "EMPTY_COMPOSITE",
       "canonicalNeutral": {
         "kind": "JSON",
-        "value": []
+        "value": {
+          "locations": [],
+          "mode": "ANY_MEETING"
+        }
       },
       "normalization": [
         "TRIM",
@@ -389,35 +348,9 @@
       "validation": [
         "DYNAMIC_DICTIONARY"
       ],
-      "queryEncoding": "SAME_SECTION_EXACT_ANY",
+      "queryEncoding": "EXPLICIT_ANY_ALL",
       "i18nKey": "filter.flt-s07",
-      "chipOrder": 17
-    },
-    {
-      "stableId": "FLT-S08",
-      "requestField": "buildingRoom",
-      "scope": "SECTION",
-      "valueKind": "BUILDING_ROOM",
-      "neutral": "EMPTY_COMPOSITE",
-      "default": "EMPTY_COMPOSITE",
-      "canonicalNeutral": {
-        "kind": "JSON",
-        "value": {
-          "buildingCodes": [],
-          "roomNumbers": []
-        }
-      },
-      "normalization": [
-        "TRIM",
-        "ASCII_UPPERCASE",
-        "SORT_DEDUPLICATE"
-      ],
-      "validation": [
-        "STRUCTURED_ONLY"
-      ],
-      "queryEncoding": "SAME_SECTION_STRUCTURED_DIMENSIONS",
-      "i18nKey": "filter.flt-s08",
-      "chipOrder": 18
+      "chipOrder": 15
     },
     {
       "stableId": "FLT-S09",
@@ -440,7 +373,7 @@
       ],
       "queryEncoding": "SAME_SECTION_EXACT_ANY",
       "i18nKey": "filter.flt-s09",
-      "chipOrder": 19
+      "chipOrder": 16
     },
     {
       "stableId": "FLT-S10",
@@ -457,36 +390,7 @@
       "validation": [],
       "queryEncoding": "TERNARY_PRESENCE",
       "i18nKey": "filter.flt-s10",
-      "chipOrder": 20
-    },
-    {
-      "stableId": "FLT-S11",
-      "requestField": "eligibility",
-      "scope": "SECTION",
-      "valueKind": "ELIGIBILITY",
-      "neutral": "EMPTY_COMPOSITE",
-      "default": "EMPTY_COMPOSITE",
-      "canonicalNeutral": {
-        "kind": "JSON",
-        "value": {
-          "honorProgramCodes": [],
-          "majorCodes": [],
-          "minorCodes": [],
-          "unitCodes": [],
-          "unitMajors": []
-        }
-      },
-      "normalization": [
-        "TRIM",
-        "ASCII_UPPERCASE",
-        "SORT_DEDUPLICATE"
-      ],
-      "validation": [
-        "STRUCTURED_ONLY"
-      ],
-      "queryEncoding": "SAME_SECTION_STRUCTURED_DIMENSIONS",
-      "i18nKey": "filter.flt-s11",
-      "chipOrder": 21
+      "chipOrder": 17
     }
   ]
 }

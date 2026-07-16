@@ -8,6 +8,10 @@ export const WATCH_WORKSPACE_CSS = String.raw`
 .watch-workspace__lede { max-width: 60ch; margin: var(--bcsp-space-2) 0 0; color: var(--bcsp-ink-muted); }
 .watch-workspace__status-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: var(--bcsp-space-4); border-top: 1px solid var(--bcsp-line); border-left: 1px solid var(--bcsp-line); }
 .watch-workspace__status-strip > * { min-width: 0; padding: var(--bcsp-space-2); border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); }
+.watch-workspace__diagnostics { margin-top: var(--bcsp-space-2); border-top: 1px solid var(--bcsp-line-soft); color: var(--bcsp-ink-muted); font-family: var(--bcsp-font-data); font-size: 0.68rem; }
+.watch-workspace__diagnostics summary { min-height: 2.25rem; padding: 0.7rem 0; cursor: pointer; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.watch-workspace__diagnostics summary:focus-visible { outline: 3px solid var(--bcsp-focus, var(--bcsp-accent)); outline-offset: 2px; }
+.watch-workspace__diagnostic-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 0 var(--bcsp-space-2); border-top: 1px solid var(--bcsp-line-soft); border-left: 1px solid var(--bcsp-line-soft); }
 .watch-workspace__form { display: grid; gap: var(--bcsp-space-3); }
 .watch-workspace__mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--bcsp-space-1); border: 0; padding: 0; margin: 0; }
 .watch-workspace__mode legend { grid-column: 1 / -1; font-family: var(--bcsp-font-data); font-size: 0.7rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
@@ -40,6 +44,13 @@ export const WATCH_WORKSPACE_CSS = String.raw`
 .watch-workspace__alert h4 { margin: 0; font-size: 1rem; text-transform: uppercase; }
 .watch-workspace__alert p { margin: 0.35rem 0 0; color: var(--bcsp-ink-muted); }
 .watch-telemetry { display: grid; gap: var(--bcsp-space-3); }
+.watch-telemetry__resources { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--bcsp-line); border-left: 1px solid var(--bcsp-line); }
+.watch-telemetry__resource { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--bcsp-space-2); align-items: start; min-width: 0; padding: var(--bcsp-space-2); border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); background: var(--bcsp-paper-raised); }
+.watch-telemetry__resource[data-availability='LKG'], .watch-telemetry__resource[data-availability='ERROR_NO_DATA'] { border-left: 4px solid var(--bcsp-accent); }
+.watch-telemetry__resource h4 { margin: 0; font-family: var(--bcsp-font-data); font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.watch-telemetry__resource p { margin: 0.35rem 0 0; }
+.watch-telemetry__resource-actions { display: grid; min-width: 10rem; gap: var(--bcsp-space-1); }
+.watch-telemetry__resource-actions .watch-workspace__diagnostics { margin-top: 0; }
 .watch-telemetry__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--bcsp-line); border-left: 1px solid var(--bcsp-line); }
 .watch-telemetry__batch { min-width: 0; border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); background: var(--bcsp-paper-raised); }
 .watch-telemetry__batch-head { display: flex; justify-content: space-between; gap: var(--bcsp-space-2); align-items: start; padding: var(--bcsp-space-3); border-bottom: 1px solid var(--bcsp-line); }
@@ -62,6 +73,9 @@ export const WATCH_WORKSPACE_CSS = String.raw`
 .watch-toast__dismiss:focus-visible { outline: 3px solid var(--bcsp-focus, var(--bcsp-accent)); outline-offset: 2px; }
 .watch-toast__dismiss:active:not(:focus-visible) { transform: scale(0.96); }
 .watch-selection-action { min-height: 2.75rem; padding: 0.45rem 0.65rem; border: 1px solid var(--bcsp-line); border-radius: 0; color: var(--bcsp-ink); background: var(--bcsp-paper); font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: transform 140ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1)); }
+.watch-selection-control { display: grid; justify-items: stretch; gap: 0.35rem; }
+.watch-selection-control__link { min-height: 2.25rem; padding: 0.45rem 0.65rem; border-bottom: 1px solid var(--bcsp-line); color: var(--bcsp-ink); font-family: var(--bcsp-font-data); font-size: 0.64rem; font-weight: 800; letter-spacing: 0.04em; line-height: 1.25; text-align: center; text-decoration: none; text-transform: uppercase; }
+.watch-selection-control__link:focus-visible { outline: 3px solid var(--bcsp-focus, var(--bcsp-accent)); outline-offset: 2px; }
 .watch-selection-action[aria-pressed='true'] { color: var(--bcsp-accent-ink); border-color: var(--bcsp-accent); background: var(--bcsp-accent); }
 .watch-selection-action:focus-visible { outline: 3px solid var(--bcsp-focus, var(--bcsp-accent)); outline-offset: 2px; }
 .watch-selection-action:active:not(:disabled):not(:focus-visible) { transform: scale(0.97); }
@@ -70,6 +84,7 @@ export const WATCH_WORKSPACE_CSS = String.raw`
   .watch-workspace__mode label:hover { background: var(--bcsp-paper); }
   .watch-workspace__mode label:has(input:checked):hover { color: var(--bcsp-paper-raised); background: var(--bcsp-ink); }
   .watch-toast__dismiss:hover, .watch-selection-action:hover:not(:disabled) { color: var(--bcsp-paper-raised); background: var(--bcsp-ink); }
+  .watch-selection-control__link:hover { color: var(--bcsp-accent); border-color: var(--bcsp-accent); }
 }
 @media (max-width: 63.999rem) {
   .watch-workspace__command-grid { grid-template-columns: 1fr; }
@@ -79,7 +94,8 @@ export const WATCH_WORKSPACE_CSS = String.raw`
 @media (max-width: 47.999rem) {
   .watch-workspace__panel { padding: var(--bcsp-space-3); }
   .watch-workspace__status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .watch-workspace__mode, .watch-telemetry__grid, .watch-telemetry__sections { grid-template-columns: 1fr; }
+  .watch-workspace__mode, .watch-workspace__diagnostic-facts, .watch-telemetry__resources, .watch-telemetry__grid, .watch-telemetry__sections { grid-template-columns: 1fr; }
+  .watch-telemetry__resource { grid-template-columns: 1fr; }
   .watch-workspace__item, .watch-workspace__alert { grid-template-columns: 1fr; }
   .watch-workspace__actions { align-items: stretch; }
   .watch-workspace__actions > * { flex: 1 1 100%; }

@@ -30,15 +30,22 @@ function readGolden<T>(name: string): T {
   )) as T;
 }
 
-describe('Rust v1 product contracts', () => {
-  it('binds all 22 neutral fields to the Rust filter schema', () => {
+describe('Rust query product contracts', () => {
+  it('binds the 18-field V2 contract to the Rust filter schema without retired fields', () => {
     const schema = readGolden<FilterSchemaV1>('filter-schema-v1.json');
-    expect(schema.contractVersion).toBe(1);
+    expect(schema.contractVersion).toBe(2);
     expect(schema.fields.map(({ stableId }) => stableId)).toEqual(FILTER_FIELD_IDS);
     expect(schema.fields.map(({ requestField }) => requestField)).toEqual(FILTER_REQUEST_FIELDS);
     expect(schema.fields.map(({ chipOrder }) => chipOrder)).toEqual(
-      Array.from({ length: 22 }, (_, index) => index),
+      Array.from({ length: 18 }, (_, index) => index),
     );
+    expect(FILTER_FIELD_IDS).toHaveLength(18);
+    expect(FILTER_FIELD_IDS).not.toEqual(expect.arrayContaining([
+      'FLT-C10', 'FLT-S02', 'FLT-S08', 'FLT-S11',
+    ]));
+    expect(FILTER_REQUEST_FIELDS).not.toEqual(expect.arrayContaining([
+      'courseLocations', 'sectionNumbers', 'buildingRoom', 'eligibility', 'text',
+    ]));
 
     const neutral = createNeutralFilterState('T2026F');
     const values = toFilterValuesV1(neutral);
@@ -63,6 +70,7 @@ describe('Rust v1 product contracts', () => {
     expect(() => toFilterValuesV1(createNeutralFilterState())).toThrow(/term is required/u);
     const state: FilterStateV1 = {
       ...createNeutralFilterState('T2026F'),
+      keywords: [' structures ', 'data', 'data'],
       courseNumbers: [' b ', 'A', 'a'],
       openStatuses: ['UNKNOWN', 'CLOSED', 'OPEN'],
       modalities: ['UNKNOWN', 'HYBRID', 'ONLINE', 'ON_CAMPUS_OR_IN_PERSON'],
@@ -73,6 +81,7 @@ describe('Rust v1 product contracts', () => {
       ],
     };
     const values = toFilterValuesV1(state);
+    expect(values.keywords).toEqual(['data', 'structures']);
     expect(values.courseNumbers).toEqual(['A', 'B']);
     expect(values.openStatuses).toEqual(['OPEN', 'CLOSED', 'UNKNOWN']);
     expect(values.modalities).toEqual([
@@ -90,7 +99,7 @@ describe('Rust v1 product contracts', () => {
     const start = readGolden<WatchClientCommandV1>('watch-client-start-v1.json');
     const startResult = readGolden<WatchServerEventV1>('watch-server-start-result-v1.json');
 
-    expect(response).toMatchObject({ contractVersion: 1, items: [] });
+    expect(response).toMatchObject({ contractVersion: 2, items: [] });
     expect(discovery.targets[0]?.key).toEqual(status.batch);
     expect(discovery.subjects[0]?.provenance.kind).toBe('DISCOVERY');
     expect(observation.sectionKey).toMatchObject(status.batch);

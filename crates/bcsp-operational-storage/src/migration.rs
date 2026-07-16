@@ -159,9 +159,10 @@ mod tests {
     #[test]
     fn embedded_migration_ids_are_contiguous_and_checksums_are_lower_hex() {
         let migrations = embedded_migrations().expect("valid embedded migrations");
-        assert_eq!(migrations.len(), 2);
+        assert_eq!(migrations.len(), 3);
         assert_eq!(migrations[0].id, 1);
         assert_eq!(migrations[1].id, 2);
+        assert_eq!(migrations[2].id, 3);
         assert!(migrations.iter().all(|migration| {
             migration.sha256.len() == 64
                 && migration

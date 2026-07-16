@@ -63,7 +63,10 @@ fn every_schema_id_is_unique_and_versioned() {
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), manifest.schemas.len());
-    assert!(ids.iter().all(|id| id.ends_with(".v1")));
+    assert!(
+        ids.iter()
+            .all(|id| id.ends_with(".v1") || id.ends_with(".v2"))
+    );
 }
 
 #[test]
@@ -166,6 +169,11 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
             } else if field.type_ref.starts_with("$optional:$schema:") {
                 let reference = field.type_ref.trim_start_matches("$optional:$schema:");
                 assert!(schema_ids.contains(reference), "{reference}");
+            } else if field.type_ref.starts_with("$optional:$array:$scalar:") {
+                let reference = field
+                    .type_ref
+                    .trim_start_matches("$optional:$array:$scalar:");
+                assert!(scalar_ids.contains(reference), "{reference}");
             } else if field.type_ref.starts_with("$optional:$scalar:") {
                 let reference = field.type_ref.trim_start_matches("$optional:$scalar:");
                 assert!(scalar_ids.contains(reference), "{reference}");
@@ -186,6 +194,7 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
                         || matches!(
                             field.type_ref.as_str(),
                             "$optional:$primitive:rfc3339-timestamp"
+                                | "$optional:$primitive:string"
                                 | "$optional:$primitive:u16"
                                 | "$optional:$primitive:u32"
                                 | "$optional:$primitive:u64"

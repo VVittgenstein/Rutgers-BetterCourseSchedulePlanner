@@ -1,4 +1,13 @@
-import type { ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 
 import { ShellStyles } from './application';
 import {
@@ -14,12 +23,12 @@ import {
   type FilterStateV1,
   type ProductRuntimePort,
   type SectionKey,
-  type ServiceLevelV1,
   type ServiceOperationPhaseV1,
   type ServiceStatusV1,
   type WatchPolicyV1,
+  searchDataProgress,
 } from './product';
-import { SearchWorkspace } from './search';
+import { SearchSessionProvider, SearchWorkspace } from './search';
 import { AppRouterProvider, RouterLink, useAppRouter } from './routing';
 import {
   useServiceStatus,
@@ -36,6 +45,21 @@ import {
 
 function retryBootstrap() {
   globalThis.location?.reload();
+}
+
+interface ServiceStatusPublisherValue {
+  readonly publish: (resource: ServiceStatusResource | null) => void;
+}
+
+const ServiceStatusPublisherContext = createContext<ServiceStatusPublisherValue | null>(null);
+
+function ServiceStatusPublisher({ resource }: { readonly resource: ServiceStatusResource }) {
+  const publisher = useContext(ServiceStatusPublisherContext);
+  useEffect(() => {
+    publisher?.publish(resource);
+    return () => publisher?.publish(null);
+  }, [publisher, resource]);
+  return null;
 }
 
 const BOOTSTRAP_SERVICE_RESOURCE: ServiceStatusResource = {
@@ -127,27 +151,57 @@ function ShellFrame({
   readonly onLocaleChange?: ((locale: SupportedLocale) => void) | undefined;
   readonly workspaceExtensions: readonly SharedWorkspaceExtension[];
 }) {
-  const { pathname } = useAppRouter();
+  const { navigate, pathname } = useAppRouter();
+  const navigationRef = useRef<HTMLElement | null>(null);
+  const [statusResource, setStatusResource] = useState<ServiceStatusResource | null>(null);
+  const publishStatus = useCallback((resource: ServiceStatusResource | null) => {
+    setStatusResource(resource);
+  }, []);
+  const statusPublisher = useMemo(() => ({ publish: publishStatus }), [publishStatus]);
   const extension = activeExtension(pathname, workspaceExtensions);
   const sectionWorkspace = pathname.startsWith('/sections');
   const watchWorkspace = pathname === '/watch';
   const directSection = sectionWorkspace && pathname !== '/sections';
-  const courseWorkspace = !sectionWorkspace && !watchWorkspace && extension === undefined;
-  const sequence = extension?.sequence ?? (watchWorkspace ? '03' : sectionWorkspace ? '02' : '01');
+  const courseWorkspace = sectionWorkspace || (!watchWorkspace && extension === undefined);
+  const extensionIndex = extension === undefined ? -1 : workspaceExtensions.indexOf(extension);
+  const sequence = extension === undefined
+    ? (watchWorkspace ? '02' : '01')
+    : String(extensionIndex + 3).padStart(2, '0');
   const workspaceTitle = extension?.title ?? (watchWorkspace
     ? i18n.t('app.nav_watch')
     : directSection
     ? i18n.t('search.section_detail_title')
-    : sectionWorkspace
-      ? i18n.t('search.section_workspace')
-      : i18n.t('search.course_workspace'));
+    : i18n.t('search.course_workspace'));
   const workspaceIntro = extension?.intro ?? (watchWorkspace
     ? i18n.t('watch.desk_lede')
-    : sectionWorkspace
-    ? i18n.t('search.section_intro')
     : i18n.t('search.course_intro'));
+  const workspaceLabel = extension?.navigationLabel
+    ?? (watchWorkspace ? i18n.t('app.nav_watch') : i18n.t('app.nav_courses'));
+
+  useEffect(() => {
+    if (pathname === '/sections') navigate('/', { replace: true });
+  }, [navigate, pathname]);
+
+  useEffect(() => {
+    const navigation = navigationRef.current;
+    const root = globalThis.document?.documentElement;
+    if (navigation === null || root === undefined) return undefined;
+    const measure = () => {
+      root.style.setProperty('--bcsp-navigation-height', `${navigation.getBoundingClientRect().height}px`);
+    };
+    measure();
+    globalThis.addEventListener('resize', measure);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(navigation);
+    return () => {
+      observer?.disconnect();
+      globalThis.removeEventListener('resize', measure);
+      root.style.removeProperty('--bcsp-navigation-height');
+    };
+  }, [workspaceExtensions.length]);
+
   return (
-    <>
+    <ServiceStatusPublisherContext.Provider value={statusPublisher}>
       <DesignSystemStyles />
       <ShellStyles />
       <a className="bcsp-skip-link" href="#bcsp-workspace">
@@ -173,8 +227,8 @@ function ShellFrame({
         aria-label={i18n.t('app.navigation')}
         className="bcsp-navigation"
         data-extended={workspaceExtensions.length > 0 || undefined}
+        ref={navigationRef}
       >
-        <span className="bcsp-navigation__label">[ {i18n.t('app.catalog_workspace')} ]</span>
         <RouterLink
           aria-current={courseWorkspace ? 'page' : undefined}
           className="bcsp-navigation__link"
@@ -184,22 +238,14 @@ function ShellFrame({
           <span>01</span>{i18n.t('app.nav_courses')}
         </RouterLink>
         <RouterLink
-          aria-current={sectionWorkspace ? 'page' : undefined}
-          className="bcsp-navigation__link"
-          data-active={sectionWorkspace || undefined}
-          to="/sections"
-        >
-          <span>02</span>{i18n.t('app.nav_sections')}
-        </RouterLink>
-        <RouterLink
           aria-current={watchWorkspace ? 'page' : undefined}
           className="bcsp-navigation__link"
           data-active={watchWorkspace || undefined}
           to="/watch"
         >
-          <span>03</span>{i18n.t('app.nav_watch')}
+          <span>02</span>{i18n.t('app.nav_watch')}
         </RouterLink>
-        {workspaceExtensions.map((workspace) => (
+        {workspaceExtensions.map((workspace, index) => (
           <RouterLink
             aria-current={extension?.path === workspace.path ? 'page' : undefined}
             className="bcsp-navigation__link"
@@ -207,7 +253,7 @@ function ShellFrame({
             key={workspace.path}
             to={workspace.path}
           >
-            <span>{workspace.sequence}</span>{workspace.navigationLabel}
+            <span>{String(index + 3).padStart(2, '0')}</span>{workspace.navigationLabel}
           </RouterLink>
         ))}
       </nav>
@@ -215,7 +261,7 @@ function ShellFrame({
         <section className="bcsp-workspace" aria-labelledby="bcsp-workspace-title">
           <header className="bcsp-workspace__heading">
             <div className="bcsp-workspace__identity">
-              <p className="bcsp-section-label">[ {sequence} / {i18n.t('app.catalog_workspace')} ]</p>
+              <p className="bcsp-section-label">[ {sequence} / {workspaceLabel} ]</p>
               <div className="bcsp-workspace__title-line">
                 <span aria-hidden="true" className="bcsp-workspace__sequence">{sequence}</span>
                 <h2 className="bcsp-workspace__title" id="bcsp-workspace-title">
@@ -224,9 +270,12 @@ function ShellFrame({
               </div>
               <p className="bcsp-workspace__intro">{workspaceIntro}</p>
             </div>
-            <p className="bcsp-workspace__protocol">
-              {i18n.t('app.protocol')} / BCSP.V{PRODUCT_PROTOCOL_VERSION}
-            </p>
+            <div className="bcsp-workspace__status-slot">
+              {statusResource === null ? null : <ServiceStatusBand resource={statusResource} />}
+              <p className="bcsp-workspace__protocol">
+                {i18n.t('app.protocol')} / BCSP.V{PRODUCT_PROTOCOL_VERSION}
+              </p>
+            </div>
           </header>
           {children}
         </section>
@@ -239,7 +288,7 @@ function ShellFrame({
           {i18n.t('app.protocol')} / BCSP.V{PRODUCT_PROTOCOL_VERSION}
         </span>
       </footer>
-    </>
+    </ServiceStatusPublisherContext.Provider>
   );
 }
 
@@ -269,14 +318,6 @@ function InitialState({
   );
 }
 
-const SERVICE_LEVEL_KEYS = {
-  INITIALIZING: 'service.level.initializing',
-  PARTIALLY_READY: 'service.level.partially_ready',
-  READY: 'service.level.ready',
-  DEGRADED: 'service.level.degraded',
-  ERROR: 'service.level.error',
-} as const satisfies Record<ServiceLevelV1, Parameters<BcspI18nRuntime['t']>[0]>;
-
 const SERVICE_PHASE_KEYS = {
   STARTING: 'service.phase.starting',
   DISCOVERING: 'service.phase.discovering',
@@ -298,65 +339,78 @@ function ServiceStatusBand({ resource }: { readonly resource: ServiceStatusResou
   const i18n = useBcspI18n();
   const status = resource.snapshot;
   const interrupted = resource.connection === 'INTERRUPTED';
-  const expanded = interrupted
-    || status === null
-    || status.level !== 'READY'
-    || status.operation.phase !== 'IDLE';
-  const level = status === null
-    ? i18n.t('service.level.initializing')
-    : i18n.t(SERVICE_LEVEL_KEYS[status.level]);
+  const progress = searchDataProgress(status);
+  const retrying = status?.operation.phase === 'RETRY_WAIT';
+  const incompleteWithIssue = !progress.ready && (status?.issues.length ?? 0) > 0;
+  const failed = interrupted || status?.level === 'ERROR' || retrying || incompleteWithIssue;
+  const level = progress.ready
+    ? i18n.t('service.overall_ready')
+    : failed
+      ? i18n.t('service.overall_retrying')
+      : i18n.t('service.overall_preparing');
   const phase = status === null
     ? i18n.t('service.phase.starting')
     : i18n.t(SERVICE_PHASE_KEYS[status.operation.phase]);
   const target = status === null ? null : targetLabel(status);
-  const issue = status?.issues[0];
   return (
     <section
       aria-label={i18n.t('app.system_status')}
       className="bcsp-service-status"
       data-connection={resource.connection.toLowerCase()}
-      data-expanded={expanded || undefined}
+      data-expanded={!progress.ready || undefined}
       data-level={status?.level.toLowerCase() ?? 'initializing'}
       id="bcsp-system-status"
     >
       <div className="bcsp-service-status__lead">
-        <span className="bcsp-service-status__signal" aria-hidden="true" />
+        <span
+          className="bcsp-service-status__signal"
+          data-loading={!progress.ready && !failed || undefined}
+          aria-hidden="true"
+        />
         <div>
           <p className="bcsp-service-status__kicker">{i18n.t('service.status_label')}</p>
-          <p className="bcsp-service-status__headline">{interrupted
-            ? i18n.t('service.connection_interrupted')
-            : level}</p>
+          <p className="bcsp-service-status__headline">{level}</p>
         </div>
       </div>
       <div className="bcsp-service-status__operation">
         <span className="bcsp-service-status__label">{i18n.t('service.current_operation')}</span>
         <strong>{phase}</strong>
-        {target === null ? null : <samp>{target}</samp>}
+      </div>
+      <div className="bcsp-service-status__progress">
+        <progress
+          aria-label={i18n.t('service.overall_progress')}
+          max={Math.max(1, progress.total)}
+          value={progress.current}
+        />
+        <span>{i18n.t('service.progress_percent', { percent: progress.percent })}</span>
       </div>
       <dl className="bcsp-service-status__counts">
         <div>
           <dt>{i18n.t('service.catalog')}</dt>
-          <dd>{status === null ? '—' : `${status.catalog.availableTargetCount}/${status.catalog.totalTargetCount}`}</dd>
+          <dd>{`${progress.catalog.current}/${progress.catalog.total}`}</dd>
         </div>
         <div>
           <dt>{i18n.t('service.open')}</dt>
-          <dd>{status === null ? '—' : `${status.open.availableTargetCount}/${status.open.totalTargetCount}`}</dd>
+          <dd>{`${progress.open.current}/${progress.open.total}`}</dd>
         </div>
       </dl>
-      {expanded ? (
-        <div className="bcsp-service-status__detail">
-          <p>{interrupted
-            ? i18n.t('service.connection_retained')
-            : issue === undefined
-              ? i18n.t('service.activity_detail')
-              : `${issue.component} / ${issue.code}`}</p>
-          {resource.connection === 'INTERRUPTED' ? (
+      <details className="bcsp-service-status__detail">
+        <summary>{i18n.t('service.diagnostics')}</summary>
+        <div className="bcsp-service-status__diagnostics">
+          <p>{interrupted ? i18n.t('service.connection_interrupted') : i18n.t('service.activity_detail')}</p>
+          {target === null ? null : <samp>{target}</samp>}
+          {status?.issues.map((issue) => (
+            <samp key={`${issue.component}:${issue.code}:${issue.target?.term ?? ''}:${issue.target?.campus ?? ''}`}>
+              {issue.component} / {issue.code}
+            </samp>
+          ))}
+          {failed ? (
             <button className="bcsp-service-status__retry" onClick={resource.retry} type="button">
               {i18n.t('action.retry')}
             </button>
           ) : null}
         </div>
-      ) : null}
+      </details>
       <p className="bcsp-visually-hidden" aria-atomic="true" aria-live="polite" role="status">
         {interrupted ? i18n.t('service.connection_interrupted') : `${level}. ${phase}`}
       </p>
@@ -379,14 +433,7 @@ function ReadyCatalogContent({
 
   return (
     <>
-      {pathname === '/watch'
-        ? (
-          <WatchWorkspace
-            initialPolicy={experience.initialWatchPolicy}
-            onPolicyChange={experience.onWatchPolicyChange}
-          />
-        )
-        : (
+      <div hidden={pathname === '/watch'}>
           <SearchWorkspace
             initialFilters={experience.initialFilters}
             onFiltersChange={experience.onFiltersChange}
@@ -394,7 +441,13 @@ function ReadyCatalogContent({
             serviceStatus={serviceStatus}
             shellState={state}
           />
-        )}
+      </div>
+      <div hidden={pathname !== '/watch'}>
+        <WatchWorkspace
+          initialPolicy={experience.initialWatchPolicy}
+          onPolicyChange={experience.onWatchPolicyChange}
+        />
+      </div>
     </>
   );
 }
@@ -431,11 +484,11 @@ function ReadyRuntime({
   const service = useServiceStatus(runtime);
   const { retry, state } = useShellDataState(runtime, service.revision);
   if (state.status === 'LOADING') {
-    return <><ServiceStatusBand resource={service} /><InitialState detail={t('app.loading_body')} heading={t('app.loading_title')} kind="loading" /></>;
+    return <><ServiceStatusPublisher resource={service} /><InitialState detail={t('app.loading_body')} heading={t('app.loading_title')} kind="loading" /></>;
   }
   if (state.status === 'ERROR') {
     return (
-      <><ServiceStatusBand resource={service} /><InitialState
+      <><ServiceStatusPublisher resource={service} /><InitialState
           detail={t('app.catalog_error_body')}
           heading={t('app.catalog_error_title')}
           kind="error"
@@ -445,7 +498,7 @@ function ReadyRuntime({
   }
   if (state.status === 'EMPTY') {
     return (
-      <><ServiceStatusBand resource={service} /><InitialState
+      <><ServiceStatusPublisher resource={service} /><InitialState
           detail={t('app.no_targets_body')}
           heading={t('app.no_targets_title')}
           kind="empty"
@@ -453,7 +506,7 @@ function ReadyRuntime({
         /></>
     );
   }
-  return <><ServiceStatusBand resource={service} /><ReadyCatalog
+  return <><ServiceStatusPublisher resource={service} /><ReadyCatalog
       experience={experience}
       runtime={runtime}
       serviceStatus={service.snapshot}
@@ -473,17 +526,22 @@ function ReadyProduct({
   const { pathname } = useAppRouter();
   const extension = activeExtension(pathname, workspaceExtensions);
   return (
-    <LiveWatchProvider
-      initialSelected={experience.initialSelectedSections}
-      initialVolume={experience.initialVolume}
-      onSelectedChange={experience.onSelectedSectionsChange}
-      onVolumeChange={experience.onVolumeChange}
-      runtime={runtime}
-    >
-      <WatchWorkspaceStyles />
-      {extension?.content ?? <ReadyRuntime experience={experience} runtime={runtime} />}
-      <WatchToastRegion />
-    </LiveWatchProvider>
+    <SearchSessionProvider>
+      <LiveWatchProvider
+        initialSelected={experience.initialSelectedSections}
+        initialVolume={experience.initialVolume}
+        onSelectedChange={experience.onSelectedSectionsChange}
+        onVolumeChange={experience.onVolumeChange}
+        runtime={runtime}
+      >
+        <WatchWorkspaceStyles />
+        <div hidden={extension !== undefined}>
+          <ReadyRuntime experience={experience} runtime={runtime} />
+        </div>
+        {extension?.content ?? null}
+        <WatchToastRegion />
+      </LiveWatchProvider>
+    </SearchSessionProvider>
   );
 }
 
@@ -513,7 +571,7 @@ export function SharedApplication({
         >
           {productRuntime.status === 'LOADING' ? (
             <>
-              <ServiceStatusBand resource={BOOTSTRAP_SERVICE_RESOURCE} />
+              <ServiceStatusPublisher resource={BOOTSTRAP_SERVICE_RESOURCE} />
               <InitialState
                 detail={i18n.t('app.loading_body')}
                 heading={i18n.t('app.loading_title')}
@@ -522,7 +580,7 @@ export function SharedApplication({
             </>
           ) : productRuntime.status === 'ERROR' ? (
             <>
-              <ServiceStatusBand resource={BOOTSTRAP_ERROR_RESOURCE} />
+              <ServiceStatusPublisher resource={BOOTSTRAP_ERROR_RESOURCE} />
               <InitialState
                 detail={i18n.t('app.bootstrap_error_body')}
                 heading={i18n.t('app.bootstrap_error_title')}

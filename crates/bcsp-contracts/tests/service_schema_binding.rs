@@ -72,6 +72,9 @@ fn service_status_schema_is_bound_to_wire_shapes_and_enum_values() {
     };
     let summary = ServiceAvailabilitySummaryV1 {
         total_target_count: 1,
+        current_target_count: 0,
+        stale_target_count: 1,
+        unavailable_target_count: 0,
         available_target_count: 1,
     };
     let status = ServiceStatusV1 {

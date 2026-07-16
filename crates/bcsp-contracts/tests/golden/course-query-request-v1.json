@@ -1,6 +1,6 @@
 {
   "filters": {
-    "contractVersion": 1,
+    "contractVersion": 2,
     "values": {
       "term": "T2026F",
       "campuses": [
@@ -9,7 +9,10 @@
       "subjects": [
         "198"
       ],
-      "text": "data structures",
+      "keywords": [
+        "data",
+        "structures"
+      ],
       "courseNumbers": [
         "01"
       ],
@@ -27,14 +30,8 @@
         "mode": "ALL"
       },
       "prerequisite": "HAS",
-      "courseLocations": [
-        "NB"
-      ],
       "sectionIndexes": [
         "12345"
-      ],
-      "sectionNumbers": [
-        "01"
       ],
       "openStatuses": [
         "OPEN"
@@ -55,41 +52,16 @@
           "endMinute": 720
         }
       ],
-      "meetingLocations": [
-        "CAC"
-      ],
-      "buildingRoom": {
-        "buildingCodes": [
-          "HILL"
+      "meetingLocations": {
+        "locations": [
+          "CAC"
         ],
-        "roomNumbers": [
-          "114"
-        ]
+        "mode": "ANY_MEETING"
       },
       "examCodes": [
         "A"
       ],
-      "permission": "REQUIRED",
-      "eligibility": {
-        "majorCodes": [
-          "198"
-        ],
-        "minorCodes": [
-          "CS"
-        ],
-        "honorProgramCodes": [
-          "HON"
-        ],
-        "unitCodes": [
-          "01"
-        ],
-        "unitMajors": [
-          {
-            "unitCode": "01",
-            "majorCode": "198"
-          }
-        ]
-      }
+      "permission": "REQUIRED"
     }
   },
   "page": {

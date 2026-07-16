@@ -7,6 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PublicCompositionRoot } from '../src/ui/public/PublicCompositionRoot';
+import { BCSP_SHELL_CSS } from '../src/ui/shared/application';
 import { BCSP_DESIGN_SYSTEM_CSS } from '../src/ui/shared/design-system';
 import type {
   CatalogDiscoveryResponseV1,
@@ -47,7 +48,7 @@ function contrast(left: string, right: string): number {
 
 function discovery(
   availability: CatalogDiscoveryResponseV1['status']['availability'] = 'CURRENT',
-  targetCount = 2,
+  targetCount = 135,
 ): CatalogDiscoveryResponseV1 {
   const point = {
     contentVersion: 7,
@@ -76,27 +77,24 @@ function discovery(
       latestAttempt: point,
     },
     subjects: [],
-    targets: [
-      {
-        campusLabel: known('New Brunswick'),
-        key: { campus: 'NB', term: '2026-9' },
-        provenance,
-        termLabel: known('Fall 2026'),
+    targets: Array.from({ length: targetCount }, (_, index) => ({
+      campusLabel: known(index === 0
+        ? 'New Brunswick'
+        : index === 1 ? 'Newark' : `Published campus ${index + 1}`),
+      key: {
+        campus: index === 0 ? 'NB' : index === 1 ? 'NK' : `C${String(index + 1).padStart(3, '0')}`,
+        term: '2026-9',
       },
-      {
-        campusLabel: known('Newark'),
-        key: { campus: 'NK', term: '2026-9' },
-        provenance,
-        termLabel: known('Fall 2026'),
-      },
-    ].slice(0, targetCount),
+      provenance,
+      termLabel: known('Fall 2026'),
+    })),
   };
 }
 
 function serviceStatus(
   level: ServiceStatusV1['level'] = 'READY',
   availability: ServiceStatusV1['targets'][number]['catalogAvailability'] = 'CURRENT',
-  targetCount = 2,
+  targetCount = 135,
 ): ServiceStatusV1 {
   const targets = discovery('CURRENT', targetCount).targets.map(({ key }) => ({
     catalogAvailability: availability,
@@ -108,7 +106,13 @@ function serviceStatus(
   }));
   const availableTargetCount = targets.filter(({ searchAvailable }) => searchAvailable).length;
   return {
-    catalog: { availableTargetCount, totalTargetCount: targets.length },
+    catalog: {
+      availableTargetCount,
+      currentTargetCount: availability === 'CURRENT' ? availableTargetCount : 0,
+      staleTargetCount: availability === 'STALE' ? availableTargetCount : 0,
+      totalTargetCount: targets.length,
+      unavailableTargetCount: availability === 'UNAVAILABLE' ? targets.length : 0,
+    },
     contractVersion: 1,
     discovery: discovery(targetCount === 0 ? 'CURRENT' : availability === 'STALE'
       ? 'STALE_LAST_SUCCESS' : 'CURRENT', targetCount).status,
@@ -122,7 +126,13 @@ function serviceStatus(
     }] : [],
     level,
     observedAt: OBSERVED_AT,
-    open: { availableTargetCount, totalTargetCount: targets.length },
+    open: {
+      availableTargetCount,
+      currentTargetCount: availability === 'CURRENT' ? availableTargetCount : 0,
+      staleTargetCount: availability === 'STALE' ? availableTargetCount : 0,
+      totalTargetCount: targets.length,
+      unavailableTargetCount: availability === 'UNAVAILABLE' ? targets.length : 0,
+    },
     operation: { nextRetryAt: null, phase: 'IDLE', startedAt: null, target: null },
     runtime: 'PUBLIC',
     targets,
@@ -133,6 +143,7 @@ function runtimeWith(
   catalog: ProductApiPort['catalogDiscovery'],
   schema: ProductApiPort['filterSchema'] = async () => filterSchema,
   status: ProductApiPort['serviceStatus'] = async () => serviceStatus(),
+  overrides: Partial<ProductApiPort> = {},
 ): ProductRuntimePort {
   const uncalled = async () => {
     throw new Error('not used by the shell foundation');
@@ -149,6 +160,7 @@ function runtimeWith(
       searchCourses: uncalled,
       searchSections: uncalled,
       sectionDetail: uncalled,
+      ...overrides,
     } as ProductApiPort,
     watch: {
       state: 'IDLE',
@@ -187,7 +199,11 @@ describe('P7.2 responsive product shell', () => {
 
     expect(await screen.findByRole('heading', { name: 'Opening the catalog console' })).toBeTruthy();
     expect(document.querySelector('[data-state="loading"]')).not.toBeNull();
-    expect(screen.getByText('Initializing')).toBeTruthy();
+    expect(screen.getByText('Preparing course data')).toBeTruthy();
+    expect(screen.getByText('Starting the local service')).toBeTruthy();
+    expect(screen.getByRole('progressbar', {
+      name: 'Overall course data loading progress',
+    })).toBeTruthy();
   });
 
   it('renders current metrics and lets native controls select published targets', async () => {
@@ -203,10 +219,14 @@ describe('P7.2 responsive product shell', () => {
     expect(newark.checked).toBe(true);
     expect(newBrunswick.checked).toBe(true);
 
-    expect(screen.getAllByText('22').length).toBeGreaterThan(0);
-    expect(screen.getByText('Search ready')).toBeTruthy();
-    expect(screen.getAllByText('2/2')).toHaveLength(2);
+    expect(screen.getAllByText('18').length).toBeGreaterThan(0);
+    expect(screen.getByText('All course data is ready')).toBeTruthy();
+    expect(screen.getAllByText('135/135')).toHaveLength(2);
     expect(screen.getByRole('group', { name: 'Interface language' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /Sections/u })).toBeNull();
+    expect(screen.getAllByRole('link', { name: /Courses|Watch desk/u })).toHaveLength(2);
+    const status = screen.getByRole('region', { name: 'System status' });
+    expect(status.closest('.bcsp-workspace__heading')).not.toBeNull();
 
     const accessibility = await axe.run(view.baseElement, {
       rules: { 'color-contrast': { enabled: false } },
@@ -221,13 +241,11 @@ describe('P7.2 responsive product shell', () => {
       .mockResolvedValue(serviceStatus());
     renderShell(runtimeWith(async () => discovery(), undefined, statusRequest));
 
-    expect(await screen.findByText('Search ready')).toBeTruthy();
+    expect(await screen.findByText('All course data is ready')).toBeTruthy();
     globalThis.dispatchEvent(new Event('online'));
 
     expect(await screen.findAllByText('Service connection interrupted')).toHaveLength(2);
-    expect(screen.getByText(
-      'The last service snapshot is retained while the browser reconnects with backoff.',
-    )).toBeTruthy();
+    expect(screen.getByText('All course data is ready')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
   });
 
@@ -237,7 +255,8 @@ describe('P7.2 responsive product shell', () => {
       undefined,
       async () => serviceStatus('DEGRADED', 'STALE'),
     ));
-    expect(await screen.findByText('Running with degraded data')).toBeTruthy();
+    expect(await screen.findAllByText('0/135')).toHaveLength(2);
+    expect(screen.getByText('Loading is incomplete; retrying')).toBeTruthy();
     stale.unmount();
 
     const empty = renderShell(runtimeWith(
@@ -259,6 +278,35 @@ describe('P7.2 responsive product shell', () => {
     expect(catalogDiscovery.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('keeps the submitted Course result state while visiting Watch and returning', async () => {
+    const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue({
+      contractVersion: 2,
+      items: [],
+      page: { page: 1, pageSize: 25, total: 0, totalPages: 0 },
+    });
+    renderShell(runtimeWith(
+      async () => discovery(),
+      undefined,
+      async () => serviceStatus(),
+      { searchCourses },
+    ));
+
+    await screen.findByText('All course data is ready');
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByRole('heading', { name: 'No matching records' })).toBeTruthy();
+    expect(searchCourses).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('link', { name: /Watch desk/u }));
+    await waitFor(() => expect(
+      screen.getByRole('link', { name: /Watch desk/u }).getAttribute('aria-current'),
+    ).toBe('page'));
+    expect(screen.queryByRole('heading', { name: 'No matching records' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('link', { name: /Courses/u }));
+    expect(await screen.findByRole('heading', { name: 'No matching records' })).toBeTruthy();
+    expect(searchCourses).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the chosen ink, paper, accent, focus, and reduced-motion rules in the shared token layer', () => {
     expect(BCSP_DESIGN_SYSTEM_CSS).toContain('--bcsp-paper: #efeee8');
     expect(BCSP_DESIGN_SYSTEM_CSS).toContain('--bcsp-ink: #11110e');
@@ -273,5 +321,8 @@ describe('P7.2 responsive product shell', () => {
     expect(contrast('11110e', 'efeee8')).toBeGreaterThan(7);
     expect(contrast('5b5a53', 'efeee8')).toBeGreaterThan(4.5);
     expect(contrast('ffffff', 'd42b1e')).toBeGreaterThan(4.5);
+    expect(BCSP_SHELL_CSS).toMatch(/\.bcsp-navigation\s*\{[\s\S]*?position:\s*sticky;/u);
+    expect(BCSP_SHELL_CSS).toMatch(/\.bcsp-navigation\s*\{[\s\S]*?top:\s*0;/u);
+    expect(BCSP_SHELL_CSS).toContain('scroll-margin-top: var(--bcsp-navigation-height');
   });
 });

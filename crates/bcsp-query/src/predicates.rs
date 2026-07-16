@@ -1,8 +1,8 @@
 use bcsp_contracts::{
     CatalogFieldKnowledge, CatalogFieldPresence, CatalogModality, CatalogPrerequisiteState,
-    CatalogSynchronicity, CatalogUnitMajorV1, CourseGroupKey, CreditRangeV1, EligibilityFilterV1,
-    FilterFieldId, FilterMatchV1, FilterSetModeV1, FilterTokenV1, LiveOpenEvidenceV1,
-    LiveOpenStateV1, MatchExplanation, MatchReasonCode, ModalityFilterV1,
+    CatalogRequiredness, CatalogSynchronicity, CourseGroupKey, CreditRangeV1, FilterFieldId,
+    FilterMatchV1, FilterSetModeV1, FilterTokenV1, LiveOpenEvidenceV1, LiveOpenStateV1,
+    MatchExplanation, MatchReasonCode, MeetingLocationMatchModeV2, ModalityFilterV1,
     NormalizedCourseVariantV1, NormalizedFilterValuesV1, NormalizedOccurrenceV1,
     NormalizedSectionV1, PermissionFilterV1, PrerequisiteFilterV1,
 };
@@ -117,14 +117,6 @@ pub(crate) fn course_filter_evaluations<'a>(
             FilterFieldId::CoursePrerequisite,
             evaluate_prerequisite(variant.prerequisite_state, filters.prerequisite()),
         ),
-        (
-            FilterFieldId::CourseLocation,
-            exact_collection(
-                &variant.campus_locations,
-                token_values(filters.course_locations()),
-                FilterFieldId::CourseLocation,
-            ),
-        ),
     ]
     .into_iter()
 }
@@ -143,14 +135,6 @@ fn section_filter_evaluations(
                 filters.section_indexes().is_empty(),
                 filters.section_indexes().contains(section.key.index()),
                 FilterFieldId::SectionIndex,
-            ),
-        ),
-        (
-            FilterFieldId::SectionNumber,
-            exact_values(
-                &section.section_number,
-                token_values(filters.section_numbers()),
-                FilterFieldId::SectionNumber,
             ),
         ),
         (
@@ -182,10 +166,6 @@ fn section_filter_evaluations(
             evaluate_meeting_location(occurrences, filters.meeting_locations()),
         ),
         (
-            FilterFieldId::SectionBuildingRoom,
-            evaluate_building_room(occurrences, filters),
-        ),
-        (
             FilterFieldId::SectionExam,
             if filters.exam_codes().is_empty() {
                 PredicateEvaluation::matched()
@@ -207,10 +187,6 @@ fn section_filter_evaluations(
         (
             FilterFieldId::SectionPermission,
             evaluate_permission(&section.special_permission_add_code, filters.permission()),
-        ),
-        (
-            FilterFieldId::SectionEligibility,
-            evaluate_eligibility(section, filters.eligibility()),
         ),
     ]
 }
@@ -408,9 +384,9 @@ fn evaluate_synchronicity(
 
 fn evaluate_meeting_location(
     occurrences: Option<&[&NormalizedOccurrenceV1]>,
-    selected: &[FilterTokenV1],
+    selected: &bcsp_contracts::MeetingLocationFilterV2,
 ) -> PredicateEvaluation {
-    if selected.is_empty() {
+    if selected.locations.is_empty() {
         return PredicateEvaluation::matched();
     }
     let Some(occurrences) = occurrences.filter(|values| !values.is_empty()) else {
@@ -419,52 +395,48 @@ fn evaluate_meeting_location(
             MatchReasonCode::MissingReliableData,
         );
     };
-    or_active(occurrences.iter().map(|occurrence| {
+    let evaluate_occurrence = |occurrence: &&NormalizedOccurrenceV1| {
         or_active([
             exact_values(
                 &occurrence.campus,
-                token_values(selected),
+                token_values(&selected.locations),
                 FilterFieldId::SectionMeetingLocation,
             ),
             exact_values(
                 &occurrence.campus_name,
-                token_values(selected),
+                token_values(&selected.locations),
                 FilterFieldId::SectionMeetingLocation,
             ),
         ])
-    }))
-}
-
-fn evaluate_building_room(
-    occurrences: Option<&[&NormalizedOccurrenceV1]>,
-    filters: &NormalizedFilterValuesV1,
-) -> PredicateEvaluation {
-    let selected = filters.building_room();
-    if selected.building_codes.is_empty() && selected.room_numbers.is_empty() {
-        return PredicateEvaluation::matched();
-    }
-    let Some(occurrences) = occurrences.filter(|values| !values.is_empty()) else {
-        return PredicateEvaluation::uncertain(
-            FilterFieldId::SectionBuildingRoom.wire_name(),
-            MatchReasonCode::MissingReliableData,
-        );
     };
-    // Building and room must be witnessed by the same occurrence. This avoids
-    // fabricating a pair from two meetings in one section.
-    or_active(occurrences.iter().map(|occurrence| {
-        and_all([
-            exact_values(
-                &occurrence.building,
-                token_values(&selected.building_codes),
-                FilterFieldId::SectionBuildingRoom,
-            ),
-            exact_values(
-                &occurrence.room,
-                token_values(&selected.room_numbers),
-                FilterFieldId::SectionBuildingRoom,
-            ),
-        ])
-    }))
+    match selected.mode {
+        MeetingLocationMatchModeV2::AnyMeeting => {
+            or_active(occurrences.iter().map(evaluate_occurrence))
+        }
+        MeetingLocationMatchModeV2::AllRequiredMeetings => {
+            let required = occurrences
+                .iter()
+                .filter_map(|occurrence| match occurrence.requiredness {
+                    CatalogRequiredness::Required => Some(evaluate_occurrence(occurrence)),
+                    CatalogRequiredness::Optional => None,
+                    CatalogRequiredness::UnknownRequiredness => {
+                        Some(PredicateEvaluation::uncertain(
+                            FilterFieldId::SectionMeetingLocation.wire_name(),
+                            MatchReasonCode::MissingReliableData,
+                        ))
+                    }
+                })
+                .collect::<Vec<_>>();
+            if required.is_empty() {
+                PredicateEvaluation::uncertain(
+                    FilterFieldId::SectionMeetingLocation.wire_name(),
+                    MatchReasonCode::MissingReliableData,
+                )
+            } else {
+                and_all(required)
+            }
+        }
+    }
 }
 
 fn evaluate_permission(
@@ -503,56 +475,6 @@ fn evaluate_permission(
     }
 }
 
-fn evaluate_eligibility(
-    section: &NormalizedSectionV1,
-    selected: &EligibilityFilterV1,
-) -> PredicateEvaluation {
-    and_all([
-        exact_collection(
-            &section.major_codes,
-            token_values(&selected.major_codes),
-            FilterFieldId::SectionEligibility,
-        ),
-        exact_collection(
-            &section.minor_codes,
-            token_values(&selected.minor_codes),
-            FilterFieldId::SectionEligibility,
-        ),
-        exact_collection(
-            &section.honor_program_codes,
-            token_values(&selected.honor_program_codes),
-            FilterFieldId::SectionEligibility,
-        ),
-        exact_collection(
-            &section.unit_codes,
-            token_values(&selected.unit_codes),
-            FilterFieldId::SectionEligibility,
-        ),
-        exact_unit_majors(&section.unit_majors, selected),
-    ])
-}
-
-fn exact_unit_majors(
-    actual: &CatalogFieldKnowledge<Vec<CatalogUnitMajorV1>>,
-    selected: &EligibilityFilterV1,
-) -> PredicateEvaluation {
-    if selected.unit_majors.is_empty() {
-        return PredicateEvaluation::matched();
-    }
-    evaluate_known(
-        actual,
-        FilterFieldId::SectionEligibility.wire_name(),
-        |actual| {
-            selected.unit_majors.iter().any(|selected| {
-                actual.iter().any(|actual| {
-                    exact(&actual.unit_code, selected.unit_code.as_str())
-                        && exact(&actual.major_code, selected.major_code.as_str())
-                })
-            })
-        },
-    )
-}
-
 fn exact_values<'a>(
     actual: &CatalogFieldKnowledge<String>,
     selected: impl IntoIterator<Item = &'a str>,
@@ -564,22 +486,6 @@ fn exact_values<'a>(
     }
     evaluate_known(actual, field.wire_name(), |actual| {
         selected.iter().any(|selected| exact(actual, selected))
-    })
-}
-
-fn exact_collection<'a>(
-    actual: &CatalogFieldKnowledge<Vec<String>>,
-    selected: impl IntoIterator<Item = &'a str>,
-    field: FilterFieldId,
-) -> PredicateEvaluation {
-    let selected = selected.into_iter().collect::<Vec<_>>();
-    if selected.is_empty() {
-        return PredicateEvaluation::matched();
-    }
-    evaluate_known(actual, field.wire_name(), |actual| {
-        actual
-            .iter()
-            .any(|actual| selected.iter().any(|selected| exact(actual, selected)))
     })
 }
 
@@ -627,26 +533,14 @@ fn bool_result(matches: bool, field: FilterFieldId) -> PredicateEvaluation {
 
 pub(crate) fn section_filters_active(filters: &NormalizedFilterValuesV1) -> bool {
     !filters.section_indexes().is_empty()
-        || !filters.section_numbers().is_empty()
         || !filters.open_statuses().is_empty()
         || !filters.modalities().is_empty()
         || !filters.synchronicities().is_empty()
         || !filters.instructors().is_empty()
         || !filters.availability().is_empty()
-        || !filters.meeting_locations().is_empty()
-        || !filters.building_room().building_codes.is_empty()
-        || !filters.building_room().room_numbers.is_empty()
+        || !filters.meeting_locations().locations.is_empty()
         || !filters.exam_codes().is_empty()
         || filters.permission() != PermissionFilterV1::Any
-        || !eligibility_inactive(filters.eligibility())
-}
-
-fn eligibility_inactive(value: &EligibilityFilterV1) -> bool {
-    value.major_codes.is_empty()
-        && value.minor_codes.is_empty()
-        && value.honor_program_codes.is_empty()
-        && value.unit_codes.is_empty()
-        && value.unit_majors.is_empty()
 }
 
 pub(crate) fn matched_explanation() -> MatchExplanation {

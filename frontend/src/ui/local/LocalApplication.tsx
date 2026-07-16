@@ -66,6 +66,8 @@ function currentCompatibleFilters(
 
 export function LocalApplication() {
   const personal = useLocalPersonal();
+  const personalRef = useRef(personal);
+  personalRef.current = personal;
   const i18n = useBcspI18n();
   const local = useLocalI18n();
   const storedLocaleOverride = personal.state.settings.value.localeOverride;
@@ -103,11 +105,11 @@ export function LocalApplication() {
     settingsTimer.current = setTimeout(() => {
       settingsTimer.current = null;
       const next = settingsDraft.current;
-      void personal.updateSettings(next).then(() => {
+      void personalRef.current.updateSettings(next).then(() => {
         if (settingsVersion.current === version) settingsDirty.current = false;
       }).catch(() => undefined);
     }, delay);
-  }, [personal]);
+  }, []);
 
   const persistSettingsNow = useCallback(async (value: LocalSettings) => {
     settingsDraft.current = value;
@@ -119,12 +121,12 @@ export function LocalApplication() {
       settingsTimer.current = null;
     }
     try {
-      await personal.updateSettings(value);
+      await personalRef.current.updateSettings(value);
       if (settingsVersion.current === version) settingsDirty.current = false;
     } catch (error) {
       throw error;
     }
-  }, [personal]);
+  }, []);
 
   const persistFilters = useCallback((filters: FilterStateV1) => {
     let request;
@@ -136,13 +138,30 @@ export function LocalApplication() {
     if (filterTimer.current !== null) clearTimeout(filterTimer.current);
     filterTimer.current = setTimeout(() => {
       filterTimer.current = null;
-      void personal.replaceCurrentFilters(request).catch(() => undefined);
+      void personalRef.current.replaceCurrentFilters(request).catch(() => undefined);
     }, PERSIST_DELAY_MS);
-  }, [personal]);
+  }, []);
 
   const patchSettings = useCallback((patch: Partial<LocalSettings>) => {
     persistSettings({ ...settingsDraft.current, ...patch });
   }, [persistSettings]);
+
+  const persistSelection = useCallback((sections: SharedExperienceConfiguration['initialSelectedSections']) => {
+    if (sections === undefined) return;
+    void personalRef.current.replaceSelection(sections).catch(() => undefined);
+  }, []);
+
+  const persistVolume = useCallback((volumePercent: number) => {
+    patchSettings({ volumePercent });
+  }, [patchSettings]);
+
+  const persistWatchPolicy = useCallback((soundPolicy: WatchPolicyV1) => {
+    patchSettings({ soundPolicy });
+  }, [patchSettings]);
+
+  const persistLocale = useCallback((localeOverride: LocalSettings['localeOverride']) => {
+    patchSettings({ localeOverride });
+  }, [patchSettings]);
 
   const commonPageState = {
     pending: personal.busy || personal.reloading,
@@ -227,19 +246,26 @@ export function LocalApplication() {
     initialVolume: personal.state.settings.value.volumePercent,
     initialWatchPolicy: personal.state.settings.value.soundPolicy,
     onFiltersChange: persistFilters,
-    onSelectedSectionsChange: (sections) => {
-      void personal.replaceSelection(sections).catch(() => undefined);
-    },
-    onVolumeChange: (volumePercent) => patchSettings({ volumePercent }),
-    onWatchPolicyChange: (soundPolicy: WatchPolicyV1) => patchSettings({ soundPolicy }),
-  }), [patchSettings, persistFilters, personal]);
+    onSelectedSectionsChange: persistSelection,
+    onVolumeChange: persistVolume,
+    onWatchPolicyChange: persistWatchPolicy,
+  }), [
+    persistFilters,
+    persistSelection,
+    persistVolume,
+    persistWatchPolicy,
+    personal.state.currentFilters.value,
+    personal.state.selectedSections,
+    personal.state.settings.value.soundPolicy,
+    personal.state.settings.value.volumePercent,
+  ]);
 
   return (
     <>
       <LocalPersonalStyles />
       <SharedApplication
         experience={experience}
-        onLocaleChange={(locale) => patchSettings({ localeOverride: locale })}
+        onLocaleChange={persistLocale}
         workspaceExtensions={workspaceExtensions}
       />
       <div

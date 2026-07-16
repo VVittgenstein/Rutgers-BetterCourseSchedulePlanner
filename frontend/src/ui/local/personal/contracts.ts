@@ -1,6 +1,6 @@
 import {
   ProductBootstrapError,
-  type FilterRequestV1,
+  type FilterRequestV2,
   type OpenEpisodeState,
   type SectionKey,
   type TraceId,
@@ -36,7 +36,7 @@ export type SavedViewIncompatibility =
   | { readonly kind: 'INVALID_FIELD_DATA' };
 
 export type SavedViewContent =
-  | { readonly status: 'COMPATIBLE'; readonly filters: FilterRequestV1 }
+  | { readonly status: 'COMPATIBLE'; readonly filters: FilterRequestV2 }
   | {
     readonly status: 'INCOMPATIBLE';
     readonly rawSnapshot: unknown;
@@ -166,7 +166,7 @@ export interface ReplaceSelectionRequest {
 export interface ReplaceCurrentFiltersRequest {
   readonly expectedUserStateRevision: number;
   readonly expectedCurrentFiltersRevision: number;
-  readonly filters: FilterRequestV1;
+  readonly filters: FilterRequestV2;
 }
 
 export interface CreateSavedViewRequest extends ReplaceCurrentFiltersRequest {
@@ -188,7 +188,7 @@ export interface RenameSavedViewRequest extends SavedViewCommand {
 }
 
 export interface UpdateSavedViewRequest extends SavedViewCommand {
-  readonly filters: FilterRequestV1;
+  readonly filters: FilterRequestV2;
 }
 
 export interface DuplicateSavedViewRequest {
@@ -264,10 +264,10 @@ function isSectionKey(value: unknown): value is SectionKey {
     && value.index.length > 0;
 }
 
-function isFilterRequest(value: unknown): value is FilterRequestV1 {
+function isFilterRequest(value: unknown): value is FilterRequestV2 {
   return isRecord(value)
     && hasKeys(value, ['contractVersion', 'values'])
-    && value.contractVersion === 1
+    && value.contractVersion === 2
     && isRecord(value.values);
 }
 

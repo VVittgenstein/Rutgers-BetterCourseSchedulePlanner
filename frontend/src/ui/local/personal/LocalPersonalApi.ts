@@ -1,6 +1,6 @@
 import {
   ProductClient,
-  type FilterRequestV1,
+  type FilterRequestV2,
   type ProductClientOptions,
   type ProductClientPort,
   type SectionKey,
@@ -258,6 +258,6 @@ export function createLocalPersonalApi(options: ProductClientOptions = {}): Loca
 
 export type {
   ConfirmUserDataResetRequest,
-  FilterRequestV1,
+  FilterRequestV2,
   LocalSettings,
 };

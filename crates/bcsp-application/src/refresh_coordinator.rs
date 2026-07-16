@@ -30,6 +30,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::refresh_generation::refresh_generation_interval;
 use crate::{
     OpenRuntimeSnapshot, OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError,
     ProductStorageAccess, RefreshPolicy, RefreshPolicyProvider, RefreshPolicyReadError,
@@ -38,6 +39,12 @@ use crate::{
 
 const STORAGE_LOCK_FIELD: &str = "operational_storage_lock";
 const STORAGE_LOCK_REASON: &str = "unavailable";
+const CATALOG_RETRY_BASE_INTERVAL: Duration = Duration::from_secs(30);
+
+fn first_load_freshness_interval_seconds(target_count: usize) -> u32 {
+    u32::try_from(refresh_generation_interval(target_count).as_secs())
+        .expect("the shared generation interval is capped to u32")
+}
 
 pub type RefreshFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -344,9 +351,10 @@ where
         let policy = self.refresh_policy()?;
         let now = self.clock.monotonic_now();
         let active_watch_count = self.watch.active_watch_count(&registration.target);
-        self.scheduler.register_catalog(
+        self.scheduler.register_catalog_initial(
             registration.target.clone(),
             policy.catalog_interval(),
+            active_watch_count,
             now,
         )?;
         self.scheduler.register_open_initial(
@@ -413,7 +421,7 @@ where
         );
 
         let execution = match dispatch.key.kind {
-            OriginJobKind::Catalog => self.execute_catalog(&dispatch, policy).await,
+            OriginJobKind::Catalog => self.execute_catalog(&dispatch).await,
             OriginJobKind::Open => self.execute_open(&dispatch, policy).await,
         };
 
@@ -513,10 +521,13 @@ where
                 policy.catalog_interval(),
                 catalog_due,
             )?;
+            let active_watch_count = self.watch.active_watch_count(target);
+            self.scheduler
+                .set_catalog_watch_count(target, active_watch_count)?;
             self.scheduler.set_open_watch_count(
                 target,
                 policy.open_general_interval(),
-                self.watch.active_watch_count(target),
+                active_watch_count,
                 now,
             )?;
         }
@@ -526,7 +537,6 @@ where
     async fn execute_catalog(
         &mut self,
         dispatch: &OriginDispatch,
-        policy: RefreshPolicy,
     ) -> Result<
         (
             CoordinatorDispatchOutcome,
@@ -560,11 +570,7 @@ where
                     Some(response.provenance.decoded_bytes),
                     "CATALOG_RESPONSE_TARGET_MISMATCH",
                 )?;
-                return Ok(self.catalog_failure_result(
-                    dispatch,
-                    policy,
-                    CatalogPullFailure::Schema,
-                ));
+                return Ok(self.catalog_failure_result(dispatch, CatalogPullFailure::Schema));
             }
             Err(failure) => {
                 self.finish_catalog_failure(
@@ -575,7 +581,7 @@ where
                     None,
                     failure.storage_code(),
                 )?;
-                return Ok(self.catalog_failure_result(dispatch, policy, failure));
+                return Ok(self.catalog_failure_result(dispatch, failure));
             }
         };
 
@@ -608,11 +614,7 @@ where
                     Some(source_bytes),
                     "CATALOG_NORMALIZATION_FAILED",
                 )?;
-                return Ok(self.catalog_failure_result(
-                    dispatch,
-                    policy,
-                    CatalogPullFailure::Schema,
-                ));
+                return Ok(self.catalog_failure_result(dispatch, CatalogPullFailure::Schema));
             }
             Err(CatalogPreparationFailure::Mapping) => {
                 self.finish_catalog_failure(
@@ -623,11 +625,7 @@ where
                     Some(source_bytes),
                     "CATALOG_MAPPING_FAILED",
                 )?;
-                return Ok(self.catalog_failure_result(
-                    dispatch,
-                    policy,
-                    CatalogPullFailure::Schema,
-                ));
+                return Ok(self.catalog_failure_result(dispatch, CatalogPullFailure::Schema));
             }
         };
         self.publish_activity(
@@ -698,7 +696,6 @@ where
     fn catalog_failure_result(
         &self,
         dispatch: &OriginDispatch,
-        policy: RefreshPolicy,
         failure: CatalogPullFailure,
     ) -> (
         CoordinatorDispatchOutcome,
@@ -707,7 +704,7 @@ where
     ) {
         let retry = retry_directive(
             &dispatch.key.target,
-            policy.catalog_interval(),
+            CATALOG_RETRY_BASE_INTERVAL,
             dispatch.failure_streak,
             failure.retry_kind(),
         );
@@ -739,12 +736,21 @@ where
             .cloned()
             .ok_or(CoordinatorError::TargetNotRegistered)?;
         let active_watch_count = self.watch.active_watch_count(&dispatch.key.target);
+        let freshness_interval_seconds = if dispatch.first_load_one_shot && active_watch_count == 0
+        {
+            first_load_freshness_interval_seconds(self.targets.len())
+        } else {
+            policy
+                .open_general_interval()
+                .effective_seconds(active_watch_count > 0)
+        };
         let command = OpenPullCommand {
             attempt_id: self.ids.next_trace_id(),
             run_id: self.run_id,
             source_request,
             general_interval: policy.open_general_interval(),
             active_watch_count,
+            freshness_interval_seconds,
             lane: dispatch.lane,
             scheduler_lag: dispatch.scheduler_lag,
             current_failure_streak: dispatch.failure_streak,
@@ -1084,4 +1090,21 @@ pub enum CoordinatorError {
     OpenRuntime(#[from] OpenRuntimeSnapshotRegistryError),
     #[error("watch observation fanout failed")]
     Watch(#[from] WatchManagerError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_load_freshness_budget_scales_with_the_discovered_fleet() {
+        assert_eq!(
+            first_load_freshness_interval_seconds(1),
+            u32::try_from(crate::DISCOVERY_REFRESH_INTERVAL.as_secs()).expect("discovery interval")
+        );
+        assert_eq!(
+            Duration::from_secs(u64::from(first_load_freshness_interval_seconds(200))),
+            refresh_generation_interval(200)
+        );
+    }
 }

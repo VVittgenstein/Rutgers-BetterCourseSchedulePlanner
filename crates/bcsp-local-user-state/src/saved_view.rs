@@ -93,6 +93,9 @@ fn decode_compatible_filter_snapshot(
             supported: SAVED_VIEW_SCHEMA_VERSION,
         });
     }
+    if schema_version == 1 {
+        return decode_v1_filter_snapshot(envelope);
+    }
     let fields = envelope
         .get("fields")
         .and_then(JsonValue::as_object)
@@ -116,6 +119,96 @@ fn decode_compatible_filter_snapshot(
             None => field.canonical_neutral.json().cloned().ok_or_else(|| {
                 SavedViewIncompatibility::MissingRequiredField {
                     stable_id: field.stable_id.wire_name().to_owned(),
+                }
+            })?,
+        };
+        request_values.insert(field.request_field.clone(), value);
+    }
+    serde_json::from_value(json!({
+        "contractVersion": QUERY_CONTRACT_VERSION.as_u16(),
+        "values": request_values,
+    }))
+    .map_err(|_| SavedViewIncompatibility::InvalidFieldData)
+}
+
+fn decode_v1_filter_snapshot(
+    envelope: &JsonMap<String, JsonValue>,
+) -> Result<FilterRequestV1, SavedViewIncompatibility> {
+    let fields = envelope
+        .get("fields")
+        .and_then(JsonValue::as_object)
+        .ok_or(SavedViewIncompatibility::InvalidEnvelope)?;
+    const REMOVED: [(&str, &str); 4] = [
+        ("FLT-C10", "array"),
+        ("FLT-S02", "array"),
+        ("FLT-S08", "buildingRoom"),
+        ("FLT-S11", "eligibility"),
+    ];
+    let neutral_building = json!({"buildingCodes": [], "roomNumbers": []});
+    let neutral_eligibility = json!({
+        "majorCodes": [],
+        "minorCodes": [],
+        "honorProgramCodes": [],
+        "unitCodes": [],
+        "unitMajors": []
+    });
+    for (stable_id, kind) in REMOVED {
+        let Some(value) = fields.get(stable_id) else {
+            continue;
+        };
+        let neutral = match kind {
+            "array" => value.as_array().is_some_and(Vec::is_empty),
+            "buildingRoom" => value == &neutral_building,
+            "eligibility" => value == &neutral_eligibility,
+            _ => false,
+        };
+        if !neutral {
+            return Err(SavedViewIncompatibility::UnknownField {
+                stable_id: stable_id.to_owned(),
+            });
+        }
+    }
+
+    let schema = filter_schema_v1();
+    let active_ids = schema
+        .fields
+        .iter()
+        .map(|field| field.stable_id.wire_name())
+        .collect::<BTreeSet<_>>();
+    let removed_ids = REMOVED
+        .iter()
+        .map(|(stable_id, _)| *stable_id)
+        .collect::<BTreeSet<_>>();
+    if let Some(unknown) = fields
+        .keys()
+        .find(|field| !active_ids.contains(field.as_str()) && !removed_ids.contains(field.as_str()))
+    {
+        return Err(SavedViewIncompatibility::UnknownField {
+            stable_id: unknown.clone(),
+        });
+    }
+
+    let mut request_values = JsonMap::new();
+    for field in &schema.fields {
+        let stable_id = field.stable_id.wire_name();
+        let value = match fields.get(stable_id) {
+            Some(value) if stable_id == "FLT-C04" => match value {
+                JsonValue::Null => json!([]),
+                JsonValue::String(text) => json!(
+                    text.split_whitespace()
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                ),
+                _ => return Err(SavedViewIncompatibility::InvalidFieldData),
+            },
+            Some(value) if stable_id == "FLT-S07" => json!({
+                "locations": value,
+                "mode": "ANY_MEETING"
+            }),
+            Some(value) => value.clone(),
+            None => field.canonical_neutral.json().cloned().ok_or_else(|| {
+                SavedViewIncompatibility::MissingRequiredField {
+                    stable_id: stable_id.to_owned(),
                 }
             })?,
         };
@@ -173,4 +266,67 @@ pub(crate) fn migrate_legacy_current_filters(
         ],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use bcsp_contracts::{MeetingLocationMatchModeV2, QueryContractVersion};
+
+    use super::*;
+
+    fn legacy_v1_snapshot() -> JsonValue {
+        let mut fields = JsonMap::new();
+        for field in filter_schema_v1().fields {
+            let value = if field.stable_id.wire_name() == "FLT-C01" {
+                json!("T2026F")
+            } else {
+                field.canonical_neutral.into_json().unwrap()
+            };
+            fields.insert(field.stable_id.wire_name().to_owned(), value);
+        }
+        fields.insert("FLT-C04".to_owned(), JsonValue::Null);
+        fields.insert("FLT-S07".to_owned(), json!([]));
+        fields.insert("FLT-C10".to_owned(), json!([]));
+        fields.insert("FLT-S02".to_owned(), json!([]));
+        fields.insert(
+            "FLT-S08".to_owned(),
+            json!({"buildingCodes": [], "roomNumbers": []}),
+        );
+        fields.insert(
+            "FLT-S11".to_owned(),
+            json!({
+                "majorCodes": [],
+                "minorCodes": [],
+                "honorProgramCodes": [],
+                "unitCodes": [],
+                "unitMajors": []
+            }),
+        );
+        json!({"codecVersion": 1, "schemaVersion": 1, "fields": fields})
+    }
+
+    #[test]
+    fn neutral_v1_removed_fields_migrate_to_v2_without_broadening() {
+        let content = decode_filter_snapshot(legacy_v1_snapshot(), 1);
+        let filters = content.filters().expect("neutral V1 snapshot migrates");
+        assert_eq!(filters.contract_version(), QueryContractVersion::V2);
+        assert!(filters.values().keywords().is_none());
+        assert!(filters.values().meeting_locations().locations.is_empty());
+        assert_eq!(
+            filters.values().meeting_locations().mode,
+            MeetingLocationMatchModeV2::AnyMeeting
+        );
+    }
+
+    #[test]
+    fn active_removed_v1_field_is_preserved_as_incompatible() {
+        let mut raw = legacy_v1_snapshot();
+        raw["fields"]["FLT-C10"] = json!(["BUSCH"]);
+        let content = decode_filter_snapshot(raw, 1);
+        assert!(matches!(
+            content.incompatibility(),
+            Some(SavedViewIncompatibility::UnknownField { stable_id })
+                if stable_id == "FLT-C10"
+        ));
+    }
 }

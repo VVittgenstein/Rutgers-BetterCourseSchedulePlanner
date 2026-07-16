@@ -163,6 +163,8 @@ const filterOptionMessageKeys: Readonly<Record<string, MessageKey>> = {
   NONE_REPORTED: 'filter.option.none_reported',
   REQUIRED: 'filter.option.required',
   NOT_REQUIRED: 'filter.option.not_required',
+  ANY_MEETING: 'filter.option.any_meeting',
+  ALL_REQUIRED_MEETINGS: 'filter.option.all_required_meetings',
 };
 
 export function filterOptionMessageKey(value: string): MessageKey | undefined {

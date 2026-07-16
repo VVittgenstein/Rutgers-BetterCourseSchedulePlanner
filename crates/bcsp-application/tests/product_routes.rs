@@ -4,23 +4,25 @@ use std::time::Duration;
 use bcsp_application::{
     ApplicationClock, ExtensionRequest, FixedRefreshPolicyProvider, OpenRuntimeSnapshot,
     OpenRuntimeSnapshotRegistry, PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH,
-    PRODUCT_COURSE_SEARCH_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
-    PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
-    PRODUCT_SERVICE_STATUS_PATH, RefreshPolicy, RefreshPolicyProvider, RefreshPolicyReadError,
-    RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY, SharedProductRoutes,
-    SharedRuntimeContext, TargetRefreshDemand,
+    PRODUCT_COURSE_SEARCH_PATH, PRODUCT_FILTER_OPTIONS_PATH, PRODUCT_FILTER_SCHEMA_PATH,
+    PRODUCT_OPEN_SECTION_STATUS_PATH, PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH,
+    PRODUCT_SECTION_SEARCH_PATH, PRODUCT_SERVICE_STATUS_PATH, RefreshPolicy, RefreshPolicyProvider,
+    RefreshPolicyReadError, RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY,
+    SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand,
 };
 use bcsp_catalog::{normalize_target, to_catalog_refresh_command, to_discovery_refresh_command};
 use bcsp_contracts::{
     ApiErrorCode, ApiErrorEnvelope, CampusCode, CatalogDiscoveryRequestV1,
     CatalogDiscoveryResponseV1, CatalogFieldKnowledge, CatalogSubjectProvenanceV1,
     CourseDetailRequestV1, CourseDetailResponseV1, CourseQueryRequestV1, CourseQueryResponseV1,
-    CourseSortV1, FilterRequestV1, FilterSchemaV1, FilterSearchTextV1, FilterTokenV1,
-    FilterValuesInputV1, HttpRequestEnvelope, HttpSuccessEnvelope, LiveOpenStateV1, OpenBatchKey,
-    OpenRefreshStatusV1, OpenSchedulerLane, OpenSectionStatusRequestV1, OpenSectionStatusV1,
-    OpenState, OpenStatusRequestV1, PageRequestV1, SectionDetailRequestV1, SectionDetailResponseV1,
-    SectionKey, SectionQueryRequestV1, SectionQueryResponseV1, SectionSortV1,
-    ServiceAvailabilityV1, ServiceLevelV1, ServiceStatusV1, TermCampusKey, TermId, TraceId,
+    CourseSortV1, FilterOptionsFieldV2, FilterOptionsRequestV2, FilterOptionsResponseV2,
+    FilterRequestV1, FilterSchemaV1, FilterSearchTextV1, FilterTokenV1, FilterValuesInputV1,
+    HttpRequestEnvelope, HttpSuccessEnvelope, LiveOpenStateV1, OpenBatchKey, OpenRefreshStatusV1,
+    OpenSchedulerLane, OpenSectionStatusRequestV1, OpenSectionStatusV1, OpenState,
+    OpenStatusRequestV1, PageRequestV1, QUERY_CONTRACT_VERSION, SectionDetailRequestV1,
+    SectionDetailResponseV1, SectionKey, SectionQueryRequestV1, SectionQueryResponseV1,
+    SectionSortV1, ServiceAvailabilityV1, ServiceLevelV1, ServiceStatusV1, TermCampusKey, TermId,
+    TraceId,
 };
 use bcsp_open::{GeneralOpenInterval, OpenCounterAudience};
 use bcsp_operational_storage::{
@@ -70,6 +72,14 @@ fn publish_discovery(storage: &mut OperationalStorage) {
 }
 
 fn publish_discovery_campuses(storage: &mut OperationalStorage, campuses: &[(&str, &str)]) {
+    publish_discovery_campuses_with_suffix(storage, campuses, 1);
+}
+
+fn publish_discovery_campuses_with_suffix(
+    storage: &mut OperationalStorage,
+    campuses: &[(&str, &str)],
+    suffix: u8,
+) {
     let body = serde_json::to_vec(&serde_json::json!({
       "sourceVersion": "synthetic-v1",
       "terms": [
@@ -108,7 +118,7 @@ fn publish_discovery_campuses(storage: &mut OperationalStorage, campuses: &[(&st
     .expect("synthetic discovery");
     storage
         .apply_discovery_refresh(
-            to_discovery_refresh_command(&snapshot, trace(1), STARTED, COMPLETED)
+            to_discovery_refresh_command(&snapshot, trace(suffix), STARTED, COMPLETED)
                 .expect("discovery command"),
         )
         .expect("publish discovery");
@@ -152,7 +162,8 @@ fn publish_catalog_subject(
             "number": "01",
             "sectionCourseType": "LECTURE",
             "openStatus": false,
-            "meetingTimes": []
+            "meetingTimes": [],
+            "instructors": [{"name": "Pat Smith"}]
         }]
     }]))
     .expect("synthetic Catalog JSON");
@@ -344,7 +355,7 @@ fn search_filters() -> FilterRequestV1 {
 #[test]
 fn shared_inventory_serves_real_sqlite_catalog_query_detail_and_open_projections() {
     let fixture = fixture();
-    assert_eq!(SHARED_PRODUCT_ROUTE_INVENTORY.len(), 9);
+    assert_eq!(SHARED_PRODUCT_ROUTE_INVENTORY.len(), 10);
     assert!(SHARED_PRODUCT_ROUTE_INVENTORY.iter().all(|route| {
         route.path().starts_with("/api/v1/")
             && matches!(route.method(), RequestMethod::Get | RequestMethod::Post)
@@ -370,6 +381,21 @@ fn shared_inventory_serves_real_sqlite_catalog_query_detail_and_open_projections
     );
     assert_eq!(discovery.targets.len(), 1);
     assert_eq!(discovery.targets[0].key, fixture.target);
+
+    let options: FilterOptionsResponseV2 = post(
+        &fixture.routes,
+        PRODUCT_FILTER_OPTIONS_PATH,
+        FilterOptionsRequestV2 {
+            contract_version: QUERY_CONTRACT_VERSION,
+            term: TermId::try_from("92026").unwrap(),
+            campuses: vec![CampusCode::try_from("NB").unwrap()],
+            field: FilterOptionsFieldV2::Instructor,
+            query: Some("SMI".to_owned()),
+            limit: Some(10),
+        },
+    );
+    assert_eq!(options.options.len(), 1);
+    assert_eq!(options.options[0].value, "Pat Smith");
 
     let filters = search_filters();
     let courses: CourseQueryResponseV1 = post(
@@ -694,6 +720,72 @@ fn unpublished_search_target_returns_catalog_not_ready() {
     assert_eq!(response.status(), 503);
     let error: ApiErrorEnvelope = serde_json::from_slice(response.body()).expect("error envelope");
     assert_eq!(error.error().code(), ApiErrorCode::CatalogNotReady);
+}
+
+#[test]
+fn search_and_filter_options_fail_closed_until_every_discovered_target_is_current() {
+    let fixture = fixture();
+    {
+        let mut storage = fixture.storage.lock().expect("storage lock");
+        publish_discovery_campuses_with_suffix(
+            &mut storage,
+            &[("NB", "New Brunswick"), ("NWK", "Newark")],
+            9,
+        );
+    }
+
+    let mut input =
+        FilterValuesInputV1::for_term(TermId::try_from("92026").expect("synthetic term"));
+    input.campuses = vec![CampusCode::try_from("NB").expect("synthetic campus")];
+    let filters = FilterRequestV1::new(
+        bcsp_contracts::NormalizedFilterValuesV1::try_new(input).expect("filters"),
+    );
+    let course = CourseQueryRequestV1 {
+        filters: filters.clone(),
+        page: PageRequestV1::default(),
+        sort: CourseSortV1::default(),
+    };
+    let section = SectionQueryRequestV1 {
+        filters,
+        page: PageRequestV1::default(),
+        sort: SectionSortV1::default(),
+    };
+    let options = FilterOptionsRequestV2 {
+        contract_version: QUERY_CONTRACT_VERSION,
+        term: TermId::try_from("92026").unwrap(),
+        campuses: vec![CampusCode::try_from("NB").unwrap()],
+        field: FilterOptionsFieldV2::Instructor,
+        query: Some("smi".to_owned()),
+        limit: None,
+    };
+
+    for (path, body) in [
+        (
+            PRODUCT_COURSE_SEARCH_PATH,
+            serde_json::to_vec(&HttpRequestEnvelope::new(course)).unwrap(),
+        ),
+        (
+            PRODUCT_SECTION_SEARCH_PATH,
+            serde_json::to_vec(&HttpRequestEnvelope::new(section)).unwrap(),
+        ),
+        (
+            PRODUCT_FILTER_OPTIONS_PATH,
+            serde_json::to_vec(&HttpRequestEnvelope::new(options)).unwrap(),
+        ),
+    ] {
+        let response =
+            fixture
+                .routes
+                .handle(ExtensionRequest::new(RequestMethod::Post, path, None, body));
+        assert_eq!(response.status(), 503, "{path}");
+        let error: ApiErrorEnvelope =
+            serde_json::from_slice(response.body()).expect("error envelope");
+        assert_eq!(
+            error.error().code(),
+            ApiErrorCode::SearchDataNotReady,
+            "{path}"
+        );
+    }
 }
 
 #[test]

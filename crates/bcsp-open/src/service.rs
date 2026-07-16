@@ -107,6 +107,11 @@ pub struct OpenPullCommand {
     pub source_request: OpenSectionsRequest,
     pub general_interval: GeneralOpenInterval,
     pub active_watch_count: u64,
+    /// Basis used only to derive the validity horizon of the committed
+    /// observation. Normal/demanded pulls set this to the effective 30s/10s
+    /// cadence. A bounded first-load one-shot may use a generation-sized
+    /// horizon without turning the target into a recurring origin job.
+    pub freshness_interval_seconds: u32,
     pub lane: OriginSchedulerLane,
     pub scheduler_lag: Duration,
     pub current_failure_streak: u32,
@@ -171,6 +176,8 @@ pub enum SharedOpenServiceError {
     ObservationCommit { reason: &'static str },
     #[error("Open observation freshness deadline overflowed")]
     FreshUntilOverflow,
+    #[error("Open observation freshness interval must be nonzero")]
+    ZeroFreshnessInterval,
 }
 
 pub struct SharedOpenService<'storage, P = OperationalStorage> {
@@ -202,6 +209,9 @@ where
         W: FnOnce(&TermCampusKey) -> Vec<SectionKey>,
     {
         validate_counter_audience(&command)?;
+        if command.freshness_interval_seconds == 0 {
+            return Err(SharedOpenServiceError::ZeroFreshnessInterval);
+        }
         let target = command.source_request.target().target();
         let captured_catalog = self
             .persistence
@@ -227,7 +237,7 @@ where
                 started_at: started_at_text,
                 lane,
                 requested_interval_seconds: Some(u64::from(command.general_interval.seconds())),
-                effective_interval_seconds: Some(effective_interval.as_secs()),
+                effective_interval_seconds: Some(u64::from(command.freshness_interval_seconds)),
                 schedule_lag_ms: Some(duration_millis(command.scheduler_lag)),
             })?;
 
@@ -919,7 +929,7 @@ fn duration_millis(value: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, VecDeque};
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
     use std::str::FromStr;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -968,7 +978,28 @@ mod tests {
         }
 
         fn outcome(&self, classification: OpenAttemptClassification) -> OpenCommitOutcome {
-            let unsafe_empty = classification == OpenAttemptClassification::UnsafeEmpty;
+            let canonical_indices = self
+                .success
+                .as_ref()
+                .map(|command| {
+                    command
+                        .open_sections
+                        .iter()
+                        .map(|section| section.index().clone())
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            let source_value_count = self
+                .success
+                .as_ref()
+                .map_or(0, |command| command.source_value_count);
+            let intersection_count = canonical_indices
+                .iter()
+                .filter(|index| matches!(index.as_str(), "00001" | "00002"))
+                .count() as u64;
+            let unique_value_count = canonical_indices.len() as u64;
+            let orphan_count = unique_value_count.saturating_sub(intersection_count);
+            let duplicate_count = source_value_count.saturating_sub(unique_value_count);
             let refresh_observation_id = trace(10);
             let observation_commit = classification.is_success().then(|| {
                 let section_events = self
@@ -986,7 +1017,7 @@ mod tests {
                         refresh_observation_id,
                         attempt_id: trace(1),
                         section: section.clone(),
-                        state: if section.index().as_str() == "00001" {
+                        state: if canonical_indices.contains(section.index()) {
                             OpenSectionState::Open
                         } else {
                             OpenSectionState::Closed
@@ -1029,11 +1060,11 @@ mod tests {
                     .then_some(refresh_observation_id),
                 observation_sequence: classification.is_success().then_some(1),
                 catalog_content_version: 7,
-                source_value_count: if unsafe_empty { 0 } else { 3 },
+                source_value_count,
                 catalog_section_count: 2,
-                intersection_count: if unsafe_empty { 0 } else { 1 },
-                orphan_count: if unsafe_empty { 0 } else { 1 },
-                duplicate_count: if unsafe_empty { 0 } else { 1 },
+                intersection_count,
+                orphan_count,
+                duplicate_count,
                 changed_section_count: if classification.is_success() { 2 } else { 0 },
                 body_changed: classification.is_success(),
                 state_changed: classification.is_success(),
@@ -1153,6 +1184,7 @@ mod tests {
             source_request: source_request(),
             general_interval: GeneralOpenInterval::local(30).expect("interval"),
             active_watch_count,
+            freshness_interval_seconds: if active_watch_count > 0 { 10 } else { 30 },
             lane: OriginSchedulerLane::OpenActiveWatch,
             scheduler_lag: Duration::from_millis(250),
             current_failure_streak: 0,
@@ -1364,9 +1396,12 @@ mod tests {
     async fn failure_is_recorded_and_translated_to_scheduler_backoff() {
         let mut persistence = FakePersistence::new(OpenAttemptClassification::ValidApplied);
         let mut service = SharedOpenService::new(&mut persistence);
+        let mut first_load = command(0);
+        first_load.freshness_interval_seconds = 3_600;
+        let target = first_load.source_request.target().target();
         let execution = service
             .execute_with(
-                command(0),
+                first_load,
                 &mut clock(),
                 |_| async {
                     Err(OpenSectionsFailure::from(
@@ -1379,10 +1414,16 @@ mod tests {
             .expect("recorded failure");
 
         assert!(matches!(execution.terminal, OpenPullTerminal::Failed(_)));
-        assert!(matches!(
+        assert_eq!(
             execution.scheduler_completion,
-            CompletionSchedule::Retry(_)
-        ));
+            CompletionSchedule::Retry(retry_directive(
+                &target,
+                Duration::from_secs(30),
+                0,
+                OpenFailureKind::Transient,
+            )),
+            "a first-load freshness lease must not lengthen the real 30-second retry cadence"
+        );
         let stored = persistence.failure.expect("failure finalization");
         assert_eq!(stored.http.http_status, Some(503));
         assert_eq!(stored.error_code, "OPEN_TRANSIENT_HTTP");
@@ -1416,8 +1457,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsafe_result_retains_lkg_and_uses_retry_policy() {
-        let mut persistence = FakePersistence::new(OpenAttemptClassification::UnsafeEmpty);
+    async fn typed_empty_response_is_valid_and_closes_the_catalog() {
+        let mut persistence = FakePersistence::new(OpenAttemptClassification::ValidApplied);
         let mut service = SharedOpenService::new(&mut persistence);
         let execution = service
             .execute_with(
@@ -1427,12 +1468,16 @@ mod tests {
                 |_| Vec::new(),
             )
             .await
-            .expect("unsafe classification");
-        assert!(matches!(execution.terminal, OpenPullTerminal::Unsafe(_)));
-        assert!(matches!(
-            execution.scheduler_completion,
-            CompletionSchedule::Retry(_)
-        ));
+            .expect("valid empty classification");
+        assert!(matches!(execution.terminal, OpenPullTerminal::Valid(_)));
+        assert_eq!(execution.scheduler_completion, CompletionSchedule::Success);
+        assert_eq!(
+            execution
+                .reconcile
+                .expect("read-side reconcile")
+                .closed_count,
+            2
+        );
     }
 
     #[tokio::test]
@@ -1697,11 +1742,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_sqlite_unsafe_and_failure_produce_no_observation_handoff_or_event() {
+    async fn real_sqlite_empty_success_hands_off_closed_state_and_failure_does_not() {
         let mut storage = OperationalStorage::open_in_memory().expect("storage");
         publish_catalog(&mut storage);
         let watched = SectionKey::try_new("92026", "NB", "00001").expect("watched Section");
-        let unsafe_execution = SharedOpenService::new(&mut storage)
+        let empty_execution = SharedOpenService::new(&mut storage)
             .execute_with(
                 command_for(4, 5, 1),
                 &mut clock(),
@@ -1709,13 +1754,14 @@ mod tests {
                 |_| vec![watched.clone()],
             )
             .await
-            .expect("unsafe response recorded");
+            .expect("empty response committed");
         assert_eq!(
-            unsafe_execution.outcome.classification,
-            OpenAttemptClassification::UnsafeEmpty
+            empty_execution.outcome.classification,
+            OpenAttemptClassification::ValidApplied
         );
-        assert!(unsafe_execution.observations.is_empty());
-        assert!(unsafe_execution.outcome.observation_commit.is_none());
+        assert_eq!(empty_execution.observations.len(), 1);
+        assert_eq!(empty_execution.observations[0].state, OpenState::Closed);
+        assert!(empty_execution.outcome.observation_commit.is_some());
 
         let failed_execution = SharedOpenService::new(&mut storage)
             .execute_with(
@@ -1736,11 +1782,12 @@ mod tests {
         ));
         assert!(failed_execution.observations.is_empty());
         assert!(failed_execution.outcome.observation_commit.is_none());
-        assert!(
+        assert_eq!(
             storage
                 .read_open_section_events(0, 10)
                 .expect("Section events")
-                .is_empty()
+                .len(),
+            1
         );
     }
 

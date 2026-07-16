@@ -1284,7 +1284,10 @@ mod tests {
         let routes = create_public_product_routes(serving_storage.clone(), open_runtime.clone())
             .expect("shared public product routes");
         assert!(Arc::ptr_eq(routes.storage_access(), &serving_storage));
-        assert_eq!(routes.route_inventory().len(), 9);
+        assert_eq!(
+            routes.route_inventory().len(),
+            bcsp_application::SHARED_PRODUCT_ROUTE_INVENTORY.len()
+        );
 
         let runtime = PublicRuntime::spawn_with_open_runtime(
             test_config(),
@@ -1460,7 +1463,7 @@ mod tests {
         assert_ne!(first["sessionNonce"], direct["sessionNonce"]);
         assert_eq!(
             first["filterSchema"]["fields"].as_array().unwrap().len(),
-            22
+            bcsp_contracts::FILTER_FIELD_COUNT
         );
         assert!(first["currentFilters"].is_null());
         assert!(direct["currentFilters"].is_null());

@@ -329,6 +329,47 @@ describe('typed search result and detail views', () => {
     expect(screen.getByText('Occurrences · 1')).toBeTruthy();
   });
 
+  it('accepts a session-controlled Section disclosure after the result view remounts', () => {
+    const onSectionDisclosureChange = vi.fn();
+    const response = {
+      ...COURSE_RESPONSE,
+      items: [{
+        ...COURSE_RESPONSE.items[0]!,
+        variants: [COURSE_RESPONSE.items[0]!.variants[0]!],
+      }],
+    };
+    const view = render(
+      <CourseResultsView
+        expandedSectionDisclosures={new Set()}
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        onSectionDisclosureChange={onSectionDisclosureChange}
+        response={response}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Show 1 Sections'));
+    const [disclosureId] = onSectionDisclosureChange.mock.calls[0] ?? [];
+    expect(disclosureId).toBe('2026-9\u0000NB\u000001:198:211\u0000lecture');
+    expect(onSectionDisclosureChange).toHaveBeenCalledWith(disclosureId, true);
+
+    view.rerender(
+      <BcspI18nProvider initialLocale="en-US">
+        <CourseResultsView
+          expandedSectionDisclosures={new Set([disclosureId as string])}
+          onCourseDetail={() => undefined}
+          onPageChange={() => undefined}
+          onSectionDisclosureChange={onSectionDisclosureChange}
+          response={response}
+          sectionHref={(key) => `/sections/${key.index}`}
+        />
+      </BcspI18nProvider>,
+    );
+    expect(screen.getByText('Hide 1 Sections')).toBeTruthy();
+    expect(view.container.querySelector('[data-section-index="12345"]')).not.toBeNull();
+  });
+
   it('keeps course variants explicit and exposes section evidence, live freshness, and uncertainty', () => {
     render(
       <CourseResultsView

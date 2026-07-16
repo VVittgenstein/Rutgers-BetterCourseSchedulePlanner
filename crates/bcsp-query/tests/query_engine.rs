@@ -3,12 +3,12 @@ mod support;
 use std::collections::BTreeSet;
 
 use bcsp_contracts::{
-    AvailabilityWindowV1, BuildingRoomFilterV1, CampusCode, CatalogFieldKnowledge, CatalogModality,
+    AvailabilityWindowV1, CampusCode, CatalogFieldKnowledge, CatalogModality, CatalogRequiredness,
     CatalogSubjectCode, CatalogSynchronicity, CourseDetailRequestV1, CourseGroupKey,
     CourseQueryRequestV1, CourseSortFieldV1, CourseSortV1, CourseVariantKey, CreditRangeV1,
-    EligibilityFilterV1, EligibilityUnitMajorV1, FilterFieldId, FilterRequestV1,
-    FilterSearchTextV1, FilterSetModeV1, FilterTokenV1, LiveOpenEvidenceV1, LiveOpenStateV1,
-    MatchOutcome, MatchReasonCode, ModalityFilterV1, PageRequestV1, PermissionFilterV1,
+    FilterFieldId, FilterRequestV1, FilterSearchTextV1, FilterSetModeV1, FilterTokenV1,
+    LiveOpenEvidenceV1, LiveOpenStateV1, MatchOutcome, MatchReasonCode, MeetingLocationFilterV2,
+    MeetingLocationMatchModeV2, ModalityFilterV1, PageRequestV1, PermissionFilterV1,
     PrerequisiteFilterV1, SectionDetailRequestV1, SectionQueryRequestV1, SectionSortV1,
     SortDirectionV1, WeekdayV1,
 };
@@ -25,7 +25,7 @@ fn token(value: &str) -> FilterTokenV1 {
 }
 
 #[test]
-fn all_22_active_filters_match_one_same_variant_and_section() {
+fn all_18_v2_filters_match_one_same_variant_and_section() {
     let mut catalog = empty_catalog("NB", 1);
     let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
     let mut input = neutral_input();
@@ -38,9 +38,7 @@ fn all_22_active_filters_match_one_same_variant_and_section() {
     input.core.codes = vec![token("CC"), token("QR")];
     input.core.mode = FilterSetModeV1::All;
     input.prerequisite = PrerequisiteFilterV1::Has;
-    input.course_locations = vec![token("BUSCH")];
     input.section_indexes = vec![keys.section.index().clone()];
-    input.section_numbers = vec![token("01")];
     input.open_statuses = vec![LiveOpenStateV1::Open];
     input.modalities = vec![ModalityFilterV1::Online];
     input.synchronicities = vec![CatalogSynchronicity::Sync];
@@ -50,24 +48,13 @@ fn all_22_active_filters_match_one_same_variant_and_section() {
         AvailabilityWindowV1::try_new(WeekdayV1::Monday, 570, 600).unwrap(),
         AvailabilityWindowV1::try_new(WeekdayV1::Monday, 540, 600).unwrap(),
     ];
-    input.meeting_locations = vec![token("BUSCH")];
-    input.building_room = BuildingRoomFilterV1 {
-        building_codes: vec![token("SEC")],
-        room_numbers: vec![token("101")],
+    input.meeting_locations = MeetingLocationFilterV2 {
+        locations: vec![token("BUSCH")],
+        ..MeetingLocationFilterV2::default()
     };
     // This intentionally matches the text field rather than the code field.
     input.exam_codes = vec![token("FINAL")];
     input.permission = PermissionFilterV1::Required;
-    input.eligibility = EligibilityFilterV1 {
-        major_codes: vec![token("198")],
-        minor_codes: vec![token("M1")],
-        honor_program_codes: vec![token("H1")],
-        unit_codes: vec![token("01")],
-        unit_majors: vec![EligibilityUnitMajorV1 {
-            unit_code: token("01"),
-            major_code: token("198"),
-        }],
-    };
     let filters = normalized(input);
     let text = filters.text().unwrap().clone();
     let request = CourseQueryRequestV1 {
@@ -100,8 +87,8 @@ fn all_22_active_filters_match_one_same_variant_and_section() {
     assert_eq!(response.items[0].explanation.outcome(), MatchOutcome::Match);
     let variant = &response.items[0].variants[0];
     assert_eq!(variant.explanation.outcome(), MatchOutcome::Match);
-    assert_eq!(variant.filter_matches.len(), 10);
-    assert_eq!(variant.sections[0].filter_matches.len(), 12);
+    assert_eq!(variant.filter_matches.len(), 9);
+    assert_eq!(variant.sections[0].filter_matches.len(), 9);
     assert_eq!(
         variant.sections[0].explanation.outcome(),
         MatchOutcome::Match
@@ -314,7 +301,7 @@ fn fts_plan_is_version_bound_exact_priority_and_filter_before_page() {
         .unwrap();
     assert_eq!(section_response.page.total, 2);
     assert_eq!(section_response.items[0].variant.key, exact.variant);
-    assert_eq!(section_response.items[0].course_filter_matches.len(), 10);
+    assert_eq!(section_response.items[0].course_filter_matches.len(), 9);
     let text_match = section_response.items[0].text_match.as_ref().unwrap();
     assert!(text_match.exact_course_identifier);
     assert_eq!(text_match.matched_tokens, text.tokens());
@@ -358,7 +345,7 @@ fn active_section_filter_requires_a_real_section_witness() {
     assert_eq!(engine.course_search(&neutral, None).unwrap().page.total, 1);
 
     let mut active = neutral_input();
-    active.section_numbers = vec![token("01")];
+    active.section_indexes = vec![keys.section.index().clone()];
     let active = course_request(active, PageRequestV1::default(), CourseSortV1::default());
     assert_eq!(engine.course_search(&active, None).unwrap().page.total, 0);
 }
@@ -374,7 +361,7 @@ fn course_search_materializes_only_section_witnesses_but_detail_stays_complete()
     let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
 
     let mut input = neutral_input();
-    input.section_numbers = vec![token("01")];
+    input.section_indexes = vec![keys.section.index().clone()];
     let request = course_request(input, PageRequestV1::default(), CourseSortV1::default());
     let response = engine.course_search(&request, None).unwrap();
     let variant = &response.items[0].variants[0];
@@ -704,7 +691,7 @@ fn text_plan_rejects_query_target_set_and_foreign_variant_mismatches() {
 }
 
 #[test]
-fn permission_null_and_missing_eligibility_keep_three_value_semantics() {
+fn permission_null_keeps_three_value_semantics() {
     let mut catalog = empty_catalog("NB", 1);
     let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
     section_mut(&mut catalog, &keys.section).special_permission_add_code =
@@ -729,28 +716,6 @@ fn permission_null_and_missing_eligibility_keep_three_value_semantics() {
             .explanation
             .outcome(),
         MatchOutcome::Match
-    );
-
-    let mut unknown_section = section;
-    unknown_section.major_codes = CatalogFieldKnowledge::absent();
-    let mut input = neutral_input();
-    input.eligibility.major_codes = vec![token("198")];
-    let (outcome, matches) = evaluate_section_filters(
-        &unknown_section,
-        Some(&occurrence_refs),
-        &open_evidence(&keys.section, LiveOpenStateV1::Open).evidence,
-        now(),
-        &normalized(input),
-    );
-    assert_eq!(outcome.outcome(), MatchOutcome::Uncertain);
-    assert_eq!(
-        matches
-            .iter()
-            .find(|entry| entry.field_id == FilterFieldId::SectionEligibility)
-            .unwrap()
-            .explanation
-            .outcome(),
-        MatchOutcome::Uncertain
     );
 }
 
@@ -880,7 +845,6 @@ fn unknown_course_knowledge_remains_uncertain_and_reasons_are_stable() {
     input.credits = Some(CreditRangeV1::try_new(Some(300), Some(300)).unwrap());
     input.core.codes = vec![token("CC")];
     input.prerequisite = PrerequisiteFilterV1::Has;
-    input.course_locations = vec![token("BUSCH")];
     let request = course_request(input, PageRequestV1::default(), CourseSortV1::default());
     let catalogs = vec![catalog];
     let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
@@ -898,7 +862,6 @@ fn unknown_course_knowledge_remains_uncertain_and_reasons_are_stable() {
         FilterFieldId::CourseCredits,
         FilterFieldId::CourseCoreCode,
         FilterFieldId::CoursePrerequisite,
-        FilterFieldId::CourseLocation,
     ] {
         let explanation = &uncertain
             .filter_matches
@@ -921,28 +884,7 @@ fn unknown_course_knowledge_remains_uncertain_and_reasons_are_stable() {
 }
 
 #[test]
-fn delivery_axes_and_same_occurrence_building_room_do_not_guess_or_stitch() {
-    let mut catalog = empty_catalog("NB", 1);
-    let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
-    let other = add_section(&mut catalog, &keys.variant, "00002");
-    occurrence_mut(&mut catalog, &keys.section).building =
-        CatalogFieldKnowledge::present("SEC".to_owned());
-    occurrence_mut(&mut catalog, &keys.section).room =
-        CatalogFieldKnowledge::present("999".to_owned());
-    occurrence_mut(&mut catalog, &other).building =
-        CatalogFieldKnowledge::present("ARC".to_owned());
-    occurrence_mut(&mut catalog, &other).room = CatalogFieldKnowledge::present("101".to_owned());
-
-    let mut input = neutral_input();
-    input.building_room = BuildingRoomFilterV1 {
-        building_codes: vec![token("SEC")],
-        room_numbers: vec![token("101")],
-    };
-    let request = course_request(input, PageRequestV1::default(), CourseSortV1::default());
-    let catalogs = vec![catalog];
-    let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
-    assert_eq!(engine.course_search(&request, None).unwrap().page.total, 0);
-
+fn delivery_axes_do_not_guess_conflicting_or_unspecified_values() {
     let mut catalog = empty_catalog("NB", 1);
     let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
     let section = section_mut(&mut catalog, &keys.section);
@@ -980,4 +922,66 @@ fn delivery_axes_and_same_occurrence_building_room_do_not_guess_or_stitch() {
             .outcome(),
         MatchOutcome::Uncertain
     );
+}
+
+#[test]
+fn all_required_meeting_locations_preserve_match_no_match_and_uncertain() {
+    let mut catalog = empty_catalog("NB", 1);
+    let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+    let section = catalog.sections[0].clone();
+    let open = open_evidence(&keys.section, LiveOpenStateV1::Open);
+    let mut input = neutral_input();
+    input.meeting_locations = MeetingLocationFilterV2 {
+        locations: vec![token("BUSCH")],
+        mode: MeetingLocationMatchModeV2::AllRequiredMeetings,
+    };
+    let filters = normalized(input);
+
+    let occurrences = catalog.occurrences.iter().collect::<Vec<_>>();
+    let (matched, _) = evaluate_section_filters(
+        &section,
+        Some(&occurrences),
+        &open.evidence,
+        now(),
+        &filters,
+    );
+    assert_eq!(matched.outcome(), MatchOutcome::Match);
+
+    occurrence_mut(&mut catalog, &keys.section).campus =
+        CatalogFieldKnowledge::present("NEWARK".to_owned());
+    occurrence_mut(&mut catalog, &keys.section).campus_name =
+        CatalogFieldKnowledge::present("Newark".to_owned());
+    let occurrences = catalog.occurrences.iter().collect::<Vec<_>>();
+    let (no_match, _) = evaluate_section_filters(
+        &section,
+        Some(&occurrences),
+        &open.evidence,
+        now(),
+        &filters,
+    );
+    assert_eq!(no_match.outcome(), MatchOutcome::NoMatch);
+
+    let occurrence = occurrence_mut(&mut catalog, &keys.section);
+    occurrence.campus = CatalogFieldKnowledge::present("BUSCH".to_owned());
+    occurrence.requiredness = CatalogRequiredness::UnknownRequiredness;
+    let occurrences = catalog.occurrences.iter().collect::<Vec<_>>();
+    let (unknown, _) = evaluate_section_filters(
+        &section,
+        Some(&occurrences),
+        &open.evidence,
+        now(),
+        &filters,
+    );
+    assert_eq!(unknown.outcome(), MatchOutcome::Uncertain);
+
+    occurrence_mut(&mut catalog, &keys.section).requiredness = CatalogRequiredness::Optional;
+    let occurrences = catalog.occurrences.iter().collect::<Vec<_>>();
+    let (only_optional, _) = evaluate_section_filters(
+        &section,
+        Some(&occurrences),
+        &open.evidence,
+        now(),
+        &filters,
+    );
+    assert_eq!(only_optional.outcome(), MatchOutcome::Uncertain);
 }

@@ -30,7 +30,7 @@ fn first_start_creates_only_an_empty_operational_database() {
             .migration_records()
             .expect("migrations")
             .len(),
-        2
+        3
     );
 
     let tables = store

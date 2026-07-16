@@ -4,16 +4,19 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bcsp_contracts::{
     ApiErrorBody, ApiErrorCode, ApiErrorEnvelope, CatalogDiscoveryRequestV1, CourseDetailRequestV1,
-    CourseQueryRequestV1, HttpRequestEnvelope, HttpSuccessEnvelope, NormalizedFilterValuesV1,
-    OpenSectionStatusRequestV1, OpenStatusRequestV1, SectionDetailRequestV1, SectionQueryRequestV1,
-    ServiceIssueComponentV1, ServiceOperationV1, ServiceRuntimeV1, SystemTraceIdSource,
-    TermCampusKey, TraceIdSource, decode_versioned_envelope_json,
+    CourseQueryRequestV1, FilterOptionsRequestV2, HttpRequestEnvelope, HttpSuccessEnvelope,
+    NormalizedFilterValuesV1, OpenSectionStatusRequestV1, OpenStatusRequestV1,
+    QueryContractVersion, SectionDetailRequestV1, SectionQueryRequestV1, ServiceIssueComponentV1,
+    ServiceOperationV1, ServiceRuntimeV1, SystemTraceIdSource, TermCampusKey, TraceIdSource,
+    decode_versioned_envelope_json,
 };
 use bcsp_operational_storage::OperationalStorage;
 use bcsp_query::QueryError;
 use serde::Serialize;
 
-use crate::service_status::{project_service_status, unavailable_service_status};
+use crate::service_status::{
+    project_service_status, search_data_ready, unavailable_service_status,
+};
 use crate::{
     ApplicationClock, ExtensionRequest, ExtensionResponse, ExtensionRoute, OpenRuntimeSnapshot,
     OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError, RefreshPolicyProvider,
@@ -22,6 +25,7 @@ use crate::{
 };
 
 pub const PRODUCT_FILTER_SCHEMA_PATH: &str = "/api/v1/query/filter-schema";
+pub const PRODUCT_FILTER_OPTIONS_PATH: &str = "/api/v1/query/filter-options";
 pub const PRODUCT_CATALOG_DISCOVERY_PATH: &str = "/api/v1/catalog/discovery";
 pub const PRODUCT_COURSE_SEARCH_PATH: &str = "/api/v1/query/courses";
 pub const PRODUCT_SECTION_SEARCH_PATH: &str = "/api/v1/query/sections";
@@ -33,6 +37,7 @@ pub const PRODUCT_SERVICE_STATUS_PATH: &str = "/api/v1/service/status";
 
 pub static SHARED_PRODUCT_ROUTE_INVENTORY: &[ExtensionRoute] = &[
     ExtensionRoute::new(RequestMethod::Get, PRODUCT_FILTER_SCHEMA_PATH),
+    ExtensionRoute::new(RequestMethod::Post, PRODUCT_FILTER_OPTIONS_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_CATALOG_DISCOVERY_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_COURSE_SEARCH_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_SECTION_SEARCH_PATH),
@@ -150,6 +155,29 @@ where
         success_response(self.runtime.filter_schema())
     }
 
+    fn filter_options(&self, request: &ExtensionRequest) -> ExtensionResponse {
+        let mut request: FilterOptionsRequestV2 = match decode_payload(request.body()) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+        if request.validate().is_err() {
+            return api_error_response(400, ApiErrorCode::InvalidFilter);
+        }
+        let targets = request.targets();
+        let policy = match self.runtime.refresh_policy() {
+            Ok(policy) => policy,
+            Err(error) => {
+                return product_failure_response(ProductRouteFailure::Runtime(error));
+            }
+        };
+        self.with_storage(|storage| {
+            self.require_search_ready(storage, policy)?;
+            crate::SharedQueryService::new(storage)
+                .filter_options(&targets, &request)
+                .map_err(|error| ProductRouteFailure::Runtime(SharedRuntimeError::Query(error)))
+        })
+    }
+
     fn service_status(&self) -> ExtensionResponse {
         let observed_at = self.runtime.now();
         let activity = self
@@ -201,6 +229,9 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
+        if request.filters.contract_version() != QueryContractVersion::V2 {
+            return api_error_response(400, ApiErrorCode::InvalidFilter);
+        }
         let policy = match self.runtime.refresh_policy() {
             Ok(policy) => policy,
             Err(error) => {
@@ -208,6 +239,7 @@ where
             }
         };
         self.with_storage(|storage| {
+            self.require_search_ready(storage, policy)?;
             let targets = self.search_targets(storage, request.filters.values())?;
             self.request_target_refresh(&targets)?;
             let snapshots = self.snapshots(&targets)?;
@@ -228,6 +260,9 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
+        if request.filters.contract_version() != QueryContractVersion::V2 {
+            return api_error_response(400, ApiErrorCode::InvalidFilter);
+        }
         let policy = match self.runtime.refresh_policy() {
             Ok(policy) => policy,
             Err(error) => {
@@ -235,6 +270,7 @@ where
             }
         };
         self.with_storage(|storage| {
+            self.require_search_ready(storage, policy)?;
             let targets = self.search_targets(storage, request.filters.values())?;
             self.request_target_refresh(&targets)?;
             let snapshots = self.snapshots(&targets)?;
@@ -255,6 +291,9 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
+        if request.contract_version != QueryContractVersion::V2 {
+            return api_error_response(400, ApiErrorCode::InvalidFilter);
+        }
         let target = request.key.target();
         let targets = vec![target];
         let policy = match self.runtime.refresh_policy() {
@@ -285,6 +324,9 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
+        if request.contract_version != QueryContractVersion::V2 {
+            return api_error_response(400, ApiErrorCode::InvalidFilter);
+        }
         let target = request.key.target();
         let targets = vec![target];
         let policy = match self.runtime.refresh_policy() {
@@ -408,6 +450,25 @@ where
         Ok(())
     }
 
+    fn require_search_ready(
+        &self,
+        storage: &mut OperationalStorage,
+        refresh_policy: crate::RefreshPolicy,
+    ) -> Result<(), ProductRouteFailure> {
+        let status = project_service_status(
+            storage,
+            &self.runtime,
+            &self.open_runtime,
+            &self.service_status,
+            Some(refresh_policy),
+        );
+        if search_data_ready(&status) {
+            Ok(())
+        } else {
+            Err(ProductRouteFailure::SearchDataNotReady)
+        }
+    }
+
     fn with_storage<T>(
         &self,
         operation: impl FnOnce(&mut OperationalStorage) -> Result<T, ProductRouteFailure>,
@@ -441,6 +502,7 @@ where
     fn handle(&self, request: ExtensionRequest) -> ExtensionResponse {
         match (request.method(), request.path()) {
             (RequestMethod::Get, PRODUCT_FILTER_SCHEMA_PATH) => self.filter_schema(),
+            (RequestMethod::Post, PRODUCT_FILTER_OPTIONS_PATH) => self.filter_options(&request),
             (RequestMethod::Get, PRODUCT_SERVICE_STATUS_PATH) => self.service_status(),
             (RequestMethod::Post, PRODUCT_CATALOG_DISCOVERY_PATH) => {
                 self.catalog_discovery(&request)
@@ -498,6 +560,7 @@ enum ProductRouteFailure {
     OpenRuntime(OpenRuntimeSnapshotRegistryError),
     TargetDemand(TargetRefreshDemandError),
     CatalogUnavailable,
+    SearchDataNotReady,
     SectionNotFound,
 }
 
@@ -516,6 +579,7 @@ impl From<TargetRefreshDemandError> for ProductRouteFailure {
 fn product_failure_response(error: ProductRouteFailure) -> ExtensionResponse {
     let (status, code) = match error {
         ProductRouteFailure::CatalogUnavailable => (503, ApiErrorCode::CatalogNotReady),
+        ProductRouteFailure::SearchDataNotReady => (503, ApiErrorCode::SearchDataNotReady),
         ProductRouteFailure::SectionNotFound => (404, ApiErrorCode::SectionNotFound),
         ProductRouteFailure::OpenRuntime(_) => (500, ApiErrorCode::InternalError),
         ProductRouteFailure::TargetDemand(_) => (500, ApiErrorCode::InternalError),
@@ -557,6 +621,9 @@ fn runtime_failure_status(error: SharedRuntimeError) -> (u16, ApiErrorCode) {
             | SharedQueryError::DetailTargetMismatch
             | SharedQueryError::InvalidTextTokens { .. },
         ) => (400, ApiErrorCode::InvalidFilter),
+        SharedRuntimeError::Query(SharedQueryError::InvalidFilterOption { .. }) => {
+            (400, ApiErrorCode::InvalidFilterOption)
+        }
         SharedRuntimeError::Query(SharedQueryError::Query { .. }) => {
             (500, ApiErrorCode::InternalError)
         }

@@ -9,10 +9,11 @@ import { BcspI18nProvider } from '../src/ui/shared/i18n/runtime';
 import type {
   CatalogDiscoveryResponseV1,
   CourseQueryResponseV1,
+  FilterOptionsFieldV2,
+  FilterOptionsResponseV2,
   FilterSchemaV1,
   ProductApiPort,
   ProductRuntimePort,
-  SectionQueryResponseV1,
   ServiceStatusV1,
 } from '../src/ui/shared/product';
 import { ProductClientError } from '../src/ui/shared/product';
@@ -72,7 +73,7 @@ function discovery(): CatalogDiscoveryResponseV1 {
 const shellState: Extract<ShellDataState, { status: 'READY' }> = {
   discovery: discovery(),
   discoveryState: 'CURRENT',
-  filterCount: 22,
+  filterCount: 18,
   filterSchema: SCHEMA,
   status: 'READY',
 };
@@ -103,23 +104,18 @@ function shellStateWithTargets(
 }
 
 const emptyCourses: CourseQueryResponseV1 = {
-  contractVersion: 1,
-  items: [],
-  page: { page: 1, pageSize: 25, total: 0, totalPages: 0 },
-};
-
-const emptySections: SectionQueryResponseV1 = {
-  contractVersion: 1,
+  contractVersion: 2,
   items: [],
   page: { page: 1, pageSize: 25, total: 0, totalPages: 0 },
 };
 
 function serviceStatus(searchAvailable: boolean): ServiceStatusV1 {
+  const totalTargetCount = 135;
   return {
     contractVersion: 1,
     observedAt: '2026-07-15T00:00:01Z',
     runtime: 'LOCAL',
-    level: searchAvailable ? 'PARTIALLY_READY' : 'INITIALIZING',
+    level: searchAvailable ? 'READY' : 'INITIALIZING',
     operation: {
       phase: searchAvailable ? 'OPEN_FETCH' : 'CATALOG_FETCH',
       target: { campus: 'NB', term: '2026-9' },
@@ -127,14 +123,26 @@ function serviceStatus(searchAvailable: boolean): ServiceStatusV1 {
       nextRetryAt: null,
     },
     discovery: shellState.discovery.status,
-    catalog: { availableTargetCount: searchAvailable ? 1 : 0, totalTargetCount: 1 },
-    open: { availableTargetCount: 0, totalTargetCount: 1 },
+    catalog: {
+      availableTargetCount: totalTargetCount,
+      currentTargetCount: totalTargetCount,
+      staleTargetCount: 0,
+      totalTargetCount,
+      unavailableTargetCount: 0,
+    },
+    open: {
+      availableTargetCount: searchAvailable ? totalTargetCount : totalTargetCount - 1,
+      currentTargetCount: searchAvailable ? totalTargetCount : totalTargetCount - 1,
+      staleTargetCount: 0,
+      totalTargetCount,
+      unavailableTargetCount: searchAvailable ? 0 : 1,
+    },
     targets: [{
       target: { campus: 'NB', term: '2026-9' },
       primary: true,
       catalogAvailability: searchAvailable ? 'CURRENT' : 'UNAVAILABLE',
       catalogContentVersion: searchAvailable ? 1 : null,
-      openAvailability: 'UNAVAILABLE',
+      openAvailability: searchAvailable ? 'CURRENT' : 'UNAVAILABLE',
       searchAvailable,
     }],
     issues: [],
@@ -153,7 +161,7 @@ function renderWorkspace(
   runtime: ProductRuntimePort,
   path: string,
   state: Extract<ShellDataState, { status: 'READY' }> = shellState,
-  status?: ServiceStatusV1 | null,
+  status: ServiceStatusV1 | null = serviceStatus(true),
 ) {
   return render(
     <BcspI18nProvider initialLocale="en-US">
@@ -174,26 +182,29 @@ function deferred<T>() {
 
 afterEach(cleanup);
 
-describe('Course and Section workspace controller', () => {
-  it('disables search while the selected Catalog target is not published', () => {
+describe('unified Course workspace controller', () => {
+  it('disables the full search surface until Catalog and Open are both 135/135', () => {
     const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue(emptyCourses);
     renderWorkspace(productRuntime({ searchCourses }), '/', shellState, serviceStatus(false));
 
     const submit = screen.getByRole('button', { name: 'Search' });
     expect(submit.hasAttribute('disabled')).toBe(true);
-    expect(screen.getByText(/Search unlocks after every selected Catalog target/u)).toBeTruthy();
+    expect((screen.getByLabelText('Term') as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByRole('checkbox', { name: /New Brunswick/u }) as HTMLInputElement).disabled)
+      .toBe(true);
+    expect(screen.getByText(/complete course catalog and live availability data/u)).toBeTruthy();
     fireEvent.click(submit);
     expect(searchCourses).not.toHaveBeenCalled();
   });
 
-  it('returns to the initialization prompt when readiness races with CATALOG_NOT_READY', async () => {
+  it('returns to the initialization prompt when readiness races with SEARCH_DATA_NOT_READY', async () => {
     const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockRejectedValue(
-      new ProductClientError(409, {
+      new ProductClientError(503, {
         protocolVersion: 1,
         error: {
-          code: 'CATALOG_NOT_READY',
+          code: 'SEARCH_DATA_NOT_READY',
           messageKey: 'error.catalog_not_ready',
-          traceId: 'trace-catalog-race',
+          traceId: 'trace-search-race',
           details: [],
         },
       }),
@@ -210,7 +221,7 @@ describe('Course and Section workspace controller', () => {
     await waitFor(() => expect(searchCourses).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole('heading', { name: 'Opening the catalog console' })).toBeTruthy();
     expect(view.container.querySelector('[data-query-state="not_ready"]')).not.toBeNull();
-    expect(screen.getByText(/every selected Catalog target/u)).toBeTruthy();
+    expect(screen.getByText(/complete course catalog and live availability data/u)).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Search failed' })).toBeNull();
   });
 
@@ -272,7 +283,7 @@ describe('Course and Section workspace controller', () => {
     view.rerender(
       <BcspI18nProvider initialLocale="en-US">
         <AppRouterProvider initialPath="/">
-          <SearchWorkspace runtime={runtime} shellState={hydrated} />
+          <SearchWorkspace runtime={runtime} serviceStatus={serviceStatus(true)} shellState={hydrated} />
         </AppRouterProvider>
       </BcspI18nProvider>,
     );
@@ -293,14 +304,35 @@ describe('Course and Section workspace controller', () => {
 
   it('submits one typed Course query with combined Course and same-Section filters', async () => {
     const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue(emptyCourses);
-    renderWorkspace(productRuntime({ searchCourses }), '/');
+    const filterOptions = vi.fn(async (
+      request: Parameters<ProductApiPort['filterOptions']>[0],
+    ): Promise<FilterOptionsResponseV2> => {
+      const options = request.field === 'KEYWORD' && request.query?.toLocaleLowerCase() === 'data'
+        ? [{ value: 'data', label: 'data' }]
+        : request.field === 'INSTRUCTOR' && request.query?.toLocaleLowerCase() === 'ada'
+          ? [{ value: 'Ada Lovelace', label: 'Ada Lovelace' }]
+          : [];
+      return {
+        contractVersion: 2,
+        field: request.field,
+        options,
+        targetVersions: [],
+        truncated: false,
+      };
+    });
+    renderWorkspace(productRuntime({ filterOptions, searchCourses }), '/');
 
-    fireEvent.change(screen.getByLabelText('Search text'), { target: { value: 'data structures' } });
+    const keyword = screen.getByRole('combobox', { name: 'Keyword match' });
+    fireEvent.change(keyword, { target: { value: 'data' } });
+    await screen.findByRole('option', { name: 'data' });
+    fireEvent.keyDown(keyword, { key: 'Enter' });
     fireEvent.click(screen.getByText('Same-Section constraints'));
     fireEvent.click(within(screen.getByRole('group', { name: 'Open status' }))
       .getByRole('checkbox', { name: 'Open' }));
-    fireEvent.change(screen.getByLabelText('Instructor names'), { target: { value: 'Ada Lovelace' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add Instructor names' }));
+    const instructor = screen.getByRole('combobox', { name: 'Instructor' });
+    fireEvent.change(instructor, { target: { value: 'ADA' } });
+    await screen.findByRole('option', { name: 'Ada Lovelace' });
+    fireEvent.keyDown(instructor, { key: 'Enter' });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
     await waitFor(() => expect(searchCourses).toHaveBeenCalledTimes(1));
@@ -308,31 +340,36 @@ describe('Course and Section workspace controller', () => {
     expect(request?.filters.values).toMatchObject({
       campuses: ['NB'],
       instructors: ['Ada Lovelace'],
+      keywords: ['data'],
       openStatuses: ['OPEN'],
       term: '2026-9',
-      text: 'data structures',
     });
     expect(request?.page).toEqual({ page: 1, pageSize: 25 });
     expect(await screen.findByRole('heading', { name: 'No matching records' })).toBeTruthy();
   });
 
-  it('uses the independent Section query endpoint without an automatic request', async () => {
-    const searchSections = vi.fn<ProductApiPort['searchSections']>().mockResolvedValue(emptySections);
-    renderWorkspace(productRuntime({ searchSections }), '/sections');
+  it('keeps Section constraints inside Course search and never calls the legacy Section endpoint', async () => {
+    const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue(emptyCourses);
+    const searchSections = vi.fn<ProductApiPort['searchSections']>();
+    const view = renderWorkspace(productRuntime({ searchCourses, searchSections }), '/');
 
-    expect(searchSections).not.toHaveBeenCalled();
+    expect(view.container.querySelector('[data-search-mode="courses"]')).not.toBeNull();
+    expect(view.container.querySelector('[data-search-mode="sections"]')).toBeNull();
+    fireEvent.click(screen.getByText('Same-Section constraints'));
     fireEvent.change(screen.getByLabelText('Section indexes'), { target: { value: '12345' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add Section indexes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
-    await waitFor(() => expect(searchSections).toHaveBeenCalledTimes(1));
-    expect(searchSections.mock.calls[0]?.[0].filters.values.sectionIndexes).toEqual(['12345']);
+    await waitFor(() => expect(searchCourses).toHaveBeenCalledTimes(1));
+    expect(searchCourses.mock.calls[0]?.[0].filters.values.sectionIndexes).toEqual(['12345']);
+    expect(searchSections).not.toHaveBeenCalled();
   });
 
   it('keeps an invalid Section index local, identifies its row, and focuses its control', async () => {
-    const searchSections = vi.fn<ProductApiPort['searchSections']>().mockResolvedValue(emptySections);
-    const view = renderWorkspace(productRuntime({ searchSections }), '/sections');
+    const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue(emptyCourses);
+    const view = renderWorkspace(productRuntime({ searchCourses }), '/');
 
+    fireEvent.click(screen.getByText('Same-Section constraints'));
     const sectionIndexInput = screen.getByLabelText('Section indexes');
     fireEvent.change(sectionIndexInput, { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add Section indexes' }));
@@ -346,7 +383,7 @@ describe('Course and Section workspace controller', () => {
       value: scrollIntoView,
     });
     await waitFor(() => {
-      expect(searchSections).not.toHaveBeenCalled();
+      expect(searchCourses).not.toHaveBeenCalled();
       expect(row?.dataset.filterError).toBe('true');
       expect(row?.getAttribute('aria-invalid')).toBe('true');
       expect(within(row as HTMLElement).getByText('A Section index must contain five digits.')).toBeTruthy();
@@ -382,7 +419,7 @@ describe('Course and Section workspace controller', () => {
 
     await waitFor(() => expect(sectionDetail).toHaveBeenCalledTimes(1));
     expect(sectionDetail.mock.calls[0]?.[0]).toEqual({
-      contractVersion: 1,
+      contractVersion: 2,
       key: { campus: 'NB', index: '12345', term: '2026-9' },
     });
     expect(screen.getByRole('heading', { name: 'Section detail' })).toBeTruthy();

@@ -623,6 +623,79 @@ impl OperationalStorage {
         })
     }
 
+    /// Returns literal terms produced by the exact unicode61 tokenizer that
+    /// backs the currently published course FTS rows. The instance vocabulary
+    /// retains rowid, allowing target/version scoping instead of leaking terms
+    /// from another catalog publication.
+    pub fn published_course_fts_terms(
+        &mut self,
+        target: &TermCampusKey,
+        content_version: u64,
+        query: Option<&str>,
+        limit: usize,
+    ) -> StorageResult<Vec<String>> {
+        if content_version == 0 || limit == 0 {
+            return Err(StorageError::InvalidCommand {
+                field: "filter_options",
+                reason: "requires a published content version and nonzero limit",
+            });
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let current_version = transaction
+            .query_row(
+                "SELECT current_content_version FROM catalog_targets WHERE target_id = ?1",
+                [target_id(target)],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(i64_to_u64)
+            .transpose()?;
+        let Some(current_version) = current_version.filter(|version| *version > 0) else {
+            return Err(StorageError::CatalogTargetNotPublished);
+        };
+        if current_version != content_version {
+            return Err(StorageError::CatalogContentVersionMismatch {
+                requested: content_version,
+                current: current_version,
+            });
+        }
+
+        transaction.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS temp.catalog_course_fts_vocab
+             USING fts5vocab(main, catalog_course_fts, instance);",
+        )?;
+        let query = query.unwrap_or("");
+        let sql_limit = i64::try_from(limit).map_err(|_| StorageError::StoredIntegerOutOfRange)?;
+        let terms = {
+            let mut statement = transaction.prepare(
+                "SELECT DISTINCT vocab.term
+                   FROM temp.catalog_course_fts_vocab AS vocab
+                   JOIN catalog_course_fts AS f ON f.rowid = vocab.doc
+                   JOIN catalog_targets AS t ON t.target_id = f.target_id
+                  WHERE f.target_id = ?1
+                    AND f.content_version = ?2
+                    AND t.current_content_version = ?2
+                    AND (?3 = '' OR instr(lower(vocab.term), lower(?3)) > 0)
+                  ORDER BY vocab.term COLLATE NOCASE, vocab.term COLLATE BINARY
+                  LIMIT ?4",
+            )?;
+            let rows = statement.query_map(
+                params![
+                    target_id(target),
+                    u64_to_i64(content_version)?,
+                    query,
+                    sql_limit
+                ],
+                |row| row.get::<_, String>(0),
+            )?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        transaction.commit()?;
+        Ok(terms)
+    }
+
     pub fn integrity_report(
         &self,
         target: &TermCampusKey,
@@ -2465,42 +2538,42 @@ fn update_target_after_publish(
     Ok(())
 }
 
-fn verify_fts_integrity(transaction: &Transaction<'_>, target_id: &str) -> StorageResult<()> {
-    let anomalies = transaction.query_row(
-        "SELECT
-            (SELECT count(*) FROM catalog_course_variants v
-             WHERE v.target_id = ?1 AND NOT EXISTS (
-                SELECT 1 FROM catalog_course_fts f
-                WHERE f.target_id = v.target_id
-                  AND f.course_string = v.course_string
-                  AND f.fingerprint = v.fingerprint)),
-            (SELECT count(*) FROM catalog_course_fts f
-             WHERE f.target_id = ?1 AND NOT EXISTS (
-                SELECT 1 FROM catalog_course_variants v
-                WHERE v.target_id = f.target_id
-                  AND v.course_string = f.course_string
-                  AND v.fingerprint = f.fingerprint)),
-            (SELECT count(*) FROM (
-                SELECT 1 FROM catalog_course_fts
-                WHERE target_id = ?1
-                GROUP BY target_id, course_string, fingerprint
-                HAVING count(*) > 1)),
-            (SELECT count(*) FROM catalog_course_fts f
-             JOIN catalog_course_variants v
-               ON v.target_id = f.target_id
+const VERIFY_FTS_INTEGRITY_SQL: &str = "WITH target_fts AS MATERIALIZED (
+        SELECT target_id, course_string, fingerprint, content_version
+        FROM catalog_course_fts
+        WHERE target_id = ?1
+    )
+    SELECT
+        abs(
+            (SELECT count(*) FROM catalog_course_variants v WHERE v.target_id = ?1)
+            - (SELECT count(*) FROM target_fts)
+        ),
+        (SELECT count(*) FROM target_fts f
+         WHERE NOT EXISTS (
+            SELECT 1 FROM catalog_course_variants v
+            WHERE v.target_id = f.target_id
               AND v.course_string = f.course_string
-              AND v.fingerprint = f.fingerprint
-             WHERE f.target_id = ?1 AND f.content_version != v.content_version)",
-        [target_id],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        },
-    )?;
+              AND v.fingerprint = f.fingerprint)),
+        (SELECT count(*) FROM (
+            SELECT 1 FROM target_fts
+            GROUP BY target_id, course_string, fingerprint
+            HAVING count(*) > 1)),
+        (SELECT count(*) FROM target_fts f
+         JOIN catalog_course_variants v
+           ON v.target_id = f.target_id
+          AND v.course_string = f.course_string
+          AND v.fingerprint = f.fingerprint
+         WHERE f.content_version != v.content_version)";
+
+fn verify_fts_integrity(transaction: &Transaction<'_>, target_id: &str) -> StorageResult<()> {
+    let anomalies = transaction.query_row(VERIFY_FTS_INTEGRITY_SQL, [target_id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })?;
     if anomalies != (0, 0, 0, 0) {
         return Err(StorageError::InvalidCommand {
             field: "catalog_course_fts",
@@ -2911,6 +2984,76 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    const FTS_INTEGRITY_TARGET: &str = "TERM/CAMPUS";
+
+    fn fts_integrity_fixture() -> Connection {
+        let connection = Connection::open_in_memory().expect("in-memory FTS integrity fixture");
+        connection
+            .execute_batch(
+                "CREATE TABLE catalog_course_variants (
+                    target_id TEXT NOT NULL,
+                    course_string TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    content_version INTEGER NOT NULL,
+                    PRIMARY KEY (target_id, course_string, fingerprint)
+                );
+                CREATE VIRTUAL TABLE catalog_course_fts USING fts5(
+                    target_id UNINDEXED,
+                    course_string UNINDEXED,
+                    fingerprint UNINDEXED,
+                    content_version UNINDEXED,
+                    document
+                );
+                INSERT INTO catalog_course_variants
+                    (target_id, course_string, fingerprint, content_version)
+                VALUES
+                    ('TERM/CAMPUS', 'COURSE-A', 'FINGERPRINT-A', 7),
+                    ('TERM/CAMPUS', 'COURSE-B', 'FINGERPRINT-B', 7);",
+            )
+            .expect("create FTS integrity fixture schema");
+        connection
+    }
+
+    fn replace_fts_rows(connection: &Connection, rows: &[(&str, &str, i64)]) {
+        connection
+            .execute("DELETE FROM catalog_course_fts", [])
+            .expect("clear fixture FTS rows");
+        for (course_string, fingerprint, content_version) in rows {
+            connection
+                .execute(
+                    "INSERT INTO catalog_course_fts
+                        (target_id, course_string, fingerprint, content_version, document)
+                     VALUES (?1, ?2, ?3, ?4, ?2)",
+                    params![
+                        FTS_INTEGRITY_TARGET,
+                        course_string,
+                        fingerprint,
+                        content_version
+                    ],
+                )
+                .expect("insert fixture FTS row");
+        }
+    }
+
+    fn fixture_integrity_result(connection: &mut Connection) -> StorageResult<()> {
+        let transaction = connection.transaction().expect("fixture transaction");
+        let result = verify_fts_integrity(&transaction, FTS_INTEGRITY_TARGET);
+        transaction
+            .rollback()
+            .expect("rollback fixture transaction");
+        result
+    }
+
+    fn assert_fts_integrity_rejected(connection: &mut Connection) {
+        assert!(matches!(
+            fixture_integrity_result(connection),
+            Err(StorageError::InvalidCommand {
+                field: "catalog_course_fts",
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn fts5_query_builder_quotes_every_literal_and_doubles_embedded_quotes() {
         let tokens = CourseTextSearchTokens::try_new(["alpha", "say\"hello", "OR"])
@@ -2918,6 +3061,77 @@ mod tests {
         assert_eq!(
             fts5_literal_and_query(&tokens),
             "\"alpha\" AND \"say\"\"hello\" AND \"OR\""
+        );
+    }
+
+    #[test]
+    fn fts_integrity_requires_a_bijection_without_duplicates_and_matching_versions() {
+        let mut connection = fts_integrity_fixture();
+
+        replace_fts_rows(
+            &connection,
+            &[
+                ("COURSE-A", "FINGERPRINT-A", 7),
+                ("COURSE-B", "FINGERPRINT-B", 7),
+            ],
+        );
+        fixture_integrity_result(&mut connection).expect("valid one-to-one FTS projection");
+
+        replace_fts_rows(&connection, &[("COURSE-A", "FINGERPRINT-A", 7)]);
+        assert_fts_integrity_rejected(&mut connection);
+
+        // Equal cardinality alone is insufficient: the orphan must expose the
+        // corresponding missing serving variant.
+        replace_fts_rows(
+            &connection,
+            &[
+                ("COURSE-A", "FINGERPRINT-A", 7),
+                ("COURSE-X", "FINGERPRINT-X", 7),
+            ],
+        );
+        assert_fts_integrity_rejected(&mut connection);
+
+        // This also preserves cardinality while replacing COURSE-B with a
+        // duplicate COURSE-A key.
+        replace_fts_rows(
+            &connection,
+            &[
+                ("COURSE-A", "FINGERPRINT-A", 7),
+                ("COURSE-A", "FINGERPRINT-A", 7),
+            ],
+        );
+        assert_fts_integrity_rejected(&mut connection);
+
+        replace_fts_rows(
+            &connection,
+            &[
+                ("COURSE-A", "FINGERPRINT-A", 7),
+                ("COURSE-B", "FINGERPRINT-B", 8),
+            ],
+        );
+        assert_fts_integrity_rejected(&mut connection);
+    }
+
+    #[test]
+    fn fts_integrity_query_scans_the_unindexed_virtual_table_once() {
+        let connection = fts_integrity_fixture();
+        let explain = format!("EXPLAIN QUERY PLAN {VERIFY_FTS_INTEGRITY_SQL}");
+        let mut statement = connection.prepare(&explain).expect("prepare query plan");
+        let details = statement
+            .query_map([FTS_INTEGRITY_TARGET], |row| row.get::<_, String>(3))
+            .expect("explain FTS integrity query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect FTS integrity query plan");
+        let virtual_table_scans = details
+            .iter()
+            .filter(|detail| {
+                detail.contains("VIRTUAL TABLE") && detail.contains("catalog_course_fts")
+            })
+            .count();
+
+        assert_eq!(
+            virtual_table_scans, 1,
+            "FTS target rows must be materialized by one virtual-table scan: {details:#?}"
         );
     }
 

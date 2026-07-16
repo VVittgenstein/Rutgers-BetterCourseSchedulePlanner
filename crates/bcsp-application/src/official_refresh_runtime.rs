@@ -16,6 +16,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
+use crate::refresh_generation::refresh_generation_interval;
 use crate::{
     CoordinatorStatusSink, OpenRuntimeSnapshotRegistry, ProductStorageAccess,
     RefreshPolicyProvider, RefreshRuntime, RutgersRefreshUpstream,
@@ -26,7 +27,6 @@ use crate::{
 
 /// Discovery is deliberately lower frequency than Catalog and Open polling. All three still use
 /// one serialized origin workflow: the coordinator is stopped before a discovery refresh begins.
-pub const DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 pub const DISCOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TARGET_DEMAND_SCAN_INTERVAL: Duration = Duration::from_millis(250);
 const CI_NO_RUTGERS_ENVIRONMENT: &str = "BCSP_CI_NO_RUTGERS";
@@ -192,7 +192,8 @@ impl OfficialRefreshRuntime {
                                     .map(|registration| registration.target().clone()),
                             );
                             current_targets = published.targets;
-                            wait_before_attempt = DISCOVERY_REFRESH_INTERVAL;
+                            wait_before_attempt =
+                                refresh_generation_interval(current_targets.len());
                             true
                         }
                         Err(_) => {
@@ -285,29 +286,14 @@ impl Drop for OfficialRefreshRuntime {
 
 fn selected_refresh_targets(
     available: &[crate::ScheduledRefreshTarget],
-    demanded: &[TermCampusKey],
+    _demanded: &[TermCampusKey],
 ) -> Vec<crate::ScheduledRefreshTarget> {
-    let latest_term = available
-        .iter()
-        .max_by_key(|registration| {
-            (
-                registration.open_request().year(),
-                registration.open_request().term_code(),
-            )
-        })
-        .map(|registration| registration.target().term().clone());
-    let demanded = demanded.iter().cloned().collect::<BTreeSet<_>>();
-
-    available
-        .iter()
-        .filter(|registration| {
-            latest_term
-                .as_ref()
-                .is_some_and(|term| registration.target().term() == term)
-                || demanded.contains(registration.target())
-        })
-        .cloned()
-        .collect()
+    // The search surface is gated on a complete discovery generation.  Every
+    // discovered target therefore receives its first Catalog/Open refresh
+    // without waiting for a query-generated demand that the disabled UI cannot
+    // produce. RefreshCoordinator still owns single-flight, cadence and watch
+    // priority ordering.
+    available.to_vec()
 }
 
 fn demanded_refresh_targets(
@@ -407,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn default_refresh_selects_every_campus_in_latest_chronological_term() {
+    fn default_refresh_selects_every_discovered_target() {
         let available = vec![
             registration("12027", "NWK", 2027, "1"),
             registration("92026", "NB", 2026, "9"),
@@ -419,12 +405,34 @@ mod tests {
             .into_iter()
             .map(|registration| registration.target().clone())
             .collect::<BTreeSet<_>>();
+        assert_eq!(selected.len(), 4);
         assert_eq!(
             selected,
-            BTreeSet::from([
-                TermCampusKey::try_new("12027", "NB").expect("target"),
-                TermCampusKey::try_new("12027", "NWK").expect("target"),
-            ])
+            available
+                .iter()
+                .map(|registration| registration.target().clone())
+                .collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn default_refresh_does_not_cap_a_full_discovery_generation() {
+        let available = (0..135)
+            .map(|index| registration("92026", &format!("CAMPUS_{index:03}"), 2026, "9"))
+            .collect::<Vec<_>>();
+
+        let selected = selected_refresh_targets(&available, &[]);
+
+        assert_eq!(selected.len(), 135);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|registration| registration.target().clone())
+                .collect::<BTreeSet<_>>(),
+            available
+                .iter()
+                .map(|registration| registration.target().clone())
+                .collect::<BTreeSet<_>>()
         );
     }
 

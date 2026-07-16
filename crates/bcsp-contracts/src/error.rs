@@ -50,12 +50,20 @@ define_api_error_codes! {
         "error.invalid_course_variant_key"
     ),
     InvalidFilter => ("INVALID_FILTER", "error.invalid_filter"),
+    InvalidFilterOption => (
+        "INVALID_FILTER_OPTION",
+        "error.invalid_filter_option"
+    ),
     SectionNotFound => ("SECTION_NOT_FOUND", "error.section_not_found"),
     SelectionLimitExceeded => (
         "SELECTION_LIMIT_EXCEEDED",
         "error.selection_limit_exceeded"
     ),
     CatalogNotReady => ("CATALOG_NOT_READY", "error.catalog_not_ready"),
+    SearchDataNotReady => (
+        "SEARCH_DATA_NOT_READY",
+        "error.search_data_not_ready"
+    ),
     UpstreamUnavailable => ("UPSTREAM_UNAVAILABLE", "error.upstream_unavailable"),
     AudioBlocked => ("AUDIO_BLOCKED", "error.audio_blocked"),
     InternalError => ("INTERNAL_ERROR", "error.internal"),

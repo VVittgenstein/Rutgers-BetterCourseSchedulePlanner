@@ -42,7 +42,7 @@ const VIEW = {
   revision: 2,
   content: {
     status: 'COMPATIBLE',
-    filters: { contractVersion: 1, values: {} },
+    filters: { contractVersion: 2, values: {} },
   },
   createdAt: Date.parse('2026-07-14T08:00:00Z'),
   updatedAt: Date.parse('2026-07-15T08:00:00Z'),

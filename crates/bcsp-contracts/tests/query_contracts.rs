@@ -4,8 +4,8 @@ use bcsp_contracts::{
     AvailabilityWindowV1, CourseQueryResponseV1, CreditRangeV1, FILTER_FIELD_COUNT, FilterFieldId,
     FilterRequestV1, FilterScopeV1, FilterSearchTextV1, FilterTokenV1, FilterValuesInputV1,
     LiveOpenStateV1, MAX_AVAILABILITY_WINDOWS, MAX_FILTER_VALUES_PER_FIELD, MAX_PAGE_SIZE,
-    NormalizedFilterValuesV1, PageRequestV1, QueryContractVersion, TermId, WeekdayV1,
-    filter_schema_v1,
+    MeetingLocationFilterV2, NormalizedFilterValuesV1, PageRequestV1, QueryContractVersion, TermId,
+    WeekdayV1, filter_schema_v1,
 };
 use serde_json::{Value, json};
 
@@ -14,31 +14,21 @@ fn neutral_values_json() -> Value {
         "term": "T2026F",
         "campuses": [],
         "subjects": [],
-        "text": null,
+        "keywords": [],
         "courseNumbers": [],
         "levels": [],
         "credits": null,
         "core": { "codes": [], "mode": "ANY" },
         "prerequisite": "ANY",
-        "courseLocations": [],
         "sectionIndexes": [],
-        "sectionNumbers": [],
         "openStatuses": [],
         "modalities": [],
         "synchronicities": [],
         "instructors": [],
         "availability": [],
-        "meetingLocations": [],
-        "buildingRoom": { "buildingCodes": [], "roomNumbers": [] },
+        "meetingLocations": { "locations": [], "mode": "ANY_MEETING" },
         "examCodes": [],
-        "permission": "ANY",
-        "eligibility": {
-            "majorCodes": [],
-            "minorCodes": [],
-            "honorProgramCodes": [],
-            "unitCodes": [],
-            "unitMajors": []
-        }
+        "permission": "ANY"
     })
 }
 
@@ -72,8 +62,8 @@ fn stable_filter_ids_are_exact_ordered_and_unique() {
         .collect::<Vec<_>>();
     let expected = [
         "FLT-C01", "FLT-C02", "FLT-C03", "FLT-C04", "FLT-C05", "FLT-C06", "FLT-C07", "FLT-C08",
-        "FLT-C09", "FLT-C10", "FLT-S01", "FLT-S02", "FLT-S03", "FLT-S04a", "FLT-S04b", "FLT-S05",
-        "FLT-S06", "FLT-S07", "FLT-S08", "FLT-S09", "FLT-S10", "FLT-S11",
+        "FLT-C09", "FLT-S01", "FLT-S03", "FLT-S04a", "FLT-S04b", "FLT-S05", "FLT-S06", "FLT-S07",
+        "FLT-S09", "FLT-S10",
     ]
     .map(|value| Value::String(value.to_owned()));
 
@@ -92,21 +82,21 @@ fn stable_filter_ids_are_exact_ordered_and_unique() {
             .iter()
             .filter(|field| field.scope() == FilterScopeV1::Course)
             .count(),
-        10
+        9
     );
     assert_eq!(
         FilterFieldId::ALL
             .iter()
             .filter(|field| field.scope() == FilterScopeV1::Section)
             .count(),
-        12
+        9
     );
 }
 
 #[test]
 fn single_filter_schema_covers_every_request_field_once() {
     let schema = filter_schema_v1();
-    assert_eq!(schema.contract_version, QueryContractVersion::V1);
+    assert_eq!(schema.contract_version, QueryContractVersion::V2);
     assert_eq!(schema.fields.len(), FILTER_FIELD_COUNT);
     assert_eq!(
         schema
@@ -177,7 +167,7 @@ fn normalized_filter_values_sort_and_deduplicate_every_collection() {
 
 #[test]
 fn client_filter_request_rejects_unknown_fields_at_every_boundary() {
-    let request = json!({"contractVersion": 1, "values": neutral_values_json()});
+    let request = json!({"contractVersion": 2, "values": neutral_values_json()});
     serde_json::from_value::<FilterRequestV1>(request.clone()).unwrap();
 
     let mut top_level = request.clone();
@@ -273,9 +263,12 @@ fn normalized_constructor_enforces_collection_limits() {
     too_many_total.course_numbers = values("C");
     too_many_total.levels = values("L");
     too_many_total.core.codes = values("K");
-    too_many_total.course_locations = values("O");
-    too_many_total.section_numbers = values("S");
-    too_many_total.meeting_locations = values("M");
+    too_many_total.instructors = values("I");
+    too_many_total.meeting_locations = MeetingLocationFilterV2 {
+        locations: values("M"),
+        ..MeetingLocationFilterV2::default()
+    };
+    too_many_total.exam_codes = values("E");
     assert!(NormalizedFilterValuesV1::try_new(too_many_total).is_err());
 }
 

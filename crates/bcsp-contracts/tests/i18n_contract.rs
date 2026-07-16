@@ -73,7 +73,7 @@ fn i18n_contract_golden_locks_locales_error_keys_and_match_reason_keys() {
 
     assert_eq!(expected.canonical_locales, ["en-US", "zh-CN"]);
     assert_eq!(expected.fallback, "en-US");
-    assert_eq!(expected.api_errors.len(), 12);
+    assert_eq!(expected.api_errors.len(), 14);
     assert_eq!(expected.match_reasons.len(), 7);
     assert_unique_pairs("API error", &expected.api_errors);
     assert_unique_pairs("match reason", &expected.match_reasons);

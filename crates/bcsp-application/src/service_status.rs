@@ -295,15 +295,10 @@ where
 
     let catalog = availability_summary(&targets, |target| target.catalog_availability);
     let open = availability_summary(&targets, |target| target.open_availability);
-    let primary = targets
-        .iter()
-        .filter(|target| target.primary)
-        .collect::<Vec<_>>();
-    let readiness_scope = if primary.is_empty() {
-        targets.iter().collect::<Vec<_>>()
-    } else {
-        primary
-    };
+    // Search is a global product surface. It becomes READY only after every
+    // discovered target has current Catalog and Open data; the latest term is
+    // still marked as primary for presentation, but no longer narrows readiness.
+    let readiness_scope = targets.iter().collect::<Vec<_>>();
     let level = service_level(&discovery.status, &readiness_scope, &issues);
 
     ServiceStatusV1 {
@@ -318,6 +313,21 @@ where
         targets,
         issues,
     }
+}
+
+/// One global gate shared by the UI status projection and query routes.
+/// Stale last-known-good data remains visible for diagnostics and previously
+/// rendered results, but never authorizes a new search.
+pub(crate) fn search_data_ready(status: &ServiceStatusV1) -> bool {
+    let totals_match = status.catalog.total_target_count > 0
+        && status.catalog.total_target_count == status.open.total_target_count;
+    let all_current = status.catalog.current_target_count == status.catalog.total_target_count
+        && status.open.current_target_count == status.open.total_target_count;
+    let blocking = status
+        .issues
+        .iter()
+        .any(|issue| issue.severity == ServiceIssueSeverityV1::Blocking);
+    totals_match && all_current && !blocking
 }
 
 pub(crate) fn unavailable_service_status(
@@ -476,15 +486,33 @@ fn availability_summary(
     targets: &[ServiceTargetStatusV1],
     availability: impl Fn(&ServiceTargetStatusV1) -> ServiceAvailabilityV1,
 ) -> ServiceAvailabilitySummaryV1 {
+    let current_target_count = u64::try_from(
+        targets
+            .iter()
+            .filter(|target| availability(target) == ServiceAvailabilityV1::Current)
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    let stale_target_count = u64::try_from(
+        targets
+            .iter()
+            .filter(|target| availability(target) == ServiceAvailabilityV1::Stale)
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    let unavailable_target_count = u64::try_from(
+        targets
+            .iter()
+            .filter(|target| availability(target) == ServiceAvailabilityV1::Unavailable)
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
     ServiceAvailabilitySummaryV1 {
         total_target_count: u64::try_from(targets.len()).unwrap_or(u64::MAX),
-        available_target_count: u64::try_from(
-            targets
-                .iter()
-                .filter(|target| availability(target) != ServiceAvailabilityV1::Unavailable)
-                .count(),
-        )
-        .unwrap_or(u64::MAX),
+        current_target_count,
+        stale_target_count,
+        unavailable_target_count,
+        available_target_count: current_target_count.saturating_add(stale_target_count),
     }
 }
 
@@ -717,5 +745,66 @@ mod tests {
         let stopped = registry.snapshot().expect("stopped snapshot");
         assert_eq!(stopped.operation.phase, ServiceOperationPhaseV1::Stopped);
         assert!(!stopped.scheduler_running);
+    }
+
+    #[test]
+    fn global_search_gate_requires_equal_nonzero_all_current_summaries() {
+        let mut status = unavailable_service_status(
+            OffsetDateTime::UNIX_EPOCH,
+            ServiceRuntimeV1::Local,
+            ServiceOperationV1::starting(),
+            ServiceIssueComponentV1::Storage,
+            "SYNTHETIC",
+        );
+        status.issues.clear();
+        status.catalog = ServiceAvailabilitySummaryV1 {
+            total_target_count: 135,
+            current_target_count: 135,
+            stale_target_count: 0,
+            unavailable_target_count: 0,
+            available_target_count: 135,
+        };
+        status.open = status.catalog;
+        assert!(search_data_ready(&status));
+
+        status.catalog.current_target_count = 15;
+        status.catalog.unavailable_target_count = 120;
+        status.catalog.available_target_count = 15;
+        assert!(!search_data_ready(&status));
+
+        status.catalog = status.open;
+        status.open.current_target_count = 134;
+        status.open.stale_target_count = 1;
+        assert!(!search_data_ready(&status));
+
+        status.open = status.catalog;
+        status.catalog.current_target_count = 134;
+        status.catalog.stale_target_count = 1;
+        assert!(!search_data_ready(&status));
+
+        status.catalog = status.open;
+        status.catalog.total_target_count = 0;
+        status.catalog.current_target_count = 0;
+        status.catalog.available_target_count = 0;
+        status.open = status.catalog;
+        assert!(!search_data_ready(&status));
+
+        status.catalog = ServiceAvailabilitySummaryV1 {
+            total_target_count: 135,
+            current_target_count: 135,
+            stale_target_count: 0,
+            unavailable_target_count: 0,
+            available_target_count: 135,
+        };
+        status.open = status.catalog;
+        status.issues.push(ServiceIssueV1 {
+            component: ServiceIssueComponentV1::Storage,
+            target: None,
+            code: "BLOCKING".to_owned(),
+            severity: ServiceIssueSeverityV1::Blocking,
+            recovery: ServiceIssueRecoveryV1::UserActionRequired,
+            retry_at: None,
+        });
+        assert!(!search_data_ready(&status));
     }
 }

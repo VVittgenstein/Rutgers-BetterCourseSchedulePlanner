@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   LocalPersonalApi,
   LocalPersonalProvider,
+  parseLocalBootstrapData,
   useLocalPersonal,
   useLocalPersonalOptional,
   type LocalBootstrapData,
@@ -17,12 +18,17 @@ import {
 import { LocalProductBootstrap } from '../src/ui/local/product/LocalProductBootstrap';
 import { PublicProductBootstrap } from '../src/ui/public/product/PublicProductBootstrap';
 import {
+  createNeutralFilterState,
   ProductClient,
+  ProductBootstrapError,
+  toFilterRequestV1,
   useProductRuntimeState,
   type ProductRuntimePort,
 } from '../src/ui/shared/product';
 
 const SESSION = '10000000-0000-4000-8000-000000000001';
+const SAVED_VIEW = '20000000-0000-4000-8000-000000000001';
+const INCOMPATIBLE_VIEW = '30000000-0000-4000-8000-000000000001';
 const DEFAULT_SETTINGS = {
   localeOverride: 'system',
   catalogRefreshMinutes: 60,
@@ -51,6 +57,57 @@ function localBootstrap(
       selectedSections: [],
       episodeHistory: { items: [], total: 0, offset: 0, limit: 50 },
       activeWatchCount: 0,
+    },
+  };
+}
+
+function localBootstrapWithV2Filters(): LocalBootstrapData {
+  const bootstrap = localBootstrap();
+  const filters = toFilterRequestV1({
+    ...createNeutralFilterState('92026'),
+    campuses: ['NB'],
+    keywords: ['data structures'],
+  });
+  return {
+    ...bootstrap,
+    state: {
+      ...bootstrap.state,
+      currentFilters: {
+        stateRevision: bootstrap.state.stateRevision,
+        revision: 3,
+        value: {
+          association: { kind: 'APPLIED', viewId: SAVED_VIEW, revision: 2 },
+          content: { status: 'COMPATIBLE', filters },
+        },
+      },
+      savedViews: [
+        {
+          id: SAVED_VIEW,
+          name: 'Data structures',
+          schemaVersion: 2,
+          revision: 2,
+          content: { status: 'COMPATIBLE', filters },
+          createdAt: 1_752_566_400_000,
+          updatedAt: 1_752_570_000_000,
+        },
+        {
+          id: INCOMPATIBLE_VIEW,
+          name: 'Legacy active fields',
+          schemaVersion: 1,
+          revision: 1,
+          content: {
+            status: 'INCOMPATIBLE',
+            rawSnapshot: {
+              codecVersion: 1,
+              schemaVersion: 1,
+              fields: { 'FLT-C10': ['legacy-location'] },
+            },
+            reason: { kind: 'UNKNOWN_FIELD', stableId: 'FLT-C10' },
+          },
+          createdAt: 1_752_566_400_000,
+          updatedAt: 1_752_570_000_000,
+        },
+      ],
     },
   };
 }
@@ -164,7 +221,7 @@ afterEach(() => {
 
 describe('P7.2-004 local personal state', () => {
   it('reaches READY with a complete local bootstrap and publishes the personal state', async () => {
-    const bootstrap = localBootstrap();
+    const bootstrap = localBootstrapWithV2Filters();
     const requests: string[] = [];
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const path = new URL(String(input), 'https://planner.invalid').pathname;
@@ -191,6 +248,64 @@ describe('P7.2-004 local personal state', () => {
       'revision 7; locale system',
     );
     await waitFor(() => expect(requests).toContain('/api/v1/local/saved-views'));
+  });
+
+  it('accepts V2 current filters and Saved views while preserving backend incompatibility', () => {
+    const bootstrap = localBootstrapWithV2Filters();
+
+    const parsed = parseLocalBootstrapData(bootstrap);
+
+    expect(parsed.state.currentFilters.value?.content).toMatchObject({
+      status: 'COMPATIBLE',
+      filters: { contractVersion: 2 },
+    });
+    expect(parsed.state.savedViews[0]?.content).toMatchObject({
+      status: 'COMPATIBLE',
+      filters: { contractVersion: 2 },
+    });
+    expect(parsed.state.savedViews[1]?.content).toEqual({
+      status: 'INCOMPATIBLE',
+      rawSnapshot: {
+        codecVersion: 1,
+        schemaVersion: 1,
+        fields: { 'FLT-C10': ['legacy-location'] },
+      },
+      reason: { kind: 'UNKNOWN_FIELD', stableId: 'FLT-C10' },
+    });
+  });
+
+  it('requires backend migration before legacy filters can be marked compatible', () => {
+    const bootstrap = localBootstrapWithV2Filters();
+    const compatible = bootstrap.state.currentFilters.value?.content;
+    if (compatible?.status !== 'COMPATIBLE') throw new Error('Expected compatible test filters.');
+    const legacyFilters = { ...compatible.filters, contractVersion: 1 };
+    const legacyCurrentFilters = {
+      ...bootstrap,
+      state: {
+        ...bootstrap.state,
+        currentFilters: {
+          ...bootstrap.state.currentFilters,
+          value: {
+            association: { kind: 'CUSTOM' },
+            content: { status: 'COMPATIBLE', filters: legacyFilters },
+          },
+        },
+      },
+    };
+    const legacySavedView = {
+      ...bootstrap,
+      state: {
+        ...bootstrap.state,
+        currentFilters: { ...bootstrap.state.currentFilters, value: null },
+        savedViews: [{
+          ...bootstrap.state.savedViews[0],
+          content: { status: 'COMPATIBLE', filters: legacyFilters },
+        }],
+      },
+    };
+
+    expect(() => parseLocalBootstrapData(legacyCurrentFilters)).toThrow(ProductBootstrapError);
+    expect(() => parseLocalBootstrapData(legacySavedView)).toThrow(ProductBootstrapError);
   });
 
   it('rejects a missing or invalid local state instead of publishing a partial personal context', async () => {

@@ -6,6 +6,7 @@ export {
   type CourseDetailViewProps,
   type CourseResultsViewProps,
   type ResultNavigationProps,
+  type SectionDisclosureStateProps,
   type SectionDetailViewProps,
   type SectionResultsViewProps,
 } from './ResultViews';

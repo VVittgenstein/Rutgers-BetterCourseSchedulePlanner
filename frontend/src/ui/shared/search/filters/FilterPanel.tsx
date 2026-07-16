@@ -19,6 +19,8 @@ import type {
   CatalogFieldKnowledge,
   CatalogSynchronicity,
   FilterFieldSchemaV1,
+  FilterOptionsFieldV2,
+  FilterOptionsResponseV2,
   FilterSchemaV1,
   FilterSerializationIssue,
   LiveOpenStateV1,
@@ -38,9 +40,13 @@ export interface FilterPanelProps {
   readonly value: FilterStateV1;
   readonly onChange: (next: FilterStateV1) => void;
   readonly onSubmit: () => void;
+  readonly loadOptions?: (
+    field: FilterOptionsFieldV2,
+    query?: string,
+    signal?: AbortSignal,
+  ) => Promise<FilterOptionsResponseV2>;
   readonly disabled?: boolean;
   readonly searchAvailable?: boolean;
-  readonly mode?: 'COURSES' | 'SECTIONS';
   readonly validationIssue?: {
     readonly issue: FilterSerializationIssue;
     readonly message: string;
@@ -51,7 +57,7 @@ const VALIDATION_FIELD: Partial<Record<FilterSerializationIssue, keyof FilterSta
   INVALID_AVAILABILITY: 'availability',
   INVALID_CREDIT_RANGE: 'credits',
   INVALID_SECTION_INDEX: 'sectionIndexes',
-  INVALID_TEXT: 'text',
+  INVALID_TEXT: 'keywords',
   TERM_REQUIRED: 'term',
 };
 
@@ -80,6 +86,13 @@ const SYNCHRONICITIES = [
   'UNSPECIFIED',
   'UNKNOWN',
 ] as const satisfies readonly CatalogSynchronicity[];
+
+const ACTIVE_REQUEST_FIELDS = new Set<keyof FilterStateV1>([
+  'term', 'campuses', 'subjects', 'keywords', 'courseNumbers', 'levels', 'credits',
+  'core', 'prerequisite', 'sectionIndexes', 'openStatuses', 'modalities',
+  'synchronicities', 'instructors', 'availability', 'meetingLocations', 'examCodes',
+  'permission',
+]);
 
 function knownText(knowledge: CatalogFieldKnowledge<string>): string | null {
   if (knowledge.knowledge !== 'KNOWN' || knowledge.presence.presence !== 'PRESENT') return null;
@@ -131,7 +144,7 @@ function fieldSummary(
     case 'term': return state.term;
     case 'campuses': return state.campuses.length > 0 ? state.campuses.join(', ') : null;
     case 'subjects': return state.subjects.length > 0 ? state.subjects.join(', ') : null;
-    case 'text': return state.text?.trim() || null;
+    case 'keywords': return state.keywords.length > 0 ? state.keywords.join(', ') : null;
     case 'courseNumbers': return state.courseNumbers.length > 0 ? state.courseNumbers.join(', ') : null;
     case 'levels': return state.levels.length > 0 ? state.levels.join(', ') : null;
     case 'credits': {
@@ -148,9 +161,7 @@ function fieldSummary(
       ? `${state.core.mode}: ${state.core.codes.join(', ')}`
       : null;
     case 'prerequisite': return state.prerequisite === 'ANY' ? null : optionText(state.prerequisite, i18n);
-    case 'courseLocations': return state.courseLocations.length > 0 ? state.courseLocations.join(', ') : null;
     case 'sectionIndexes': return state.sectionIndexes.length > 0 ? state.sectionIndexes.join(', ') : null;
-    case 'sectionNumbers': return state.sectionNumbers.length > 0 ? state.sectionNumbers.join(', ') : null;
     case 'openStatuses': return state.openStatuses.length > 0
       ? state.openStatuses.map((entry) => optionText(entry, i18n)).join(', ')
       : null;
@@ -166,26 +177,11 @@ function fieldSummary(
         .map((window) => `${optionText(window.weekday, i18n)} ${timeFromMinute(window.startMinute)}–${timeFromMinute(window.endMinute)}`)
         .join(', ')
       : null;
-    case 'meetingLocations': return state.meetingLocations.length > 0 ? state.meetingLocations.join(', ') : null;
-    case 'buildingRoom': {
-      const values = [
-        ...state.buildingRoom.buildingCodes.map((code) => `BLDG ${code}`),
-        ...state.buildingRoom.roomNumbers.map((number) => `ROOM ${number}`),
-      ];
-      return values.length > 0 ? values.join(', ') : null;
-    }
+    case 'meetingLocations': return state.meetingLocations.locations.length > 0
+      ? `${optionText(state.meetingLocations.mode, i18n)}: ${state.meetingLocations.locations.join(', ')}`
+      : null;
     case 'examCodes': return state.examCodes.length > 0 ? state.examCodes.join(', ') : null;
     case 'permission': return state.permission === 'ANY' ? null : optionText(state.permission, i18n);
-    case 'eligibility': {
-      const values = [
-        ...state.eligibility.majorCodes.map((value) => `MAJOR ${value}`),
-        ...state.eligibility.minorCodes.map((value) => `MINOR ${value}`),
-        ...state.eligibility.honorProgramCodes.map((value) => `HONORS ${value}`),
-        ...state.eligibility.unitCodes.map((value) => `UNIT ${value}`),
-        ...state.eligibility.unitMajors.map(({ unitCode, majorCode }) => `${unitCode}/${majorCode}`),
-      ];
-      return values.length > 0 ? values.join(', ') : null;
-    }
   }
 }
 
@@ -253,6 +249,195 @@ function TokenListControl({
               >
                 ×
               </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function DictionaryPicker({
+  disabled,
+  field,
+  label,
+  loadOptions,
+  onChange,
+  searchable = false,
+  values,
+}: {
+  readonly disabled: boolean;
+  readonly field: FilterOptionsFieldV2;
+  readonly label: string;
+  readonly loadOptions?: FilterPanelProps['loadOptions'];
+  readonly onChange: (values: readonly string[]) => void;
+  readonly searchable?: boolean;
+  readonly values: readonly string[];
+}) {
+  const i18n = useBcspI18n();
+  const inputId = useId();
+  const listId = useId();
+  const [query, setQuery] = useState('');
+  const [response, setResponse] = useState<FilterOptionsResponseV2 | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  useEffect(() => {
+    if (disabled || loadOptions === undefined) {
+      setResponse(null);
+      setLoading(false);
+      return undefined;
+    }
+    setResponse(null);
+    setLoading(true);
+    const controller = new AbortController();
+    const timer = globalThis.setTimeout(() => {
+      setFailed(false);
+      void loadOptions(field, searchable ? query : undefined, controller.signal)
+        .then((next) => {
+          if (controller.signal.aborted) return;
+          setResponse(next);
+          setActiveIndex(0);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setFailed(true);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false);
+        });
+    }, searchable ? 180 : 0);
+    return () => {
+      controller.abort();
+      globalThis.clearTimeout(timer);
+    };
+  }, [disabled, field, loadOptions, query, searchable]);
+
+  const options = response?.options ?? [];
+  const optionLabel = (value: string, fallback: string) => {
+    if (field !== 'COURSE_LEVEL') return fallback;
+    if (value === 'U') return i18n.t('filter.level_undergraduate');
+    if (value === 'G') return i18n.t('filter.level_graduate');
+    return fallback;
+  };
+  const choose = (next: string) => {
+    if (disabled || loading) return;
+    onChange(values.includes(next)
+      ? values.filter((value) => value !== next)
+      : [...values, next]);
+    if (searchable) {
+      setQuery('');
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div className="filter-panel__dictionary">
+      {searchable ? (
+        <div className="filter-panel__dictionary-input">
+          <label className="filter-panel__sub-label" htmlFor={inputId}>{label}</label>
+          <input
+            aria-activedescendant={open && options[activeIndex] !== undefined
+              ? `${listId}-option-${activeIndex}`
+              : undefined}
+            aria-autocomplete="list"
+            aria-controls={listId}
+            aria-expanded={open && !disabled}
+            aria-haspopup="listbox"
+            autoComplete="off"
+            className="filter-panel__input"
+            disabled={disabled}
+            id={inputId}
+            onBlur={() => globalThis.setTimeout(() => setOpen(false), 0)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setOpen(true);
+                setActiveIndex((index) => Math.min(index + 1, Math.max(0, options.length - 1)));
+              } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setActiveIndex((index) => Math.max(0, index - 1));
+              } else if (event.key === 'Enter' && open && options[activeIndex] !== undefined) {
+                event.preventDefault();
+                choose(options[activeIndex].value);
+              } else if (event.key === 'Escape') {
+                setOpen(false);
+              }
+            }}
+            placeholder={i18n.t('filter.dictionary_placeholder')}
+            role="combobox"
+            type="search"
+            value={query}
+          />
+        </div>
+      ) : null}
+      <div className="filter-panel__dictionary-options" data-open={!searchable || open || undefined}>
+        {loading ? <p className="bcsp-field__helper" role="status">{i18n.t('filter.dictionary_loading')}</p> : null}
+        {!loading && failed ? <p className="bcsp-field__helper" role="alert">{i18n.t('filter.dictionary_error')}</p> : null}
+        {!loading && !failed && options.length === 0 ? (
+          <p className="bcsp-field__helper">{i18n.t('filter.dictionary_empty')}</p>
+        ) : null}
+        {!loading && !failed && searchable ? (
+          <div aria-label={label} aria-multiselectable="true" id={listId} role="listbox">
+            {options.map((option, index) => (
+              <div
+                aria-selected={values.includes(option.value)}
+                className="filter-panel__dictionary-option"
+                data-active={index === activeIndex || undefined}
+                id={`${listId}-option-${index}`}
+                key={option.value}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  choose(option.value);
+                }}
+                role="option"
+              >
+                <span aria-hidden="true">{values.includes(option.value) ? '■' : '□'}</span>
+                <span>{optionLabel(option.value, option.label)}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {!loading && !failed && !searchable ? (
+          <div className="filter-panel__checks" role="group" aria-label={label}>
+            {options.map((option) => (
+              <label className="filter-panel__check" key={option.value}>
+                <input
+                  checked={values.includes(option.value)}
+                  disabled={disabled}
+                  onChange={() => choose(option.value)}
+                  type="checkbox"
+                  value={option.value}
+                />
+                <span>{optionLabel(option.value, option.label)}</span>
+              </label>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {response?.truncated === true ? (
+        <p className="bcsp-field__helper">{i18n.t('filter.dictionary_truncated')}</p>
+      ) : null}
+      {values.length > 0 ? (
+        <ul className="filter-panel__token-list" aria-label={i18n.t('filter.values', { label })}>
+          {values.map((value) => (
+            <li className="filter-panel__token" key={value}>
+              <samp>{optionLabel(
+                value,
+                response?.options.find((option) => option.value === value)?.label ?? value,
+              )}</samp>
+              <button
+                aria-label={i18n.t('filter.remove_value', { label, value })}
+                disabled={disabled}
+                onClick={() => onChange(values.filter((candidate) => candidate !== value))}
+                type="button"
+              >×</button>
             </li>
           ))}
         </ul>
@@ -421,87 +606,24 @@ function AvailabilityControl({
   );
 }
 
-function EligibilityControl({
-  value,
-  onChange,
-  disabled,
-}: {
-  readonly value: FilterStateV1['eligibility'];
-  readonly onChange: (value: FilterStateV1['eligibility']) => void;
-  readonly disabled: boolean;
-}) {
-  const i18n = useBcspI18n();
-  const [unitDraft, setUnitDraft] = useState('');
-  const [majorDraft, setMajorDraft] = useState('');
-
-  const update = <K extends keyof typeof value>(key: K, next: (typeof value)[K]) => {
-    onChange({ ...value, [key]: next });
-  };
-  const addUnitMajor = () => {
-    const unitCode = unitDraft.trim();
-    const majorCode = majorDraft.trim();
-    if (unitCode.length === 0 || majorCode.length === 0) return;
-    const next = value.unitMajors.filter((candidate) =>
-      candidate.unitCode !== unitCode || candidate.majorCode !== majorCode);
-    onChange({ ...value, unitMajors: [...next, { unitCode, majorCode }] });
-    setUnitDraft('');
-    setMajorDraft('');
-  };
-
-  return (
-    <div className="filter-panel__eligibility">
-      <TokenListControl label={i18n.t('filter.eligibility.major_codes')} values={value.majorCodes} disabled={disabled}
-        onChange={(next) => update('majorCodes', next)} />
-      <TokenListControl label={i18n.t('filter.eligibility.minor_codes')} values={value.minorCodes} disabled={disabled}
-        onChange={(next) => update('minorCodes', next)} />
-      <TokenListControl label={i18n.t('filter.eligibility.honors_codes')} values={value.honorProgramCodes} disabled={disabled}
-        onChange={(next) => update('honorProgramCodes', next)} />
-      <TokenListControl label={i18n.t('filter.eligibility.unit_codes')} values={value.unitCodes} disabled={disabled}
-        onChange={(next) => update('unitCodes', next)} />
-      <div className="filter-panel__token-control filter-panel__unit-major">
-        <span className="filter-panel__sub-label">{i18n.t('filter.eligibility.unit_major_pairs')}</span>
-        <div className="filter-panel__input-action filter-panel__input-action--pair">
-          <label>
-            <span className="bcsp-visually-hidden">{i18n.t('filter.eligibility.unit_code_for_pair')}</span>
-            <input className="filter-panel__input" value={unitDraft} placeholder={i18n.t('filter.eligibility.unit_code')}
-              disabled={disabled} onChange={(event) => setUnitDraft(event.target.value)} />
-          </label>
-          <label>
-            <span className="bcsp-visually-hidden">{i18n.t('filter.eligibility.major_code_for_pair')}</span>
-            <input className="filter-panel__input" value={majorDraft} placeholder={i18n.t('filter.eligibility.major_code')}
-              disabled={disabled} onChange={(event) => setMajorDraft(event.target.value)} />
-          </label>
-          <button className="filter-panel__minor-action" type="button"
-            disabled={disabled || unitDraft.trim() === '' || majorDraft.trim() === ''}
-            onClick={addUnitMajor}>
-            {i18n.t('filter.eligibility.add_pair')}
-          </button>
-        </div>
-        {value.unitMajors.length > 0 ? (
-          <ul className="filter-panel__token-list" aria-label={i18n.t('filter.eligibility.unit_major_pairs')}>
-            {value.unitMajors.map(({ unitCode, majorCode }, index) => (
-              <li className="filter-panel__token" key={`${unitCode}:${majorCode}`}>
-                <samp>{unitCode} / {majorCode}</samp>
-                <button type="button" disabled={disabled}
-                  aria-label={i18n.t('filter.eligibility.remove_pair', { major: majorCode, unit: unitCode })}
-                  onClick={() => update('unitMajors', value.unitMajors.filter((_, item) => item !== index))}>
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 export const FILTER_PANEL_CSS = String.raw`
 .filter-panel {
   display: grid;
   gap: 0;
   border: 1px solid var(--bcsp-line);
   background: var(--bcsp-paper);
+}
+
+.filter-panel__gate {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.filter-panel__gate:disabled {
+  cursor: wait;
 }
 
 .filter-panel__head {
@@ -533,6 +655,9 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__head-note { max-width: 28ch; margin: 0; color: var(--bcsp-ink-muted); font-size: 0.8rem; }
 .filter-panel__submit-status {
   grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
   margin: 0;
   padding: 0.55rem 0.65rem;
   border-left: 3px solid var(--bcsp-accent);
@@ -541,6 +666,24 @@ export const FILTER_PANEL_CSS = String.raw`
   font-family: var(--bcsp-font-data);
   font-size: 0.7rem;
   line-height: 1.45;
+}
+
+.filter-panel__submit-status strong {
+  display: block;
+  color: var(--bcsp-ink);
+}
+
+.filter-panel__loading-mark {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex: 0 0 auto;
+  border: 2px solid var(--bcsp-ink);
+  border-top-color: transparent;
+  animation: filter-panel-turn 900ms steps(8, end) infinite;
+}
+
+@keyframes filter-panel-turn {
+  to { transform: rotate(1turn); }
 }
 
 .filter-panel__active {
@@ -645,6 +788,37 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__subject-list { max-height: 18rem; overflow: auto; border-top: 1px solid var(--bcsp-line); }
 .filter-panel__subject-list .filter-panel__checks { border-top: 0; }
 .filter-panel__core-picker { display: grid; gap: var(--bcsp-space-2); }
+.filter-panel__dictionary { display: grid; gap: var(--bcsp-space-2); }
+.filter-panel__dictionary-input { display: grid; }
+.filter-panel__dictionary-options {
+  display: none;
+  max-height: 15rem;
+  overflow: auto;
+  border: 1px solid var(--bcsp-line);
+  background: var(--bcsp-paper-raised);
+}
+.filter-panel__dictionary-options[data-open='true'] { display: grid; }
+.filter-panel__dictionary-options > .bcsp-field__helper { padding: var(--bcsp-space-2); }
+.filter-panel__dictionary-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--bcsp-space-2);
+  min-height: 2.75rem;
+  align-items: center;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--bcsp-line-soft);
+  font-family: var(--bcsp-font-data);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.filter-panel__dictionary-option[aria-selected='true'] {
+  color: var(--bcsp-paper-raised);
+  background: var(--bcsp-ink);
+}
+.filter-panel__dictionary-option[data-active='true'] {
+  outline: 2px solid var(--bcsp-accent);
+  outline-offset: -2px;
+}
 .filter-panel__incompatible { padding-top: var(--bcsp-space-2); border-top: 1px solid var(--bcsp-line); }
 .filter-panel__token--incompatible { border-color: var(--bcsp-accent); color: var(--bcsp-accent); }
 .filter-panel__credit-range, .filter-panel__building, .filter-panel__eligibility { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--bcsp-space-2); }
@@ -662,6 +836,7 @@ export const FILTER_PANEL_CSS = String.raw`
   .filter-panel__token button:hover:not(:disabled),
   .filter-panel__window-list button:hover:not(:disabled) { color: var(--bcsp-accent-ink); background: var(--bcsp-accent); }
   .filter-panel__minor-action:hover:not(:disabled) { color: var(--bcsp-paper); background: var(--bcsp-ink); }
+  .filter-panel__dictionary-option:hover { color: var(--bcsp-paper-raised); background: var(--bcsp-ink); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -673,6 +848,7 @@ export const FILTER_PANEL_CSS = String.raw`
   .filter-panel__token button:active:not(:disabled),
   .filter-panel__window-list button:active:not(:disabled),
   .filter-panel__minor-action:active:not(:disabled) { transform: none; }
+  .filter-panel__loading-mark { animation: none; }
 }
 .filter-panel__window-list samp { padding: 0.65rem; }
 .filter-panel__window-list button { padding: 0.5rem 0.75rem; font-family: var(--bcsp-font-data); font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
@@ -715,25 +891,24 @@ export function FilterPanel({
   value,
   onChange,
   onSubmit,
+  loadOptions,
   disabled = false,
   searchAvailable = true,
-  mode = 'COURSES',
   validationIssue,
 }: FilterPanelProps) {
   const i18n = useBcspI18n();
   const formRef = useRef<HTMLFormElement>(null);
   const [subjectQuery, setSubjectQuery] = useState('');
-  const [coreQuery, setCoreQuery] = useState('');
-  const [courseOpen, setCourseOpen] = useState(mode === 'COURSES');
-  const [sectionOpen, setSectionOpen] = useState(mode === 'SECTIONS');
-
-  useEffect(() => {
-    setCourseOpen(mode === 'COURSES');
-    setSectionOpen(mode === 'SECTIONS');
-  }, [mode]);
+  const [courseOpen, setCourseOpen] = useState(true);
+  const [sectionOpen, setSectionOpen] = useState(false);
 
   const fields = useMemo(
-    () => [...schema.fields].sort((left, right) => left.chipOrder - right.chipOrder),
+    () => [...schema.fields]
+      .map((field) => (field.requestField as string) === 'text'
+        ? { ...field, requestField: 'keywords' as const }
+        : field)
+      .filter((field) => ACTIVE_REQUEST_FIELDS.has(field.requestField))
+      .sort((left, right) => left.chipOrder - right.chipOrder),
     [schema.fields],
   );
   const invalidField = useMemo(() => {
@@ -835,12 +1010,7 @@ export function FilterPanel({
       }));
   }, [selectedCoreDictionaries]);
   const validCoreCodes = useMemo(() => new Set(coreDictionary.map(({ code }) => code)), [coreDictionary]);
-  const coreOptions = useMemo(() => {
-    const query = coreQuery.trim().toLocaleLowerCase(i18n.locale);
-    return coreDictionary.filter(({ code, label }) => query.length === 0
-      || code.toLocaleLowerCase(i18n.locale).includes(query)
-      || label.toLocaleLowerCase(i18n.locale).includes(query));
-  }, [coreDictionary, coreQuery, i18n.locale]);
+  const coreOptions = coreDictionary;
   const incompatibleCoreCodes = coreDictionaryLoading
     ? []
     : value.core.codes.filter((code) => !validCoreCodes.has(code));
@@ -883,7 +1053,12 @@ export function FilterPanel({
                 term,
                 campuses: retained.length > 0 ? retained : availableCampuses.slice(0, 1),
                 subjects: [],
+                keywords: [],
+                levels: [],
                 core: { ...value.core, codes: [] },
+                instructors: [],
+                meetingLocations: { ...value.meetingLocations, locations: [] },
+                examCodes: [],
               });
             }}
           >
@@ -908,7 +1083,12 @@ export function FilterPanel({
                         ...value,
                         campuses,
                         subjects: [],
+                        keywords: [],
+                        levels: [],
                         core: { ...value.core, codes: [] },
+                        instructors: [],
+                        meetingLocations: { ...value.meetingLocations, locations: [] },
+                        examCodes: [],
                       });
                     }}
                   />
@@ -938,7 +1118,9 @@ export function FilterPanel({
             </div>
             <div className="filter-panel__subject-list">
               {subjectOptions.length === 0 ? (
-                <p className="bcsp-field__helper">{i18n.t('filter.subject_empty')}</p>
+                <p className="bcsp-field__helper" role={!searchAvailable ? 'status' : undefined}>
+                  {i18n.t(!searchAvailable ? 'filter.loading_options' : 'filter.subject_empty')}
+                </p>
               ) : (
                 <div className="filter-panel__checks" role="group" aria-label={i18n.t('filter.subject_list')}>
                   {subjectOptions.map(([code, subjectLabel]) => (
@@ -957,16 +1139,17 @@ export function FilterPanel({
             </div>
           </div>
         );
-      case 'text':
-        return <input className="filter-panel__input" aria-label={label} value={value.text ?? ''}
-          disabled={disabled} placeholder={i18n.t('search.placeholder')}
-          onChange={(event) => update('text', event.target.value || null)} />;
+      case 'keywords':
+        return <DictionaryPicker disabled={disabled} field="KEYWORD" label={label}
+          loadOptions={loadOptions} searchable values={value.keywords}
+          onChange={(next) => update('keywords', next)} />;
       case 'courseNumbers':
         return <TokenListControl label={i18n.t('filter.course_numbers')} values={value.courseNumbers}
           onChange={(next) => update('courseNumbers', next)} disabled={disabled} placeholder={i18n.t('filter.course_number_placeholder')} />;
       case 'levels':
-        return <TokenListControl label={i18n.t('filter.course_levels')} values={value.levels}
-          onChange={(next) => update('levels', next)} disabled={disabled} placeholder={i18n.t('filter.level_placeholder')} />;
+        return <DictionaryPicker disabled={disabled} field="COURSE_LEVEL" label={label}
+          loadOptions={loadOptions} values={value.levels}
+          onChange={(next) => update('levels', next)} />;
       case 'credits':
         return (
           <div className="filter-panel__credit-range">
@@ -1000,22 +1183,6 @@ export function FilterPanel({
               disabled={disabled || coreDictionaryLoading || selectedCoreTargets.length === 0}
               onChange={(mode) => update('core', { ...value.core, mode })} />
             <div className="filter-panel__core-picker">
-              <div className="filter-panel__subject-search">
-                <label>
-                  <span className="filter-panel__sub-label">{i18n.t('filter.core_search')}</span>
-                  <input
-                    className="filter-panel__input"
-                    type="search"
-                    value={coreQuery}
-                    disabled={disabled || coreDictionaryLoading || selectedCoreTargets.length === 0}
-                    placeholder={i18n.t('filter.core_placeholder')}
-                    onChange={(event) => setCoreQuery(event.target.value)}
-                  />
-                </label>
-                <output className="filter-panel__subject-count" aria-live="polite">
-                  {i18n.t('filter.core_count', { count: i18n.formatNumber(coreOptions.length) })}
-                </output>
-              </div>
               {coreDictionaryLoading ? (
                 <p className="bcsp-field__helper" role="status">{i18n.t('filter.core_loading')}</p>
               ) : (
@@ -1070,15 +1237,9 @@ export function FilterPanel({
         return <EnumSelect<PrerequisiteFilterV1> label={label} value={value.prerequisite}
           options={['ANY', 'HAS', 'NONE_REPORTED']} disabled={disabled}
           onChange={(next) => update('prerequisite', next)} />;
-      case 'courseLocations':
-        return <TokenListControl label={i18n.t('filter.course_locations')} values={value.courseLocations}
-          onChange={(next) => update('courseLocations', next)} disabled={disabled} />;
       case 'sectionIndexes':
         return <TokenListControl label={i18n.t('filter.section_indexes')} values={value.sectionIndexes}
           onChange={(next) => update('sectionIndexes', next)} disabled={disabled} placeholder={i18n.t('filter.five_digits')} />;
-      case 'sectionNumbers':
-        return <TokenListControl label={i18n.t('filter.section_numbers')} values={value.sectionNumbers}
-          onChange={(next) => update('sectionNumbers', next)} disabled={disabled} />;
       case 'openStatuses':
         return <CheckboxSet label={label} options={OPEN_STATES} values={value.openStatuses}
           onChange={(next) => update('openStatuses', next)} disabled={disabled} />;
@@ -1089,35 +1250,31 @@ export function FilterPanel({
         return <CheckboxSet label={label} options={SYNCHRONICITIES} values={value.synchronicities}
           onChange={(next) => update('synchronicities', next)} disabled={disabled} />;
       case 'instructors':
-        return <TokenListControl label={i18n.t('filter.instructor_names')} values={value.instructors}
-          onChange={(next) => update('instructors', next)} disabled={disabled} />;
+        return <DictionaryPicker disabled={disabled} field="INSTRUCTOR" label={label}
+          loadOptions={loadOptions} searchable values={value.instructors}
+          onChange={(next) => update('instructors', next)} />;
       case 'availability':
         return <AvailabilityControl value={value.availability}
           onChange={(next) => update('availability', next)} disabled={disabled} />;
       case 'meetingLocations':
-        return <TokenListControl label={i18n.t('filter.meeting_locations')} values={value.meetingLocations}
-          onChange={(next) => update('meetingLocations', next)} disabled={disabled} />;
-      case 'buildingRoom':
         return (
-          <div className="filter-panel__building">
-            <TokenListControl label={i18n.t('filter.building_codes')} values={value.buildingRoom.buildingCodes}
-              onChange={(buildingCodes) => update('buildingRoom', { ...value.buildingRoom, buildingCodes })}
-              disabled={disabled} />
-            <TokenListControl label={i18n.t('filter.room_numbers')} values={value.buildingRoom.roomNumbers}
-              onChange={(roomNumbers) => update('buildingRoom', { ...value.buildingRoom, roomNumbers })}
-              disabled={disabled} />
+          <div className="filter-panel__control">
+            <EnumSelect label={i18n.t('filter.meeting_location_mode')} value={value.meetingLocations.mode}
+              options={['ANY_MEETING', 'ALL_REQUIRED_MEETINGS']} disabled={disabled}
+              onChange={(mode) => update('meetingLocations', { ...value.meetingLocations, mode })} />
+            <DictionaryPicker disabled={disabled} field="MEETING_LOCATION" label={label}
+              loadOptions={loadOptions} values={value.meetingLocations.locations}
+              onChange={(locations) => update('meetingLocations', { ...value.meetingLocations, locations })} />
           </div>
         );
       case 'examCodes':
-        return <TokenListControl label={i18n.t('filter.exam_codes')} values={value.examCodes}
-          onChange={(next) => update('examCodes', next)} disabled={disabled} />;
+        return <DictionaryPicker disabled={disabled} field="EXAM_CODE" label={label}
+          loadOptions={loadOptions} values={value.examCodes}
+          onChange={(next) => update('examCodes', next)} />;
       case 'permission':
         return <EnumSelect<PermissionFilterV1> label={label} value={value.permission}
           options={['ANY', 'REQUIRED', 'NOT_REQUIRED']} disabled={disabled}
           onChange={(next) => update('permission', next)} />;
-      case 'eligibility':
-        return <EligibilityControl value={value.eligibility}
-          onChange={(next) => update('eligibility', next)} disabled={disabled} />;
     }
   };
 
@@ -1134,8 +1291,7 @@ export function FilterPanel({
   const renderRow = (field: FilterFieldSchemaV1) => {
     const index = fields.indexOf(field);
     const wide = field.requestField === 'subjects'
-      || field.requestField === 'availability'
-      || field.requestField === 'eligibility';
+      || field.requestField === 'availability';
     const invalid = field.stableId === invalidField?.stableId;
     const errorId = `filter-panel-error-${field.stableId}`;
     return (
@@ -1178,6 +1334,12 @@ export function FilterPanel({
     <>
       <style data-bcsp-filter-panel="">{FILTER_PANEL_CSS}</style>
       <form ref={formRef} className="filter-panel" aria-label={i18n.t('filter.form_label')} onSubmit={submit}>
+        <fieldset
+          aria-busy={!searchAvailable || undefined}
+          className="filter-panel__gate"
+          disabled={disabled || !searchAvailable}
+        >
+        <legend className="bcsp-visually-hidden">{i18n.t('filter.form_label')}</legend>
         <header className="filter-panel__head">
           <div>
             <p className="filter-panel__kicker">
@@ -1193,7 +1355,13 @@ export function FilterPanel({
             {i18n.t('action.search')}
           </button>
           {!searchAvailable ? (
-            <p className="filter-panel__submit-status" role="status">{i18n.t('service.search_not_ready')}</p>
+            <div className="filter-panel__submit-status" role="status">
+              <span aria-hidden="true" className="filter-panel__loading-mark" />
+              <span>
+                <strong>{i18n.t('filter.loading_options')}</strong>
+                {i18n.t('service.search_not_ready')}
+              </span>
+            </div>
           ) : null}
         </header>
 
@@ -1234,7 +1402,7 @@ export function FilterPanel({
             if (next) setSectionOpen(false);
           }}>
           <summary className="filter-panel__group-summary">
-            <span>03–10</span>
+            <span>03–09</span>
             <span>{i18n.t('filter.course_constraints')}</span>
             <span className="filter-panel__group-count">{courseFields.length}</span>
           </summary>
@@ -1247,7 +1415,7 @@ export function FilterPanel({
             if (next) setCourseOpen(false);
           }}>
           <summary className="filter-panel__group-summary">
-            <span>11–22</span>
+            <span>10–18</span>
             <span>{i18n.t('filter.section_constraints')}</span>
             <span className="filter-panel__group-count">{sectionFields.length}</span>
           </summary>
@@ -1259,6 +1427,7 @@ export function FilterPanel({
             {i18n.t('filter.footer_note')}
           </p>
         </footer>
+        </fieldset>
       </form>
     </>
   );

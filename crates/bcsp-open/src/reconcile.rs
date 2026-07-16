@@ -216,7 +216,16 @@ pub fn reconcile_open_set(
         return Ok(if current_catalog.sections.is_empty() {
             base(OpenReconcileClassification::ValidEmptyNoRows, 0, Vec::new())
         } else {
-            base(OpenReconcileClassification::UnsafeEmpty, 0, Vec::new())
+            let updates = current_catalog
+                .sections
+                .values()
+                .cloned()
+                .map(|section_key| SectionOpenUpdate {
+                    section_key,
+                    state: ReconciledOpenState::Closed,
+                })
+                .collect();
+            base(OpenReconcileClassification::ValidApplied, 0, updates)
         });
     }
 
@@ -334,17 +343,19 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_zero_intersection_never_mass_close_nonempty_catalog() {
+    fn typed_empty_closes_nonempty_catalog_while_zero_intersection_stays_unsafe() {
         let catalog = CatalogOpenBatch::try_new(target("NB"), version(1), [section("NB", "00001")])
             .expect("catalog");
         let empty = OpenSetEvidence::try_new(target("NB"), [], 0).expect("empty set");
         let plan = reconcile_open_set(version(1), &catalog, &empty).expect("same target");
         assert_eq!(
             plan.classification,
-            OpenReconcileClassification::UnsafeEmpty
+            OpenReconcileClassification::ValidApplied
         );
-        assert!(plan.updates.is_empty());
-        assert!(plan.state_hash.is_none());
+        assert_eq!(plan.open_count, 0);
+        assert_eq!(plan.closed_count, 1);
+        assert_eq!(plan.updates[0].state, ReconciledOpenState::Closed);
+        assert!(plan.state_hash.is_some());
 
         let foreign =
             OpenSetEvidence::try_new(target("NB"), [index("99999")], 1).expect("foreign set");

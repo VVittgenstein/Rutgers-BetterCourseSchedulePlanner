@@ -305,6 +305,13 @@ fn saved_views_crud_is_cas_safe_and_tracks_clean_modified_association() {
         SavedViewMatch::Clean
     );
     let id = created.definition.id;
+    let (raw_revision, raw_snapshot) = store
+        .saved_view_raw_snapshot(id)
+        .unwrap()
+        .expect("created Saved View has a raw snapshot");
+    assert_eq!(raw_revision, created.definition.revision);
+    assert_eq!(raw_snapshot["schemaVersion"], 2);
+    assert_eq!(raw_snapshot["codecVersion"], 1);
 
     assert!(matches!(
         store.create_saved_view(

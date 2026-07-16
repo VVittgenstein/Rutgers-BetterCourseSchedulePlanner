@@ -6,28 +6,32 @@ use thiserror::Error;
 use time::OffsetDateTime;
 
 use crate::{
-    CatalogSubjectCode, CatalogSynchronicity, CourseGroupKey, MatchExplanation,
-    NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedOccurrenceV1,
+    CatalogContentVersion, CatalogSubjectCode, CatalogSynchronicity, CourseGroupKey,
+    MatchExplanation, NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedOccurrenceV1,
     NormalizedSectionV1, SectionIndex, SectionKey, TermId,
 };
 
-pub const QUERY_CONTRACT_VERSION: QueryContractVersion = QueryContractVersion::V1;
-pub const FILTER_FIELD_COUNT: usize = 22;
+pub const QUERY_CONTRACT_VERSION: QueryContractVersion = QueryContractVersion::V2;
+pub const FILTER_FIELD_COUNT: usize = 18;
 pub const DEFAULT_PAGE_SIZE: u16 = 25;
 pub const MAX_PAGE_SIZE: u16 = 200;
 pub const MAX_FILTER_VALUES_PER_FIELD: usize = 100;
 pub const MAX_AVAILABILITY_WINDOWS: usize = 64;
 pub const MAX_TOTAL_FILTER_VALUES: usize = 512;
+pub const DEFAULT_FILTER_OPTIONS_LIMIT: u16 = 50;
+pub const MAX_FILTER_OPTIONS_LIMIT: u16 = 100;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum QueryContractVersion {
     V1,
+    V2,
 }
 
 impl QueryContractVersion {
     pub const fn as_u16(self) -> u16 {
         match self {
             Self::V1 => 1,
+            Self::V2 => 2,
         }
     }
 }
@@ -50,6 +54,7 @@ impl TryFrom<u16> for QueryContractVersion {
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::V1),
+            2 => Ok(Self::V2),
             observed => Err(QueryContractVersionError { observed }),
         }
     }
@@ -95,12 +100,8 @@ pub enum FilterFieldId {
     CourseCoreCode,
     #[serde(rename = "FLT-C09")]
     CoursePrerequisite,
-    #[serde(rename = "FLT-C10")]
-    CourseLocation,
     #[serde(rename = "FLT-S01")]
     SectionIndex,
-    #[serde(rename = "FLT-S02")]
-    SectionNumber,
     #[serde(rename = "FLT-S03")]
     SectionOpenStatus,
     #[serde(rename = "FLT-S04a")]
@@ -113,17 +114,15 @@ pub enum FilterFieldId {
     SectionAvailability,
     #[serde(rename = "FLT-S07")]
     SectionMeetingLocation,
-    #[serde(rename = "FLT-S08")]
-    SectionBuildingRoom,
     #[serde(rename = "FLT-S09")]
     SectionExam,
     #[serde(rename = "FLT-S10")]
     SectionPermission,
-    #[serde(rename = "FLT-S11")]
-    SectionEligibility,
 }
 
 impl FilterFieldId {
+    /// Fields exposed by the active V2 product contract. Removed V1 IDs are
+    /// recognized only by the raw Saved-view migration codec.
     pub const ALL: &'static [Self] = &[
         Self::CourseTerm,
         Self::CourseCampus,
@@ -134,19 +133,15 @@ impl FilterFieldId {
         Self::CourseCredits,
         Self::CourseCoreCode,
         Self::CoursePrerequisite,
-        Self::CourseLocation,
         Self::SectionIndex,
-        Self::SectionNumber,
         Self::SectionOpenStatus,
         Self::SectionModality,
         Self::SectionSynchronicity,
         Self::SectionInstructor,
         Self::SectionAvailability,
         Self::SectionMeetingLocation,
-        Self::SectionBuildingRoom,
         Self::SectionExam,
         Self::SectionPermission,
-        Self::SectionEligibility,
     ];
 
     pub const fn wire_name(self) -> &'static str {
@@ -160,19 +155,15 @@ impl FilterFieldId {
             Self::CourseCredits => "FLT-C07",
             Self::CourseCoreCode => "FLT-C08",
             Self::CoursePrerequisite => "FLT-C09",
-            Self::CourseLocation => "FLT-C10",
             Self::SectionIndex => "FLT-S01",
-            Self::SectionNumber => "FLT-S02",
             Self::SectionOpenStatus => "FLT-S03",
             Self::SectionModality => "FLT-S04a",
             Self::SectionSynchronicity => "FLT-S04b",
             Self::SectionInstructor => "FLT-S05",
             Self::SectionAvailability => "FLT-S06",
             Self::SectionMeetingLocation => "FLT-S07",
-            Self::SectionBuildingRoom => "FLT-S08",
             Self::SectionExam => "FLT-S09",
             Self::SectionPermission => "FLT-S10",
-            Self::SectionEligibility => "FLT-S11",
         }
     }
 
@@ -186,8 +177,7 @@ impl FilterFieldId {
             | Self::CourseLevel
             | Self::CourseCredits
             | Self::CourseCoreCode
-            | Self::CoursePrerequisite
-            | Self::CourseLocation => FilterScopeV1::Course,
+            | Self::CoursePrerequisite => FilterScopeV1::Course,
             _ => FilterScopeV1::Section,
         }
     }
@@ -212,25 +202,21 @@ pub enum FilterValueKindV1 {
     TermId,
     CampusCodeSet,
     SubjectCodeSet,
-    TextQuery,
+    KeywordSet,
     CourseNumberSet,
     LevelSet,
     CreditRange,
     CoreCodeSet,
     PrerequisitePresence,
-    CourseLocationSet,
     SectionIndexSet,
-    SectionNumberSet,
     OpenStatusSet,
     ModalitySet,
     SynchronicitySet,
     InstructorNameSet,
     AvailabilityWindows,
     MeetingLocationSet,
-    BuildingRoom,
     ExamCodeSet,
     PermissionRequirement,
-    Eligibility,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -238,7 +224,6 @@ pub enum FilterValueKindV1 {
 pub enum FilterSchemaValueV1 {
     Required,
     EmptySet,
-    EmptyText,
     UnboundedRange,
     Any,
     EmptyWindows,
@@ -307,7 +292,7 @@ pub enum FilterValidationV1 {
 pub enum FilterQueryEncodingV1 {
     ExactOne,
     ExactAny,
-    TextTokenAndExactIdentifierPriority,
+    KeywordTokenAndExactIdentifierPriority,
     InclusiveRange,
     ExplicitAnyAll,
     TernaryPresence,
@@ -404,19 +389,24 @@ fn filter_field_schema(id: FilterFieldId, chip_order: u8) -> FilterFieldSchemaV1
             Q::ExactAny,
         ),
         Id::CourseText => (
-            "text",
-            K::TextQuery,
-            D::EmptyText,
-            D::EmptyText,
-            canonical_json(serde_json::Value::Null),
-            vec![N::TrimAndCollapseWhitespace, N::TokenAnd],
+            "keywords",
+            K::KeywordSet,
+            D::EmptySet,
+            D::EmptySet,
+            canonical_json(serde_json::json!([])),
             vec![
+                N::TrimAndCollapseWhitespace,
+                N::SortDeduplicate,
+                N::TokenAnd,
+            ],
+            vec![
+                V::DynamicDictionary,
                 V::NonemptyWhenActive,
                 V::Max32TextTokens,
                 V::Max128TokenBytes,
                 V::TokenContainsAlphanumeric,
             ],
-            Q::TextTokenAndExactIdentifierPriority,
+            Q::KeywordTokenAndExactIdentifierPriority,
         ),
         Id::CourseNumber => (
             "courseNumbers",
@@ -468,16 +458,6 @@ fn filter_field_schema(id: FilterFieldId, chip_order: u8) -> FilterFieldSchemaV1
             vec![],
             Q::TernaryPresence,
         ),
-        Id::CourseLocation => (
-            "courseLocations",
-            K::CourseLocationSet,
-            D::EmptySet,
-            D::EmptySet,
-            canonical_json(serde_json::json!([])),
-            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-            vec![V::DynamicDictionary],
-            Q::ExactAny,
-        ),
         Id::SectionIndex => (
             "sectionIndexes",
             K::SectionIndexSet,
@@ -486,16 +466,6 @@ fn filter_field_schema(id: FilterFieldId, chip_order: u8) -> FilterFieldSchemaV1
             canonical_json(serde_json::json!([])),
             vec![N::CanonicalIdentity, N::SortDeduplicate],
             vec![V::SectionIndexIdentity],
-            Q::SameSectionExactAny,
-        ),
-        Id::SectionNumber => (
-            "sectionNumbers",
-            K::SectionNumberSet,
-            D::EmptySet,
-            D::EmptySet,
-            canonical_json(serde_json::json!([])),
-            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-            vec![V::NonemptyWhenActive],
             Q::SameSectionExactAny,
         ),
         Id::SectionOpenStatus => (
@@ -551,22 +521,15 @@ fn filter_field_schema(id: FilterFieldId, chip_order: u8) -> FilterFieldSchemaV1
         Id::SectionMeetingLocation => (
             "meetingLocations",
             K::MeetingLocationSet,
-            D::EmptySet,
-            D::EmptySet,
-            canonical_json(serde_json::json!([])),
+            D::EmptyComposite,
+            D::EmptyComposite,
+            canonical_json(serde_json::json!({
+                "locations": [],
+                "mode": "ANY_MEETING"
+            })),
             vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
             vec![V::DynamicDictionary],
-            Q::SameSectionExactAny,
-        ),
-        Id::SectionBuildingRoom => (
-            "buildingRoom",
-            K::BuildingRoom,
-            D::EmptyComposite,
-            D::EmptyComposite,
-            canonical_json(serde_json::json!({"buildingCodes": [], "roomNumbers": []})),
-            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-            vec![V::StructuredOnly],
-            Q::SameSectionStructuredDimensions,
+            Q::ExplicitAnyAll,
         ),
         Id::SectionExam => (
             "examCodes",
@@ -587,22 +550,6 @@ fn filter_field_schema(id: FilterFieldId, chip_order: u8) -> FilterFieldSchemaV1
             vec![],
             vec![],
             Q::TernaryPresence,
-        ),
-        Id::SectionEligibility => (
-            "eligibility",
-            K::Eligibility,
-            D::EmptyComposite,
-            D::EmptyComposite,
-            canonical_json(serde_json::json!({
-                "majorCodes": [],
-                "minorCodes": [],
-                "honorProgramCodes": [],
-                "unitCodes": [],
-                "unitMajors": []
-            })),
-            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-            vec![V::StructuredOnly],
-            Q::SameSectionStructuredDimensions,
         ),
     };
     FilterFieldSchemaV1 {
@@ -706,6 +653,56 @@ impl FilterSearchTextV1 {
     pub fn tokens(&self) -> &[String] {
         &self.tokens
     }
+
+    /// V2 wire values are selected dictionary keywords, not a free-form text
+    /// token. The legacy type name is retained to keep the query engine API
+    /// source-compatible while the public representation is an array.
+    pub fn try_from_keywords<I, S>(keywords: I) -> Result<Self, FilterSearchTextError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut tokens = keywords
+            .into_iter()
+            .map(|value| value.as_ref().trim().to_owned())
+            .collect::<Vec<_>>();
+        tokens.sort_by(|left, right| {
+            left.to_lowercase()
+                .cmp(&right.to_lowercase())
+                .then_with(|| left.cmp(right))
+        });
+        tokens.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        Self::from_tokens(tokens)
+    }
+
+    fn from_tokens(tokens: Vec<String>) -> Result<Self, FilterSearchTextError> {
+        if tokens.is_empty() || tokens.len() > 32 {
+            return Err(FilterSearchTextError::TokenCount);
+        }
+        if tokens.iter().any(|token| {
+            token.is_empty()
+                || token.trim() != token
+                || token
+                    .chars()
+                    .any(|character| character.is_control() && !character.is_whitespace())
+        }) {
+            return Err(FilterSearchTextError::ControlCharacter);
+        }
+        if tokens.iter().any(|token| token.len() > 128) {
+            return Err(FilterSearchTextError::TokenTooLong);
+        }
+        if tokens
+            .iter()
+            .any(|token| !token.chars().any(char::is_alphanumeric))
+        {
+            return Err(FilterSearchTextError::TokenWithoutAlphanumeric);
+        }
+        let text = tokens.join(" ");
+        if text.len() > FILTER_TEXT_MAX_BYTES {
+            return Err(FilterSearchTextError::TextTooLong);
+        }
+        Ok(Self { text, tokens })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -736,23 +733,7 @@ impl TryFrom<String> for FilterSearchTextV1 {
             .split_whitespace()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        if tokens.is_empty() || tokens.len() > 32 {
-            return Err(FilterSearchTextError::TokenCount);
-        }
-        if tokens.iter().any(|token| token.len() > 128) {
-            return Err(FilterSearchTextError::TokenTooLong);
-        }
-        if tokens
-            .iter()
-            .any(|token| !token.chars().any(char::is_alphanumeric))
-        {
-            return Err(FilterSearchTextError::TokenWithoutAlphanumeric);
-        }
-        let text = tokens.join(" ");
-        if !validate_filter_string(&text, FILTER_TEXT_MAX_BYTES) {
-            return Err(FilterSearchTextError::TextTooLong);
-        }
-        Ok(Self { text, tokens })
+        Self::from_tokens(tokens)
     }
 }
 
@@ -768,7 +749,7 @@ impl Serialize for FilterSearchTextV1 {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.text)
+        self.tokens.serialize(serializer)
     }
 }
 
@@ -777,7 +758,41 @@ impl<'de> Deserialize<'de> for FilterSearchTextV1 {
     where
         D: Deserializer<'de>,
     {
-        Self::try_from(String::deserialize(deserializer)?).map_err(D::Error::custom)
+        Self::try_from_keywords(Vec::<String>::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+mod optional_keywords {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{FilterSearchTextError, FilterSearchTextV1};
+
+    pub fn serialize<S>(
+        value: &Option<FilterSearchTextV1>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value
+            .as_ref()
+            .map(FilterSearchTextV1::tokens)
+            .unwrap_or_default()
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<FilterSearchTextV1>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values = Vec::<String>::deserialize(deserializer)?;
+        if values.is_empty() {
+            Ok(None)
+        } else {
+            FilterSearchTextV1::try_from_keywords(values)
+                .map(Some)
+                .map_err(|error: FilterSearchTextError| serde::de::Error::custom(error))
+        }
     }
 }
 
@@ -786,6 +801,13 @@ impl<'de> Deserialize<'de> for FilterSearchTextV1 {
 pub enum FilterSetModeV1 {
     Any,
     All,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeetingLocationMatchModeV2 {
+    AnyMeeting,
+    AllRequiredMeetings,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -968,28 +990,20 @@ impl Default for CoreFilterV1 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BuildingRoomFilterV1 {
-    pub building_codes: Vec<FilterTokenV1>,
-    pub room_numbers: Vec<FilterTokenV1>,
+pub struct MeetingLocationFilterV2 {
+    pub locations: Vec<FilterTokenV1>,
+    pub mode: MeetingLocationMatchModeV2,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EligibilityUnitMajorV1 {
-    pub unit_code: FilterTokenV1,
-    pub major_code: FilterTokenV1,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EligibilityFilterV1 {
-    pub major_codes: Vec<FilterTokenV1>,
-    pub minor_codes: Vec<FilterTokenV1>,
-    pub honor_program_codes: Vec<FilterTokenV1>,
-    pub unit_codes: Vec<FilterTokenV1>,
-    pub unit_majors: Vec<EligibilityUnitMajorV1>,
+impl Default for MeetingLocationFilterV2 {
+    fn default() -> Self {
+        Self {
+            locations: Vec::new(),
+            mode: MeetingLocationMatchModeV2::AnyMeeting,
+        }
+    }
 }
 
 fn canonicalize<T: Ord>(values: &mut Vec<T>) {
@@ -1012,25 +1026,22 @@ pub struct FilterValuesInputV1 {
     pub term: TermId,
     pub campuses: Vec<crate::CampusCode>,
     pub subjects: Vec<CatalogSubjectCode>,
+    #[serde(rename = "keywords", with = "optional_keywords")]
     pub text: Option<FilterSearchTextV1>,
     pub course_numbers: Vec<FilterTokenV1>,
     pub levels: Vec<FilterTokenV1>,
     pub credits: Option<CreditRangeV1>,
     pub core: CoreFilterV1,
     pub prerequisite: PrerequisiteFilterV1,
-    pub course_locations: Vec<FilterTokenV1>,
     pub section_indexes: Vec<SectionIndex>,
-    pub section_numbers: Vec<FilterTokenV1>,
     pub open_statuses: Vec<LiveOpenStateV1>,
     pub modalities: Vec<ModalityFilterV1>,
     pub synchronicities: Vec<CatalogSynchronicity>,
     pub instructors: Vec<FilterTokenV1>,
     pub availability: Vec<AvailabilityWindowV1>,
-    pub meeting_locations: Vec<FilterTokenV1>,
-    pub building_room: BuildingRoomFilterV1,
+    pub meeting_locations: MeetingLocationFilterV2,
     pub exam_codes: Vec<FilterTokenV1>,
     pub permission: PermissionFilterV1,
-    pub eligibility: EligibilityFilterV1,
 }
 
 impl FilterValuesInputV1 {
@@ -1045,19 +1056,15 @@ impl FilterValuesInputV1 {
             credits: None,
             core: CoreFilterV1::default(),
             prerequisite: PrerequisiteFilterV1::Any,
-            course_locations: Vec::new(),
             section_indexes: Vec::new(),
-            section_numbers: Vec::new(),
             open_statuses: Vec::new(),
             modalities: Vec::new(),
             synchronicities: Vec::new(),
             instructors: Vec::new(),
             availability: Vec::new(),
-            meeting_locations: Vec::new(),
-            building_room: BuildingRoomFilterV1::default(),
+            meeting_locations: MeetingLocationFilterV2::default(),
             exam_codes: Vec::new(),
             permission: PermissionFilterV1::Any,
-            eligibility: EligibilityFilterV1::default(),
         }
     }
 }
@@ -1068,25 +1075,22 @@ pub struct NormalizedFilterValuesV1 {
     term: TermId,
     campuses: Vec<crate::CampusCode>,
     subjects: Vec<CatalogSubjectCode>,
+    #[serde(rename = "keywords", with = "optional_keywords")]
     text: Option<FilterSearchTextV1>,
     course_numbers: Vec<FilterTokenV1>,
     levels: Vec<FilterTokenV1>,
     credits: Option<CreditRangeV1>,
     core: CoreFilterV1,
     prerequisite: PrerequisiteFilterV1,
-    course_locations: Vec<FilterTokenV1>,
     section_indexes: Vec<SectionIndex>,
-    section_numbers: Vec<FilterTokenV1>,
     open_statuses: Vec<LiveOpenStateV1>,
     modalities: Vec<ModalityFilterV1>,
     synchronicities: Vec<CatalogSynchronicity>,
     instructors: Vec<FilterTokenV1>,
     availability: Vec<AvailabilityWindowV1>,
-    meeting_locations: Vec<FilterTokenV1>,
-    building_room: BuildingRoomFilterV1,
+    meeting_locations: MeetingLocationFilterV2,
     exam_codes: Vec<FilterTokenV1>,
     permission: PermissionFilterV1,
-    eligibility: EligibilityFilterV1,
 }
 
 impl NormalizedFilterValuesV1 {
@@ -1099,20 +1103,8 @@ impl NormalizedFilterValuesV1 {
         uppercase_tokens(&mut input.course_numbers);
         uppercase_tokens(&mut input.levels);
         uppercase_tokens(&mut input.core.codes);
-        uppercase_tokens(&mut input.course_locations);
-        uppercase_tokens(&mut input.section_numbers);
-        uppercase_tokens(&mut input.meeting_locations);
-        uppercase_tokens(&mut input.building_room.building_codes);
-        uppercase_tokens(&mut input.building_room.room_numbers);
+        uppercase_tokens(&mut input.meeting_locations.locations);
         uppercase_tokens(&mut input.exam_codes);
-        uppercase_tokens(&mut input.eligibility.major_codes);
-        uppercase_tokens(&mut input.eligibility.minor_codes);
-        uppercase_tokens(&mut input.eligibility.honor_program_codes);
-        uppercase_tokens(&mut input.eligibility.unit_codes);
-        for pair in &mut input.eligibility.unit_majors {
-            pair.unit_code.make_ascii_uppercase();
-            pair.major_code.make_ascii_uppercase();
-        }
         input
             .instructors
             .iter_mut()
@@ -1123,24 +1115,15 @@ impl NormalizedFilterValuesV1 {
         canonicalize(&mut input.course_numbers);
         canonicalize(&mut input.levels);
         canonicalize(&mut input.core.codes);
-        canonicalize(&mut input.course_locations);
         canonicalize(&mut input.section_indexes);
-        canonicalize(&mut input.section_numbers);
         canonicalize(&mut input.open_statuses);
         canonicalize(&mut input.modalities);
         input.synchronicities.sort_by_key(|value| value.wire_name());
         input.synchronicities.dedup();
         canonicalize(&mut input.instructors);
         canonicalize(&mut input.availability);
-        canonicalize(&mut input.meeting_locations);
-        canonicalize(&mut input.building_room.building_codes);
-        canonicalize(&mut input.building_room.room_numbers);
+        canonicalize(&mut input.meeting_locations.locations);
         canonicalize(&mut input.exam_codes);
-        canonicalize(&mut input.eligibility.major_codes);
-        canonicalize(&mut input.eligibility.minor_codes);
-        canonicalize(&mut input.eligibility.honor_program_codes);
-        canonicalize(&mut input.eligibility.unit_codes);
-        canonicalize(&mut input.eligibility.unit_majors);
 
         let ordinary_lengths = [
             input.campuses.len(),
@@ -1148,22 +1131,13 @@ impl NormalizedFilterValuesV1 {
             input.course_numbers.len(),
             input.levels.len(),
             input.core.codes.len(),
-            input.course_locations.len(),
             input.section_indexes.len(),
-            input.section_numbers.len(),
             input.open_statuses.len(),
             input.modalities.len(),
             input.synchronicities.len(),
             input.instructors.len(),
-            input.meeting_locations.len(),
-            input.building_room.building_codes.len(),
-            input.building_room.room_numbers.len(),
+            input.meeting_locations.locations.len(),
             input.exam_codes.len(),
-            input.eligibility.major_codes.len(),
-            input.eligibility.minor_codes.len(),
-            input.eligibility.honor_program_codes.len(),
-            input.eligibility.unit_codes.len(),
-            input.eligibility.unit_majors.len(),
         ];
         if ordinary_lengths
             .iter()
@@ -1187,19 +1161,15 @@ impl NormalizedFilterValuesV1 {
             credits: input.credits,
             core: input.core,
             prerequisite: input.prerequisite,
-            course_locations: input.course_locations,
             section_indexes: input.section_indexes,
-            section_numbers: input.section_numbers,
             open_statuses: input.open_statuses,
             modalities: input.modalities,
             synchronicities: input.synchronicities,
             instructors: input.instructors,
             availability: input.availability,
             meeting_locations: input.meeting_locations,
-            building_room: input.building_room,
             exam_codes: input.exam_codes,
             permission: input.permission,
-            eligibility: input.eligibility,
         })
     }
 
@@ -1213,6 +1183,9 @@ impl NormalizedFilterValuesV1 {
         &self.subjects
     }
     pub const fn text(&self) -> Option<&FilterSearchTextV1> {
+        self.text.as_ref()
+    }
+    pub const fn keywords(&self) -> Option<&FilterSearchTextV1> {
         self.text.as_ref()
     }
     pub fn course_numbers(&self) -> &[FilterTokenV1] {
@@ -1230,14 +1203,8 @@ impl NormalizedFilterValuesV1 {
     pub const fn prerequisite(&self) -> PrerequisiteFilterV1 {
         self.prerequisite
     }
-    pub fn course_locations(&self) -> &[FilterTokenV1] {
-        &self.course_locations
-    }
     pub fn section_indexes(&self) -> &[SectionIndex] {
         &self.section_indexes
-    }
-    pub fn section_numbers(&self) -> &[FilterTokenV1] {
-        &self.section_numbers
     }
     pub fn open_statuses(&self) -> &[LiveOpenStateV1] {
         &self.open_statuses
@@ -1254,20 +1221,14 @@ impl NormalizedFilterValuesV1 {
     pub fn availability(&self) -> &[AvailabilityWindowV1] {
         &self.availability
     }
-    pub fn meeting_locations(&self) -> &[FilterTokenV1] {
+    pub fn meeting_locations(&self) -> &MeetingLocationFilterV2 {
         &self.meeting_locations
-    }
-    pub const fn building_room(&self) -> &BuildingRoomFilterV1 {
-        &self.building_room
     }
     pub fn exam_codes(&self) -> &[FilterTokenV1] {
         &self.exam_codes
     }
     pub const fn permission(&self) -> PermissionFilterV1 {
         self.permission
-    }
-    pub const fn eligibility(&self) -> &EligibilityFilterV1 {
-        &self.eligibility
     }
 }
 
@@ -1424,6 +1385,109 @@ pub struct SectionQueryRequestV1 {
     pub sort: SectionSortV1,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FilterOptionsFieldV2 {
+    Keyword,
+    CourseLevel,
+    Instructor,
+    MeetingLocation,
+    ExamCode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum FilterOptionsRequestError {
+    #[error("filter options require query contract version 2")]
+    UnsupportedContractVersion,
+    #[error("filter options require at least one campus")]
+    EmptyCampusSet,
+    #[error("filter options limit must be between 1 and 100")]
+    InvalidLimit,
+    #[error("filter options query is invalid for the selected field")]
+    InvalidQuery,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FilterOptionsRequestV2 {
+    pub contract_version: QueryContractVersion,
+    pub term: TermId,
+    pub campuses: Vec<crate::CampusCode>,
+    pub field: FilterOptionsFieldV2,
+    pub query: Option<String>,
+    pub limit: Option<u16>,
+}
+
+impl FilterOptionsRequestV2 {
+    pub fn validate(&mut self) -> Result<(), FilterOptionsRequestError> {
+        if self.contract_version != QueryContractVersion::V2 {
+            return Err(FilterOptionsRequestError::UnsupportedContractVersion);
+        }
+        canonicalize(&mut self.campuses);
+        if self.campuses.is_empty() {
+            return Err(FilterOptionsRequestError::EmptyCampusSet);
+        }
+        if self
+            .limit
+            .is_some_and(|limit| limit == 0 || limit > MAX_FILTER_OPTIONS_LIMIT)
+        {
+            return Err(FilterOptionsRequestError::InvalidLimit);
+        }
+        self.query = self
+            .query
+            .take()
+            .map(|query| query.trim().to_owned())
+            .filter(|query| !query.is_empty());
+        if self.query.as_ref().is_some_and(|query| {
+            query.len() > FILTER_TOKEN_MAX_BYTES || query.chars().any(char::is_control)
+        }) || (self.query.is_some()
+            && !matches!(
+                self.field,
+                FilterOptionsFieldV2::Keyword | FilterOptionsFieldV2::Instructor
+            ))
+        {
+            return Err(FilterOptionsRequestError::InvalidQuery);
+        }
+        Ok(())
+    }
+
+    pub fn effective_limit(&self) -> usize {
+        usize::from(self.limit.unwrap_or(DEFAULT_FILTER_OPTIONS_LIMIT))
+    }
+
+    pub fn targets(&self) -> Vec<crate::TermCampusKey> {
+        self.campuses
+            .iter()
+            .cloned()
+            .map(|campus| crate::TermCampusKey::new(self.term.clone(), campus))
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterOptionTargetVersionV2 {
+    pub target: crate::TermCampusKey,
+    pub content_version: CatalogContentVersion,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterOptionV2 {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterOptionsResponseV2 {
+    pub contract_version: QueryContractVersion,
+    pub field: FilterOptionsFieldV2,
+    pub target_versions: Vec<FilterOptionTargetVersionV2>,
+    pub options: Vec<FilterOptionV2>,
+    pub truncated: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CourseDetailRequestV1 {
@@ -1562,4 +1626,21 @@ pub struct SectionDetailResponseV1 {
     pub contract_version: QueryContractVersion,
     pub variant: NormalizedCourseVariantV1,
     pub section: SectionQueryItemV1,
+}
+
+// V2 is a wire-shape revision over the established query result model. These
+// aliases let new callers state the active contract explicitly without
+// duplicating result DTOs whose fields did not change.
+pub type FilterSchemaV2 = FilterSchemaV1;
+pub type FilterFieldSchemaV2 = FilterFieldSchemaV1;
+pub type FilterRequestV2 = FilterRequestV1;
+pub type FilterValuesInputV2 = FilterValuesInputV1;
+pub type NormalizedFilterValuesV2 = NormalizedFilterValuesV1;
+pub type CourseQueryRequestV2 = CourseQueryRequestV1;
+pub type CourseQueryResponseV2 = CourseQueryResponseV1;
+pub type SectionQueryRequestV2 = SectionQueryRequestV1;
+pub type SectionQueryResponseV2 = SectionQueryResponseV1;
+
+pub fn filter_schema_v2() -> FilterSchemaV2 {
+    filter_schema_v1()
 }

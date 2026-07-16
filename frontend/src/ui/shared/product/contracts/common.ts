@@ -1,5 +1,6 @@
 export type ProtocolVersionV1 = 1;
 export type ContractVersionV1 = 1;
+export type QueryContractVersion = 1 | 2;
 export type TraceId = string;
 export type IsoDateTime = string;
 
@@ -38,9 +39,11 @@ export type ApiErrorCode =
   | 'INVALID_COURSE_GROUP_KEY'
   | 'INVALID_COURSE_VARIANT_KEY'
   | 'INVALID_FILTER'
+  | 'INVALID_FILTER_OPTION'
   | 'SECTION_NOT_FOUND'
   | 'SELECTION_LIMIT_EXCEEDED'
   | 'CATALOG_NOT_READY'
+  | 'SEARCH_DATA_NOT_READY'
   | 'UPSTREAM_UNAVAILABLE'
   | 'AUDIO_BLOCKED'
   | 'INTERNAL_ERROR';

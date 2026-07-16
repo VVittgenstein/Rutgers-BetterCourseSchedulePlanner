@@ -692,7 +692,7 @@ impl OperationalStorage {
             if catalog_indices.is_empty() {
                 OpenAttemptClassification::ValidEmptyNoRows
             } else {
-                OpenAttemptClassification::UnsafeEmpty
+                OpenAttemptClassification::ValidApplied
             }
         } else if !catalog_indices.is_empty() && intersection_count == 0 {
             OpenAttemptClassification::UnsafeZeroIntersection

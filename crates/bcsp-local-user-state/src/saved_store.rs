@@ -41,6 +41,31 @@ impl PersonalStateStore {
         load_saved_view(&self.connection, id)
     }
 
+    /// Returns the exact stored snapshot together with the revision that owns
+    /// it. Application layers can use the revision to avoid projecting a raw
+    /// snapshot across a concurrent Saved View update.
+    pub fn saved_view_raw_snapshot(
+        &self,
+        id: TraceId,
+    ) -> PersonalStateResult<Option<(SavedViewRevision, JsonValue)>> {
+        let stored = self
+            .connection
+            .query_row(
+                "SELECT revision, snapshot_json FROM personal_saved_views_v1 WHERE view_id = ?1",
+                [id.to_string()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        stored
+            .map(|(revision, raw)| {
+                Ok((
+                    SavedViewRevision::from_stored(nonnegative_i64_to_u64(revision)?),
+                    serde_json::from_str(&raw)?,
+                ))
+            })
+            .transpose()
+    }
+
     pub fn create_saved_view(
         &mut self,
         expected_state_revision: UserStateRevision,

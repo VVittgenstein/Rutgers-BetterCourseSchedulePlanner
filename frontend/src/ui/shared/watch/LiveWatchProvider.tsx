@@ -26,6 +26,7 @@ import type {
   WatchStartItemV1,
   WsServerEnvelope,
 } from '../product';
+import { ProductClientError } from '../product';
 import {
   WatchAudioController,
   type WatchAudioUnlockResult,
@@ -45,6 +46,27 @@ export interface ActiveWatchView {
   readonly sectionKey: SectionKey;
   readonly startedAt: string;
   readonly policy: WatchPolicyV1;
+}
+
+export type WatchTelemetryResourceKind = 'SECTION' | 'BATCH';
+export type WatchTelemetryResourceAvailability = 'CURRENT' | 'LKG' | 'ERROR_NO_DATA';
+
+export interface WatchTelemetryResourceError {
+  readonly httpStatus: number | null;
+  readonly apiCode: string | null;
+  readonly traceId: string | null;
+}
+
+/** Per-resource REST evidence. WebSocket and audio state are intentionally independent. */
+export interface WatchTelemetryResourceState {
+  readonly key: string;
+  readonly kind: WatchTelemetryResourceKind;
+  readonly sectionKey: SectionKey | null;
+  readonly batch: { readonly term: string; readonly campus: string } | null;
+  readonly availability: WatchTelemetryResourceAvailability;
+  readonly loading: boolean;
+  readonly lastSuccessAt: string | null;
+  readonly error: WatchTelemetryResourceError | null;
 }
 
 export type WatchNoticeCode =
@@ -82,13 +104,14 @@ export interface LiveWatchValue {
   readonly continuousEpisodeIds: readonly string[];
   readonly batchStatuses: readonly OpenRefreshStatusV1[];
   readonly sectionStatuses: readonly OpenSectionStatusV1[];
+  readonly telemetryResources: readonly WatchTelemetryResourceState[];
   readonly telemetryLoading: boolean;
-  readonly telemetryError: boolean;
+  readonly starting: boolean;
   isSelected(sectionKey: SectionKey): boolean;
   isActive(sectionKey: SectionKey): boolean;
   select(sectionKey: SectionKey): void;
   remove(sectionKey: SectionKey): void;
-  startSelected(policy: WatchPolicyV1): void;
+  startSelected(policy: WatchPolicyV1): Promise<void>;
   stop(watch: ActiveWatchView): void;
   updatePolicy(watch: ActiveWatchView, policy: WatchPolicyV1): void;
   acknowledge(episode: OpenEpisodeV1): void;
@@ -103,6 +126,7 @@ export interface LiveWatchValue {
   setMuted(muted: boolean): void;
   setVolume(volume: number): void;
   refreshTelemetry(): Promise<void>;
+  retryTelemetryResource(key: string): Promise<void>;
 }
 
 const LiveWatchContext = createContext<LiveWatchValue | null>(null);
@@ -134,6 +158,54 @@ function batchTelemetryFailureKey(
   batch: { readonly term: string; readonly campus: string },
 ): string {
   return `batch:${batchIdentity(batch)}`;
+}
+
+function sectionTelemetryTarget(sectionKey: SectionKey): WatchTelemetryResourceState {
+  return {
+    key: sectionTelemetryFailureKey(sectionKey),
+    kind: 'SECTION',
+    sectionKey,
+    batch: null,
+    availability: 'ERROR_NO_DATA',
+    loading: false,
+    lastSuccessAt: null,
+    error: null,
+  };
+}
+
+function batchTelemetryTarget(
+  batch: { readonly term: string; readonly campus: string },
+): WatchTelemetryResourceState {
+  return {
+    key: batchTelemetryFailureKey(batch),
+    kind: 'BATCH',
+    sectionKey: null,
+    batch,
+    availability: 'ERROR_NO_DATA',
+    loading: false,
+    lastSuccessAt: null,
+    error: null,
+  };
+}
+
+function telemetryError(error: unknown): WatchTelemetryResourceError {
+  if (error instanceof ProductClientError) {
+    return {
+      httpStatus: error.status,
+      apiCode: error.apiError?.error.code ?? null,
+      traceId: error.apiError?.error.traceId ?? null,
+    };
+  }
+  return { httpStatus: null, apiCode: null, traceId: null };
+}
+
+function sectionLastSuccessAt(status: OpenSectionStatusV1): string | null {
+  return status.freshness.observedAt;
+}
+
+function batchLastSuccessAt(status: OpenRefreshStatusV1): string | null {
+  return status.lastValidObservation?.observedAt
+    ?? status.freshness.observedAt;
 }
 
 function expireFreshness(freshness: OpenFreshnessV1, now: number): OpenFreshnessV1 {
@@ -215,12 +287,18 @@ export function LiveWatchProvider({
   const [continuousEpisodeIds, setContinuousEpisodeIds] = useState<readonly string[]>([]);
   const [batchStatuses, setBatchStatuses] = useState<readonly OpenRefreshStatusV1[]>([]);
   const [sectionStatuses, setSectionStatuses] = useState<readonly OpenSectionStatusV1[]>([]);
+  const [telemetryResources, setTelemetryResources] = useState<
+    readonly WatchTelemetryResourceState[]
+  >([]);
   const [telemetryLoading, setTelemetryLoading] = useState(false);
-  const [telemetryError, setTelemetryError] = useState(false);
+  const [starting, setStarting] = useState(false);
   const selectedRef = useRef(selected);
   const activeRef = useRef(active);
+  const pendingRef = useRef(pending);
+  const audioStateRef = useRef<WatchAudioState>(audioState);
   const mutedRef = useRef(muted);
   const volumeRef = useRef(volume);
+  const telemetryResourcesRef = useRef(telemetryResources);
   const continuousEpisodeIdsRef = useRef(continuousEpisodeIds);
   const pendingPolicies = useRef(new Map<string, WatchPolicyV1>());
   const queuedStart = useRef<readonly WatchStartItemV1[] | null>(null);
@@ -232,13 +310,17 @@ export function LiveWatchProvider({
   const hadConnection = useRef(runtime.watch.state === 'OPEN');
   const announcedAlerts = useRef(new Set<string>());
   const announcedAudioCaps = useRef(new Set<ActiveWatchId>());
-  const telemetryFailures = useRef(new Set<string>());
   const audioProviderMounted = useRef(false);
+  const startAttempt = useRef(0);
+  const startingRef = useRef(false);
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { activeRef.current = active; }, [active]);
+  useEffect(() => { pendingRef.current = pending; }, [pending]);
+  useEffect(() => { audioStateRef.current = audioState; }, [audioState]);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
+  useEffect(() => { telemetryResourcesRef.current = telemetryResources; }, [telemetryResources]);
   useEffect(() => { continuousEpisodeIdsRef.current = continuousEpisodeIds; }, [continuousEpisodeIds]);
 
   const addNotice = useCallback((
@@ -258,11 +340,52 @@ export function LiveWatchProvider({
     setNotices((current) => [...current.slice(-5), notice]);
   }, []);
 
-  const setTelemetryFailure = useCallback((key: string, failed: boolean) => {
-    if (failed) telemetryFailures.current.add(key);
-    else telemetryFailures.current.delete(key);
-    setTelemetryError(telemetryFailures.current.size > 0);
+  const updateTelemetryResource = useCallback((
+    target: WatchTelemetryResourceState,
+    update: (current: WatchTelemetryResourceState) => WatchTelemetryResourceState,
+  ) => {
+    setTelemetryResources((current) => {
+      const existing = current.find((resource) => resource.key === target.key) ?? target;
+      const nextResource = update(existing);
+      const next = replaceByIdentity(current, nextResource, (resource) => resource.key);
+      telemetryResourcesRef.current = next;
+      return next;
+    });
   }, []);
+
+  const markTelemetryLoading = useCallback((target: WatchTelemetryResourceState) => {
+    updateTelemetryResource(target, (current) => ({ ...current, loading: true }));
+  }, [updateTelemetryResource]);
+
+  const markTelemetrySuccess = useCallback((
+    target: WatchTelemetryResourceState,
+    freshness: OpenFreshnessV1,
+    lastSuccessAt: string | null,
+  ) => {
+    updateTelemetryResource(target, (current) => ({
+      ...current,
+      availability: lastSuccessAt === null || freshness.state === 'UNKNOWN'
+        ? 'ERROR_NO_DATA'
+        : freshness.state === 'STALE'
+          ? 'LKG'
+          : 'CURRENT',
+      loading: false,
+      lastSuccessAt,
+      error: null,
+    }));
+  }, [updateTelemetryResource]);
+
+  const markTelemetryFailure = useCallback((
+    target: WatchTelemetryResourceState,
+    error: unknown,
+  ) => {
+    updateTelemetryResource(target, (current) => ({
+      ...current,
+      availability: current.lastSuccessAt === null ? 'ERROR_NO_DATA' : 'LKG',
+      loading: false,
+      error: telemetryError(error),
+    }));
+  }, [updateTelemetryResource]);
 
   const send = useCallback((command: WatchClientCommandV1): boolean => {
     try {
@@ -277,16 +400,27 @@ export function LiveWatchProvider({
   const sendQueuedStart = useCallback(() => {
     const items = queuedStart.current;
     if (items === null || items.length === 0 || runtime.watch.state !== 'OPEN') return;
-    if (send({ type: 'START_WATCH', items })) queuedStart.current = null;
+    const sent = send({ type: 'START_WATCH', items });
+    queuedStart.current = null;
+    if (sent) return;
+    const failedKeys = new Set(items.map((item) => sectionIdentity(item.sectionKey)));
+    for (const key of failedKeys) pendingPolicies.current.delete(key);
+    setPending((current) => {
+      const next = current.filter((key) => !failedKeys.has(sectionIdentity(key)));
+      pendingRef.current = next;
+      return next;
+    });
   }, [runtime, send]);
 
   const loadBatchStatus = useCallback(async (
     batch: { readonly term: string; readonly campus: string },
   ) => {
+    const target = batchTelemetryTarget(batch);
     const identity = batchIdentity(batch);
     const epoch = telemetryEpoch.current;
     const revision = (batchRequestRevisions.current.get(identity) ?? 0) + 1;
     batchRequestRevisions.current.set(identity, revision);
+    markTelemetryLoading(target);
     try {
       const response = await runtime.product.openStatus({ contractVersion: 1, batch });
       const isCurrent = telemetryEpoch.current === epoch
@@ -300,22 +434,54 @@ export function LiveWatchProvider({
         status,
         (value) => batchIdentity(value.batch),
       ));
-      setTelemetryFailure(batchTelemetryFailureKey(batch), false);
-    } catch {
+      markTelemetrySuccess(target, status.freshness, batchLastSuccessAt(status));
+    } catch (error) {
       const isCurrent = telemetryEpoch.current === epoch
         && batchRequestRevisions.current.get(identity) === revision;
       const isRelevant = selectedRef.current.some((section) => sameBatch(section, batch))
         || activeRef.current.some((watch) => sameBatch(watch.sectionKey, batch));
-      if (isCurrent && isRelevant) setTelemetryFailure(batchTelemetryFailureKey(batch), true);
+      if (isCurrent && isRelevant) markTelemetryFailure(target, error);
     }
-  }, [runtime, setTelemetryFailure]);
+  }, [markTelemetryFailure, markTelemetryLoading, markTelemetrySuccess, runtime]);
+
+  const loadSectionStatus = useCallback(async (sectionKey: SectionKey) => {
+    const target = sectionTelemetryTarget(sectionKey);
+    const identity = sectionIdentity(sectionKey);
+    const epoch = telemetryEpoch.current;
+    const revision = (sectionRequestRevisions.current.get(identity) ?? 0) + 1;
+    sectionRequestRevisions.current.set(identity, revision);
+    markTelemetryLoading(target);
+    try {
+      const response = await runtime.product.openSectionStatus({ contractVersion: 1, sectionKey });
+      const isCurrent = telemetryEpoch.current === epoch
+        && sectionRequestRevisions.current.get(identity) === revision;
+      const isRelevant = selectedRef.current.some((section) => sameSection(section, sectionKey))
+        || activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey));
+      if (!isCurrent || !isRelevant) return;
+      const status = normalizeSectionStatus(response);
+      setSectionStatuses((current) => replaceByIdentity(
+        current,
+        status,
+        (value) => sectionIdentity(value.sectionKey),
+      ));
+      markTelemetrySuccess(target, status.freshness, sectionLastSuccessAt(status));
+    } catch (error) {
+      const isCurrent = telemetryEpoch.current === epoch
+        && sectionRequestRevisions.current.get(identity) === revision;
+      const isRelevant = selectedRef.current.some((section) => sameSection(section, sectionKey))
+        || activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey));
+      if (isCurrent && isRelevant) markTelemetryFailure(target, error);
+    }
+  }, [markTelemetryFailure, markTelemetryLoading, markTelemetrySuccess, runtime]);
 
   const startContinuousAudio = useCallback((nextVolume: number, nextMuted: boolean) => {
     const outcome = audioController.startContinuous(nextVolume, nextMuted);
     if (outcome === 'AUTOPLAY_BLOCKED') {
+      audioStateRef.current = 'BLOCKED';
       setAudioState('BLOCKED');
       addNotice('AUDIO_BLOCKED', 'ALERT');
     } else if (outcome === 'FAILED') {
+      audioStateRef.current = 'FAILED';
       setAudioState('FAILED');
       addNotice('AUDIO_FAILED', 'ALERT');
     }
@@ -341,7 +507,11 @@ export function LiveWatchProvider({
     const event = envelope.payload;
     if (event.type === 'START_RESULT') {
       const completedKeys = event.result.items.map((item) => sectionIdentity(item.sectionKey));
-      setPending((current) => current.filter((key) => !completedKeys.includes(sectionIdentity(key))));
+      setPending((current) => {
+        const next = current.filter((key) => !completedKeys.includes(sectionIdentity(key)));
+        pendingRef.current = next;
+        return next;
+      });
       for (const item of event.result.items) {
         const identity = sectionIdentity(item.sectionKey);
         if (item.status === 'ACTIVE') {
@@ -402,7 +572,6 @@ export function LiveWatchProvider({
         projected,
         (value) => sectionIdentity(value.sectionKey),
       ));
-      setTelemetryFailure(sectionTelemetryFailureKey(observation.sectionKey), false);
       void loadBatchStatus(observation.batch);
       return;
     }
@@ -435,9 +604,11 @@ export function LiveWatchProvider({
         announcedAudioCaps.current.delete(disposition.cue.activeWatchId);
         const outcome = audioController.play(disposition.cue, volumeRef.current, mutedRef.current);
         if (outcome === 'AUTOPLAY_BLOCKED') {
+          audioStateRef.current = 'BLOCKED';
           setAudioState('BLOCKED');
           addNotice('AUDIO_BLOCKED', 'ALERT', disposition.cue.sectionKey);
         } else if (outcome === 'FAILED') {
+          audioStateRef.current = 'FAILED';
           setAudioState('FAILED');
           addNotice('AUDIO_FAILED', 'ALERT', disposition.cue.sectionKey);
         }
@@ -468,7 +639,7 @@ export function LiveWatchProvider({
         audioController.stopContinuous();
       }
     }
-  }, [addNotice, audioController, loadBatchStatus, send, setTelemetryFailure, startContinuousAudio]);
+  }, [addNotice, audioController, loadBatchStatus, send, startContinuousAudio]);
 
   useEffect(() => {
     const unsubscribeEvents = runtime.watch.subscribe(handleServerEvent);
@@ -482,15 +653,13 @@ export function LiveWatchProvider({
           || queuedStart.current !== null
           || activeRef.current.length > 0;
         hadConnection.current = false;
-        telemetryAbort.current?.abort();
-        telemetryEpoch.current += 1;
-        batchRequestRevisions.current.clear();
-        sectionRequestRevisions.current.clear();
-        telemetryFailures.current.clear();
-        setTelemetryError(false);
+        startAttempt.current += 1;
+        startingRef.current = false;
+        setStarting(false);
         announcedAudioCaps.current.clear();
         queuedStart.current = null;
         pendingPolicies.current.clear();
+        pendingRef.current = [];
         setPending([]);
         setActive([]);
         setObservations([]);
@@ -515,8 +684,8 @@ export function LiveWatchProvider({
       telemetryEpoch.current += 1;
       batchRequestRevisions.current.clear();
       sectionRequestRevisions.current.clear();
-      telemetryFailures.current.clear();
       announcedAudioCaps.current.clear();
+      startAttempt.current += 1;
       audioProviderMounted.current = false;
       queueMicrotask(() => {
         if (!audioProviderMounted.current) audioController.dispose();
@@ -543,16 +712,21 @@ export function LiveWatchProvider({
     telemetryEpoch.current += 1;
     batchRequestRevisions.current.clear();
     sectionRequestRevisions.current.clear();
-    telemetryFailures.current.clear();
     telemetryAbort.current?.abort();
-    setTelemetryError(false);
     setSelected(next);
     onSelectedChange?.(next);
   }, [onSelectedChange]);
 
   const enableSound = useCallback(async () => {
+    audioStateRef.current = 'UNLOCKING';
     setAudioState('UNLOCKING');
-    const state = await audioController.unlock();
+    let state: WatchAudioUnlockResult;
+    try {
+      state = await audioController.unlock();
+    } catch {
+      state = 'FAILED';
+    }
+    audioStateRef.current = state;
     setAudioState(state);
     if (state === 'READY') {
       mutedRef.current = false;
@@ -571,11 +745,13 @@ export function LiveWatchProvider({
     if (unlocked !== 'READY') return unlocked;
     const outcome = audioController.preview(volumeRef.current);
     if (outcome === 'AUTOPLAY_BLOCKED') {
+      audioStateRef.current = 'BLOCKED';
       setAudioState('BLOCKED');
       addNotice('AUDIO_BLOCKED', 'ALERT');
       return 'BLOCKED';
     }
     if (outcome === 'FAILED') {
+      audioStateRef.current = 'FAILED';
       setAudioState('FAILED');
       addNotice('AUDIO_FAILED', 'ALERT');
       return 'FAILED';
@@ -583,24 +759,39 @@ export function LiveWatchProvider({
     return 'READY';
   }, [addNotice, audioController, enableSound]);
 
-  const startSelected = useCallback((policy: WatchPolicyV1) => {
+  const startSelected = useCallback(async (policy: WatchPolicyV1) => {
+    if (startingRef.current) return;
     const inactive = selectedRef.current.filter((sectionKey) =>
-      !activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey)));
+      !activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey))
+      && !pendingRef.current.some((pendingKey) => sameSection(pendingKey, sectionKey)));
     if (inactive.length === 0) return;
+    const attempt = startAttempt.current + 1;
+    startAttempt.current = attempt;
+    startingRef.current = true;
+    setStarting(true);
     const items = inactive.map((sectionKey) => ({ sectionKey, policy }));
     for (const item of items) pendingPolicies.current.set(sectionIdentity(item.sectionKey), policy);
-    queuedStart.current = items;
+    pendingRef.current = inactive;
     setPending(inactive);
-    if (audioState !== 'READY') void enableSound();
     try {
+      if (audioStateRef.current !== 'READY') await enableSound();
+      if (startAttempt.current !== attempt) return;
+      queuedStart.current = items;
       if (runtime.watch.state === 'OPEN') sendQueuedStart();
       else runtime.watch.connect();
     } catch (error) {
       queuedStart.current = null;
+      for (const item of items) pendingPolicies.current.delete(sectionIdentity(item.sectionKey));
+      pendingRef.current = [];
       setPending([]);
       addNotice('COMMAND_FAILED', 'ALERT', undefined, error instanceof Error ? error.message : undefined);
+    } finally {
+      if (startAttempt.current === attempt) {
+        startingRef.current = false;
+        setStarting(false);
+      }
     }
-  }, [addNotice, audioState, enableSound, runtime, sendQueuedStart]);
+  }, [addNotice, enableSound, runtime, sendQueuedStart]);
 
   const stop = useCallback((watch: ActiveWatchView) => {
     send({ type: 'STOP_WATCH', watch: { activeWatchId: watch.activeWatchId, sectionKey: watch.sectionKey } });
@@ -690,7 +881,6 @@ export function LiveWatchProvider({
     telemetryEpoch.current = epoch;
     batchRequestRevisions.current.clear();
     sectionRequestRevisions.current.clear();
-    telemetryFailures.current.clear();
     const keys = [...selectedRef.current];
     for (const watch of activeRef.current) {
       if (!keys.some((key) => sameSection(key, watch.sectionKey))) keys.push(watch.sectionKey);
@@ -698,14 +888,14 @@ export function LiveWatchProvider({
     if (keys.length === 0) {
       setBatchStatuses([]);
       setSectionStatuses([]);
-      setTelemetryError(false);
+      telemetryResourcesRef.current = [];
+      setTelemetryResources([]);
       setTelemetryLoading(false);
       return;
     }
     const abort = new AbortController();
     telemetryAbort.current = abort;
     setTelemetryLoading(true);
-    setTelemetryError(false);
     const batches = keys.filter((key, index) =>
       keys.findIndex((candidate) => sameBatch(candidate, key)) === index);
     const sectionTickets = keys.map((sectionKey) => {
@@ -720,6 +910,26 @@ export function LiveWatchProvider({
       batchRequestRevisions.current.set(identity, revision);
       return { batch, identity, revision };
     });
+    const relevantResourceKeys = new Set([
+      ...keys.map((sectionKey) => sectionTelemetryFailureKey(sectionKey)),
+      ...batches.map((batch) => batchTelemetryFailureKey(batch)),
+    ]);
+    setTelemetryResources((current) => {
+      const retained = current.filter((resource) => relevantResourceKeys.has(resource.key));
+      let next: readonly WatchTelemetryResourceState[] = retained;
+      for (const sectionKey of keys) {
+        const target = sectionTelemetryTarget(sectionKey);
+        const existing = next.find((resource) => resource.key === target.key) ?? target;
+        next = replaceByIdentity(next, { ...existing, loading: true }, (resource) => resource.key);
+      }
+      for (const batch of batches) {
+        const target = batchTelemetryTarget(batch);
+        const existing = next.find((resource) => resource.key === target.key) ?? target;
+        next = replaceByIdentity(next, { ...existing, loading: true }, (resource) => resource.key);
+      }
+      telemetryResourcesRef.current = next;
+      return next;
+    });
     const [sectionResults, batchResults] = await Promise.all([
       Promise.allSettled(sectionTickets.map(({ sectionKey }) =>
         runtime.product.openSectionStatus({ contractVersion: 1, sectionKey }, abort.signal))),
@@ -732,16 +942,22 @@ export function LiveWatchProvider({
     sectionResults.forEach((result, index) => {
       const ticket = sectionTickets[index]!;
       if (sectionRequestRevisions.current.get(ticket.identity) !== ticket.revision) return;
-      const failureKey = sectionTelemetryFailureKey(ticket.sectionKey);
-      if (result.status === 'rejected') telemetryFailures.current.add(failureKey);
-      else telemetryFailures.current.delete(failureKey);
+      const target = sectionTelemetryTarget(ticket.sectionKey);
+      if (result.status === 'rejected') markTelemetryFailure(target, result.reason);
+      else {
+        const status = normalizeSectionStatus(result.value);
+        markTelemetrySuccess(target, status.freshness, sectionLastSuccessAt(status));
+      }
     });
     batchResults.forEach((result, index) => {
       const ticket = batchTickets[index]!;
       if (batchRequestRevisions.current.get(ticket.identity) !== ticket.revision) return;
-      const failureKey = batchTelemetryFailureKey(ticket.batch);
-      if (result.status === 'rejected') telemetryFailures.current.add(failureKey);
-      else telemetryFailures.current.delete(failureKey);
+      const target = batchTelemetryTarget(ticket.batch);
+      if (result.status === 'rejected') markTelemetryFailure(target, result.reason);
+      else {
+        const status = normalizeBatchStatus(result.value);
+        markTelemetrySuccess(target, status.freshness, batchLastSuccessAt(status));
+      }
     });
     setSectionStatuses((current) => {
       let next: readonly OpenSectionStatusV1[] = current.filter((status) =>
@@ -767,9 +983,20 @@ export function LiveWatchProvider({
       });
       return next;
     });
-    setTelemetryError(telemetryFailures.current.size > 0);
     setTelemetryLoading(false);
-  }, [runtime]);
+  }, [markTelemetryFailure, markTelemetrySuccess, runtime]);
+
+  const retryTelemetryResource = useCallback(async (key: string) => {
+    const resource = telemetryResourcesRef.current.find((candidate) => candidate.key === key);
+    if (resource === undefined || resource.loading) return;
+    if (resource.kind === 'SECTION' && resource.sectionKey !== null) {
+      await loadSectionStatus(resource.sectionKey);
+      return;
+    }
+    if (resource.kind === 'BATCH' && resource.batch !== null) {
+      await loadBatchStatus(resource.batch);
+    }
+  }, [loadBatchStatus, loadSectionStatus]);
 
   const nextFreshnessExpiry = useMemo(() => {
     const now = Date.now();
@@ -814,11 +1041,11 @@ export function LiveWatchProvider({
       telemetryEpoch.current += 1;
       batchRequestRevisions.current.clear();
       sectionRequestRevisions.current.clear();
-      telemetryFailures.current.clear();
       setBatchStatuses([]);
       setSectionStatuses([]);
+      telemetryResourcesRef.current = [];
+      setTelemetryResources([]);
       setTelemetryLoading(false);
-      setTelemetryError(false);
       return;
     }
     void refreshTelemetry();
@@ -845,8 +1072,9 @@ export function LiveWatchProvider({
     continuousEpisodeIds,
     batchStatuses,
     sectionStatuses,
+    telemetryResources,
     telemetryLoading,
-    telemetryError,
+    starting,
     isSelected: (sectionKey) => selected.some((value) => sameSection(value, sectionKey)),
     isActive: (sectionKey) => active.some((watch) => sameSection(watch.sectionKey, sectionKey)),
     select,
@@ -866,6 +1094,7 @@ export function LiveWatchProvider({
     setMuted,
     setVolume,
     refreshTelemetry,
+    retryTelemetryResource,
   }), [
     acknowledge,
     acknowledgeAll,
@@ -886,6 +1115,7 @@ export function LiveWatchProvider({
     refreshTelemetry,
     remove,
     resetAudibleCount,
+    retryTelemetryResource,
     resume,
     sectionStatuses,
     select,
@@ -894,11 +1124,12 @@ export function LiveWatchProvider({
     setVolume,
     startSelected,
     stop,
-    telemetryError,
     telemetryLoading,
+    telemetryResources,
     testSound,
     updatePolicy,
     volume,
+    starting,
   ]);
 
   return <LiveWatchContext.Provider value={value}>{children}</LiveWatchContext.Provider>;

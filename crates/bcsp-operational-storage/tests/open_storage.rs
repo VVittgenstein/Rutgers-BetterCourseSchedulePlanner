@@ -244,8 +244,8 @@ fn existing_v1_database_migrates_to_open_storage_without_seed_rows() {
         .expect("record v1");
     drop(connection);
 
-    let storage = OperationalStorage::open(&path).expect("migrate to v2");
-    assert_eq!(storage.migration_records().expect("records").len(), 2);
+    let storage = OperationalStorage::open(&path).expect("migrate to current schema");
+    assert_eq!(storage.migration_records().expect("records").len(), 3);
     let tables = storage.operational_table_names().expect("tables");
     assert!(tables.contains(&"open_pull_attempts".to_owned()));
     assert!(tables.contains(&"open_section_events".to_owned()));
@@ -268,7 +268,7 @@ fn existing_v1_database_migrates_to_open_storage_without_seed_rows() {
 }
 
 #[test]
-fn applied_lkg_survives_failure_unsafe_empty_zero_intersection_race_and_restart() {
+fn applied_lkg_accepts_typed_empty_then_survives_zero_intersection_race_and_restart() {
     let temp = TempDir::new().expect("temp");
     let path = temp.path().join("operational.sqlite");
     let scope = target("FALL_2026", "OPEN_LKG");
@@ -371,7 +371,7 @@ fn applied_lkg_survives_failure_unsafe_empty_zero_intersection_race_and_restart(
         Some(120)
     );
     begin(&mut storage, &scope, "open-lkg-3", run, v1, "2026-07-14");
-    let unsafe_empty = storage
+    let valid_empty = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
             attempt_id: trace("open-lkg-3"),
             completed_at: COMPLETED.to_owned(),
@@ -380,12 +380,22 @@ fn applied_lkg_survives_failure_unsafe_empty_zero_intersection_race_and_restart(
             watched_sections: Vec::new(),
             http: success_http(2),
         })
-        .expect("classify unsafe empty");
+        .expect("apply typed empty response");
     assert_eq!(
-        unsafe_empty.classification,
-        OpenAttemptClassification::UnsafeEmpty
+        valid_empty.classification,
+        OpenAttemptClassification::ValidApplied
     );
-    assert!(unsafe_empty.observation_commit.is_none());
+    assert_eq!(valid_empty.changed_section_count, 1);
+    assert!(valid_empty.observation_commit.is_some());
+    assert_eq!(
+        storage
+            .open_section_current(&scope)
+            .expect("closed current state")
+            .iter()
+            .map(|section| section.state)
+            .collect::<Vec<_>>(),
+        vec![OpenSectionState::Closed, OpenSectionState::Closed]
+    );
     begin(&mut storage, &scope, "open-lkg-4", run, v1, "2026-07-14");
     let zero = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
@@ -426,11 +436,11 @@ fn applied_lkg_survives_failure_unsafe_empty_zero_intersection_race_and_restart(
             .expect("batch")
             .expect("state")
             .lkg_attempt_id,
-        Some(trace("open-lkg-1"))
+        Some(trace("open-lkg-3"))
     );
     assert_eq!(
         storage.open_section_current(&scope).expect("LKG")[0].state,
-        OpenSectionState::Open
+        OpenSectionState::Closed
     );
     assert_eq!(
         storage
@@ -438,8 +448,8 @@ fn applied_lkg_survives_failure_unsafe_empty_zero_intersection_race_and_restart(
             .expect("day counters"),
         bcsp_operational_storage::OpenAttemptCounters {
             attempted: 5,
-            succeeded: 1,
-            failed: 4,
+            succeeded: 2,
+            failed: 3,
             empty: 1,
         }
     );
@@ -450,7 +460,7 @@ fn applied_lkg_survives_failure_unsafe_empty_zero_intersection_race_and_restart(
         .open_batch_state(&scope)
         .expect("batch")
         .expect("state");
-    assert_eq!(batch.lkg_attempt_id, Some(trace("open-lkg-1")));
+    assert_eq!(batch.lkg_attempt_id, Some(trace("open-lkg-3")));
     assert_eq!(batch.last_failure_attempt_sequence, Some(5));
     assert_eq!(batch.last_failure_at.as_deref(), Some(COMPLETED));
     assert_eq!(
