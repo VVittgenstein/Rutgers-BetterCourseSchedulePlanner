@@ -23,7 +23,7 @@ pub use model::{
     SavedViewContent, SavedViewDefinition, SavedViewDeleteResult, SavedViewIncompatibility,
     SavedViewMatch, SavedViewMutation, SavedViewRevision, SavedViewsDeleteAllResult,
     SelectionMutation, SettingsRevision, SqliteConfiguration, StoredCurrentFilters, StoredSettings,
-    UnixMillis, UserStateRevision, VolumePercent, WalCheckpoint,
+    UnixMillis, UserStateRevision, VolumePercent, WalCheckpoint, WatchFastLaneSeconds,
 };
 pub use store::PersonalStateStore;
 

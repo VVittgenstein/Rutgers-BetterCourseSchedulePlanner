@@ -300,7 +300,8 @@ function SelectedSectionManager({
 }) {
   const i18n = useBcspI18n();
   const watch = useLiveWatch();
-  const inactiveCount = watch.selected.filter((sectionKey) => !watch.isActive(sectionKey)).length;
+  const inactiveCount = watch.selected.filter((sectionKey) =>
+    !watch.isActive(sectionKey) && watch.isWatchable(sectionKey)).length;
   return (
     <section aria-labelledby="watch-selected-title">
       <header className="watch-workspace__section-head">
@@ -323,16 +324,19 @@ function SelectedSectionManager({
             const active = watch.active.find((value) => sectionLabel(value.sectionKey) === sectionLabel(sectionKey));
             const pending = watch.pending.some((value) => sectionLabel(value) === sectionLabel(sectionKey));
             const observation = watch.observations.find((value) => sectionLabel(value.sectionKey) === sectionLabel(sectionKey));
+            const watchable = watch.isWatchable(sectionKey);
             return (
               <li className="watch-workspace__item" key={sectionLabel(sectionKey)}>
                 <div>
                   <div className="watch-workspace__identity">
                     <strong className="watch-workspace__index">{sectionKey.index}</strong>
-                    <span className="watch-workspace__badge" data-state={active === undefined ? 'SELECTED' : 'READY'}>
+                    <span className="watch-workspace__badge" data-state={active === undefined
+                      ? watchable ? 'SELECTED' : 'OUT_OF_RANGE'
+                      : 'READY'}>
                       {pending
                         ? i18n.t('watch.state.starting')
                         : active === undefined
-                          ? i18n.t('watch.state.selected')
+                          ? i18n.t(watchable ? 'watch.state.selected' : 'watch.term_out_of_range')
                           : i18n.t('watch.state.watching')}
                     </span>
                     {observation === undefined ? null : (
@@ -342,6 +346,9 @@ function SelectedSectionManager({
                     )}
                   </div>
                   <p className="watch-workspace__meta">{sectionKey.term} / {sectionKey.campus}</p>
+                  {active === undefined && !watchable ? (
+                    <p className="watch-workspace__meta">{i18n.t('watch.term_out_of_range_detail')}</p>
+                  ) : null}
                   {active === undefined ? null : (
                     <p className="watch-workspace__meta">
                       {i18n.t('watch.policy_summary', {

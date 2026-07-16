@@ -330,11 +330,18 @@ function renderWatch(
   audio = new FakeAudioController(),
   locale: SupportedLocale = 'en-US',
   productOverrides: Partial<ProductApiPort> = {},
+  initialWatchableTerms?: readonly string[],
+  initialSelected: readonly SectionKey[] = [],
 ) {
   const result = render(
     <AppRouterProvider initialPath="/">
       <BcspI18nProvider initialLocale={locale}>
-        <LiveWatchProvider audio={audio} runtime={runtime(watch, productOverrides)}>
+        <LiveWatchProvider
+          audio={audio}
+          initialSelected={initialSelected}
+          initialWatchableTerms={initialWatchableTerms}
+          runtime={runtime(watch, productOverrides)}
+        >
           <SelectionActions sections={sections} />
           <WatchWorkspace />
           <WatchToastRegion />
@@ -428,6 +435,34 @@ afterEach(() => {
 });
 
 describe('Watch workspace product flow', () => {
+  it('rejects new out-of-range selections while retaining an old one for removal', () => {
+    const current = section(1);
+    const old = { ...section(2), term: '2025-9' };
+    renderWatch(
+      [current, old],
+      new FakeWatchClient(),
+      new FakeAudioController(),
+      'en-US',
+      {},
+      ['2026-9', '2027-0'],
+      [old],
+    );
+
+    const oldAdd = screen.getByRole('button', { name: /Section 00002/u }) as HTMLButtonElement;
+    expect(oldAdd.disabled).toBe(false, 'an existing selection remains removable');
+    expect(screen.getAllByText('Outside watch range').length).toBeGreaterThan(0);
+    expect(screen.getByText(/selection is retained so you can remove it/u)).toBeTruthy();
+    const start = screen.getByRole('button', { name: /Start selected · 0/u }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    fireEvent.click(oldAdd);
+    expect(screen.queryByText(/selection is retained so you can remove it/u)).toBeNull();
+
+    const oldUnselected = screen.getByRole('button', { name: /Section 00002/u }) as HTMLButtonElement;
+    expect(oldUnselected.disabled).toBe(true);
+    fireEvent.click(oldUnselected);
+    expect(screen.getByLabelText('0 of 9 selected')).toBeTruthy();
+  });
+
   it('translates the Chinese Watch chrome while preserving Section identifiers', () => {
     const sectionKey = section(1);
     renderWatch(

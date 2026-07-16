@@ -37,6 +37,9 @@ function validSettings(value: LocalSettings): boolean {
     && Number.isInteger(value.openRefreshSeconds)
     && value.openRefreshSeconds >= 3
     && value.openRefreshSeconds <= 3600
+    && Number.isInteger(value.watchFastLaneSeconds)
+    && value.watchFastLaneSeconds >= 3
+    && value.watchFastLaneSeconds <= 60
     && Number.isInteger(value.volumePercent)
     && value.volumePercent >= 0
     && value.volumePercent <= 100
@@ -54,6 +57,7 @@ function sameSettings(left: LocalSettings, right: LocalSettings): boolean {
   return left.localeOverride === right.localeOverride
     && left.catalogRefreshMinutes === right.catalogRefreshMinutes
     && left.openRefreshSeconds === right.openRefreshSeconds
+    && left.watchFastLaneSeconds === right.watchFastLaneSeconds
     && left.volumePercent === right.volumePercent
     && left.soundPolicy.notificationMode === right.soundPolicy.notificationMode
     && left.soundPolicy.maxAudible === right.soundPolicy.maxAudible
@@ -83,6 +87,7 @@ export function SettingsPage({
   const localeId = useId();
   const catalogId = useId();
   const openId = useId();
+  const watchFastLaneId = useId();
   const volumeId = useId();
   const modeId = useId();
   const maximumId = useId();
@@ -300,6 +305,31 @@ export function SettingsPage({
                 type="number"
                 value={draft.openRefreshSeconds}
               />
+            </div>
+            <div className="local-personal__field">
+              <label htmlFor={watchFastLaneId}>{local.t('local.settings.watch_fast_lane')}</label>
+              <input
+                aria-describedby={`${watchFastLaneId}-hint`}
+                disabled={locked}
+                id={watchFastLaneId}
+                inputMode="numeric"
+                max={60}
+                min={3}
+                onChange={(event) => {
+                  const watchFastLaneSeconds = numberValue(event.currentTarget.value);
+                  updateDraft((current) => ({
+                    ...current,
+                    watchFastLaneSeconds,
+                  }));
+                }}
+                required
+                step={1}
+                type="number"
+                value={draft.watchFastLaneSeconds}
+              />
+              <p className="local-personal__meta" id={`${watchFastLaneId}-hint`}>
+                {local.t('local.settings.watch_fast_lane_hint')}
+              </p>
             </div>
             <div className="local-personal__field">
               <label htmlFor={volumeId}>{local.t('local.settings.volume')}</label>

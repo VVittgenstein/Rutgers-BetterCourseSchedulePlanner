@@ -14,8 +14,21 @@ export interface LocalSettings {
   readonly localeOverride: LocalLocaleOverride;
   readonly catalogRefreshMinutes: number;
   readonly openRefreshSeconds: number;
+  readonly watchFastLaneSeconds: number;
   readonly volumePercent: number;
   readonly soundPolicy: WatchPolicyV1;
+}
+
+export interface LocalTermPullRequest {
+  readonly contractVersion: 1;
+  readonly term: string;
+}
+
+export interface LocalTermPullResponse {
+  readonly contractVersion: 1;
+  readonly term: string;
+  readonly disposition: 'ENQUEUED' | 'ALREADY_REQUESTED' | 'ALREADY_READY';
+  readonly targetCount: number;
 }
 
 export interface StoredSettings {
@@ -99,7 +112,8 @@ export type WatchStopReason =
   | 'USER_REQUESTED'
   | 'CONNECTION_CLOSED'
   | 'HEARTBEAT_TIMEOUT'
-  | 'SERVICE_STOPPING';
+  | 'SERVICE_STOPPING'
+  | 'TERM_OUT_OF_RANGE';
 
 export type EpisodeDisposition =
   | { readonly kind: 'SECTION_CLOSED' }
@@ -290,6 +304,7 @@ function isLocalSettings(value: unknown): value is LocalSettings {
       'localeOverride',
       'catalogRefreshMinutes',
       'openRefreshSeconds',
+      'watchFastLaneSeconds',
       'volumePercent',
       'soundPolicy',
     ])
@@ -300,6 +315,9 @@ function isLocalSettings(value: unknown): value is LocalSettings {
     && isNonnegativeInteger(value.openRefreshSeconds)
     && value.openRefreshSeconds >= 3
     && value.openRefreshSeconds <= 3_600
+    && isNonnegativeInteger(value.watchFastLaneSeconds)
+    && value.watchFastLaneSeconds >= 3
+    && value.watchFastLaneSeconds <= 60
     && isNonnegativeInteger(value.volumePercent)
     && value.volumePercent <= 100
     && isWatchPolicy(value.soundPolicy);
@@ -394,7 +412,7 @@ function isDisposition(value: unknown): value is EpisodeDisposition {
   }
   return value.kind === 'WATCH_STOPPED'
     && hasKeys(value, ['kind', 'reason'])
-    && ['USER_REQUESTED', 'CONNECTION_CLOSED', 'HEARTBEAT_TIMEOUT', 'SERVICE_STOPPING']
+    && ['USER_REQUESTED', 'CONNECTION_CLOSED', 'HEARTBEAT_TIMEOUT', 'SERVICE_STOPPING', 'TERM_OUT_OF_RANGE']
       .includes(String(value.reason));
 }
 

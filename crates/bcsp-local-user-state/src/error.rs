@@ -9,6 +9,8 @@ pub enum SettingValueError {
     CatalogRefreshOutOfRange,
     #[error("Open refresh interval must be between 3 and 3600 seconds")]
     OpenRefreshOutOfRange,
+    #[error("watch Fast Lane interval must be between 3 and 60 seconds")]
+    WatchFastLaneOutOfRange,
     #[error("volume must be between 0 and 100 percent")]
     VolumeOutOfRange,
     #[error("timestamp must be a non-negative Unix millisecond value")]

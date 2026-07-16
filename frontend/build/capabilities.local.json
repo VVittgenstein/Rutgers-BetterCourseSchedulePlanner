@@ -15,6 +15,7 @@
     "en-us-zh-cn",
     "filter-schema",
     "local-run-counters",
+    "manual-term-pull",
     "open-status",
     "persistent-current-filters",
     "persistent-selected-sections",

@@ -6,7 +6,9 @@ use bcsp_application::{
     SystemApplicationClock,
 };
 use bcsp_contracts::{SystemTraceIdSource, TraceIdSource};
-use bcsp_open::{GeneralOpenInterval, OpenCounterAudience};
+use bcsp_open::{
+    GeneralOpenInterval, OpenCounterAudience, OpenRefreshIntervals, WatchOpenInterval,
+};
 
 use crate::LocalPrimaryDatabase;
 
@@ -36,7 +38,14 @@ impl RefreshPolicyProvider for LocalRefreshPolicyProvider {
         let open_interval =
             GeneralOpenInterval::local(u32::from(settings.open_refresh_seconds.get()))
                 .map_err(|_| RefreshPolicyReadError)?;
-        RefreshPolicy::try_new(catalog_interval, open_interval).map_err(|_| RefreshPolicyReadError)
+        let watch_interval =
+            WatchOpenInterval::local(u32::from(settings.watch_fast_lane_seconds.get()))
+                .map_err(|_| RefreshPolicyReadError)?;
+        RefreshPolicy::try_new_with_intervals(
+            catalog_interval,
+            OpenRefreshIntervals::new(open_interval, watch_interval),
+        )
+        .map_err(|_| RefreshPolicyReadError)
     }
 }
 

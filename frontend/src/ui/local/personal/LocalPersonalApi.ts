@@ -16,6 +16,8 @@ import {
   type HistoryPage,
   type LocalBootstrapData,
   type LocalSettings,
+  type LocalTermPullRequest,
+  type LocalTermPullResponse,
   type PersonalResetResult,
   type PreparedUserDataReset,
   type RenameSavedViewRequest,
@@ -48,6 +50,7 @@ export const LOCAL_PERSONAL_API_ROUTES = {
   resetCurrentFilters: { method: 'POST', path: '/api/v1/local/filters/reset' },
   prepareUserDataReset: { method: 'POST', path: '/api/v1/local/user-data-reset/prepare' },
   confirmUserDataReset: { method: 'POST', path: '/api/v1/local/user-data-reset/confirm' },
+  pullTerm: { method: 'POST', path: '/api/v1/local/terms/pull' },
 } as const;
 
 export interface LocalPersonalApiPort {
@@ -103,6 +106,7 @@ export interface LocalPersonalApiPort {
     confirmationToken: TraceId,
     signal?: AbortSignal,
   ): Promise<PersonalResetResult>;
+  pullTerm(request: LocalTermPullRequest, signal?: AbortSignal): Promise<LocalTermPullResponse>;
 }
 
 export class LocalPersonalApi implements LocalPersonalApiPort {
@@ -231,6 +235,10 @@ export class LocalPersonalApi implements LocalPersonalApiPort {
       { confirmationToken },
       signal,
     );
+  }
+
+  pullTerm(request: LocalTermPullRequest, signal?: AbortSignal): Promise<LocalTermPullResponse> {
+    return this.post(LOCAL_PERSONAL_API_ROUTES.pullTerm.path, request, signal);
   }
 
   private put<TRequest, TResponse>(

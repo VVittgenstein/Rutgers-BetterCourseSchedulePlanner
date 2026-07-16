@@ -301,7 +301,7 @@ impl PublicRuntime {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
-        self.watch.stop();
+        self.watch.seal_and_stop();
         if let Some(task) = self.maintenance_task.take() {
             task.abort();
             let _ = task.await;
@@ -314,12 +314,12 @@ impl PublicRuntime {
                 Err(_) => {
                     task.abort();
                     let _ = task.await;
-                    self.watch.stop();
+                    self.watch.seal_and_stop();
                     return Err(PublicRuntimeError::ShutdownTimeout);
                 }
             }
         }
-        self.watch.stop();
+        self.watch.seal_and_stop();
         Ok(())
     }
 }
@@ -330,7 +330,7 @@ impl Drop for PublicRuntime {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
-        self.watch.stop();
+        self.watch.seal_and_stop();
         if let Some(task) = self.maintenance_task.take() {
             task.abort();
         }
@@ -556,6 +556,16 @@ async fn handle_fallback(State(state): State<PublicHostState>, request: Request)
     if method.changes_state() && !authenticated_mutation(request.headers(), &state) {
         return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
     }
+    let scoped_status = method == RequestMethod::Get
+        && path == bcsp_application::PRODUCT_SERVICE_STATUS_PATH
+        && request.uri().query().is_some_and(|query| {
+            query
+                .split('&')
+                .any(|field| field.starts_with("activeTerm=") || field.starts_with("activeCampus="))
+        });
+    if scoped_status && !authenticated_session(request.headers(), &state) {
+        return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
+    }
     let query = request.uri().query().map(str::to_owned);
     let body = match to_bytes(request.into_body(), MAX_REQUEST_BODY_BYTES).await {
         Ok(body) => body.to_vec(),
@@ -768,6 +778,10 @@ fn authenticated_mutation(headers: &HeaderMap, state: &PublicHostState) -> bool 
     if header_text(headers, ORIGIN).as_deref() != Some(state.config.external_origin()) {
         return false;
     }
+    authenticated_session(headers, state)
+}
+
+fn authenticated_session(headers: &HeaderMap, state: &PublicHostState) -> bool {
     header_text_name(headers, SESSION_HEADER)
         .is_some_and(|nonce| matches!(state.sessions.locale(&nonce), Ok(Some(_))))
 }
@@ -1036,6 +1050,7 @@ mod tests {
     const TEST_ORIGIN: &str = "https://planner.example.test";
     const TEST_AUTHORITY: &str = "planner.example.test";
     static TEST_PRODUCT_ROUTE_INVENTORY: &[ExtensionRoute] = &[
+        ExtensionRoute::new(RequestMethod::Get, "/api/v1/service/status"),
         ExtensionRoute::new(RequestMethod::Get, "/api/v1/query/courses"),
         ExtensionRoute::new(RequestMethod::Post, "/api/v1/query/courses"),
     ];
@@ -1371,7 +1386,7 @@ mod tests {
             .await
             .expect("service status JSON");
         assert_eq!(service_status["protocolVersion"], 1);
-        assert_eq!(service_status["data"]["contractVersion"], 1);
+        assert_eq!(service_status["data"]["contractVersion"], 2);
         assert_eq!(service_status["data"]["runtime"], "PUBLIC");
 
         let unauthenticated = client
@@ -1687,6 +1702,27 @@ mod tests {
             .await
             .expect("wrong session mutation");
         assert_eq!(wrong_session.status(), StatusCode::FORBIDDEN);
+        let unauthenticated_scope = client
+            .get(request_url(
+                &runtime,
+                "/api/v1/service/status?activeTerm=72026&activeCampus=NB",
+            ))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .send()
+            .await
+            .expect("unauthenticated scoped status");
+        assert_eq!(unauthenticated_scope.status(), StatusCode::FORBIDDEN);
+        let wrong_scope_session = client
+            .get(request_url(
+                &runtime,
+                "/api/v1/service/status?activeTerm=72026&activeCampus=NB",
+            ))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .header(SESSION_HEADER, "00000000-0000-4000-8000-000000000001")
+            .send()
+            .await
+            .expect("wrong scoped-status session");
+        assert_eq!(wrong_scope_session.status(), StatusCode::FORBIDDEN);
         assert_eq!(routes.calls.load(Ordering::SeqCst), 0);
 
         let accepted = client
@@ -1706,6 +1742,17 @@ mod tests {
             .await
             .expect("shared-state read");
         assert_eq!(read.status(), StatusCode::OK);
+        let scoped_status = client
+            .get(request_url(
+                &runtime,
+                "/api/v1/service/status?activeTerm=72026&activeCampus=NB",
+            ))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .header(SESSION_HEADER, &nonce)
+            .send()
+            .await
+            .expect("authenticated scoped status");
+        assert_eq!(scoped_status.status(), StatusCode::OK);
         let unlisted_read = client
             .get(request_url(&runtime, "/api/v1/query/unlisted"))
             .header(HOST.as_str(), TEST_AUTHORITY)
@@ -1720,11 +1767,15 @@ mod tests {
             .await
             .expect("unlisted API mutation");
         assert_eq!(unlisted_mutation.status(), StatusCode::NOT_FOUND);
-        assert_eq!(routes.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(routes.calls.load(Ordering::SeqCst), 3);
         assert_eq!(routes.origin_starts.load(Ordering::SeqCst), 0);
         assert_eq!(
             routes.paths.lock().expect("route paths").as_slice(),
-            ["Post /api/v1/query/courses", "Get /api/v1/query/courses"]
+            [
+                "Post /api/v1/query/courses",
+                "Get /api/v1/query/courses",
+                "Get /api/v1/service/status",
+            ]
         );
 
         runtime.shutdown().await.expect("clean shutdown");

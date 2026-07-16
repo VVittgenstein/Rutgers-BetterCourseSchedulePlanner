@@ -1,11 +1,16 @@
 use std::collections::BTreeSet;
+use std::str::FromStr;
 
 use bcsp_contracts::{
     CatalogContentVersion, CatalogDiscoveryAvailability, CatalogDiscoveryStatusV1, ContractSchema,
-    SERVICE_STATUS_CONTRACT_VERSION, ServiceAvailabilitySummaryV1, ServiceAvailabilityV1,
+    SERVICE_STATUS_CONTRACT_VERSION, SERVICE_STATUS_V2_CONTRACT_VERSION,
+    ServiceAutomaticTermSummaryV2, ServiceAvailabilitySummaryV1, ServiceAvailabilityV1,
     ServiceIssueComponentV1, ServiceIssueRecoveryV1, ServiceIssueSeverityV1, ServiceIssueV1,
-    ServiceLevelV1, ServiceOperationPhaseV1, ServiceOperationV1, ServiceRuntimeV1, ServiceStatusV1,
-    ServiceTargetStatusV1, TermCampusKey, contract_manifest,
+    ServiceLevelV1, ServiceOperationPhaseV1, ServiceOperationStageV2, ServiceOperationV1,
+    ServiceOperationV2, ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceStatusV1,
+    ServiceStatusV2, ServiceTargetErrorV2, ServiceTargetStatusV1, ServiceTargetStatusV2,
+    ServiceTermWindowV2, ServiceVisibleTermV2, ServiceWorkStateV2, TermCampusKey, TermId, TraceId,
+    contract_manifest,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -17,6 +22,106 @@ fn schema(id: &str) -> ContractSchema {
         .into_iter()
         .find(|schema| schema.id == id)
         .unwrap_or_else(|| panic!("missing contract schema {id}"))
+}
+
+#[test]
+fn service_status_v2_schema_is_bound_to_wire_shapes_and_enum_values() {
+    let summer = TermId::try_from("72026").expect("summer");
+    let fall = TermId::try_from("92026").expect("fall");
+    let target = TermCampusKey::new(summer.clone(), "NB".try_into().expect("campus"));
+    let visible = ServiceVisibleTermV2 {
+        term: summer.clone(),
+        relative_offset: 0,
+        discovered: true,
+        auto_managed: true,
+        manual_pull_allowed: false,
+        watchable: true,
+    };
+    let term_window = ServiceTermWindowV2 {
+        current_term: summer.clone(),
+        next_term: fall,
+        visible_terms: vec![visible.clone()],
+    };
+    let summary = ServiceAutomaticTermSummaryV2 {
+        term: summer,
+        ready_target_count: 1,
+        total_target_count: 12,
+    };
+    let operation = ServiceOperationV2 {
+        target: target.clone(),
+        stage: ServiceOperationStageV2::OpenFetch,
+        started_at: OffsetDateTime::UNIX_EPOCH,
+    };
+    let error = ServiceTargetErrorV2 {
+        code: "CATALOG_UPSTREAM_TRANSPORT".to_owned(),
+        http_status: Some(503),
+        content_type: Some("application/json".to_owned()),
+        content_encoding: Some("gzip".to_owned()),
+        decoded_bytes: Some(123),
+        error_class: Some("TRANSPORT".to_owned()),
+        error_chain: Some("request timed out".to_owned()),
+        trace_id: Some(TraceId::from_str("00000000-0000-4000-8000-000000000001").expect("trace")),
+    };
+    let target_status = ServiceTargetStatusV2 {
+        target,
+        primary: true,
+        snapshot_availability: ServiceSnapshotAvailabilityV2::Ready,
+        work_state: ServiceWorkStateV2::RetryWait,
+        stage: None,
+        usable: true,
+        catalog_content_version: Some(CatalogContentVersion::try_from(1).expect("version")),
+        last_complete_at: Some(OffsetDateTime::UNIX_EPOCH),
+        next_retry_at: Some(OffsetDateTime::UNIX_EPOCH),
+        error: Some(error.clone()),
+    };
+    let status = ServiceStatusV2 {
+        contract_version: SERVICE_STATUS_V2_CONTRACT_VERSION,
+        observed_at: OffsetDateTime::UNIX_EPOCH,
+        runtime: ServiceRuntimeV1::Local,
+        level: ServiceLevelV1::Degraded,
+        discovery: CatalogDiscoveryStatusV1 {
+            availability: CatalogDiscoveryAvailability::Current,
+            latest_attempt: None,
+            last_success: None,
+            is_stale: false,
+            error: None,
+        },
+        term_window: term_window.clone(),
+        automatic_term_summaries: vec![summary.clone()],
+        operations: vec![operation.clone()],
+        targets: vec![target_status.clone()],
+        issues: vec![],
+    };
+
+    assert_object_binding("bcsp.service.visible-term.v2", &visible);
+    assert_object_binding("bcsp.service.term-window.v2", &term_window);
+    assert_object_binding("bcsp.service.automatic-term-summary.v2", &summary);
+    assert_object_binding("bcsp.service.operation.v2", &operation);
+    assert_object_binding("bcsp.service.target-error.v2", &error);
+    assert_object_binding("bcsp.service.target-status.v2", &target_status);
+    assert_object_binding("bcsp.service.status.v2", &status);
+
+    for (schema_id, actual) in [
+        (
+            "bcsp.service.operation-stage.v2",
+            enum_values(ServiceOperationStageV2::ALL),
+        ),
+        (
+            "bcsp.service.snapshot-availability.v2",
+            enum_values(ServiceSnapshotAvailabilityV2::ALL),
+        ),
+        (
+            "bcsp.service.work-state.v2",
+            enum_values(ServiceWorkStateV2::ALL),
+        ),
+    ] {
+        let expected = schema(schema_id)
+            .enum_values
+            .into_iter()
+            .map(Value::String)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{schema_id}");
+    }
 }
 
 fn assert_object_binding<T: Serialize>(schema_id: &str, value: &T) {

@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 use uuid::{Uuid, Variant, Version};
 
-use crate::{API_PROTOCOL_VERSION, ProtocolVersion};
+use crate::{API_PROTOCOL_VERSION, ProtocolVersion, TermCampusKey};
 
 macro_rules! define_api_error_codes {
     ($( $variant:ident => ($wire:literal, $message_key:literal) ),+ $(,)?) => {
@@ -246,6 +246,7 @@ pub enum ApiErrorDetail {
     Limit { name: DetailName, maximum: u32 },
     RetryAfterSeconds { seconds: u32 },
     CurrentRevision { revision: u64 },
+    TargetNotReady { target: TermCampusKey },
 }
 
 /// Generic error body for a separately versioned target-specific error set.

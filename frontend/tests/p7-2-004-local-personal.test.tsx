@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = {
   localeOverride: 'system',
   catalogRefreshMinutes: 60,
   openRefreshSeconds: 30,
+  watchFastLaneSeconds: 10,
   volumePercent: 70,
   soundPolicy: {
     notificationMode: 'ONE_SHOT',
@@ -157,6 +158,7 @@ function unexpected(): Promise<never> {
 function fakePersonalApi(overrides: Partial<LocalPersonalApiPort>): LocalPersonalApiPort {
   return {
     bootstrap: unexpected,
+    pullTerm: unexpected,
     settings: unexpected,
     updateSettings: unexpected,
     selection: unexpected,
@@ -363,6 +365,34 @@ describe('P7.2-004 local personal state', () => {
         expectedRevision: 2,
         value: next.value,
       },
+    });
+  });
+
+  it('registers manual term pull only on the Local API and sends the canonical request envelope', async () => {
+    const response = {
+      contractVersion: 1,
+      term: '12026',
+      disposition: 'ENQUEUED',
+      targetCount: 12,
+    } as const;
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({
+      protocolVersion: 1,
+      data: response,
+    }));
+    const api = new LocalPersonalApi(new ProductClient({
+      baseUrl: 'https://planner.invalid/',
+      fetch: fetchMock,
+      session: () => SESSION,
+    }));
+
+    await expect(api.pullTerm({ contractVersion: 1, term: '12026' })).resolves.toEqual(response);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('https://planner.invalid/api/v1/local/terms/pull');
+    expect(init?.method).toBe('POST');
+    expect(new Headers(init?.headers).get('x-bcsp-session')).toBe(SESSION);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      protocolVersion: 1,
+      payload: { contractVersion: 1, term: '12026' },
     });
   });
 

@@ -9,6 +9,7 @@ export function SectionSelectionAction({ sectionKey }: { readonly sectionKey: Se
   if (watch === null) return null;
   const selected = watch.isSelected(sectionKey);
   const active = watch.isActive(sectionKey);
+  const watchable = watch.isWatchable(sectionKey);
   const pending = watch.pending.some((value) =>
     value.term === sectionKey.term
     && value.campus === sectionKey.campus
@@ -21,7 +22,7 @@ export function SectionSelectionAction({ sectionKey }: { readonly sectionKey: Se
         })}
         aria-pressed={selected}
         className="watch-selection-action"
-        disabled={active || pending}
+        disabled={active || pending || (!selected && !watchable)}
         onClick={() => selected ? watch.remove(sectionKey) : watch.select(sectionKey)}
         type="button"
       >
@@ -29,6 +30,8 @@ export function SectionSelectionAction({ sectionKey }: { readonly sectionKey: Se
           ? i18n.t('watch.state.watching')
           : pending
             ? i18n.t('watch.state.starting')
+            : !watchable
+              ? i18n.t('watch.term_out_of_range')
             : selected
               ? i18n.t('watch.state.selected')
               : i18n.t('watch.selection.action')}

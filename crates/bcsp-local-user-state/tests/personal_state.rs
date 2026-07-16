@@ -13,7 +13,7 @@ use bcsp_local_user_state::{
     HistoryFilter, HistoryWriteOutcome, LocalSettings, LocaleOverride, MAX_SELECTED_SECTIONS,
     OpenRefreshSeconds, PageRequest, PersonalStateError, PersonalStateStore, SavedViewContent,
     SavedViewIncompatibility, SavedViewMatch, SavedViewRevision, SelectionMutation,
-    SettingsRevision, UnixMillis, UserStateRevision, VolumePercent,
+    SettingsRevision, UnixMillis, UserStateRevision, VolumePercent, WatchFastLaneSeconds,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -224,6 +224,10 @@ fn typed_settings_are_bounded_cas_persisted_and_saved_view_associated() {
     assert!(OpenRefreshSeconds::try_from(3600).is_ok());
     assert!(OpenRefreshSeconds::try_from(2).is_err());
     assert!(OpenRefreshSeconds::try_from(3601).is_err());
+    assert!(WatchFastLaneSeconds::try_from(3).is_ok());
+    assert!(WatchFastLaneSeconds::try_from(60).is_ok());
+    assert!(WatchFastLaneSeconds::try_from(2).is_err());
+    assert!(WatchFastLaneSeconds::try_from(61).is_err());
     assert!(VolumePercent::try_from(100).is_ok());
     assert!(VolumePercent::try_from(101).is_err());
 
@@ -236,6 +240,7 @@ fn typed_settings_are_bounded_cas_persisted_and_saved_view_associated() {
         locale_override: LocaleOverride::ZhCn,
         catalog_refresh_minutes: CatalogRefreshMinutes::try_from(1440).unwrap(),
         open_refresh_seconds: OpenRefreshSeconds::try_from(3600).unwrap(),
+        watch_fast_lane_seconds: WatchFastLaneSeconds::try_from(60).unwrap(),
         volume_percent: VolumePercent::try_from(73).unwrap(),
         sound_policy: WatchPolicyV1::new(
             WatchNotificationMode::Continuous,
@@ -267,6 +272,17 @@ fn typed_settings_are_bounded_cas_persisted_and_saved_view_associated() {
         PersonalStateStore::open(&path).unwrap().settings().unwrap(),
         stored
     );
+}
+
+#[test]
+fn legacy_settings_without_watch_fast_lane_use_the_ten_second_default() {
+    let mut legacy = serde_json::to_value(LocalSettings::default()).expect("settings JSON");
+    legacy
+        .as_object_mut()
+        .expect("settings object")
+        .remove("watchFastLaneSeconds");
+    let settings: LocalSettings = serde_json::from_value(legacy).expect("legacy settings");
+    assert_eq!(settings.watch_fast_lane_seconds.get(), 10);
 }
 
 #[test]

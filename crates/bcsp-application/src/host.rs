@@ -24,6 +24,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 const MAX_EXTENSION_BODY_BYTES: usize = 1024 * 1024;
+const LOOPBACK_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_HEADER: &str = "x-bcsp-session";
 pub const SHARED_WATCH_SUBPROTOCOL: &str = "bcsp.v1";
 const SOCKET_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
@@ -269,11 +270,26 @@ impl LoopbackServer {
             let _ = socket_maintenance.await;
         }
         if let Some(task) = self.task.take() {
-            task.await
-                .map_err(LoopbackServerError::Join)?
-                .map_err(LoopbackServerError::Serve)?;
+            drain_loopback_server_task(task, LOOPBACK_SHUTDOWN_DRAIN_TIMEOUT).await?;
         }
         Ok(())
+    }
+}
+
+async fn drain_loopback_server_task(
+    mut task: JoinHandle<Result<(), std::io::Error>>,
+    timeout: Duration,
+) -> Result<(), LoopbackServerError> {
+    match tokio::time::timeout(timeout, &mut task).await {
+        Ok(result) => result
+            .map_err(LoopbackServerError::Join)?
+            .map_err(LoopbackServerError::Serve),
+        Err(_) => {
+            tracing::warn!(code = "LOOPBACK_SHUTDOWN_DRAIN_TIMEOUT");
+            task.abort();
+            let _ = task.await;
+            Ok(())
+        }
     }
 }
 
@@ -509,10 +525,23 @@ async fn handle_extension(State(state): State<HostState>, request: Request) -> R
     }
 
     let method = RequestMethod::from_http(request.method());
+    let scoped_status = method == RequestMethod::Get
+        && request.uri().path() == crate::PRODUCT_SERVICE_STATUS_PATH
+        && request.uri().query().is_some_and(|query| {
+            query
+                .split('&')
+                .any(|field| field.starts_with("activeTerm=") || field.starts_with("activeCampus="))
+        });
     if method.changes_state()
         && (header_text(request.headers(), ORIGIN).as_deref() != Some(state.origin.as_str())
             || header_text_name(request.headers(), SESSION_HEADER).as_deref()
                 != Some(state.nonce.as_str()))
+    {
+        return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
+    }
+    if scoped_status
+        && header_text_name(request.headers(), SESSION_HEADER).as_deref()
+            != Some(state.nonce.as_str())
     {
         return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
     }
@@ -872,6 +901,18 @@ mod tests {
         .await
         .expect("shared socket maintenance tick");
         server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stuck_transport_drain_is_bounded_before_database_shutdown() {
+        let task = tokio::spawn(std::future::pending::<Result<(), std::io::Error>>());
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            drain_loopback_server_task(task, Duration::from_millis(20)),
+        )
+        .await
+        .expect("the loopback drain deadline must be bounded")
+        .expect("a bounded transport drain is a successful shutdown");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

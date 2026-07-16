@@ -6,6 +6,7 @@ use bcsp_contracts::{
     ServiceOperationPhaseV1, ServiceOperationV1, SystemTraceIdSource, TermCampusKey, TraceId,
     TraceIdSource,
 };
+use bcsp_domain::{RutgersTermWindow, RutgersTermWindowError, RutgersTermWindowScope};
 use bcsp_open::OpenCounterAudience;
 use bcsp_rutgers_client::{
     DiscoveryClientBuildError, DiscoveryFailure, DiscoveryTransportError, RutgersDiscoveryClient,
@@ -13,7 +14,7 @@ use bcsp_rutgers_client::{
 use thiserror::Error;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 
 use crate::refresh_generation::refresh_generation_interval;
@@ -25,8 +26,7 @@ use crate::{
     record_discovery_transport_failure, restore_refresh_targets,
 };
 
-/// Discovery is deliberately lower frequency than Catalog and Open polling. All three still use
-/// one serialized origin workflow: the coordinator is stopped before a discovery refresh begins.
+/// Discovery is deliberately lower frequency than Catalog and Open polling.
 pub const DISCOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TARGET_DEMAND_SCAN_INTERVAL: Duration = Duration::from_millis(250);
 const CI_NO_RUTGERS_ENVIRONMENT: &str = "BCSP_CI_NO_RUTGERS";
@@ -95,11 +95,36 @@ impl OfficialRefreshRuntime {
                 .map_err(OfficialRefreshRuntimeBuildError::Refresh)?,
         );
         let (shutdown, mut shutdown_receiver) = watch::channel(false);
+        let term_window_scope = match counter_audience {
+            OpenCounterAudience::Local { .. } => RutgersTermWindowScope::Local,
+            OpenCounterAudience::Public => RutgersTermWindowScope::Public,
+        };
+        let network_budget = Arc::new(Semaphore::new(crate::REFRESH_MAX_CONCURRENCY));
         let task = tokio::spawn(async move {
             let mut ids = SystemTraceIdSource;
             let mut current_targets = restore_refresh_targets(&storage).unwrap_or_default();
+            membership.replace(
+                current_targets
+                    .iter()
+                    .map(|registration| registration.target().clone()),
+            );
+            if term_window_scope == RutgersTermWindowScope::Local
+                && let Ok(window) =
+                    RutgersTermWindow::at(OffsetDateTime::now_utc(), term_window_scope)
+            {
+                restore_manual_term_demand(
+                    &storage,
+                    &current_targets,
+                    &target_refresh_demand,
+                    &window,
+                );
+            }
             let mut coordinator_runtime: Option<RefreshRuntime> = None;
             let mut wait_before_attempt = Duration::ZERO;
+            let mut active_window_terms =
+                RutgersTermWindow::at(OffsetDateTime::now_utc(), term_window_scope)
+                    .ok()
+                    .map(|window| (window.current_term().clone(), window.next_term().clone()));
 
             loop {
                 let mut wait_remaining = wait_before_attempt;
@@ -115,15 +140,55 @@ impl OfficialRefreshRuntime {
                             wait_remaining = wait_remaining.saturating_sub(wait_slice);
                             if let Some(runtime) = &coordinator_runtime {
                                 let demanded = target_refresh_demand.snapshot().unwrap_or_default();
-                                for target in demanded_refresh_targets(&current_targets, &demanded) {
+                                let manual_terms = target_refresh_demand
+                                    .manual_terms_snapshot()
+                                    .unwrap_or_default();
+                                let demanded_set = demanded.iter().cloned().collect::<BTreeSet<_>>();
+                                let Ok(window) = RutgersTermWindow::at(
+                                    OffsetDateTime::now_utc(),
+                                    term_window_scope,
+                                ) else {
+                                    tracing::error!(code = "TERM_CALENDAR_UNAVAILABLE");
+                                    continue;
+                                };
+                                let window_terms =
+                                    (window.current_term().clone(), window.next_term().clone());
+                                if active_window_terms
+                                    .as_ref()
+                                    .is_some_and(|active| active != &window_terms)
+                                {
+                                    active_window_terms = Some(window_terms);
+                                    break;
+                                }
+                                active_window_terms = Some(window_terms);
+                                let pending_manual_targets = pending_manual_refresh_targets(
+                                    &storage,
+                                    &current_targets,
+                                    &manual_terms,
+                                );
+                                let complete_snapshot_targets = complete_snapshot_targets(
+                                    &storage,
+                                    &current_targets,
+                                );
+                                for target in demanded_refresh_targets(
+                                    &current_targets,
+                                    &demanded,
+                                    &pending_manual_targets,
+                                    &window,
+                                ) {
                                     let key = target.target().clone();
-                                    if runtime.register_target(target).is_err() {
+                                    let registration = runtime.register_target_with_snapshot_state(
+                                        target,
+                                        !is_automatically_managed_target(&key, &window),
+                                        complete_snapshot_targets.contains(&key),
+                                    );
+                                    if registration.is_err() {
                                         tracing::error!(code = "SHARED_REFRESH_REGISTRATION_FAILED");
                                         continue;
                                     }
-                                    if runtime.activate_open(&key).is_err() {
-                                        tracing::error!(code = "SHARED_OPEN_ACTIVATION_FAILED");
-                                    }
+                                }
+                                if runtime.sync_product_demand(&demanded_set).is_err() {
+                                    tracing::error!(code = "SHARED_TARGET_DEMAND_SYNC_FAILED");
                                 }
                             }
                         }
@@ -136,17 +201,22 @@ impl OfficialRefreshRuntime {
                     break;
                 }
 
-                // Let an in-flight Catalog/Open attempt reach its durable terminal state before
-                // discovery touches the same Rutgers origin.
-                if let Some(runtime) = coordinator_runtime.take() {
-                    runtime.shutdown().await;
-                }
-                status.mark_stopped();
                 publish_discovering(&*status);
 
                 let observation_id = ids.next_trace_id();
                 let started_at = system_timestamp();
                 let request_id = ids.next_trace_id().to_string();
+                let discovery_permit = tokio::select! {
+                    changed = shutdown_receiver.changed() => {
+                        if changed.is_err() || *shutdown_receiver.borrow_and_update() {
+                            break;
+                        }
+                        continue;
+                    }
+                    permit = Arc::clone(&network_budget).acquire_owned() => {
+                        permit.expect("the process network budget remains open")
+                    }
+                };
                 let discovery_result = match &started_at {
                     Ok(started_at) => {
                         tokio::select! {
@@ -166,6 +236,7 @@ impl OfficialRefreshRuntime {
                         continue;
                     }
                 };
+                drop(discovery_permit);
                 let completed_at = match system_timestamp() {
                     Ok(completed_at) => completed_at,
                     Err(()) => {
@@ -197,14 +268,12 @@ impl OfficialRefreshRuntime {
                             true
                         }
                         Err(_) => {
-                            membership.replace([]);
                             tracing::error!(code = "DISCOVERY_PUBLISH_FAILED");
                             wait_before_attempt = DISCOVERY_RETRY_INTERVAL;
                             false
                         }
                     },
                     Err(failure) => {
-                        membership.replace([]);
                         let _ = record_discovery_transport_failure(
                             &storage,
                             observation_id,
@@ -229,11 +298,53 @@ impl OfficialRefreshRuntime {
                 }
 
                 let demanded = target_refresh_demand.snapshot().unwrap_or_default();
-                let active_targets = selected_refresh_targets(&current_targets, &demanded);
+                let manual_terms = target_refresh_demand
+                    .manual_terms_snapshot()
+                    .unwrap_or_default();
+                let pending_manual_targets =
+                    pending_manual_refresh_targets(&storage, &current_targets, &manual_terms);
+                let complete_snapshot_targets =
+                    complete_snapshot_targets(&storage, &current_targets);
+                let (active_targets, manual_targets) = match authoritative_refresh_targets(
+                    &current_targets,
+                    &demanded,
+                    &pending_manual_targets,
+                    RutgersTermWindow::at(OffsetDateTime::now_utc(), term_window_scope),
+                ) {
+                    Ok(selection) => selection,
+                    Err(error) => {
+                        tracing::error!(code = error.diagnostic_code());
+                        // The bundled calendar being unavailable is not an authoritative empty
+                        // discovery projection. Keep serving and maintaining the existing target
+                        // set until a valid window can be computed again.
+                        continue;
+                    }
+                };
+                if let Some(runtime) = &coordinator_runtime {
+                    for target in active_targets.iter().cloned() {
+                        let key = target.target().clone();
+                        let registration = runtime.register_target_with_snapshot_state(
+                            target,
+                            manual_targets.contains(&key),
+                            complete_snapshot_targets.contains(&key),
+                        );
+                        if registration.is_err() {
+                            tracing::error!(code = "SHARED_REFRESH_REGISTRATION_FAILED");
+                        }
+                    }
+                    if retain_authoritative_refresh_targets(&active_targets, |retained| {
+                        runtime.retain_registered_targets(retained)
+                    })
+                    .is_err()
+                    {
+                        tracing::error!(code = "SHARED_REFRESH_TARGET_SYNC_FAILED");
+                    }
+                    continue;
+                }
                 if active_targets.is_empty() {
                     continue;
                 }
-                let coordinator = SharedRefreshCoordinator::with_parts(
+                let coordinators = vec![SharedRefreshCoordinator::with_parts(
                     storage.clone(),
                     upstream.clone(),
                     policy.clone(),
@@ -244,9 +355,21 @@ impl OfficialRefreshRuntime {
                     watch_socket.clone(),
                     open_runtime.clone(),
                     status.clone(),
-                );
-                match RefreshRuntime::spawn(coordinator, active_targets) {
-                    Ok(runtime) => coordinator_runtime = Some(runtime),
+                )];
+                match RefreshRuntime::spawn_pool_with_target_states_and_budget(
+                    coordinators,
+                    active_targets,
+                    &manual_targets,
+                    &complete_snapshot_targets,
+                    Arc::clone(&network_budget),
+                ) {
+                    Ok(runtime) => {
+                        let demanded = demanded.iter().cloned().collect::<BTreeSet<_>>();
+                        if runtime.sync_product_demand(&demanded).is_err() {
+                            tracing::error!(code = "SHARED_PRODUCT_DEMAND_SYNC_FAILED");
+                        }
+                        coordinator_runtime = Some(runtime);
+                    }
                     Err(_) => tracing::error!(code = "SHARED_REFRESH_START_FAILED"),
                 }
             }
@@ -286,26 +409,172 @@ impl Drop for OfficialRefreshRuntime {
 
 fn selected_refresh_targets(
     available: &[crate::ScheduledRefreshTarget],
-    _demanded: &[TermCampusKey],
+    demanded: &[TermCampusKey],
+    pending_manual_targets: &BTreeSet<TermCampusKey>,
+    window: &RutgersTermWindow,
 ) -> Vec<crate::ScheduledRefreshTarget> {
-    // The search surface is gated on a complete discovery generation.  Every
-    // discovered target therefore receives its first Catalog/Open refresh
-    // without waiting for a query-generated demand that the disabled UI cannot
-    // produce. RefreshCoordinator still owns single-flight, cadence and watch
-    // priority ordering.
-    available.to_vec()
+    let visible_terms = window
+        .visible_terms()
+        .iter()
+        .map(|term| term.term().clone())
+        .collect::<BTreeSet<_>>();
+    let automatic_terms =
+        BTreeSet::from([window.current_term().clone(), window.next_term().clone()]);
+    let demanded = demanded.iter().cloned().collect::<BTreeSet<_>>();
+    available
+        .iter()
+        .filter(|registration| {
+            automatic_terms.contains(registration.target().term())
+                || (visible_terms.contains(registration.target().term())
+                    && (demanded.contains(registration.target())
+                        || pending_manual_targets.contains(registration.target())))
+        })
+        .cloned()
+        .collect()
+}
+
+fn authoritative_refresh_targets(
+    available: &[crate::ScheduledRefreshTarget],
+    demanded: &[TermCampusKey],
+    pending_manual_targets: &BTreeSet<TermCampusKey>,
+    window: Result<RutgersTermWindow, RutgersTermWindowError>,
+) -> Result<(Vec<crate::ScheduledRefreshTarget>, BTreeSet<TermCampusKey>), RutgersTermWindowError> {
+    let window = window?;
+    let active_targets =
+        selected_refresh_targets(available, demanded, pending_manual_targets, &window);
+    let manual_targets = active_targets
+        .iter()
+        .map(|registration| registration.target())
+        .filter(|target| !is_automatically_managed_target(target, &window))
+        .cloned()
+        .collect();
+    Ok((active_targets, manual_targets))
+}
+
+fn retain_authoritative_refresh_targets<E>(
+    active_targets: &[crate::ScheduledRefreshTarget],
+    retain: impl FnOnce(&BTreeSet<TermCampusKey>) -> Result<(), E>,
+) -> Result<(), E> {
+    let retained = active_targets
+        .iter()
+        .map(|target| target.target().clone())
+        .collect();
+    retain(&retained)
+}
+
+fn is_automatically_managed_target(target: &TermCampusKey, window: &RutgersTermWindow) -> bool {
+    target.term() == window.current_term() || target.term() == window.next_term()
 }
 
 fn demanded_refresh_targets(
     available: &[crate::ScheduledRefreshTarget],
     demanded: &[TermCampusKey],
+    pending_manual_targets: &BTreeSet<TermCampusKey>,
+    window: &RutgersTermWindow,
 ) -> Vec<crate::ScheduledRefreshTarget> {
     let demanded = demanded.iter().cloned().collect::<BTreeSet<_>>();
+    let visible_terms = window
+        .visible_terms()
+        .iter()
+        .map(|term| term.term().clone())
+        .collect::<BTreeSet<_>>();
     available
         .iter()
-        .filter(|registration| demanded.contains(registration.target()))
+        .filter(|registration| {
+            visible_terms.contains(registration.target().term())
+                && (demanded.contains(registration.target())
+                    || pending_manual_targets.contains(registration.target()))
+        })
         .cloned()
         .collect()
+}
+
+fn pending_manual_refresh_targets<S>(
+    storage: &S,
+    available: &[crate::ScheduledRefreshTarget],
+    manual_terms: &[bcsp_contracts::TermId],
+) -> BTreeSet<TermCampusKey>
+where
+    S: ProductStorageAccess,
+{
+    let manual_terms = manual_terms.iter().cloned().collect::<BTreeSet<_>>();
+    if manual_terms.is_empty() {
+        return BTreeSet::new();
+    }
+    let requested = available
+        .iter()
+        .filter(|registration| manual_terms.contains(registration.target().term()))
+        .map(|registration| registration.target().clone())
+        .collect::<BTreeSet<_>>();
+    let Ok(storage) = storage.lock_operational() else {
+        return requested;
+    };
+    requested
+        .into_iter()
+        .filter(|target| {
+            !storage
+                .complete_target_snapshot_state(target)
+                .is_ok_and(|state| state.ready)
+        })
+        .collect()
+}
+
+fn complete_snapshot_targets<S>(
+    storage: &S,
+    available: &[crate::ScheduledRefreshTarget],
+) -> BTreeSet<TermCampusKey>
+where
+    S: ProductStorageAccess,
+{
+    let Ok(storage) = storage.lock_operational() else {
+        return BTreeSet::new();
+    };
+    available
+        .iter()
+        .filter_map(|registration| {
+            storage
+                .complete_target_snapshot_state(registration.target())
+                .is_ok_and(|state| state.ready)
+                .then(|| registration.target().clone())
+        })
+        .collect()
+}
+
+fn restore_manual_term_demand<S>(
+    storage: &S,
+    available: &[crate::ScheduledRefreshTarget],
+    demand: &TargetRefreshDemand,
+    window: &RutgersTermWindow,
+) where
+    S: ProductStorageAccess,
+{
+    let manual_terms = window
+        .visible_terms()
+        .iter()
+        .filter(|term| !term.auto_managed())
+        .map(|term| term.term().clone())
+        .collect::<BTreeSet<_>>();
+    let Ok(storage) = storage.lock_operational() else {
+        return;
+    };
+    let mut requested_terms = BTreeSet::new();
+    for registration in available {
+        if !manual_terms.contains(registration.target().term()) {
+            continue;
+        }
+        let attempted = storage
+            .target_state(registration.target())
+            .ok()
+            .flatten()
+            .is_some_and(|state| state.last_attempt_sequence > 0);
+        if attempted {
+            requested_terms.insert(registration.target().term().clone());
+        }
+    }
+    drop(storage);
+    for term in requested_terms {
+        let _ = demand.request_manual_term(term);
+    }
 }
 
 fn system_timestamp() -> Result<String, ()> {
@@ -366,9 +635,15 @@ mod tests {
     use std::time::Duration;
 
     use bcsp_contracts::{ServiceOperationPhaseV1, ServiceRuntimeV1, TermCampusKey};
+    use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
     use bcsp_rutgers_client::OpenSectionsRequest;
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
 
-    use super::{publish_discovering, publish_retry_wait, selected_refresh_targets};
+    use super::{
+        authoritative_refresh_targets, is_automatically_managed_target, publish_discovering,
+        publish_retry_wait, retain_authoritative_refresh_targets, selected_refresh_targets,
+    };
     use crate::{ScheduledRefreshTarget, ServiceStatusRegistry};
 
     const SOURCE: &str =
@@ -392,48 +667,122 @@ mod tests {
         ScheduledRefreshTarget::try_new(target, request).expect("registration")
     }
 
+    fn summer_2026_window() -> RutgersTermWindow {
+        RutgersTermWindow::at(
+            OffsetDateTime::parse("2026-07-17T12:00:00Z", &Rfc3339).expect("timestamp"),
+            RutgersTermWindowScope::Local,
+        )
+        .expect("covered Rutgers calendar")
+    }
+
     #[test]
-    fn default_refresh_selects_every_discovered_target() {
+    fn default_refresh_selects_current_and_next_terms_only() {
         let available = vec![
             registration("12027", "NWK", 2027, "1"),
             registration("92026", "NB", 2026, "9"),
-            registration("12027", "NB", 2027, "1"),
+            registration("72026", "NB", 2026, "7"),
             registration("92026", "CAMDEN", 2026, "9"),
         ];
 
-        let selected = selected_refresh_targets(&available, &[])
-            .into_iter()
-            .map(|registration| registration.target().clone())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(selected.len(), 4);
-        assert_eq!(
-            selected,
-            available
-                .iter()
+        let selected =
+            selected_refresh_targets(&available, &[], &BTreeSet::new(), &summer_2026_window())
+                .into_iter()
                 .map(|registration| registration.target().clone())
-                .collect::<BTreeSet<_>>()
+                .collect::<BTreeSet<_>>();
+        assert_eq!(selected.len(), 3);
+        assert!(
+            selected
+                .iter()
+                .all(|target| matches!(target.term().as_str(), "72026" | "92026"))
         );
     }
 
     #[test]
-    fn default_refresh_does_not_cap_a_full_discovery_generation() {
-        let available = (0..135)
-            .map(|index| registration("92026", &format!("CAMPUS_{index:03}"), 2026, "9"))
-            .collect::<Vec<_>>();
+    fn explicit_local_demand_can_add_one_visible_nonautomatic_term() {
+        let demanded_target = TermCampusKey::try_new("02027", "NB").expect("target");
+        let unavailable_target = TermCampusKey::try_new("12025", "NB").expect("target");
+        let available = vec![
+            registration("72026", "NB", 2026, "7"),
+            registration("92026", "NB", 2026, "9"),
+            registration("02027", "NB", 2027, "0"),
+            registration("12025", "NB", 2025, "1"),
+        ];
 
-        let selected = selected_refresh_targets(&available, &[]);
+        let selected = selected_refresh_targets(
+            &available,
+            &[demanded_target.clone(), unavailable_target],
+            &BTreeSet::new(),
+            &summer_2026_window(),
+        )
+        .into_iter()
+        .map(|registration| registration.target().clone())
+        .collect::<BTreeSet<_>>();
 
-        assert_eq!(selected.len(), 135);
-        assert_eq!(
-            selected
+        assert_eq!(selected.len(), 3);
+        assert!(selected.contains(&demanded_target));
+        assert!(
+            !selected
                 .iter()
-                .map(|registration| registration.target().clone())
-                .collect::<BTreeSet<_>>(),
-            available
-                .iter()
-                .map(|registration| registration.target().clone())
-                .collect::<BTreeSet<_>>()
+                .any(|target| target.term().as_str() == "12025")
         );
+    }
+
+    #[test]
+    fn requested_manual_term_only_requeues_targets_without_a_complete_snapshot() {
+        let ready = TermCampusKey::try_new("02027", "NB").expect("ready target");
+        let newly_discovered = TermCampusKey::try_new("02027", "CM").expect("new target");
+        let available = vec![
+            registration("72026", "NB", 2026, "7"),
+            registration("92026", "NB", 2026, "9"),
+            registration("02027", "NB", 2027, "0"),
+            registration("02027", "CM", 2027, "0"),
+        ];
+        let selected = selected_refresh_targets(
+            &available,
+            &[],
+            &BTreeSet::from([newly_discovered.clone()]),
+            &summer_2026_window(),
+        )
+        .into_iter()
+        .map(|registration| registration.target().clone())
+        .collect::<BTreeSet<_>>();
+
+        assert!(!selected.contains(&ready));
+        assert!(selected.contains(&newly_discovered));
+    }
+
+    #[test]
+    fn successful_empty_projection_is_authoritative_but_calendar_failure_is_not() {
+        let (active, manual) =
+            authoritative_refresh_targets(&[], &[], &BTreeSet::new(), Ok(summer_2026_window()))
+                .expect("a valid term window makes an empty discovery projection authoritative");
+        assert!(active.is_empty());
+        assert!(manual.is_empty());
+        let mut retained = None;
+        retain_authoritative_refresh_targets(&active, |targets| {
+            retained = Some(targets.clone());
+            Ok::<(), ()>(())
+        })
+        .expect("an authoritative empty projection must still reach runtime retention");
+        assert_eq!(retained, Some(BTreeSet::new()));
+
+        let unavailable = RutgersTermWindow::at(
+            OffsetDateTime::parse("2030-01-01T12:00:00Z", &Rfc3339).expect("timestamp"),
+            RutgersTermWindowScope::Local,
+        );
+        assert!(authoritative_refresh_targets(&[], &[], &BTreeSet::new(), unavailable).is_err());
+    }
+
+    #[test]
+    fn ready_out_of_band_term_remains_manual_when_product_demand_re_registers_it() {
+        let window = summer_2026_window();
+        let current = TermCampusKey::try_new("72026", "NB").expect("current target");
+        let next = TermCampusKey::try_new("92026", "NB").expect("next target");
+        let local_manual = TermCampusKey::try_new("02027", "NB").expect("manual target");
+
+        assert!(is_automatically_managed_target(&current, &window));
+        assert!(is_automatically_managed_target(&next, &window));
+        assert!(!is_automatically_managed_target(&local_manual, &window));
     }
 
     #[test]

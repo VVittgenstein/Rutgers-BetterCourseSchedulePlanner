@@ -79,6 +79,7 @@ pub enum WatchStartAdmission {
     },
     SectionNotFound,
     TargetUnavailable,
+    TermOutOfRange,
 }
 
 impl WatchStartAdmission {
@@ -280,6 +281,14 @@ where
                     });
                     continue;
                 }
+                WatchStartAdmission::TermOutOfRange => {
+                    specs.push(CoreStartSpec {
+                        section: item.section_key,
+                        policy: core_policy(&item.policy),
+                        admission: CoreStartAdmission::TermOutOfRange,
+                    });
+                    continue;
+                }
             };
             if current
                 .as_ref()
@@ -338,6 +347,20 @@ where
             .core
             .stop_watch(connection_id, target.active_watch_id.trace_id())?;
         project_dispatch(&self.core, dispatch, None, WatchStopReason::UserRequested)
+    }
+
+    pub fn stop_section_with_reason(
+        &mut self,
+        connection_id: TraceId,
+        section: &SectionKey,
+        reason: WatchStopReason,
+    ) -> Result<WatchDispatch, WatchManagerError> {
+        let watch_id = self
+            .core
+            .watch_id_for_section(connection_id, section)
+            .ok_or(WatchManagerError::UnknownWatch)?;
+        let dispatch = self.core.stop_watch(connection_id, watch_id)?;
+        project_dispatch(&self.core, dispatch, None, reason)
     }
 
     pub fn update_policy(
@@ -652,6 +675,12 @@ where
                     WatchStartItemResultV1::Rejected {
                         section_key: value.section,
                         reason: WatchStartRejectionReason::TargetUnavailable,
+                    }
+                }
+                crate::effect::CoreStartDisposition::RejectedTermOutOfRange => {
+                    WatchStartItemResultV1::Rejected {
+                        section_key: value.section,
+                        reason: WatchStartRejectionReason::TermOutOfRange,
                     }
                 }
             }),

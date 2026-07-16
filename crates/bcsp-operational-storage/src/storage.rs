@@ -11,13 +11,13 @@ use time::format_description::well_known::Rfc3339;
 use crate::migration::{apply_migrations, probe_fts5, read_migration_records, sha256_hex};
 use crate::open::recover_interrupted_open_attempts;
 use crate::{
-    BeginRefreshAttemptCommand, CatalogCounts, CatalogRefreshCommand, CatalogSnapshot,
-    CourseTextSearchTokens, CourseVariantSearchHit, CourseVariantSearchResult,
-    EmptySnapshotDecision, FinishRefreshFailureCommand, MigrationRecord, ProvenanceEntityKind,
-    PublishOutcome, PublishedCatalogSnapshot, RefreshFailureStage, RefreshObservation,
-    RefreshStatus, StorageError, StorageIntegrityReport, StorageResult, StoredCanonicalFacts,
-    StoredCourseGroup, StoredCourseVariant, StoredOccurrence, StoredProvenance, StoredSection,
-    TargetState,
+    BeginRefreshAttemptCommand, CatalogCandidateOpenSnapshot, CatalogCounts, CatalogFailureAudit,
+    CatalogRefreshCommand, CatalogSnapshot, CourseTextSearchTokens, CourseVariantSearchHit,
+    CourseVariantSearchResult, EmptySnapshotDecision, FinishRefreshFailureCommand, MigrationRecord,
+    ProvenanceEntityKind, PublishOutcome, PublishedCatalogSnapshot, RefreshFailureStage,
+    RefreshObservation, RefreshStatus, StorageError, StorageIntegrityReport, StorageResult,
+    StoredCanonicalFacts, StoredCourseGroup, StoredCourseVariant, StoredOccurrence,
+    StoredProvenance, StoredSection, TargetState,
 };
 
 pub struct OperationalStorage {
@@ -154,6 +154,15 @@ impl OperationalStorage {
         &mut self,
         command: &FinishRefreshFailureCommand,
     ) -> StorageResult<()> {
+        self.finish_refresh_failure_with_audit(command, None)
+    }
+
+    /// Atomically finish a failed Catalog attempt and retain its bounded HTTP audit evidence.
+    pub fn finish_refresh_failure_with_audit(
+        &mut self,
+        command: &FinishRefreshFailureCommand,
+        audit: Option<&CatalogFailureAudit>,
+    ) -> StorageResult<()> {
         validate_timestamp("completed_at", &command.completed_at)?;
         validate_optional_sha256(
             "source_content_sha256",
@@ -161,7 +170,11 @@ impl OperationalStorage {
         )?;
         validate_safe_code("error_code", &command.error_code)?;
         validate_diagnostic_token(command.diagnostic_token.as_deref())?;
+        if let Some(audit) = audit {
+            validate_catalog_failure_audit(audit)?;
+        }
         let source_bytes = optional_u64_to_i64(command.source_bytes)?;
+        let decoded_bytes = optional_u64_to_i64(audit.and_then(|audit| audit.decoded_bytes))?;
 
         let transaction = self
             .connection
@@ -200,7 +213,9 @@ impl OperationalStorage {
              SET status = 'FAILED', completed_at = ?2,
                  source_content_sha256 = COALESCE(source_content_sha256, ?3),
                  source_bytes = COALESCE(source_bytes, ?4),
-                 error_stage = ?5, error_code = ?6, diagnostic_token = ?7
+                 error_stage = ?5, error_code = ?6, diagnostic_token = ?7,
+                 http_status = ?8, content_type = ?9, content_encoding = ?10,
+                 decoded_bytes = ?11, error_detail = ?12
              WHERE observation_id = ?1",
             params![
                 observation_id,
@@ -210,10 +225,60 @@ impl OperationalStorage {
                 command.stage.as_str(),
                 command.error_code,
                 command.diagnostic_token,
+                audit.and_then(|audit| audit.http_status).map(i64::from),
+                audit.and_then(|audit| audit.content_type.as_deref()),
+                audit.and_then(|audit| audit.content_encoding.as_deref()),
+                decoded_bytes,
+                audit.and_then(|audit| audit.error_chain.as_deref()),
             ],
         )?;
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Read the HTTP audit attached to one failed Catalog observation.
+    pub fn catalog_failure_audit(
+        &self,
+        observation_id: &TraceId,
+    ) -> StorageResult<Option<CatalogFailureAudit>> {
+        let observation_trace_id = *observation_id;
+        let observation_id = observation_trace_id.to_string();
+        let row = self
+            .connection
+            .query_row(
+                "SELECT http_status, content_type, content_encoding, decoded_bytes, error_detail
+                 FROM catalog_refresh_observations
+                 WHERE observation_id = ?1",
+                [&observation_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(StorageError::ObservationNotFound(observation_trace_id))?;
+        if row == (None, None, None, None, None) {
+            return Ok(None);
+        }
+        let audit = CatalogFailureAudit {
+            http_status: row
+                .0
+                .map(|value| {
+                    u16::try_from(value).map_err(|_| StorageError::StoredIntegerOutOfRange)
+                })
+                .transpose()?,
+            content_type: row.1,
+            content_encoding: row.2,
+            decoded_bytes: row.3.map(i64_to_u64).transpose()?,
+            error_chain: row.4,
+        };
+        validate_stored_catalog_failure_audit(&audit)?;
+        Ok(Some(audit))
     }
 
     pub fn apply_catalog_refresh(
@@ -314,6 +379,123 @@ impl OperationalStorage {
             );
         }
         result
+    }
+
+    /// Builds the exact Open reconciliation input for a staged Catalog without publishing it.
+    ///
+    /// The candidate version is derived from the same semantic/version rules as publication. A
+    /// suspect empty replacement returns `None`, because no new Catalog/Open pair may be formed.
+    pub fn candidate_open_catalog_snapshot(
+        &mut self,
+        observation_id: &TraceId,
+        empty_decision: EmptySnapshotDecision,
+    ) -> StorageResult<Option<CatalogCandidateOpenSnapshot>> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let metadata = load_staged_metadata(&transaction, *observation_id)?;
+        let target = target_from_id(&metadata.target_id)?;
+        let row = transaction.query_row(
+            "SELECT current_content_version, accepted_semantic_hash,
+                    group_count, variant_count, section_count, occurrence_count
+             FROM catalog_targets WHERE target_id = ?1",
+            [&metadata.target_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            },
+        )?;
+        let base_content_version = i64_to_u64(row.0)?;
+        let retained_counts = CatalogCounts {
+            course_groups: i64_to_u64(row.2)?,
+            course_variants: i64_to_u64(row.3)?,
+            sections: i64_to_u64(row.4)?,
+            occurrences: i64_to_u64(row.5)?,
+        };
+        let incoming_empty = metadata.counts == CatalogCounts::default();
+        let baseline_nonempty = retained_counts != CatalogCounts::default();
+        if incoming_empty && base_content_version > 0 && baseline_nonempty {
+            transaction.commit()?;
+            return Ok(None);
+        }
+        if !incoming_empty
+            && empty_decision != EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty
+        {
+            return Err(StorageError::InvalidCommand {
+                field: "empty_decision",
+                reason: "non-empty snapshots require the non-empty publication decision",
+            });
+        }
+        let changed = base_content_version == 0
+            || row.1.as_deref() != Some(metadata.semantic_sha256.as_str());
+        let initial_selector_membership_requested = incoming_empty
+            && base_content_version == 0
+            && empty_decision
+                == EmptySnapshotDecision::AcceptInitialSelectorConfirmedEmpty(
+                    crate::InitialEmptyProof::CurrentSelectorMembership,
+                );
+        let initial_valid_empty = initial_selector_membership_requested
+            && current_selector_contains_target(&transaction, &metadata.target_id)?;
+        if incoming_empty && base_content_version == 0 && !initial_valid_empty {
+            return Err(StorageError::InvalidCommand {
+                field: "empty_decision",
+                reason: "a first valid empty requires current persisted selector membership",
+            });
+        }
+        if incoming_empty
+            && base_content_version > 0
+            && !baseline_nonempty
+            && empty_decision != EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty
+        {
+            return Err(StorageError::InvalidCommand {
+                field: "empty_decision",
+                reason: "an established empty target accepts only an unchanged empty decision",
+            });
+        }
+        if incoming_empty && base_content_version > 0 && changed {
+            return Err(StorageError::InvalidCommand {
+                field: "empty_decision",
+                reason: "an established empty target accepts only an unchanged empty snapshot",
+            });
+        }
+        let content_version = if changed {
+            base_content_version
+                .checked_add(1)
+                .ok_or(StorageError::StoredIntegerOutOfRange)?
+        } else {
+            base_content_version
+        };
+        let mut statement = transaction.prepare(
+            "SELECT section_index FROM catalog_staging_sections
+             WHERE observation_id = ?1 ORDER BY section_index",
+        )?;
+        let indices = statement
+            .query_map([observation_id.to_string()], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let sections = indices
+            .into_iter()
+            .map(|index| {
+                SectionKey::try_new(target.term().as_str(), target.campus().as_str(), &index)
+                    .map_err(StorageError::Identity)
+            })
+            .collect::<StorageResult<Vec<_>>>()?;
+        drop(statement);
+        transaction.commit()?;
+        Ok(Some(CatalogCandidateOpenSnapshot {
+            observation_id: *observation_id,
+            base_content_version,
+            catalog: crate::OpenCatalogSnapshot {
+                target,
+                content_version,
+                sections,
+            },
+        }))
     }
 
     pub fn target_state(&self, target: &TermCampusKey) -> StorageResult<Option<TargetState>> {
@@ -2157,6 +2339,19 @@ fn stage_prepared_catalog_refresh(
     Ok(())
 }
 
+pub(crate) fn publish_staged_in_transaction(
+    transaction: &Transaction<'_>,
+    observation_id: TraceId,
+    empty_decision: EmptySnapshotDecision,
+) -> StorageResult<PublishOutcome> {
+    publish_staged(
+        transaction,
+        observation_id,
+        empty_decision,
+        PublishFaultPoint::None,
+    )
+}
+
 fn publish_staged(
     transaction: &Transaction<'_>,
     observation_id: TraceId,
@@ -2732,7 +2927,10 @@ fn validate_source_metadata_compatibility(
     Ok(())
 }
 
-fn clear_staging(transaction: &Transaction<'_>, observation_id: TraceId) -> StorageResult<()> {
+pub(crate) fn clear_staging(
+    transaction: &Transaction<'_>,
+    observation_id: TraceId,
+) -> StorageResult<()> {
     let observation_id = observation_id.to_string();
     transaction.execute(
         "DELETE FROM catalog_staging_provenance WHERE observation_id = ?1",
@@ -2796,6 +2994,17 @@ fn recover_interrupted_refreshes(connection: &mut Connection) -> StorageResult<(
 
 fn target_id(target: &TermCampusKey) -> String {
     format!("{}/{}", target.term(), target.campus())
+}
+
+fn target_from_id(value: &str) -> StorageResult<TermCampusKey> {
+    let (term, campus) = value
+        .split_once('/')
+        .ok_or(StorageError::InvalidStoredProjection {
+            table: "catalog_targets",
+            field: "target_id",
+            reason: "must contain term/campus identity",
+        })?;
+    TermCampusKey::try_new(term, campus).map_err(StorageError::Identity)
 }
 
 fn fts5_literal_and_query(tokens: &CourseTextSearchTokens) -> String {
@@ -2889,6 +3098,55 @@ pub(crate) fn validate_diagnostic_token(value: Option<&str>) -> StorageResult<()
         });
     }
     Ok(())
+}
+
+fn validate_catalog_failure_audit(audit: &CatalogFailureAudit) -> StorageResult<()> {
+    if audit
+        .http_status
+        .is_some_and(|status| !(100..=599).contains(&status))
+    {
+        return Err(StorageError::InvalidCommand {
+            field: "http_status",
+            reason: "must be a valid HTTP status",
+        });
+    }
+    if audit
+        .decoded_bytes
+        .is_some_and(|value| value > i64::MAX as u64)
+    {
+        return Err(StorageError::InvalidCommand {
+            field: "decoded_bytes",
+            reason: "must fit the durable signed 64-bit range",
+        });
+    }
+    validate_catalog_audit_text("content_type", audit.content_type.as_deref())?;
+    validate_catalog_audit_text("content_encoding", audit.content_encoding.as_deref())?;
+    validate_catalog_audit_text("error_chain", audit.error_chain.as_deref())?;
+    Ok(())
+}
+
+fn validate_catalog_audit_text(field: &'static str, value: Option<&str>) -> StorageResult<()> {
+    if let Some(value) = value
+        && (value.is_empty()
+            || value.len() > 4_096
+            || value
+                .bytes()
+                .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n')))
+    {
+        return Err(StorageError::InvalidCommand {
+            field,
+            reason: "must be non-empty, bounded, and free of NUL/CR/LF",
+        });
+    }
+    Ok(())
+}
+
+fn validate_stored_catalog_failure_audit(audit: &CatalogFailureAudit) -> StorageResult<()> {
+    validate_catalog_failure_audit(audit).map_err(|_| StorageError::InvalidStoredProjection {
+        table: "catalog_refresh_observations",
+        field: "Catalog failure audit",
+        reason: "violates the bounded redacted audit contract",
+    })
 }
 
 pub(crate) fn validate_text(

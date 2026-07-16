@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use bcsp_contracts::{
     OpenObservationV1, SectionKey, SystemTraceIdSource, TraceId, TraceIdSource,
-    WatchClientCommandV1, WsClientEnvelope, WsServerEnvelope, decode_versioned_envelope_json,
+    WatchClientCommandV1, WatchStopReason, WsClientEnvelope, WsServerEnvelope,
+    decode_versioned_envelope_json,
 };
 use bcsp_watch::{
     WatchCleanupReport, WatchClock, WatchDispatch, WatchInstant, WatchManager, WatchManagerError,
@@ -23,6 +24,10 @@ const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 /// roots must inject their authoritative shared storage view here.
 pub trait WatchAdmissionSource: Send + Sync + 'static {
     fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission;
+
+    fn term_in_range(&self, _section: &SectionKey) -> bool {
+        true
+    }
 }
 
 impl<F> WatchAdmissionSource for F
@@ -90,6 +95,7 @@ struct SocketState<C, I, E> {
     manager: WatchManager<C, I>,
     connections: BTreeMap<TraceId, mpsc::UnboundedSender<String>>,
     envelope_ids: E,
+    sealed: bool,
 }
 
 /// Typed WebSocket adapter around the one shared [`WatchManager`].
@@ -138,6 +144,7 @@ where
                 manager: WatchManager::try_new(clock, manager_ids, heartbeat_timeout)?,
                 connections: BTreeMap::new(),
                 envelope_ids,
+                sealed: false,
             }),
             admission,
             sink,
@@ -208,21 +215,52 @@ where
     where
         E: TraceIdSource,
     {
-        let outcome = match self.lock_state() {
-            Some(mut state) => match state.manager.tick() {
-                Ok(outcome) => {
-                    for report in &outcome.expired_connections {
-                        state.connections.remove(&report.connection_id);
+        let (forced, outcome) = match self.lock_state() {
+            Some(mut state) => {
+                let candidates = state
+                    .connections
+                    .keys()
+                    .copied()
+                    .flat_map(|connection_id| {
+                        state
+                            .manager
+                            .connection_watches(connection_id)
+                            .into_iter()
+                            .map(move |section| (connection_id, section))
+                    })
+                    .filter(|(_, section)| !self.admission.term_in_range(section))
+                    .collect::<Vec<_>>();
+                let forced = candidates
+                    .into_iter()
+                    .filter_map(|(connection_id, section)| {
+                        state
+                            .manager
+                            .stop_section_with_reason(
+                                connection_id,
+                                &section,
+                                WatchStopReason::TermOutOfRange,
+                            )
+                            .ok()
+                    })
+                    .collect::<Vec<_>>();
+                match state.manager.tick() {
+                    Ok(outcome) => {
+                        for report in &outcome.expired_connections {
+                            state.connections.remove(&report.connection_id);
+                        }
+                        (forced, outcome)
                     }
-                    outcome
+                    Err(error) => {
+                        tracing::error!(?error, "shared watch timer tick failed");
+                        return;
+                    }
                 }
-                Err(error) => {
-                    tracing::error!(?error, "shared watch timer tick failed");
-                    return;
-                }
-            },
+            }
             None => return,
         };
+        for dispatch in forced {
+            self.deliver(dispatch, None, true);
+        }
         for dispatch in outcome.dispatches {
             self.deliver(dispatch, None, true);
         }
@@ -231,10 +269,22 @@ where
         }
     }
 
-    /// Stops all active connection state and records cleanup actions without persisting watches.
+    /// Clears active connection state and records cleanup actions without persisting watches.
+    /// The adapter remains available for a later connection, as required after a user-data reset.
     pub fn stop(&self) {
+        self.stop_connections(false);
+    }
+
+    /// Seals this process-local adapter for runtime shutdown and clears active connection state.
+    /// Later transport reconnects are rejected.
+    pub fn seal_and_stop(&self) {
+        self.stop_connections(true);
+    }
+
+    fn stop_connections(&self, seal: bool) {
         let reports = match self.lock_state() {
             Some(mut state) => {
+                state.sealed |= seal;
                 let reports = state.manager.process_stop();
                 state.connections.clear();
                 reports
@@ -364,6 +414,9 @@ where
         let Some(mut state) = self.lock_state() else {
             return false;
         };
+        if state.sealed {
+            return false;
+        }
         if let Err(error) = state.manager.connect(connection_id) {
             tracing::warn!(?error, "rejected watch WebSocket connection");
             return false;
@@ -430,7 +483,7 @@ where
 mod tests {
     use std::str::FromStr;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     use bcsp_contracts::{
         ActiveWatchTargetV1, OpenEpisodeState, OpenObservationV1, ProtocolVersion,
@@ -488,6 +541,20 @@ mod tests {
 
         fn record_cleanup(&self, cleanup: &WatchCleanupReport) {
             self.cleanups.lock().unwrap().push(cleanup.clone());
+        }
+    }
+
+    struct MutableRangeAdmission {
+        in_range: Arc<AtomicBool>,
+    }
+
+    impl WatchAdmissionSource for MutableRangeAdmission {
+        fn admission_for(&self, _section: &SectionKey) -> WatchStartAdmission {
+            WatchStartAdmission::admitted(None)
+        }
+
+        fn term_in_range(&self, _section: &SectionKey) -> bool {
+            self.in_range.load(Ordering::SeqCst)
         }
     }
 
@@ -655,6 +722,92 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_stop_allows_a_new_connection_after_user_data_reset() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let first_connection = trace(90);
+        let second_connection = trace(91);
+        let (first_outbound, mut first_receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(first_connection, first_outbound));
+
+        socket.stop();
+
+        assert_eq!(socket.connection_count(), 0);
+        assert!(matches!(
+            first_receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
+        let (second_outbound, _second_receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(second_connection, second_outbound));
+        assert_eq!(socket.connection_count(), 1);
+
+        socket.stop();
+        socket.stop();
+        assert_eq!(socket.connection_count(), 0);
+    }
+
+    #[test]
+    fn sealed_socket_rejects_reconnects_during_runtime_shutdown() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let first_connection = trace(92);
+        let second_connection = trace(93);
+        let (first_outbound, mut first_receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(first_connection, first_outbound));
+
+        socket.seal_and_stop();
+        socket.seal_and_stop();
+
+        assert_eq!(socket.connection_count(), 0);
+        assert!(matches!(
+            first_receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
+        let (second_outbound, _second_receiver) = mpsc::unbounded_channel();
+        assert!(!socket.connect(second_connection, second_outbound));
+        assert_eq!(socket.connection_count(), 0);
+    }
+
+    #[test]
+    fn direct_start_watch_cannot_bypass_the_term_window_admission() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::TermOutOfRange),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let connection_id = trace(12);
+        let watched = section(12);
+        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(connection_id, outbound));
+
+        send(
+            &socket,
+            connection_id,
+            trace(13),
+            WatchClientCommandV1::StartWatch {
+                items: items([watched.clone()]),
+            },
+        );
+
+        let WatchServerEventV1::StartResult { result } = receive(&mut receiver).into_payload()
+        else {
+            panic!("START must produce START_RESULT");
+        };
+        assert_eq!(
+            result.items(),
+            &[WatchStartItemResultV1::Rejected {
+                section_key: watched,
+                reason: WatchStartRejectionReason::TermOutOfRange,
+            }]
+        );
+        assert_eq!(result.active_watch_count(), 0);
+        assert!(socket.connection_watches(connection_id).is_empty());
+    }
+
+    #[test]
     fn target_demand_deduplicates_the_same_section_across_connections() {
         let socket = socket(
             Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
@@ -806,6 +959,50 @@ mod tests {
 
         socket.disconnect(connection_id);
         assert_eq!(sink.cleanups.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn maintenance_tick_stops_a_watch_that_rolls_out_of_the_term_window() {
+        let in_range = Arc::new(AtomicBool::new(true));
+        let sink = Arc::new(RecordingSink::default());
+        let socket = socket(
+            Arc::new(MutableRangeAdmission {
+                in_range: in_range.clone(),
+            }),
+            sink.clone(),
+        );
+        let connection_id = trace(43);
+        let watched = section(43);
+        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(connection_id, outbound));
+        send(
+            &socket,
+            connection_id,
+            trace(44),
+            WatchClientCommandV1::StartWatch {
+                items: items([watched.clone()]),
+            },
+        );
+        assert!(matches!(
+            receive(&mut receiver).into_payload(),
+            WatchServerEventV1::StartResult { .. }
+        ));
+        assert_eq!(
+            socket.connection_watches(connection_id),
+            vec![watched.clone()]
+        );
+
+        in_range.store(false, Ordering::SeqCst);
+        socket.tick();
+
+        let WatchServerEventV1::WatchStopped { stopped } = receive(&mut receiver).into_payload()
+        else {
+            panic!("term-window rollover must emit WATCH_STOPPED");
+        };
+        assert_eq!(stopped.section_key, watched);
+        assert_eq!(stopped.reason, WatchStopReason::TermOutOfRange);
+        assert!(socket.connection_watches(connection_id).is_empty());
+        assert_eq!(sink.dispatches.lock().unwrap().len(), 2);
     }
 
     #[test]

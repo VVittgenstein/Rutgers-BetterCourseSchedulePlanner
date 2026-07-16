@@ -63,17 +63,36 @@ test('accepts both closed manifests and proves local capabilities survive as bui
   assert.equal(expectedManifestFor('local').readiness, 'UI_INTEGRATION_COMPLETE');
   assert.ok(expectedManifestFor('local').allowedCapabilities.includes('saved-views'));
   assert.ok(expectedManifestFor('local').allowedCapabilities.includes('reset-local-user-data'));
+  assert.ok(expectedManifestFor('local').allowedCapabilities.includes('manual-term-pull'));
   assert.ok(expectedManifestFor('local').allowedRoutes.includes('/watch'));
 
   const publicReport = verifyTargetArtifacts(fixture('public'));
   assert.equal(publicReport.state, 'PASS', publicReport.errors.join('\n'));
   assert.equal(expectedManifestFor('public').readiness, 'UI_INTEGRATION_COMPLETE');
   assert.ok(expectedManifestFor('public').allowedRoutes.includes('/watch'));
-  assert.equal(publicReport.publicZeroSurface.assertionCount, 72);
-  assert.equal(new Set(publicReport.publicZeroSurface.denyIds).size, 72);
-  assert.equal(new Set(publicReport.publicZeroSurface.validationIds).size, 72);
+  assert.equal(publicReport.publicZeroSurface.assertionCount, 76);
+  assert.equal(new Set(publicReport.publicZeroSurface.denyIds).size, 76);
+  assert.equal(new Set(publicReport.publicZeroSurface.validationIds).size, 76);
   assert.ok(publicReport.publicZeroSurface.denyIds.includes('P4-D-SAVED_VIEWS-DOM'));
   assert.ok(publicReport.publicZeroSurface.validationIds.includes('P4-Z-SAVED_VIEWS-BUNDLE'));
+  assert.ok(publicReport.publicZeroSurface.denyIds.includes('RC3-D-LOCAL_TERM_PULL-DOM'));
+  assert.ok(publicReport.publicZeroSurface.validationIds.includes('RC3-Z-LOCAL_TERM_PULL-BUNDLE'));
+});
+
+test('rejects Local term-pull client, DOM, i18n, and bundle markers from Public artifacts', () => {
+  const input = fixture('public');
+  input.files.set(
+    'assets/public.js',
+    'const route = "/api/v1/local/terms/pull"; const key = "scope.pull_failed";'
+      + ' const flag = "manualPullAllowed"; void route; void key; void flag;',
+  );
+  const report = verifyTargetArtifacts(input);
+  assert.equal(report.state, 'FAIL');
+  for (const surface of ['DOM', 'ROUTE', 'I18N', 'BUNDLE']) {
+    assert.ok(report.publicZeroSurface.violations.some(
+      ({ capability, surface: actual }) => capability === 'LOCAL_TERM_PULL' && actual === surface,
+    ));
+  }
 });
 
 test('rejects stale pre-integration readiness after the UI integration gate', () => {

@@ -95,7 +95,8 @@ impl PreparedLocalRuntime {
         )?;
         let mutation_store = PersonalStateStore::open(operational.paths().database())
             .map_err(LocalBootstrapError::PersonalState)?;
-        let personal = PersonalSurface::new(database, mutation_store, watch.clone());
+        let personal = PersonalSurface::new(database, mutation_store, watch.clone())
+            .with_target_refresh_demand(target_refresh_demand.clone());
         let nonce = SessionNonce::generate();
         let (shutdown_trigger, shutdown_requests) = local_shutdown_channel();
         let extension = Arc::new(LocalRouteExtension::with_product_routes(
@@ -242,7 +243,7 @@ impl RunningLocalRuntime {
             refresh,
         } = self;
         refresh.shutdown().await;
-        prepared.watch.stop();
+        prepared.watch.seal_and_stop();
         prepared.watch.flush_dispatch_sink();
         server.shutdown().await?;
         prepared.extension.checkpoint_wal()?;

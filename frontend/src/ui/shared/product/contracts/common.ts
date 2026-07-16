@@ -52,7 +52,8 @@ export type ApiErrorDetail =
   | { readonly kind: 'INVALID_FIELD'; readonly field: string }
   | { readonly kind: 'LIMIT'; readonly name: string; readonly maximum: number }
   | { readonly kind: 'RETRY_AFTER_SECONDS'; readonly seconds: number }
-  | { readonly kind: 'CURRENT_REVISION'; readonly revision: number };
+  | { readonly kind: 'CURRENT_REVISION'; readonly revision: number }
+  | { readonly kind: 'TARGET_NOT_READY'; readonly target: TermCampusKey };
 
 export interface ApiErrorBody {
   readonly code: ApiErrorCode;

@@ -176,9 +176,11 @@ function addToken(label: string, value: string): void {
 afterEach(() => {
   cleanup();
   loadOptions.mockClear();
+  document.documentElement.style.removeProperty('--bcsp-navigation-height');
+  Object.defineProperty(window, 'scrollY', { configurable: true, value: 0 });
 });
 
-describe('controlled 18-field FilterPanel', () => {
+describe('controlled 03–18 FilterPanel', () => {
   it('keeps touch, fine-pointer, press, and reduced-motion rules bounded', () => {
     expect(FILTER_PANEL_CSS).toContain('min-width: 2.75rem; min-height: 2.75rem');
     expect(FILTER_PANEL_CSS).toContain('@media (hover: hover) and (pointer: fine)');
@@ -187,22 +189,24 @@ describe('controlled 18-field FilterPanel', () => {
     expect(FILTER_PANEL_CSS).not.toContain('transition: all');
   });
 
-  it('renders exactly 18 continuously numbered V2 rows and no retired controls', () => {
+  it('renders the 16 filter rows continuously as 03–18 after scope moved outside the form', () => {
     const view = render(<Harness />);
     const rows = [...view.container.querySelectorAll<HTMLElement>('[data-filter-row]')];
 
-    expect(rows.map((row) => row.dataset.filterRow)).toEqual(FILTER_FIELD_IDS);
-    expect(rows).toHaveLength(18);
+    expect(rows.map((row) => row.dataset.filterRow)).toEqual(
+      FILTER_FIELD_IDS.filter((id) => id !== 'FLT-C01' && id !== 'FLT-C02'),
+    );
+    expect(rows).toHaveLength(16);
     expect([...view.container.querySelectorAll('.filter-panel__ordinal')]
       .map((node) => node.textContent)).toEqual(
-      Array.from({ length: 18 }, (_, index) => String(index + 1).padStart(2, '0')),
+      Array.from({ length: 16 }, (_, index) => String(index + 3).padStart(2, '0')),
     );
     for (const retired of ['FLT-C10', 'FLT-S02', 'FLT-S08', 'FLT-S11']) {
       expect(view.container.querySelector(`[data-filter-row="${retired}"]`)).toBeNull();
     }
     expect(screen.queryByLabelText(/Course locations|Section numbers|Building codes|Eligibility/u)).toBeNull();
     expect(screen.getByRole('form', { name: 'Course and Section filters' })).toBeTruthy();
-    expect(screen.getByText('Query matrix / 18 channels')).toBeTruthy();
+    expect(screen.getByText('Query matrix / 16 channels')).toBeTruthy();
   });
 
   it('uses the approved Chinese labels without translating Rutgers catalog values', () => {
@@ -210,11 +214,9 @@ describe('controlled 18-field FilterPanel', () => {
 
     expect(screen.getByRole('form', { name: '课程与课节筛选条件' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '建立精确搜索' })).toBeTruthy();
-    expect(screen.getByLabelText('学期')).toBeTruthy();
     expect(screen.getAllByText('关键词匹配').length).toBeGreaterThan(0);
     expect(screen.getByText('Index号索引')).toBeTruthy();
     expect(screen.getByText('子校区')).toBeTruthy();
-    expect(screen.getByRole('option', { name: 'Fall 2026 / T2026F' })).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('搜索学科目录'), {
       target: { value: 'Subject 299' },
@@ -222,17 +224,16 @@ describe('controlled 18-field FilterPanel', () => {
     expect(screen.getByRole('checkbox', { name: /S299.*Subject 299/u })).toBeTruthy();
   });
 
-  it('disables term, campus, dictionaries, and submit while complete data is not ready', () => {
+  it('disables dictionaries and submit while the applied target is not ready', () => {
     const view = render(<Harness catalogDiscovery={discovery(0)} searchAvailable={false} />);
     const gate = view.container.querySelector<HTMLFieldSetElement>('.filter-panel__gate');
 
     expect(gate?.disabled).toBe(true);
-    expect(gate?.getAttribute('aria-busy')).toBe('true');
-    expect((screen.getByLabelText('Term') as HTMLSelectElement).disabled).toBe(true);
-    expect((screen.getByRole('checkbox', { name: /New Brunswick/u }) as HTMLInputElement).disabled).toBe(true);
+    expect(gate?.getAttribute('aria-busy')).toBeNull();
+    expect((screen.getByRole('combobox', { name: 'Keyword match' }) as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getAllByText('Loading subject and filter options…').length).toBeGreaterThan(0);
-    expect(screen.getByText(/complete course catalog and live availability data/u)).toBeTruthy();
+    expect(screen.getAllByText('Apply a ready query range').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Choose at least one ready Campus above/u)).toBeTruthy();
   });
 
   it('only commits published Keyword and Instructor candidates with case-insensitive lookup', async () => {
@@ -264,8 +265,6 @@ describe('controlled 18-field FilterPanel', () => {
   it('serializes all retained fields, including dictionary-backed Level, Subcampus, and Exam', async () => {
     render(<Harness />);
 
-    fireEvent.click(within(screen.getByRole('group', { name: 'Campus' }))
-      .getByRole('checkbox', { name: /Newark/u }));
     fireEvent.change(screen.getByLabelText('Search subject dictionary'), {
       target: { value: 'Subject 299' },
     });
@@ -310,7 +309,7 @@ describe('controlled 18-field FilterPanel', () => {
 
     expect(toFilterValuesV1(state())).toEqual({
       term: 'T2026F',
-      campuses: ['NB', 'NK'],
+      campuses: ['NB'],
       subjects: ['S299'],
       keywords: ['structures'],
       courseNumbers: ['CS111'],
@@ -342,7 +341,7 @@ describe('controlled 18-field FilterPanel', () => {
     expect(state().core).toEqual({ codes: ['QQ'], mode: 'ANY' });
   });
 
-  it('shows incompatible Saved View Core values and clears dependent dictionaries on target change', () => {
+  it('shows and explicitly removes incompatible Saved View Core values', () => {
     const view = render(<Harness initial={{
       ...createNeutralFilterState('T2026F'),
       campuses: ['NB'],
@@ -358,18 +357,133 @@ describe('controlled 18-field FilterPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove incompatible Core code LEGACY' }));
     expect(state().core).toEqual({ codes: [], mode: 'ALL' });
 
-    fireEvent.click(within(screen.getByRole('group', { name: 'Campus' }))
-      .getByRole('checkbox', { name: /Newark/u }));
     expect(state()).toMatchObject({
-      campuses: ['NB', 'NK'],
-      keywords: [],
-      levels: [],
-      instructors: [],
-      meetingLocations: { locations: [], mode: 'ALL_REQUIRED_MEETINGS' },
-      examCodes: [],
+      campuses: ['NB'],
+      keywords: ['data'],
+      levels: ['U'],
+      instructors: ['Smith, Jane'],
+      meetingLocations: { locations: ['BUSCH'], mode: 'ALL_REQUIRED_MEETINGS' },
+      examCodes: ['A'],
     });
     expect(view.container.querySelector('[data-filter-row="FLT-S07"]')).not.toBeNull();
   });
+
+  it('moves from 03–09 to 10–18 inside the desktop rail, focuses the new summary, and preserves values', async () => {
+    const view = render(
+      <div className="bcsp-search-workspace__filters" style={{ overflowY: 'auto' }}>
+        <Harness />
+      </div>,
+    );
+    const rail = view.container.querySelector<HTMLElement>('.bcsp-search-workspace__filters');
+    if (rail === null) throw new Error('filter rail is required');
+    Object.defineProperties(rail, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 1200 },
+    });
+    Object.defineProperty(rail, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        top: 100, bottom: 500, left: 0, right: 500, width: 500, height: 400,
+        x: 0, y: 100, toJSON() {},
+      }),
+    });
+    const stickyHeader = view.container.querySelector<HTMLElement>('.filter-panel__head');
+    if (stickyHeader === null) throw new Error('sticky filter header is required');
+    Object.defineProperty(stickyHeader, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        top: 100, bottom: 180, left: 0, right: 500, width: 500, height: 80,
+        x: 0, y: 100, toJSON() {},
+      }),
+    });
+
+    addToken('Course numbers', '198111');
+    const sectionSummary = screen.getByText('Same-Section constraints').closest('summary');
+    if (sectionSummary === null) throw new Error('Section summary is required');
+    Object.defineProperty(sectionSummary, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        top: 360, bottom: 410, left: 0, right: 500, width: 500, height: 50,
+        x: 0, y: 360, toJSON() {},
+      }),
+    });
+
+    fireEvent.click(sectionSummary);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(sectionSummary);
+      expect(rail.scrollTop).toBe(180);
+    });
+    expect(state().courseNumbers).toEqual(['198111']);
+    expect((sectionSummary.parentElement as HTMLDetailsElement).open).toBe(true);
+    expect(screen.getByText('Course constraints').closest('details')?.hasAttribute('open')).toBe(false);
+  });
+
+  it.each(['Enter', ' '])(
+    'returns from 10–18 to 03–09 with %s keyboard activation and a sticky-safe window position',
+    async (key) => {
+      const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+      document.documentElement.style.setProperty('--bcsp-navigation-height', '64px');
+      Object.defineProperty(window, 'scrollY', { configurable: true, value: 100 });
+      render(<Harness />);
+
+      const sectionSummary = screen.getByText('Same-Section constraints').closest('summary');
+      const courseSummary = screen.getByText('Course constraints').closest('summary');
+      if (sectionSummary === null || courseSummary === null) {
+        throw new Error('both summaries are required');
+      }
+      fireEvent.click(sectionSummary);
+      await waitFor(() => expect(document.activeElement).toBe(sectionSummary));
+      Object.defineProperty(courseSummary, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          top: 400, bottom: 450, left: 0, right: 500, width: 500, height: 50,
+          x: 0, y: 400, toJSON() {},
+        }),
+      });
+
+      fireEvent.keyDown(courseSummary, { key });
+      (courseSummary.parentElement as HTMLDetailsElement).open = true;
+      fireEvent(courseSummary.parentElement as HTMLDetailsElement, new Event('toggle'));
+      await waitFor(() => {
+        expect(document.activeElement).toBe(courseSummary);
+        expect(scrollTo).toHaveBeenLastCalledWith({ behavior: 'auto', top: 436 });
+      });
+      expect(screen.getByText('Same-Section constraints').closest('details')?.hasAttribute('open')).toBe(false);
+      document.documentElement.style.removeProperty('--bcsp-navigation-height');
+    },
+  );
+
+  it.each(['mouse', 'Enter', ' '] as const)(
+    'supports %s activation in both 03–09 → 10–18 and 10–18 → 03–09 directions',
+    async (method) => {
+      vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+      render(<Harness />);
+      const sectionSummary = screen.getByText('Same-Section constraints').closest('summary');
+      const courseSummary = screen.getByText('Course constraints').closest('summary');
+      if (sectionSummary === null || courseSummary === null) {
+        throw new Error('both summaries are required');
+      }
+      const activate = (summary: HTMLElement) => {
+        if (method === 'mouse') {
+          fireEvent.click(summary);
+          return;
+        }
+        fireEvent.keyDown(summary, { key: method });
+        (summary.parentElement as HTMLDetailsElement).open = true;
+        fireEvent(summary.parentElement as HTMLDetailsElement, new Event('toggle'));
+      };
+
+      activate(sectionSummary);
+      await waitFor(() => expect(document.activeElement).toBe(sectionSummary));
+      expect((sectionSummary.parentElement as HTMLDetailsElement).open).toBe(true);
+      expect((courseSummary.parentElement as HTMLDetailsElement).open).toBe(false);
+
+      activate(courseSummary);
+      await waitFor(() => expect(document.activeElement).toBe(courseSummary));
+      expect((courseSummary.parentElement as HTMLDetailsElement).open).toBe(true);
+      expect((sectionSummary.parentElement as HTMLDetailsElement).open).toBe(false);
+    },
+  );
 
   it('adds/removes an availability window and submits once while preserving the target', () => {
     const onSubmit = vi.fn();

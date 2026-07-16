@@ -252,7 +252,7 @@ describe('shell data state', () => {
     expect(filterSchema).toHaveBeenCalledTimes(1);
   });
 
-  it('recovers a first-start EMPTY discovery from service-driven revisions without reloading schema', async () => {
+  it('keeps the shell renderable through empty discovery revisions and hydrates without reloading schema', async () => {
     const initial = discovery('UNAVAILABLE_NO_FIRST_SUCCESS', 0, 'first-start-empty');
     const stillEmpty = discovery('CURRENT', 0, 'discovery-in-progress');
     const recovered = catalogHydratedDiscovery(discovery('CURRENT', 1, 'discovery-published'));
@@ -275,11 +275,11 @@ describe('shell data state', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(result.current.state).toMatchObject({ status: 'EMPTY', discovery: initial });
+    expect(result.current.state).toMatchObject({ status: 'READY', discovery: initial });
 
     rerender({ revision: 'discovered' });
     await act(async () => { await Promise.resolve(); });
-    expect(result.current.state).toMatchObject({ status: 'EMPTY', discovery: stillEmpty });
+    expect(result.current.state).toMatchObject({ status: 'READY', discovery: stillEmpty });
     expect(catalogDiscovery).toHaveBeenCalledTimes(2);
 
     rerender({ revision: 'published' });
@@ -332,8 +332,8 @@ describe('shell data state', () => {
 
   it.each([
     ['STALE_LAST_SUCCESS', 1, 'READY', 'STALE_LAST_SUCCESS'],
-    ['UNAVAILABLE_NO_FIRST_SUCCESS', 1, 'EMPTY', 'UNAVAILABLE'],
-    ['CURRENT', 0, 'EMPTY', 'CURRENT'],
+    ['UNAVAILABLE_NO_FIRST_SUCCESS', 1, 'READY', 'UNAVAILABLE'],
+    ['CURRENT', 0, 'READY', 'CURRENT'],
   ] as const)(
     'classifies %s with %i targets as %s without hiding provenance',
     async (availability, targetCount, status, discoveryState) => {

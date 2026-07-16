@@ -14,7 +14,7 @@ import {
   type CatalogDiscoveryResponseV1,
   type FilterOptionsFieldV2,
   type FilterSchemaV1,
-  type ServiceStatusV1,
+  type ServiceStatusV2,
 } from '../src/ui/shared/product';
 import { FilterPanel } from '../src/ui/shared/search/filters';
 import { SEARCH_WORKSPACE_CSS } from '../src/ui/shared/search/searchStyles';
@@ -61,8 +61,8 @@ const discovery: CatalogDiscoveryResponseV1 = {
 
 afterEach(cleanup);
 
-describe('RC2 course workspace contract', () => {
-  it('renders exactly 18 filters and disables the entire target form until both datasets are current', () => {
+describe('RC3 course workspace contract', () => {
+  it('renders exactly 16 search filters after the two scope controls and disables only 03–18', () => {
     const view = render(
       <BcspI18nProvider initialLocale="en-US">
         <FilterPanel
@@ -76,10 +76,11 @@ describe('RC2 course workspace contract', () => {
         />
       </BcspI18nProvider>,
     );
-    expect(view.container.querySelectorAll('[data-filter-row]')).toHaveLength(18);
-    expect(screen.getByRole('combobox', { name: 'Term' }).matches(':disabled')).toBe(true);
-    expect(screen.getByRole('checkbox', { name: /New Brunswick/u }).matches(':disabled')).toBe(true);
-    expect(screen.getAllByText('Loading subject and filter options…').length).toBeGreaterThan(0);
+    expect(view.container.querySelectorAll('[data-filter-row]')).toHaveLength(16);
+    expect(screen.queryByRole('combobox', { name: 'Term' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Campus' })).toBeNull();
+    expect(screen.getByRole('combobox', { name: 'Keyword match' }).matches(':disabled')).toBe(true);
+    expect(screen.getAllByText('Apply a ready query range').length).toBeGreaterThan(0);
     expect(view.container.querySelector('[data-filter-row="FLT-C10"]')).toBeNull();
     expect(view.container.querySelector('[data-filter-row="FLT-S02"]')).toBeNull();
     expect(view.container.querySelector('[data-filter-row="FLT-S08"]')).toBeNull();
@@ -139,24 +140,20 @@ describe('RC2 course workspace contract', () => {
     expect(await screen.findByText('G · 研究生')).toBeTruthy();
   });
 
-  it('requires complete current Catalog and Open summaries and keeps the widened layout', () => {
+  it('gates only the exact applied V2 targets and keeps READY plus retry usable', () => {
     const status = {
-      catalog: { availableTargetCount: 135, currentTargetCount: 135, staleTargetCount: 0, totalTargetCount: 135, unavailableTargetCount: 0 },
-      open: { availableTargetCount: 135, currentTargetCount: 134, staleTargetCount: 0, totalTargetCount: 135, unavailableTargetCount: 1 },
+      contractVersion: 2,
+      automaticTermSummaries: [{ term: '92026', readyTargetCount: 1, totalTargetCount: 2 }],
+      targets: [
+        { target: { term: '92026', campus: 'NB' }, usable: true, workState: 'RETRY_WAIT' },
+        { target: { term: '92026', campus: 'NK' }, usable: false, workState: 'RETRY_WAIT' },
+      ],
       issues: [],
-    } as unknown as ServiceStatusV1;
+    } as unknown as ServiceStatusV2;
     expect(isSearchDataReady(undefined)).toBe(false);
     expect(isSearchDataReady(status)).toBe(false);
-    expect(isSearchDataReady({
-      ...status,
-      open: {
-        ...status.open,
-        currentTargetCount: 134,
-        totalTargetCount: 134,
-        unavailableTargetCount: 0,
-      },
-    })).toBe(false);
-    expect(isSearchDataReady({ ...status, open: { ...status.open, currentTargetCount: 135, unavailableTargetCount: 0 } })).toBe(true);
+    expect(isSearchDataReady(status, { term: '92026', campuses: ['NB'] })).toBe(true);
+    expect(isSearchDataReady(status, { term: '92026', campuses: ['NB', 'NK'] })).toBe(false);
     expect(SEARCH_WORKSPACE_CSS).toContain('clamp(26rem, 28vw, 34rem)');
   });
 });

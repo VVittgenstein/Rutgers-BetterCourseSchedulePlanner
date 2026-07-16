@@ -6,8 +6,10 @@ use bcsp_application::{
     WatchAdmissionSource,
 };
 use bcsp_contracts::SectionKey;
+use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_open::{OpenCounterAudience, OpenProjectionError, project_current_open_observation};
 use bcsp_watch::{WatchManagerError, WatchStartAdmission};
+use time::OffsetDateTime;
 
 use crate::fixed_public_refresh_policy;
 
@@ -19,6 +21,9 @@ struct PublicWatchAdmission {
 
 impl WatchAdmissionSource for PublicWatchAdmission {
     fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission {
+        if !self.term_in_range(section) {
+            return WatchStartAdmission::TermOutOfRange;
+        }
         let target = section.target();
         let Ok(snapshot) = self.open_runtime.snapshot(&target) else {
             return WatchStartAdmission::TargetUnavailable;
@@ -34,6 +39,14 @@ impl WatchAdmissionSource for PublicWatchAdmission {
             section,
             &runtime,
         ))
+    }
+
+    fn term_in_range(&self, section: &SectionKey) -> bool {
+        RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Public).is_ok_and(
+            |window| {
+                section.term() == window.current_term() || section.term() == window.next_term()
+            },
+        )
     }
 }
 

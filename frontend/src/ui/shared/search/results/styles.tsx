@@ -53,6 +53,7 @@ export const SEARCH_RESULTS_CSS = String.raw`
 .search-results__label,
 .search-results__page-label {
   color: var(--result-muted);
+  overflow-wrap: anywhere;
 }
 
 .search-results__heading,
@@ -128,6 +129,10 @@ export const SEARCH_RESULTS_CSS = String.raw`
 .search-results__variant-summary {
   min-height: 2.75rem;
   padding: 0.8rem 0;
+}
+
+.search-results__variant-summary > * {
+  min-width: 0;
 }
 
 .search-results__variant-facts,

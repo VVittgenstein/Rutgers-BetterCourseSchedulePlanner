@@ -99,10 +99,13 @@ pub use schema::{
     ScalarConstraint, SchemaDirection, UnknownFieldPolicy, contract_manifest,
 };
 pub use service::{
-    SERVICE_STATUS_CONTRACT_VERSION, ServiceAvailabilitySummaryV1, ServiceAvailabilityV1,
+    SERVICE_STATUS_CONTRACT_VERSION, SERVICE_STATUS_V2_CONTRACT_VERSION,
+    ServiceAutomaticTermSummaryV2, ServiceAvailabilitySummaryV1, ServiceAvailabilityV1,
     ServiceIssueComponentV1, ServiceIssueRecoveryV1, ServiceIssueSeverityV1, ServiceIssueV1,
-    ServiceLevelV1, ServiceOperationPhaseV1, ServiceOperationV1, ServiceRuntimeV1, ServiceStatusV1,
-    ServiceTargetStatusV1,
+    ServiceLevelV1, ServiceOperationPhaseV1, ServiceOperationStageV2, ServiceOperationV1,
+    ServiceOperationV2, ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceStatusV1,
+    ServiceStatusV2, ServiceTargetErrorV2, ServiceTargetStatusV1, ServiceTargetStatusV2,
+    ServiceTermWindowV2, ServiceVisibleTermV2, ServiceWorkStateV2,
 };
 pub use watch::{
     ACTIVE_WATCH_STATE_PERSISTENT, ActiveWatchId, ActiveWatchTargetV1,

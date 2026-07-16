@@ -4,15 +4,16 @@ use std::time::Duration;
 use axum::http::Uri;
 use bcsp_application::{RefreshPolicy, RefreshPolicyError};
 use bcsp_open::{
-    ACTIVE_WATCH_OPEN_INTERVAL_SECONDS, GeneralOpenInterval,
+    GeneralOpenInterval, OpenRefreshIntervals,
     PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS as SHARED_PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS,
+    PUBLIC_WATCH_OPEN_INTERVAL_SECONDS, WatchOpenInterval,
 };
 use thiserror::Error;
 
 pub const PUBLIC_BIND_ADDRESS: &str = "127.0.0.1:8080";
 pub const PUBLIC_CATALOG_INTERVAL_SECONDS: u64 = 600;
 pub const PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS: u32 = SHARED_PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS;
-pub const PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS: u32 = ACTIVE_WATCH_OPEN_INTERVAL_SECONDS;
+pub const PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS: u32 = PUBLIC_WATCH_OPEN_INTERVAL_SECONDS;
 pub const PUBLIC_ORIGIN_ENVIRONMENT: &str = "BCSP_PUBLIC_ORIGIN";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,9 +89,9 @@ impl PublicHostConfig {
 }
 
 pub fn fixed_public_refresh_policy() -> Result<RefreshPolicy, RefreshPolicyError> {
-    RefreshPolicy::try_new(
+    RefreshPolicy::try_new_with_intervals(
         Duration::from_secs(PUBLIC_CATALOG_INTERVAL_SECONDS),
-        GeneralOpenInterval::public(),
+        OpenRefreshIntervals::new(GeneralOpenInterval::public(), WatchOpenInterval::public()),
     )
 }
 

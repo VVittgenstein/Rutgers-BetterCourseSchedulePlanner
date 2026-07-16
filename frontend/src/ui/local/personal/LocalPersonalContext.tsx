@@ -14,6 +14,7 @@ import type { LocalPersonalApiPort } from './LocalPersonalApi';
 import type {
   LocalBootstrapData,
   LocalSettings,
+  LocalTermPullResponse,
   PersonalResetResult,
   PersonalStateSnapshot,
   PreparedUserDataReset,
@@ -70,6 +71,7 @@ export interface LocalPersonalContextValue {
   readonly resetCurrentFilters: () => Promise<void>;
   readonly prepareUserDataReset: () => Promise<PreparedUserDataReset>;
   readonly confirmUserDataReset: (token: TraceId) => Promise<PersonalResetResult>;
+  readonly pullTerm: (term: string) => Promise<LocalTermPullResponse>;
 }
 
 const LocalPersonalContext = createContext<LocalPersonalContextValue | null>(null);
@@ -265,6 +267,16 @@ export function LocalPersonalProvider({ api, children, initialBootstrap }: Local
     prepareUserDataReset: () => enqueue(async (snapshot) =>
       api.prepareUserDataReset(snapshot.stateRevision)),
     confirmUserDataReset: (token) => enqueue(async () => api.confirmUserDataReset(token)),
+    pullTerm: async (term) => {
+      setError(null);
+      try {
+        return await api.pullTerm({ contractVersion: 1, term });
+      } catch (caught) {
+        const next = caught instanceof Error ? caught : new Error('Local term pull failed.');
+        setError(next);
+        throw next;
+      }
+    },
   }), [api, bootstrap, enqueue, error, pendingCount, reload, reloading, savedViews]);
 
   return <LocalPersonalContext.Provider value={value}>{children}</LocalPersonalContext.Provider>;

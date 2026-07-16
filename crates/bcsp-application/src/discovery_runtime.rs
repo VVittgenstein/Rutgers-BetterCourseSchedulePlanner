@@ -12,6 +12,8 @@ use thiserror::Error;
 
 use crate::{ProductStorageAccess, ScheduledRefreshTarget};
 
+const ONLINE_CAMPUS_ALIASES: [&str; 3] = ["ONLINE_NB", "ONLINE_NK", "ONLINE_CM"];
+
 /// A validated discovery publication and the exact Rutgers Open registrations derived from it.
 /// Both product entrypoints use this one conversion so target identity cannot drift between them.
 #[derive(Clone, Debug)]
@@ -98,6 +100,9 @@ fn scheduled_targets(
         if target.enabled.value() != Some(&true) {
             continue;
         }
+        if is_online_campus_alias(target.key.campus().as_str()) {
+            continue;
+        }
         let Some(term) = discovery
             .terms
             .iter()
@@ -131,6 +136,9 @@ fn scheduled_targets_from_persisted(
     let mut registrations = Vec::new();
     for campus in &discovery.campuses {
         if campus.enabled != Some(true) {
+            continue;
+        }
+        if is_online_campus_alias(campus.target.campus().as_str()) {
             continue;
         }
         let Some(term) = discovery
@@ -167,6 +175,12 @@ fn scheduled_targets_from_persisted(
     }
     registrations.sort_by(|left, right| left.target().cmp(right.target()));
     Ok(registrations)
+}
+
+pub(crate) fn is_online_campus_alias(campus: &str) -> bool {
+    ONLINE_CAMPUS_ALIASES
+        .iter()
+        .any(|alias| campus.eq_ignore_ascii_case(alias))
 }
 
 #[derive(Debug, Error)]

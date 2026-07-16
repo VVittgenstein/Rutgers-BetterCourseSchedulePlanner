@@ -27,6 +27,10 @@ const productBootstrap = {
   protocolVersion: 1,
   data: { sessionNonce: '10000000-0000-4000-8000-000000000001' },
 };
+const sharedProductApiSource = readFileSync(
+  resolve(process.cwd(), 'src/ui/shared/product/ProductApi.ts'),
+  'utf8',
+);
 
 function normalize(value: string): string {
   return value.toLocaleLowerCase('en-US').replace(/[^a-z0-9]/gu, '');
@@ -76,6 +80,9 @@ describe('public rendered DOM zero surface', () => {
         ),
       ).toBe('READY');
       expect(publicDomViolations(baseElement.ownerDocument)).toEqual([]);
+      expect(baseElement.textContent).not.toMatch(/\bPull\b|拉取/u);
+      expect(sharedProductApiSource).not.toContain('/api/v1/local/terms/pull');
+      expect(sharedProductApiSource).not.toMatch(/\bpullTerm\b/u);
     },
   );
 

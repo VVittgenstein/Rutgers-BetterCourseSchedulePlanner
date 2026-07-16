@@ -1,21 +1,29 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 
 use bcsp_catalog::to_catalog_discovery_response_v1;
 use bcsp_contracts::{
     CatalogContentVersion, CatalogDiscoveryAvailability, CatalogDiscoveryErrorClass,
     CatalogDiscoveryStatusV1, OpenFreshnessState, SERVICE_STATUS_CONTRACT_VERSION,
+    SERVICE_STATUS_V2_CONTRACT_VERSION, ServiceAutomaticTermSummaryV2,
     ServiceAvailabilitySummaryV1, ServiceAvailabilityV1, ServiceIssueComponentV1,
     ServiceIssueRecoveryV1, ServiceIssueSeverityV1, ServiceIssueV1, ServiceLevelV1,
-    ServiceOperationPhaseV1, ServiceOperationV1, ServiceRuntimeV1, ServiceStatusV1,
-    ServiceTargetStatusV1, TermCampusKey,
+    ServiceOperationPhaseV1, ServiceOperationV1, ServiceOperationV2, ServiceRuntimeV1,
+    ServiceSnapshotAvailabilityV2, ServiceStatusV1, ServiceStatusV2, ServiceTargetStatusV1,
+    ServiceTargetStatusV2, ServiceTermWindowV2, ServiceVisibleTermV2, ServiceWorkStateV2,
+    TermCampusKey,
 };
-use bcsp_operational_storage::{OpenBatchState, OperationalStorage, RefreshStatus, TargetState};
+use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
+use bcsp_operational_storage::{
+    CatalogFailureAudit, OpenAttemptRecord, OpenBatchState, OperationalStorage, RefreshStatus,
+    TargetState,
+};
 use time::OffsetDateTime;
 
 use crate::{
     ApplicationClock, CoordinatorStatusSink, CoordinatorStatusSnapshot,
     OpenRuntimeSnapshotRegistry, RefreshPolicy, RefreshPolicyProvider, SharedRuntimeContext,
+    TargetWorkActivity, WorkflowOperationActivity, WorkflowOperationId,
 };
 
 #[derive(Clone, Debug)]
@@ -23,12 +31,16 @@ pub struct ServiceActivitySnapshot {
     pub operation: ServiceOperationV1,
     pub coordinator: CoordinatorStatusSnapshot,
     pub scheduler_running: bool,
+    pub target_activities: Vec<TargetWorkActivity>,
+    pub workflow_operations: Vec<WorkflowOperationActivity>,
 }
 
 struct ServiceActivityState {
     operation: ServiceOperationV1,
     coordinator: CoordinatorStatusSnapshot,
     scheduler_running: bool,
+    target_activities: BTreeMap<TermCampusKey, TargetWorkActivity>,
+    workflow_operations: BTreeMap<WorkflowOperationId, WorkflowOperationActivity>,
 }
 
 /// Process-local activity and scheduler facts shared by the status endpoint and refresh runtime.
@@ -47,6 +59,8 @@ impl ServiceStatusRegistry {
                 operation: ServiceOperationV1::starting(),
                 coordinator: CoordinatorStatusSnapshot::default(),
                 scheduler_running: false,
+                target_activities: BTreeMap::new(),
+                workflow_operations: BTreeMap::new(),
             }),
             delegate: RwLock::new(None),
         }
@@ -62,6 +76,12 @@ impl ServiceStatusRegistry {
     ) -> Result<(), ServiceStatusRegistryError> {
         let snapshot = self.snapshot()?;
         delegate.publish(snapshot.coordinator);
+        for activity in snapshot.target_activities {
+            delegate.publish_target_activity(activity);
+        }
+        for operation in snapshot.workflow_operations {
+            delegate.publish_workflow_operation(operation);
+        }
         if !snapshot.scheduler_running {
             delegate.mark_stopped();
         }
@@ -78,6 +98,8 @@ impl ServiceStatusRegistry {
             operation: state.operation.clone(),
             coordinator: state.coordinator,
             scheduler_running: state.scheduler_running,
+            target_activities: state.target_activities.values().cloned().collect(),
+            workflow_operations: state.workflow_operations.values().cloned().collect(),
         })
     }
 
@@ -103,6 +125,8 @@ impl CoordinatorStatusSink for ServiceStatusRegistry {
     fn mark_stopped(&self) {
         if let Ok(mut state) = self.state.write() {
             state.scheduler_running = false;
+            state.target_activities.clear();
+            state.workflow_operations.clear();
             state.operation = ServiceOperationV1 {
                 phase: ServiceOperationPhaseV1::Stopped,
                 target: None,
@@ -123,11 +147,71 @@ impl CoordinatorStatusSink for ServiceStatusRegistry {
             delegate.publish_activity(operation);
         }
     }
+
+    fn publish_target_activity(&self, activity: TargetWorkActivity) {
+        if let Ok(mut state) = self.state.write() {
+            state
+                .target_activities
+                .insert(activity.target.clone(), activity.clone());
+        }
+        if let Some(delegate) = self.delegate() {
+            delegate.publish_target_activity(activity);
+        }
+    }
+
+    fn clear_target_activity(&self, target: &TermCampusKey) {
+        if let Ok(mut state) = self.state.write() {
+            state.target_activities.remove(target);
+        }
+        if let Some(delegate) = self.delegate() {
+            delegate.clear_target_activity(target);
+        }
+    }
+
+    fn publish_workflow_operation(&self, operation: WorkflowOperationActivity) {
+        if let Ok(mut state) = self.state.write() {
+            match state.workflow_operations.get_mut(&operation.id) {
+                Some(current) => {
+                    current.stage = operation.stage;
+                }
+                None => {
+                    state
+                        .workflow_operations
+                        .insert(operation.id.clone(), operation.clone());
+                }
+            }
+            state.scheduler_running = true;
+        }
+        if let Some(delegate) = self.delegate() {
+            delegate.publish_workflow_operation(operation);
+        }
+    }
+
+    fn clear_workflow_operation(&self, id: &WorkflowOperationId) {
+        if let Ok(mut state) = self.state.write() {
+            state.workflow_operations.remove(id);
+        }
+        if let Some(delegate) = self.delegate() {
+            delegate.clear_workflow_operation(id);
+        }
+    }
+
+    fn clear_target_workflow_operations(&self, target: &TermCampusKey) {
+        if let Ok(mut state) = self.state.write() {
+            state
+                .workflow_operations
+                .retain(|id, _| &id.target != target);
+        }
+        if let Some(delegate) = self.delegate() {
+            delegate.clear_target_workflow_operations(target);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceStatusRegistryError;
 
+#[allow(dead_code)]
 pub(crate) fn project_service_status<C, P>(
     storage: &mut OperationalStorage,
     runtime: &SharedRuntimeContext<C, P>,
@@ -148,6 +232,8 @@ where
             ..CoordinatorStatusSnapshot::default()
         },
         scheduler_running: false,
+        target_activities: Vec::new(),
+        workflow_operations: Vec::new(),
     });
     let published = match storage.published_discovery_snapshot() {
         Ok(published) => published,
@@ -315,19 +401,348 @@ where
     }
 }
 
-/// One global gate shared by the UI status projection and query routes.
-/// Stale last-known-good data remains visible for diagnostics and previously
-/// rendered results, but never authorizes a new search.
-pub(crate) fn search_data_ready(status: &ServiceStatusV1) -> bool {
-    let totals_match = status.catalog.total_target_count > 0
-        && status.catalog.total_target_count == status.open.total_target_count;
-    let all_current = status.catalog.current_target_count == status.catalog.total_target_count
-        && status.open.current_target_count == status.open.total_target_count;
-    let blocking = status
-        .issues
+pub(crate) fn project_service_status_v2<C, P>(
+    storage: &mut OperationalStorage,
+    runtime: &SharedRuntimeContext<C, P>,
+    registry: &ServiceStatusRegistry,
+) -> Result<ServiceStatusV2, ServiceStatusV1>
+where
+    C: ApplicationClock,
+    P: RefreshPolicyProvider,
+{
+    let observed_at = runtime.now();
+    let activity = registry.snapshot().unwrap_or(ServiceActivitySnapshot {
+        operation: ServiceOperationV1::starting(),
+        coordinator: CoordinatorStatusSnapshot {
+            origin_circuit_open: true,
+            overloaded: true,
+            ..CoordinatorStatusSnapshot::default()
+        },
+        scheduler_running: false,
+        target_activities: Vec::new(),
+        workflow_operations: Vec::new(),
+    });
+    let scope = match registry.runtime() {
+        ServiceRuntimeV1::Local => RutgersTermWindowScope::Local,
+        ServiceRuntimeV1::Public => RutgersTermWindowScope::Public,
+    };
+    let window = RutgersTermWindow::at(observed_at, scope).map_err(|error| {
+        unavailable_service_status(
+            observed_at,
+            registry.runtime(),
+            activity.operation.clone(),
+            ServiceIssueComponentV1::Scheduler,
+            error.diagnostic_code(),
+        )
+    })?;
+    let published = storage.published_discovery_snapshot().map_err(|_| {
+        unavailable_service_status(
+            observed_at,
+            registry.runtime(),
+            activity.operation.clone(),
+            ServiceIssueComponentV1::Storage,
+            "SERVICE_STATUS_STORAGE_UNAVAILABLE",
+        )
+    })?;
+    let discovery =
+        to_catalog_discovery_response_v1(&published, &[], observed_at).map_err(|_| {
+            unavailable_service_status(
+                observed_at,
+                registry.runtime(),
+                activity.operation.clone(),
+                ServiceIssueComponentV1::Discovery,
+                "DISCOVERY_STATUS_PROJECTION_FAILED",
+            )
+        })?;
+    let visible_ids = window
+        .visible_terms()
         .iter()
-        .any(|issue| issue.severity == ServiceIssueSeverityV1::Blocking);
-    totals_match && all_current && !blocking
+        .map(|term| term.term().clone())
+        .collect::<BTreeSet<_>>();
+    let discovered_targets = discovery
+        .targets
+        .iter()
+        .map(|target| target.key.clone())
+        .filter(|target| {
+            visible_ids.contains(target.term()) && !is_online_alias(target.campus().as_str())
+        })
+        .collect::<BTreeSet<_>>();
+    let visible_terms = window
+        .visible_terms()
+        .iter()
+        .map(|term| ServiceVisibleTermV2 {
+            term: term.term().clone(),
+            relative_offset: term.relative_offset(),
+            discovered: discovered_targets
+                .iter()
+                .any(|target| target.term() == term.term()),
+            auto_managed: term.auto_managed(),
+            manual_pull_allowed: registry.runtime() == ServiceRuntimeV1::Local
+                && !term.auto_managed(),
+            watchable: term.watchable(),
+        })
+        .collect::<Vec<_>>();
+    let target_activity = activity
+        .target_activities
+        .iter()
+        .map(|item| (item.target.clone(), item))
+        .collect::<BTreeMap<_, _>>();
+    let mut running_by_target = BTreeMap::<TermCampusKey, &WorkflowOperationActivity>::new();
+    for operation in &activity.workflow_operations {
+        match running_by_target.get_mut(&operation.id.target) {
+            Some(current) if current.id.kind <= operation.id.kind => {}
+            Some(current) => *current = operation,
+            None => {
+                running_by_target.insert(operation.id.target.clone(), operation);
+            }
+        }
+    }
+    let mut targets = Vec::with_capacity(discovered_targets.len());
+    let mut issues = Vec::new();
+    if let Some(error) = &discovery.status.error {
+        issues.push(ServiceIssueV1 {
+            component: ServiceIssueComponentV1::Discovery,
+            target: None,
+            code: error.code.to_string(),
+            severity: ServiceIssueSeverityV1::Degraded,
+            recovery: ServiceIssueRecoveryV1::AutomaticRetry,
+            retry_at: activity.operation.next_retry_at,
+        });
+    }
+    for target in discovered_targets {
+        let candidate_activity = target_activity.get(&target).copied();
+        let running_operation = running_by_target.get(&target).copied();
+        let catalog_state = storage.target_state(&target).map_err(|_| {
+            unavailable_service_status(
+                observed_at,
+                registry.runtime(),
+                activity.operation.clone(),
+                ServiceIssueComponentV1::Storage,
+                "SERVICE_STATUS_STORAGE_UNAVAILABLE",
+            )
+        })?;
+        let open_state = storage.open_batch_state(&target).map_err(|_| {
+            unavailable_service_status(
+                observed_at,
+                registry.runtime(),
+                activity.operation.clone(),
+                ServiceIssueComponentV1::Storage,
+                "SERVICE_STATUS_STORAGE_UNAVAILABLE",
+            )
+        })?;
+        let complete = storage
+            .complete_target_snapshot_state(&target)
+            .map_err(|_| {
+                unavailable_service_status(
+                    observed_at,
+                    registry.runtime(),
+                    activity.operation.clone(),
+                    ServiceIssueComponentV1::Storage,
+                    "SERVICE_STATUS_STORAGE_UNAVAILABLE",
+                )
+            })?;
+        let requested = candidate_activity.is_some()
+            || running_operation.is_some()
+            || catalog_state.is_some()
+            || open_state.is_some();
+        let snapshot_availability = if complete.ready {
+            ServiceSnapshotAvailabilityV2::Ready
+        } else if requested {
+            ServiceSnapshotAvailabilityV2::NoCompleteSnapshot
+        } else {
+            ServiceSnapshotAvailabilityV2::Unrequested
+        };
+        let last_complete_at = if complete.ready {
+            open_state
+                .as_ref()
+                .and_then(|state| state.last_success_at.as_deref())
+                .and_then(parse_timestamp)
+        } else {
+            None
+        };
+        let catalog_audit = catalog_state
+            .as_ref()
+            .and_then(|state| state.last_attempt.as_ref())
+            .filter(|attempt| {
+                matches!(
+                    attempt.status,
+                    RefreshStatus::Failed | RefreshStatus::Interrupted
+                )
+            })
+            .map(|attempt| storage.catalog_failure_audit(&attempt.observation_id))
+            .transpose()
+            .map_err(|_| {
+                unavailable_service_status(
+                    observed_at,
+                    registry.runtime(),
+                    activity.operation.clone(),
+                    ServiceIssueComponentV1::Storage,
+                    "SERVICE_STATUS_STORAGE_UNAVAILABLE",
+                )
+            })?
+            .flatten();
+        let stored_error = candidate_activity
+            .and_then(|item| item.error.clone())
+            .or_else(|| {
+                let open_failure_attempt = open_state
+                    .as_ref()
+                    .filter(|state| {
+                        state.last_failure_attempt_sequence == Some(state.last_attempt_sequence)
+                    })
+                    .and_then(|state| state.last_attempt_id)
+                    .and_then(|attempt_id| storage.open_attempt(&attempt_id).ok().flatten());
+                target_last_error(
+                    catalog_state.as_ref(),
+                    open_state.as_ref(),
+                    catalog_audit.as_ref(),
+                    open_failure_attempt.as_ref(),
+                )
+            });
+        targets.push(ServiceTargetStatusV2 {
+            primary: target.campus().as_str().eq_ignore_ascii_case("NB"),
+            target,
+            snapshot_availability,
+            work_state: if running_operation.is_some() {
+                ServiceWorkStateV2::Running
+            } else {
+                candidate_activity.map_or(ServiceWorkStateV2::Idle, |item| item.work_state)
+            },
+            stage: running_operation
+                .map(|operation| operation.stage)
+                .or_else(|| candidate_activity.and_then(|item| item.stage)),
+            usable: complete.ready,
+            catalog_content_version: complete
+                .ready
+                .then(|| CatalogContentVersion::try_from(complete.catalog_content_version).ok())
+                .flatten(),
+            last_complete_at,
+            next_retry_at: running_operation
+                .is_none()
+                .then(|| candidate_activity.and_then(|item| item.next_retry_at))
+                .flatten(),
+            error: stored_error,
+        });
+    }
+    targets.sort_by(|left, right| left.target.cmp(&right.target));
+    let automatic_term_summaries = [window.current_term(), window.next_term()]
+        .into_iter()
+        .map(|term| ServiceAutomaticTermSummaryV2 {
+            term: term.clone(),
+            ready_target_count: targets
+                .iter()
+                .filter(|target| target.target.term() == term && target.usable)
+                .count() as u64,
+            total_target_count: targets
+                .iter()
+                .filter(|target| target.target.term() == term)
+                .count() as u64,
+        })
+        .collect::<Vec<_>>();
+    let operations = activity
+        .workflow_operations
+        .iter()
+        .map(|operation| ServiceOperationV2 {
+            target: operation.id.target.clone(),
+            stage: operation.stage,
+            started_at: operation.started_at,
+        })
+        .collect::<Vec<_>>();
+    let automatic_total = automatic_term_summaries
+        .iter()
+        .map(|summary| summary.total_target_count)
+        .sum::<u64>();
+    let automatic_ready = automatic_term_summaries
+        .iter()
+        .map(|summary| summary.ready_target_count)
+        .sum::<u64>();
+    let any_retry = targets
+        .iter()
+        .any(|target| target.work_state == ServiceWorkStateV2::RetryWait);
+    let level = if automatic_total > 0 && automatic_ready == automatic_total {
+        if any_retry {
+            ServiceLevelV1::Degraded
+        } else {
+            ServiceLevelV1::Ready
+        }
+    } else if automatic_ready > 0 {
+        ServiceLevelV1::PartiallyReady
+    } else if any_retry {
+        ServiceLevelV1::Degraded
+    } else {
+        ServiceLevelV1::Initializing
+    };
+    Ok(ServiceStatusV2 {
+        contract_version: SERVICE_STATUS_V2_CONTRACT_VERSION,
+        observed_at,
+        runtime: registry.runtime(),
+        level,
+        discovery: discovery.status,
+        term_window: ServiceTermWindowV2 {
+            current_term: window.current_term().clone(),
+            next_term: window.next_term().clone(),
+            visible_terms,
+        },
+        automatic_term_summaries,
+        operations,
+        targets,
+        issues,
+    })
+}
+
+fn is_online_alias(campus: &str) -> bool {
+    matches!(campus, "ONLINE_NB" | "ONLINE_NK" | "ONLINE_CM")
+}
+
+fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+}
+
+fn target_last_error(
+    catalog: Option<&TargetState>,
+    open: Option<&OpenBatchState>,
+    catalog_audit: Option<&CatalogFailureAudit>,
+    open_failure_attempt: Option<&OpenAttemptRecord>,
+) -> Option<bcsp_contracts::ServiceTargetErrorV2> {
+    let catalog_attempt = catalog
+        .and_then(|state| state.last_attempt.as_ref())
+        .filter(|attempt| {
+            matches!(
+                attempt.status,
+                RefreshStatus::Failed | RefreshStatus::Interrupted
+            )
+        })
+        .filter(|attempt| attempt.error_code.is_some());
+    if let Some(attempt) = catalog_attempt {
+        return Some(bcsp_contracts::ServiceTargetErrorV2 {
+            code: attempt.error_code.as_deref()?.to_owned(),
+            http_status: catalog_audit.and_then(|audit| audit.http_status),
+            content_type: catalog_audit.and_then(|audit| audit.content_type.clone()),
+            content_encoding: catalog_audit.and_then(|audit| audit.content_encoding.clone()),
+            decoded_bytes: catalog_audit.and_then(|audit| audit.decoded_bytes),
+            error_class: None,
+            error_chain: catalog_audit.and_then(|audit| audit.error_chain.clone()),
+            trace_id: Some(attempt.observation_id),
+        });
+    }
+    let open = open.filter(|state| {
+        state.last_failure_at.is_some()
+            && state.last_failure_attempt_sequence == Some(state.last_attempt_sequence)
+    })?;
+    let attempt = open_failure_attempt?;
+    Some(bcsp_contracts::ServiceTargetErrorV2 {
+        code: attempt
+            .error_code
+            .as_deref()
+            .or(open.last_failure_error_code.as_deref())?
+            .to_owned(),
+        http_status: attempt.http.http_status.or(open.last_failure_http_status),
+        content_type: attempt.http.content_type.clone(),
+        content_encoding: None,
+        decoded_bytes: attempt.http.decoded_bytes,
+        error_class: None,
+        error_chain: None,
+        trace_id: Some(attempt.attempt_id),
+    })
 }
 
 pub(crate) fn unavailable_service_status(
@@ -364,6 +779,7 @@ pub(crate) fn unavailable_service_status(
     }
 }
 
+#[allow(dead_code)]
 fn latest_primary_term(
     snapshot: &bcsp_operational_storage::DiscoverySnapshot,
 ) -> Option<bcsp_contracts::TermId> {
@@ -387,6 +803,7 @@ fn latest_primary_term(
         .map(|(_, _, term)| term)
 }
 
+#[allow(dead_code)]
 fn catalog_availability(
     state: Option<&TargetState>,
 ) -> (ServiceAvailabilityV1, Option<CatalogContentVersion>) {
@@ -412,6 +829,7 @@ fn catalog_availability(
     )
 }
 
+#[allow(dead_code)]
 fn catalog_issue(
     target: &TermCampusKey,
     state: Option<&TargetState>,
@@ -441,6 +859,7 @@ fn catalog_issue(
     })
 }
 
+#[allow(dead_code)]
 fn storage_issue(target: Option<TermCampusKey>) -> ServiceIssueV1 {
     ServiceIssueV1 {
         component: ServiceIssueComponentV1::Storage,
@@ -452,6 +871,7 @@ fn storage_issue(target: Option<TermCampusKey>) -> ServiceIssueV1 {
     }
 }
 
+#[allow(dead_code)]
 fn open_failure_issue(
     target: &TermCampusKey,
     batch: &OpenBatchState,
@@ -472,6 +892,7 @@ fn open_failure_issue(
     })
 }
 
+#[allow(dead_code)]
 fn current_open_failure_code<'a>(
     last_attempt_sequence: u64,
     last_failure_attempt_sequence: Option<u64>,
@@ -482,6 +903,7 @@ fn current_open_failure_code<'a>(
         .flatten()
 }
 
+#[allow(dead_code)]
 fn availability_summary(
     targets: &[ServiceTargetStatusV1],
     availability: impl Fn(&ServiceTargetStatusV1) -> ServiceAvailabilityV1,
@@ -516,6 +938,7 @@ fn availability_summary(
     }
 }
 
+#[allow(dead_code)]
 fn service_level(
     discovery: &CatalogDiscoveryStatusV1,
     targets: &[&ServiceTargetStatusV1],
@@ -580,6 +1003,9 @@ mod tests {
         CatalogDiscoveryAvailability, CatalogDiscoveryStatusV1, ServiceIssueRecoveryV1,
         ServiceOperationPhaseV1,
     };
+    use bcsp_operational_storage::{
+        BeginRefreshAttemptCommand, FinishRefreshFailureCommand, RefreshFailureStage,
+    };
 
     use super::*;
 
@@ -605,6 +1031,58 @@ mod tests {
             open_availability: open,
             search_available: catalog != ServiceAvailabilityV1::Unavailable,
         }
+    }
+
+    #[test]
+    fn stored_catalog_failure_audit_projects_into_target_diagnostics() {
+        let mut storage = OperationalStorage::open_in_memory().expect("storage");
+        let target = TermCampusKey::try_new("72026", "NB").expect("target");
+        let observation_id = "123e4567-e89b-42d3-a456-426614174000"
+            .parse()
+            .expect("trace ID");
+        storage
+            .begin_refresh_attempt(&BeginRefreshAttemptCommand {
+                observation_id,
+                target: target.clone(),
+                started_at: "2026-07-17T00:00:00Z".to_owned(),
+                source_content_sha256: None,
+                source_bytes: None,
+            })
+            .expect("begin attempt");
+        let audit = CatalogFailureAudit {
+            http_status: Some(503),
+            content_type: Some("application/json".to_owned()),
+            content_encoding: Some("gzip".to_owned()),
+            decoded_bytes: Some(27),
+            error_chain: Some("Catalog upstream returned non-success HTTP status 503".to_owned()),
+        };
+        storage
+            .finish_refresh_failure_with_audit(
+                &FinishRefreshFailureCommand {
+                    observation_id,
+                    completed_at: "2026-07-17T00:00:01Z".to_owned(),
+                    stage: RefreshFailureStage::Transport,
+                    source_content_sha256: None,
+                    source_bytes: None,
+                    error_code: "CATALOG_UPSTREAM_TRANSPORT".to_owned(),
+                    diagnostic_token: None,
+                },
+                Some(&audit),
+            )
+            .expect("finish attempt");
+        let state = storage
+            .target_state(&target)
+            .expect("state")
+            .expect("target");
+
+        let diagnostic =
+            target_last_error(Some(&state), None, Some(&audit), None).expect("diagnostic");
+        assert_eq!(diagnostic.http_status, Some(503));
+        assert_eq!(diagnostic.content_type.as_deref(), Some("application/json"));
+        assert_eq!(diagnostic.content_encoding.as_deref(), Some("gzip"));
+        assert_eq!(diagnostic.decoded_bytes, Some(27));
+        assert_eq!(diagnostic.trace_id, Some(observation_id));
+        assert_eq!(diagnostic.error_chain, audit.error_chain);
     }
 
     #[test]
@@ -745,66 +1223,5 @@ mod tests {
         let stopped = registry.snapshot().expect("stopped snapshot");
         assert_eq!(stopped.operation.phase, ServiceOperationPhaseV1::Stopped);
         assert!(!stopped.scheduler_running);
-    }
-
-    #[test]
-    fn global_search_gate_requires_equal_nonzero_all_current_summaries() {
-        let mut status = unavailable_service_status(
-            OffsetDateTime::UNIX_EPOCH,
-            ServiceRuntimeV1::Local,
-            ServiceOperationV1::starting(),
-            ServiceIssueComponentV1::Storage,
-            "SYNTHETIC",
-        );
-        status.issues.clear();
-        status.catalog = ServiceAvailabilitySummaryV1 {
-            total_target_count: 135,
-            current_target_count: 135,
-            stale_target_count: 0,
-            unavailable_target_count: 0,
-            available_target_count: 135,
-        };
-        status.open = status.catalog;
-        assert!(search_data_ready(&status));
-
-        status.catalog.current_target_count = 15;
-        status.catalog.unavailable_target_count = 120;
-        status.catalog.available_target_count = 15;
-        assert!(!search_data_ready(&status));
-
-        status.catalog = status.open;
-        status.open.current_target_count = 134;
-        status.open.stale_target_count = 1;
-        assert!(!search_data_ready(&status));
-
-        status.open = status.catalog;
-        status.catalog.current_target_count = 134;
-        status.catalog.stale_target_count = 1;
-        assert!(!search_data_ready(&status));
-
-        status.catalog = status.open;
-        status.catalog.total_target_count = 0;
-        status.catalog.current_target_count = 0;
-        status.catalog.available_target_count = 0;
-        status.open = status.catalog;
-        assert!(!search_data_ready(&status));
-
-        status.catalog = ServiceAvailabilitySummaryV1 {
-            total_target_count: 135,
-            current_target_count: 135,
-            stale_target_count: 0,
-            unavailable_target_count: 0,
-            available_target_count: 135,
-        };
-        status.open = status.catalog;
-        status.issues.push(ServiceIssueV1 {
-            component: ServiceIssueComponentV1::Storage,
-            target: None,
-            code: "BLOCKING".to_owned(),
-            severity: ServiceIssueSeverityV1::Blocking,
-            recovery: ServiceIssueRecoveryV1::UserActionRequired,
-            retry_at: None,
-        });
-        assert!(!search_data_ready(&status));
     }
 }

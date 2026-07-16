@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import type { ProductRuntimePort, ServiceStatusV1 } from '../product';
+import {
+  isServiceStatusV2,
+  type ProductRuntimePort,
+  type ServiceStatus,
+  type ServiceStatusScope,
+} from '../product';
 
 export interface ServiceStatusPollingSchedule {
   readonly activeMilliseconds: number;
@@ -22,10 +27,14 @@ export interface ServiceStatusResource {
   readonly connection: ServiceConnectionState;
   readonly retry: () => void;
   readonly revision: string;
-  readonly snapshot: ServiceStatusV1 | null;
+  readonly snapshot: ServiceStatus | null;
 }
 
-function isActive(snapshot: ServiceStatusV1): boolean {
+function isActive(snapshot: ServiceStatus): boolean {
+  if (isServiceStatusV2(snapshot)) {
+    return snapshot.operations.length > 0
+      || snapshot.targets.some(({ workState }) => workState !== 'IDLE');
+  }
   return snapshot.level === 'INITIALIZING'
     || snapshot.level === 'PARTIALLY_READY'
     || (snapshot.operation.phase !== 'IDLE' && snapshot.operation.phase !== 'STOPPED');
@@ -35,8 +44,19 @@ function pageIsHidden(): boolean {
   return globalThis.document?.visibilityState === 'hidden';
 }
 
-function discoveryRevision(snapshot: ServiceStatusV1 | null): string {
+function discoveryRevision(snapshot: ServiceStatus | null): string {
   if (snapshot === null) return 'unobserved';
+  if (isServiceStatusV2(snapshot)) {
+    return JSON.stringify({
+      availability: snapshot.discovery.availability,
+      contentVersion: snapshot.discovery.lastSuccess?.contentVersion ?? null,
+      targets: snapshot.targets.map(({ target, catalogContentVersion, usable }) => ({
+        target,
+        catalogContentVersion,
+        usable,
+      })),
+    });
+  }
   return JSON.stringify({
     availability: snapshot.discovery.availability,
     contentVersion: snapshot.discovery.lastSuccess?.contentVersion ?? null,
@@ -51,10 +71,15 @@ function discoveryRevision(snapshot: ServiceStatusV1 | null): string {
 export function useServiceStatus(
   runtime: ProductRuntimePort,
   polling: ServiceStatusPollingSchedule = SERVICE_STATUS_POLLING,
+  scope?: ServiceStatusScope,
 ): ServiceStatusResource {
   const [generation, setGeneration] = useState(0);
   const [connection, setConnection] = useState<ServiceConnectionState>('CONNECTING');
-  const [snapshot, setSnapshot] = useState<ServiceStatusV1 | null>(null);
+  const [snapshot, setSnapshot] = useState<ServiceStatus | null>(null);
+  const scopeKey = `${scope?.term ?? ''}\u0000${scope?.campuses.join('\u0000') ?? ''}`;
+  const stableScope = useMemo<ServiceStatusScope | undefined>(() => scope === undefined
+    ? undefined
+    : { campuses: [...scope.campuses], term: scope.term }, [scopeKey]);
 
   const retry = useCallback(() => {
     setConnection('CONNECTING');
@@ -97,7 +122,7 @@ export function useServiceStatus(
       controller = new AbortController();
       deadlineExpired = false;
       try {
-        const request = runtime.product.serviceStatus(controller.signal);
+        const request = runtime.product.serviceStatus(controller.signal, stableScope);
         const deadline = new Promise<never>((_resolve, reject) => {
           requestTimer = globalThis.setTimeout(() => {
             deadlineExpired = true;
@@ -160,7 +185,7 @@ export function useServiceStatus(
       globalThis.document?.removeEventListener('visibilitychange', onVisibilityChange);
       globalThis.removeEventListener?.('online', onOnline);
     };
-  }, [generation, polling, runtime]);
+  }, [generation, polling, runtime, stableScope]);
 
   return {
     connection,

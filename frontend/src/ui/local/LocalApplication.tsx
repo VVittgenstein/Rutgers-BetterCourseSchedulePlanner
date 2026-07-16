@@ -20,6 +20,7 @@ import {
 } from '../shared/product';
 import { currentSystemLanguages, resolveLocalLocale } from './i18n/localeBootstrap';
 import { useLocalI18n } from './i18n/runtime';
+import { LocalTermPullAction } from './LocalTermPullAction';
 import {
   LocalPersonalStyles,
   useLocalPersonal,
@@ -249,8 +250,18 @@ export function LocalApplication() {
     onSelectedSectionsChange: persistSelection,
     onVolumeChange: persistVolume,
     onWatchPolicyChange: persistWatchPolicy,
+    renderUnavailableScopeAction: (context) => (
+      <LocalTermPullAction
+        {...context}
+        onPull={async (term) => {
+          await personal.pullTerm(term);
+        }}
+      />
+    ),
   }), [
+    local,
     persistFilters,
+    personal,
     persistSelection,
     persistVolume,
     persistWatchPolicy,

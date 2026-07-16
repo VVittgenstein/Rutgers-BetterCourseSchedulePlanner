@@ -19,16 +19,22 @@ import type { SupportedLocale } from './i18n/contract';
 import { useBcspI18n, type BcspI18nRuntime } from './i18n/runtime';
 import {
   PRODUCT_PROTOCOL_VERSION,
+  isServiceStatusV2,
   useProductRuntimeState,
   type FilterStateV1,
   type ProductRuntimePort,
   type SectionKey,
   type ServiceOperationPhaseV1,
-  type ServiceStatusV1,
+  type ServiceStatus,
   type WatchPolicyV1,
   searchDataProgress,
 } from './product';
-import { SearchSessionProvider, SearchWorkspace } from './search';
+import {
+  SearchSessionProvider,
+  SearchWorkspace,
+  useSearchSession,
+  type QueryScopeUnavailableActionRenderer,
+} from './search';
 import { AppRouterProvider, RouterLink, useAppRouter } from './routing';
 import {
   useServiceStatus,
@@ -38,6 +44,7 @@ import {
 } from './shell';
 import {
   LiveWatchProvider,
+  useLiveWatch,
   WatchToastRegion,
   WatchWorkspace,
   WatchWorkspaceStyles,
@@ -92,6 +99,7 @@ export interface SharedExperienceConfiguration {
   readonly onSelectedSectionsChange?: ((selected: readonly SectionKey[]) => void) | undefined;
   readonly onVolumeChange?: ((volume: number) => void) | undefined;
   readonly onWatchPolicyChange?: ((policy: WatchPolicyV1) => void) | undefined;
+  readonly renderUnavailableScopeAction?: QueryScopeUnavailableActionRenderer | undefined;
 }
 
 export interface SharedApplicationProps {
@@ -330,7 +338,18 @@ const SERVICE_PHASE_KEYS = {
   STOPPED: 'service.phase.stopped',
 } as const satisfies Record<ServiceOperationPhaseV1, Parameters<BcspI18nRuntime['t']>[0]>;
 
-function targetLabel(status: ServiceStatusV1): string | null {
+const SERVICE_STAGE_KEYS = {
+  CATALOG_FETCH: 'service.phase.catalog_fetch',
+  CATALOG_PROCESS: 'service.phase.catalog_process',
+  OPEN_FETCH: 'service.phase.open_fetch',
+  SNAPSHOT_PUBLISH: 'service.phase.catalog_publish',
+} as const;
+
+function targetLabel(status: ServiceStatus): string | null {
+  if (isServiceStatusV2(status)) {
+    const target = status.operations[0]?.target;
+    return target === undefined ? null : `${target.term} / ${target.campus}`;
+  }
   const target = status.operation.target;
   return target === null ? null : `${target.term} / ${target.campus}`;
 }
@@ -340,24 +359,40 @@ function ServiceStatusBand({ resource }: { readonly resource: ServiceStatusResou
   const status = resource.snapshot;
   const interrupted = resource.connection === 'INTERRUPTED';
   const progress = searchDataProgress(status);
-  const retrying = status?.operation.phase === 'RETRY_WAIT';
+  const retrying = status !== null && (isServiceStatusV2(status)
+    ? status.targets.some(({ nextRetryAt, workState }) =>
+      workState === 'RETRY_WAIT' && nextRetryAt !== null)
+    : status.operation.phase === 'RETRY_WAIT');
   const incompleteWithIssue = !progress.ready && (status?.issues.length ?? 0) > 0;
   const failed = interrupted || status?.level === 'ERROR' || retrying || incompleteWithIssue;
-  const level = progress.ready
-    ? i18n.t('service.overall_ready')
-    : failed
+  const level = interrupted
+    ? i18n.t('service.connection_interrupted')
+    : progress.ready && retrying
+      ? i18n.t('service.overall_ready_retrying')
+      : progress.ready
+        ? i18n.t('service.overall_ready')
+        : failed
       ? i18n.t('service.overall_retrying')
+      : progress.anyReady
+        ? i18n.t('service.overall_partial', { count: progress.current })
       : i18n.t('service.overall_preparing');
   const phase = status === null
     ? i18n.t('service.phase.starting')
-    : i18n.t(SERVICE_PHASE_KEYS[status.operation.phase]);
+    : isServiceStatusV2(status)
+      ? status.operations[0] === undefined
+        ? i18n.t('service.phase.idle')
+        : i18n.t(SERVICE_STAGE_KEYS[status.operations[0].stage])
+      : i18n.t(SERVICE_PHASE_KEYS[status.operation.phase]);
   const target = status === null ? null : targetLabel(status);
+  const summaries = status !== null && isServiceStatusV2(status)
+    ? status.automaticTermSummaries
+    : null;
   return (
     <section
       aria-label={i18n.t('app.system_status')}
       className="bcsp-service-status"
       data-connection={resource.connection.toLowerCase()}
-      data-expanded={!progress.ready || undefined}
+      data-expanded={interrupted || retrying || !progress.ready || undefined}
       data-level={status?.level.toLowerCase() ?? 'initializing'}
       id="bcsp-system-status"
     >
@@ -385,26 +420,47 @@ function ServiceStatusBand({ resource }: { readonly resource: ServiceStatusResou
         <span>{i18n.t('service.progress_percent', { percent: progress.percent })}</span>
       </div>
       <dl className="bcsp-service-status__counts">
-        <div>
-          <dt>{i18n.t('service.catalog')}</dt>
-          <dd>{`${progress.catalog.current}/${progress.catalog.total}`}</dd>
-        </div>
-        <div>
-          <dt>{i18n.t('service.open')}</dt>
-          <dd>{`${progress.open.current}/${progress.open.total}`}</dd>
-        </div>
+        {summaries === null ? (
+          <>
+            <div>
+              <dt>{i18n.t('service.catalog')}</dt>
+              <dd>{`${progress.catalog.current}/${progress.catalog.total}`}</dd>
+            </div>
+            <div>
+              <dt>{i18n.t('service.open')}</dt>
+              <dd>{`${progress.open.current}/${progress.open.total}`}</dd>
+            </div>
+          </>
+        ) : summaries.map((summary) => (
+          <div key={summary.term}>
+            <dt><samp>{summary.term}</samp></dt>
+            <dd>{`${summary.readyTargetCount}/${summary.totalTargetCount}`}</dd>
+          </div>
+        ))}
       </dl>
       <details className="bcsp-service-status__detail">
         <summary>{i18n.t('service.diagnostics')}</summary>
         <div className="bcsp-service-status__diagnostics">
           <p>{interrupted ? i18n.t('service.connection_interrupted') : i18n.t('service.activity_detail')}</p>
           {target === null ? null : <samp>{target}</samp>}
+          {status !== null && isServiceStatusV2(status) ? status.operations.map((operation, index) => (
+            <samp key={`${operation.target.term}:${operation.target.campus}:${operation.stage}:${operation.startedAt}:${index}`}>
+              {operation.target.term} / {operation.target.campus} / {operation.stage}
+            </samp>
+          )) : null}
+          {status !== null && isServiceStatusV2(status) ? status.targets
+            .filter(({ error }) => error !== null)
+            .map(({ error, stage, target: errorTarget }) => (
+              <samp key={`${errorTarget.term}:${errorTarget.campus}:${error?.traceId ?? ''}`}>
+                {errorTarget.term} / {errorTarget.campus} / {stage ?? 'IDLE'} / {error?.code}
+              </samp>
+            )) : null}
           {status?.issues.map((issue) => (
             <samp key={`${issue.component}:${issue.code}:${issue.target?.term ?? ''}:${issue.target?.campus ?? ''}`}>
               {issue.component} / {issue.code}
             </samp>
           ))}
-          {failed ? (
+          {interrupted ? (
             <button className="bcsp-service-status__retry" onClick={resource.retry} type="button">
               {i18n.t('action.retry')}
             </button>
@@ -426,7 +482,7 @@ function ReadyCatalogContent({
 }: {
   readonly experience: SharedExperienceConfiguration;
   readonly runtime: ProductRuntimePort;
-  readonly serviceStatus: ServiceStatusV1 | null;
+  readonly serviceStatus: ServiceStatus | null;
   readonly state: Extract<ShellDataState, { status: 'READY' }>;
 }) {
   const { pathname } = useAppRouter();
@@ -437,6 +493,7 @@ function ReadyCatalogContent({
           <SearchWorkspace
             initialFilters={experience.initialFilters}
             onFiltersChange={experience.onFiltersChange}
+            renderUnavailableScopeAction={experience.renderUnavailableScopeAction}
             runtime={runtime}
             serviceStatus={serviceStatus}
             shellState={state}
@@ -459,7 +516,7 @@ function ReadyCatalog({
   state,
 }: {
   readonly runtime: ProductRuntimePort;
-  readonly serviceStatus: ServiceStatusV1 | null;
+  readonly serviceStatus: ServiceStatus | null;
   readonly experience: SharedExperienceConfiguration;
   readonly state: Extract<ShellDataState, { status: 'READY' }>;
 }) {
@@ -481,7 +538,26 @@ function ReadyRuntime({
   readonly runtime: ProductRuntimePort;
 }) {
   const { t } = useBcspI18n();
-  const service = useServiceStatus(runtime);
+  const searchSession = useSearchSession();
+  const { updateWatchableTerms } = useLiveWatch();
+  const service = useServiceStatus(
+    runtime,
+    undefined,
+    searchSession.state.appliedScope ?? undefined,
+  );
+  const watchableTermKey = service.snapshot !== null && isServiceStatusV2(service.snapshot)
+    ? `${service.snapshot.termWindow.currentTerm}\u0000${service.snapshot.termWindow.nextTerm}`
+    : '';
+  useEffect(() => {
+    if (service.snapshot !== null && isServiceStatusV2(service.snapshot)) {
+      updateWatchableTerms([
+        service.snapshot.termWindow.currentTerm,
+        service.snapshot.termWindow.nextTerm,
+      ]);
+    } else {
+      updateWatchableTerms([]);
+    }
+  }, [service.snapshot, updateWatchableTerms, watchableTermKey]);
   const { retry, state } = useShellDataState(runtime, service.revision);
   if (state.status === 'LOADING') {
     return <><ServiceStatusPublisher resource={service} /><InitialState detail={t('app.loading_body')} heading={t('app.loading_title')} kind="loading" /></>;
@@ -529,6 +605,7 @@ function ReadyProduct({
     <SearchSessionProvider>
       <LiveWatchProvider
         initialSelected={experience.initialSelectedSections}
+        initialWatchableTerms={[]}
         initialVolume={experience.initialVolume}
         onSelectedChange={experience.onSelectedSectionsChange}
         onVolumeChange={experience.onVolumeChange}

@@ -25,8 +25,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    CatalogOpenBatch, CompletionSchedule, GeneralOpenInterval, OpenCounterAudience,
-    OpenFailureKind, OpenReconcileClassification, OpenReconcilePlan, OpenSetEvidence,
+    CatalogOpenBatch, CompletionSchedule, OpenCounterAudience, OpenFailureKind,
+    OpenReconcileClassification, OpenReconcilePlan, OpenRefreshIntervals, OpenSetEvidence,
     OriginSchedulerLane, ReconcileInputError, reconcile_open_set, retry_directive,
 };
 
@@ -105,7 +105,7 @@ pub struct OpenPullCommand {
     pub attempt_id: TraceId,
     pub run_id: TraceId,
     pub source_request: OpenSectionsRequest,
-    pub general_interval: GeneralOpenInterval,
+    pub refresh_intervals: OpenRefreshIntervals,
     pub active_watch_count: u64,
     /// Basis used only to derive the validity horizon of the committed
     /// observation. Normal/demanded pulls set this to the effective 30s/10s
@@ -132,6 +132,39 @@ pub enum OpenPullFailure {
     ResponseTargetMismatch(OpenResponseMetadata),
     ResponseMetadataMismatch(OpenResponseMetadata),
     CatalogUnavailableAfterFetch(OpenResponseMetadata),
+}
+
+impl OpenPullFailure {
+    pub const fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::ResponseTargetMismatch(_) => "OPEN_RESPONSE_TARGET_MISMATCH",
+            Self::ResponseMetadataMismatch(_) => "OPEN_RESPONSE_METADATA_MISMATCH",
+            Self::CatalogUnavailableAfterFetch(_) => "OPEN_CATALOG_UNAVAILABLE_AFTER_FETCH",
+            Self::Upstream(failure) => match failure.kind() {
+                OpenSectionsError::Timeout => "OPEN_TIMEOUT",
+                OpenSectionsError::Network => "OPEN_NETWORK",
+                OpenSectionsError::RequestConstruction => "OPEN_REQUEST_CONSTRUCTION",
+                OpenSectionsError::ResponseUrlMismatch => "OPEN_RESPONSE_URL_MISMATCH",
+                OpenSectionsError::TransientHttp { .. } => "OPEN_TRANSIENT_HTTP",
+                OpenSectionsError::RateLimited { .. } => "OPEN_RATE_LIMITED",
+                OpenSectionsError::Forbidden => "OPEN_FORBIDDEN",
+                OpenSectionsError::Redirect { scope, .. } => match scope {
+                    RedirectScope::OffOrigin => "OPEN_OFF_ORIGIN_REDIRECT",
+                    RedirectScope::SameOrigin => "OPEN_SAME_ORIGIN_REDIRECT",
+                    RedirectScope::InvalidLocation => "OPEN_INVALID_REDIRECT",
+                },
+                OpenSectionsError::FatalClientHttp { .. } => "OPEN_FATAL_CLIENT_HTTP",
+                OpenSectionsError::UnsupportedHttp { .. } => "OPEN_UNSUPPORTED_HTTP",
+                OpenSectionsError::InvalidContentType => "OPEN_INVALID_CONTENT_TYPE",
+                OpenSectionsError::ResponseTooLarge => "OPEN_RESPONSE_TOO_LARGE",
+                OpenSectionsError::ContentDecoding => "OPEN_CONTENT_DECODING",
+                OpenSectionsError::InvalidJson => "OPEN_INVALID_JSON",
+                OpenSectionsError::RootNotArray => "OPEN_ROOT_NOT_ARRAY",
+                OpenSectionsError::NonStringValue { .. } => "OPEN_NON_STRING_VALUE",
+                OpenSectionsError::InvalidSectionIndex { .. } => "OPEN_INVALID_SECTION_INDEX",
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -224,7 +257,7 @@ where
         let started_at_text = format_timestamp(started_at)?;
         let rutgers_day = rutgers_day_at(started_at)?;
         let effective_interval = command
-            .general_interval
+            .refresh_intervals
             .effective(command.active_watch_count > 0);
         let lane = storage_lane(command.lane)?;
         self.persistence
@@ -236,7 +269,9 @@ where
                 rutgers_day,
                 started_at: started_at_text,
                 lane,
-                requested_interval_seconds: Some(u64::from(command.general_interval.seconds())),
+                requested_interval_seconds: Some(u64::from(
+                    command.refresh_intervals.general().seconds(),
+                )),
                 effective_interval_seconds: Some(u64::from(command.freshness_interval_seconds)),
                 schedule_lag_ms: Some(duration_millis(command.scheduler_lag)),
             })?;
@@ -307,7 +342,7 @@ where
     {
         let target = command.source_request.target().target();
         let effective_interval = command
-            .general_interval
+            .refresh_intervals
             .effective(command.active_watch_count > 0);
         let source_value_count = u64::try_from(response.metadata.raw_value_count)
             .map_err(|_| SharedOpenServiceError::ResponseCountOverflow)?;
@@ -1182,7 +1217,7 @@ mod tests {
             attempt_id: trace(attempt_suffix),
             run_id: trace(run_suffix),
             source_request: source_request(),
-            general_interval: GeneralOpenInterval::local(30).expect("interval"),
+            refresh_intervals: OpenRefreshIntervals::local_default(),
             active_watch_count,
             freshness_interval_seconds: if active_watch_count > 0 { 10 } else { 30 },
             lane: OriginSchedulerLane::OpenActiveWatch,
@@ -1430,7 +1465,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn content_decoding_failure_requires_explicit_diagnostic_recheck() {
+    async fn content_decoding_failure_uses_target_local_content_retry() {
         let mut persistence = FakePersistence::new(OpenAttemptClassification::ValidApplied);
         let execution = SharedOpenService::new(&mut persistence)
             .execute_with(
@@ -1449,7 +1484,9 @@ mod tests {
         let CompletionSchedule::Retry(directive) = execution.scheduler_completion else {
             panic!("content failure must produce a retry directive");
         };
-        assert_eq!(directive.mode, crate::RetryMode::ExplicitDiagnosticRecheck);
+        assert_eq!(directive.mode, crate::RetryMode::Automatic);
+        assert!(directive.delay >= Duration::from_secs(60));
+        assert!(directive.delay <= Duration::from_secs(66));
         assert_eq!(
             persistence.failure.expect("failure").error_code,
             "OPEN_CONTENT_DECODING"

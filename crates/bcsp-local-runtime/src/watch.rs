@@ -2,9 +2,11 @@ use std::sync::{Arc, Mutex};
 
 use bcsp_application::{OpenRuntimeSnapshotRegistry, SharedWatchSocket, WatchAdmissionSource};
 use bcsp_contracts::SectionKey;
+use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_user_state::PersonalStateStore;
 use bcsp_open::{OpenProjectionError, project_current_open_observation};
 use bcsp_watch::{WatchManagerError, WatchStartAdmission};
+use time::OffsetDateTime;
 
 use crate::{LocalPrimaryDatabase, LocalRuntimeCore, history::LocalWatchHistorySink};
 
@@ -16,6 +18,9 @@ struct LocalWatchAdmission {
 
 impl WatchAdmissionSource for LocalWatchAdmission {
     fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission {
+        if !self.term_in_range(section) {
+            return WatchStartAdmission::TermOutOfRange;
+        }
         let target = section.target();
         let Ok(snapshot) = self.open_runtime.snapshot(&target) else {
             return WatchStartAdmission::TargetUnavailable;
@@ -32,6 +37,16 @@ impl WatchAdmissionSource for LocalWatchAdmission {
             &runtime,
         ))
     }
+
+    fn term_in_range(&self, section: &SectionKey) -> bool {
+        watch_term_in_range(section)
+    }
+}
+
+fn watch_term_in_range(section: &SectionKey) -> bool {
+    RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Public).is_ok_and(
+        |window| section.term() == window.current_term() || section.term() == window.next_term(),
+    )
 }
 
 fn admission_from_projection(

@@ -9,9 +9,9 @@ use bcsp_application::{
     OpenRuntimeSnapshotRegistry, PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH,
     PRODUCT_COURSE_SEARCH_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
     PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
-    PRODUCT_SERVICE_STATUS_PATH, ProductStorageAccess, ProductStorageLockError, RefreshFuture,
-    RefreshPolicy, RefreshUpstream, RequestMethod, RouteExtension, ScheduledRefreshTarget,
-    SharedProductRoutes, SharedRefreshCoordinator, SharedRuntimeContext, SharedWatchSocket,
+    ProductStorageAccess, ProductStorageLockError, RefreshFuture, RefreshPolicy, RefreshUpstream,
+    RequestMethod, RouteExtension, ScheduledRefreshTarget, SharedProductRoutes,
+    SharedRefreshCoordinator, SharedRuntimeContext, SharedWatchSocket, TargetWorkActivity,
     WebSocketExtension, publish_discovery_for_refresh,
 };
 use bcsp_contracts::{
@@ -22,14 +22,12 @@ use bcsp_contracts::{
     OpenFreshnessState, OpenRefreshStatusV1, OpenSchedulerLane, OpenSectionStatusRequestV1,
     OpenSectionStatusV1, OpenState, OpenStatusRequestV1, PageRequestV1, SectionDetailRequestV1,
     SectionDetailResponseV1, SectionIndex, SectionKey, SectionQueryRequestV1,
-    SectionQueryResponseV1, SectionSortV1, ServiceOperationPhaseV1, ServiceOperationV1,
-    ServiceStatusV1, TermCampusKey, TermId, TraceId, TraceIdSource, WatchClientCommandV1,
-    WatchPolicyV1, WatchServerEventV1, WatchStartItemResultV1, WatchStartItemV1, WatchStartItemsV1,
-    WsClientEnvelope, WsServerEnvelope,
+    SectionQueryResponseV1, SectionSortV1, ServiceOperationPhaseV1, ServiceOperationStageV2,
+    ServiceOperationV1, ServiceWorkStateV2, TermCampusKey, TermId, TraceId, TraceIdSource,
+    WatchClientCommandV1, WatchPolicyV1, WatchServerEventV1, WatchStartItemResultV1,
+    WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope, WsServerEnvelope,
 };
-use bcsp_open::{
-    GeneralOpenInterval, MonotonicTime, OpenCounterAudience, OpenFailureKind, retry_directive,
-};
+use bcsp_open::{GeneralOpenInterval, MonotonicTime, OpenCounterAudience};
 use bcsp_operational_storage::{OperationalStorage, PublishOutcome};
 use bcsp_rutgers_client::{
     DiscoverySnapshot, DiscoverySourceInput, OpenPayloadClassification, OpenResponseMetadata,
@@ -44,7 +42,7 @@ use tempfile::TempDir;
 use time::OffsetDateTime;
 use tokio::sync::mpsc;
 
-const BASE_UNIX_SECONDS: i64 = 1_893_456_000;
+const BASE_UNIX_SECONDS: i64 = 1_784_246_400;
 const DISCOVERY_BODY: &[u8] = br#"{
   "sourceVersion":"synthetic-v1",
   "terms":[{
@@ -137,6 +135,7 @@ impl TraceIdSource for FakeIds {
 #[derive(Default)]
 struct RecordingStatus {
     activities: Mutex<Vec<ServiceOperationV1>>,
+    target_activities: Mutex<Vec<TargetWorkActivity>>,
     snapshots: Mutex<Vec<CoordinatorStatusSnapshot>>,
     stopped: AtomicBool,
 }
@@ -155,6 +154,13 @@ impl CoordinatorStatusSink for RecordingStatus {
             .lock()
             .expect("activity lock")
             .push(operation);
+    }
+
+    fn publish_target_activity(&self, activity: TargetWorkActivity) {
+        self.target_activities
+            .lock()
+            .expect("target activity lock")
+            .push(activity);
     }
 }
 
@@ -450,19 +456,6 @@ where
         .into_data()
 }
 
-fn service_status(routes: &ProductRoutes) -> ServiceStatusV1 {
-    let response = routes.handle(ExtensionRequest::new(
-        RequestMethod::Get,
-        PRODUCT_SERVICE_STATUS_PATH,
-        None,
-        Vec::new(),
-    ));
-    assert_eq!(response.status(), 200);
-    serde_json::from_slice::<HttpSuccessEnvelope<ServiceStatusV1>>(response.body())
-        .expect("service status envelope")
-        .into_data()
-}
-
 fn product_search_filters() -> FilterRequestV1 {
     let mut input =
         FilterValuesInputV1::for_term(TermId::try_from("92026").expect("synthetic term"));
@@ -490,13 +483,16 @@ async fn catalog_persistence_does_not_block_the_async_runtime_thread() {
     let upstream_state = Arc::new(FakeUpstream::new(
         Arc::clone(&fixture.storage),
         [Ok(fixture.catalog_response.clone())],
-        [],
+        [FakeOpenResult::Success(vec![
+            fixture.section.index().clone(),
+        ])],
     ));
     let delayed_storage = DelayedCatalogPersistence {
         storage: Arc::clone(&fixture.storage),
         lock_calls: Arc::new(AtomicUsize::new(0)),
         delay: Duration::from_millis(250),
     };
+    let status = Arc::new(RecordingStatus::default());
     let mut coordinator = SharedRefreshCoordinator::with_parts(
         delayed_storage,
         FakeUpstreamHandle(upstream_state),
@@ -507,7 +503,7 @@ async fn catalog_persistence_does_not_block_the_async_runtime_thread() {
         OpenCounterAudience::Public,
         create_socket(),
         Arc::new(OpenRuntimeSnapshotRegistry::default()),
-        Arc::new(RecordingStatus::default()),
+        status.clone(),
     );
     coordinator
         .register_target(
@@ -565,8 +561,10 @@ async fn initial_open_is_one_shot_until_product_demand_activates_recurring() {
         )
         .expect("register target");
 
-    coordinator.run_next().await.expect("initial Catalog");
-    coordinator.run_next().await.expect("initial Open");
+    coordinator
+        .run_next()
+        .await
+        .expect("initial complete snapshot");
     assert_eq!(upstream_state.open_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         open_runtime
@@ -637,16 +635,11 @@ async fn typed_empty_open_for_nonempty_catalog_is_current_and_counted() {
         .expect("register target");
 
     assert!(matches!(
-        coordinator.run_next().await.expect("Catalog dispatch"),
+        coordinator
+            .run_next()
+            .await
+            .expect("complete snapshot dispatch"),
         Some(CoordinatorDispatchOutcome::CatalogPublished { .. })
-    ));
-    assert!(matches!(
-        coordinator.run_next().await.expect("Open dispatch"),
-        Some(CoordinatorDispatchOutcome::OpenCompleted {
-            terminal: OpenDispatchTerminal::Valid,
-            observation_count: 0,
-            ..
-        })
     ));
 
     let routes = SharedProductRoutes::new(
@@ -654,11 +647,15 @@ async fn typed_empty_open_for_nonempty_catalog_is_current_and_counted() {
         SharedRuntimeContext::new(OpenCounterAudience::Public, clock, fixed_policy),
         open_runtime,
     );
-    let status = service_status(&routes);
-    assert_eq!(status.catalog.current_target_count, 1);
-    assert_eq!(status.open.current_target_count, 1);
-    assert_eq!(status.open.stale_target_count, 0);
-    assert_eq!(status.open.unavailable_target_count, 0);
+    assert!(
+        fixture
+            .storage
+            .lock()
+            .expect("storage")
+            .complete_target_snapshot_state(&fixture.target)
+            .expect("complete state")
+            .ready
+    );
 
     let open: OpenRefreshStatusV1 = post(
         &routes,
@@ -788,15 +785,17 @@ async fn long_full_first_load_sweep_reaches_all_current_without_recurring_every_
         SharedRuntimeContext::new(OpenCounterAudience::Public, clock.clone(), fixed_policy),
         Arc::clone(&open_runtime),
     );
-    let initial = service_status(&routes);
-    assert_eq!(initial.catalog.total_target_count, TARGET_COUNT as u64);
-    assert_eq!(initial.catalog.current_target_count, 0);
-    assert_eq!(initial.open.total_target_count, TARGET_COUNT as u64);
-    assert_eq!(initial.open.current_target_count, 0);
+    assert!(published.targets.iter().all(|registration| {
+        !storage
+            .lock()
+            .expect("storage")
+            .complete_target_snapshot_state(registration.target())
+            .expect("complete state")
+            .ready
+    }));
 
     let mut catalog_valid_empty = 0;
-    let mut open_valid = 0;
-    while catalog_valid_empty < TARGET_COUNT || open_valid < TARGET_COUNT {
+    while catalog_valid_empty < TARGET_COUNT {
         match coordinator
             .run_next()
             .await
@@ -807,23 +806,19 @@ async fn long_full_first_load_sweep_reaches_all_current_without_recurring_every_
                 outcome: PublishOutcome::InitialValidEmpty { .. },
                 ..
             } => catalog_valid_empty += 1,
-            CoordinatorDispatchOutcome::OpenCompleted {
-                terminal: OpenDispatchTerminal::Valid,
-                observation_count: 0,
-                ..
-            } => open_valid += 1,
             unexpected => panic!("unexpected first-load outcome: {unexpected:?}"),
         }
     }
     assert_eq!(clock.monotonic_now(), MonotonicTime::from_millis(120_000));
 
-    let ready = service_status(&routes);
-    assert_eq!(ready.catalog.current_target_count, TARGET_COUNT as u64);
-    assert_eq!(ready.open.current_target_count, TARGET_COUNT as u64);
-    assert_eq!(ready.catalog.stale_target_count, 0);
-    assert_eq!(ready.open.stale_target_count, 0);
-    assert_eq!(ready.catalog.unavailable_target_count, 0);
-    assert_eq!(ready.open.unavailable_target_count, 0);
+    assert!(published.targets.iter().all(|registration| {
+        storage
+            .lock()
+            .expect("storage")
+            .complete_target_snapshot_state(registration.target())
+            .expect("complete state")
+            .ready
+    }));
 
     let first_target = published.targets[0].target().clone();
     let first_open: OpenRefreshStatusV1 = post(
@@ -891,18 +886,10 @@ async fn fake_upstream_drives_all_product_routes_and_watch_without_client_amplif
         )
         .expect("register target");
 
+    let mut receiver = start_watch(&socket, fixture.section.clone());
     assert!(matches!(
         coordinator.run_next().await.expect("Catalog dispatch"),
         Some(CoordinatorDispatchOutcome::CatalogPublished { .. })
-    ));
-    let mut receiver = start_watch(&socket, fixture.section.clone());
-    assert!(matches!(
-        coordinator.run_next().await.expect("Open dispatch"),
-        Some(CoordinatorDispatchOutcome::OpenCompleted {
-            terminal: OpenDispatchTerminal::Valid,
-            observation_count: 1,
-            ..
-        })
     ));
     assert_eq!(upstream_state.catalog_calls.load(Ordering::SeqCst), 1);
     assert_eq!(upstream_state.open_calls.load(Ordering::SeqCst), 1);
@@ -919,7 +906,6 @@ async fn fake_upstream_drives_all_product_routes_and_watch_without_client_amplif
             ServiceOperationPhaseV1::CatalogFetch,
             ServiceOperationPhaseV1::CatalogProcess,
             ServiceOperationPhaseV1::CatalogPublish,
-            ServiceOperationPhaseV1::Idle,
             ServiceOperationPhaseV1::OpenFetch,
             ServiceOperationPhaseV1::Idle,
         ]
@@ -1118,14 +1104,6 @@ async fn shared_coordinator_fans_out_committed_open_and_skips_catch_up_bursts() 
         coordinator.run_next().await.expect("Catalog dispatch"),
         Some(CoordinatorDispatchOutcome::CatalogPublished { .. })
     ));
-    assert!(matches!(
-        coordinator.run_next().await.expect("Open dispatch"),
-        Some(CoordinatorDispatchOutcome::OpenCompleted {
-            terminal: OpenDispatchTerminal::Valid,
-            observation_count: 1,
-            ..
-        })
-    ));
     let events = std::iter::from_fn(|| receiver.try_recv().ok())
         .map(|frame| {
             serde_json::from_str::<WsServerEnvelope<WatchServerEventV1>>(&frame)
@@ -1167,7 +1145,7 @@ async fn shared_coordinator_fans_out_committed_open_and_skips_catch_up_bursts() 
 }
 
 #[tokio::test]
-async fn catalog_transport_recovery_uses_thirty_second_base_and_continuous_backoff() {
+async fn catalog_transport_recovery_uses_nb_weighted_continuous_backoff() {
     let fixture = fixture();
     let clock = FakeClock::default();
     let upstream_state = Arc::new(FakeUpstream::new(
@@ -1177,7 +1155,9 @@ async fn catalog_transport_recovery_uses_thirty_second_base_and_continuous_backo
             Err(bcsp_application::CatalogPullFailure::Transport),
             Ok(fixture.catalog_response.clone()),
         ],
-        [],
+        [FakeOpenResult::Success(vec![
+            fixture.section.index().clone(),
+        ])],
     ));
     let mut coordinator = SharedRefreshCoordinator::with_parts(
         Arc::clone(&fixture.storage),
@@ -1205,22 +1185,7 @@ async fn catalog_transport_recovery_uses_thirty_second_base_and_continuous_backo
             ..
         })
     ));
-    let first_delay = retry_directive(
-        &fixture.target,
-        Duration::from_secs(30),
-        0,
-        OpenFailureKind::Transient,
-    )
-    .delay;
-    assert!(first_delay >= Duration::from_secs(30));
-    assert!(first_delay <= Duration::from_secs(33));
-
     clock.advance(Duration::from_millis(1));
-    assert!(
-        coordinator.run_next().await.is_err(),
-        "the dependent Open bootstrap cannot run before Catalog exists"
-    );
-    clock.advance(first_delay.saturating_sub(Duration::from_millis(2)));
     assert!(
         coordinator
             .run_next()
@@ -1228,7 +1193,7 @@ async fn catalog_transport_recovery_uses_thirty_second_base_and_continuous_backo
             .expect("retry remains in the future")
             .is_none()
     );
-    clock.advance(Duration::from_millis(1));
+    clock.advance(Duration::from_secs(6));
     assert!(matches!(
         coordinator
             .run_next()
@@ -1241,22 +1206,7 @@ async fn catalog_transport_recovery_uses_thirty_second_base_and_continuous_backo
     ));
     assert_eq!(upstream_state.catalog_calls.load(Ordering::SeqCst), 2);
 
-    let second_delay = retry_directive(
-        &fixture.target,
-        Duration::from_secs(30),
-        1,
-        OpenFailureKind::Transient,
-    )
-    .delay;
-    assert!(second_delay >= Duration::from_secs(60));
-    assert!(second_delay <= Duration::from_secs(66));
-
     clock.advance(Duration::from_millis(1));
-    assert!(
-        coordinator.run_next().await.is_err(),
-        "the dependent Open retry remains coalesced behind Catalog recovery"
-    );
-    clock.advance(second_delay.saturating_sub(Duration::from_millis(2)));
     assert!(
         coordinator
             .run_next()
@@ -1264,7 +1214,7 @@ async fn catalog_transport_recovery_uses_thirty_second_base_and_continuous_backo
             .expect("second retry remains in the future")
             .is_none()
     );
-    clock.advance(Duration::from_millis(1));
+    clock.advance(Duration::from_secs(11));
     assert!(matches!(
         coordinator.run_next().await.expect("Catalog recovery"),
         Some(CoordinatorDispatchOutcome::CatalogPublished { .. })
@@ -1287,7 +1237,7 @@ async fn failed_refreshes_retain_catalog_and_project_open_lkg_as_stale() {
         ],
         [
             FakeOpenResult::Success(vec![index.clone()]),
-            FakeOpenResult::Failure(OpenSectionsError::Network),
+            FakeOpenResult::Failure(OpenSectionsError::TransientHttp { status: 503 }),
             FakeOpenResult::Success(vec![index]),
         ],
     )));
@@ -1312,8 +1262,13 @@ async fn failed_refreshes_retain_catalog_and_project_open_lkg_as_stale() {
                 .expect("registration"),
         )
         .expect("register target");
-    coordinator.run_next().await.expect("initial Catalog");
-    coordinator.run_next().await.expect("initial Open");
+    coordinator
+        .activate_open_target(&fixture.target)
+        .expect("applied target activation");
+    coordinator
+        .run_next()
+        .await
+        .expect("initial complete snapshot");
 
     clock.advance(Duration::from_secs(30));
     assert!(matches!(
@@ -1334,6 +1289,16 @@ async fn failed_refreshes_retain_catalog_and_project_open_lkg_as_stale() {
     assert_eq!(latest_activity.phase, ServiceOperationPhaseV1::RetryWait);
     assert_eq!(latest_activity.target, Some(fixture.target.clone()));
     assert!(latest_activity.next_retry_at.is_some());
+    let target_error = status
+        .target_activities
+        .lock()
+        .expect("target activity lock")
+        .last()
+        .and_then(|activity| activity.error.clone())
+        .expect("Open target error");
+    assert_eq!(target_error.code, "OPEN_TRANSIENT_HTTP");
+    assert_eq!(target_error.http_status, Some(503));
+    assert!(target_error.trace_id.is_some());
     let runtime =
         SharedRuntimeContext::new(OpenCounterAudience::Public, clock.clone(), fixed_policy);
     let projected = runtime
@@ -1375,12 +1340,15 @@ async fn first_open_failure_projects_unknown_without_mass_closing_sections() {
     let upstream = FakeUpstreamHandle(Arc::new(FakeUpstream::new(
         Arc::clone(&fixture.storage),
         [Ok(fixture.catalog_response)],
-        [FakeOpenResult::Failure(OpenSectionsError::Network)],
+        [FakeOpenResult::Failure(OpenSectionsError::TransientHttp {
+            status: 503,
+        })],
     )));
     let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
     let fixed_policy = FixedRefreshPolicyProvider::new(policy(
         GeneralOpenInterval::local(3_600).expect("local maximum cadence"),
     ));
+    let status = Arc::new(RecordingStatus::default());
     let mut coordinator = SharedRefreshCoordinator::with_parts(
         Arc::clone(&fixture.storage),
         upstream,
@@ -1391,7 +1359,7 @@ async fn first_open_failure_projects_unknown_without_mass_closing_sections() {
         OpenCounterAudience::Local { run_id: trace(92) },
         socket,
         Arc::clone(&open_runtime),
-        Arc::new(RecordingStatus::default()),
+        status.clone(),
     );
     coordinator
         .register_target(
@@ -1399,29 +1367,47 @@ async fn first_open_failure_projects_unknown_without_mass_closing_sections() {
                 .expect("registration"),
         )
         .expect("register target");
-    coordinator.run_next().await.expect("initial Catalog");
-    coordinator.run_next().await.expect("failed first Open");
+    assert!(matches!(
+        coordinator
+            .run_next()
+            .await
+            .expect("failed initial complete snapshot"),
+        Some(CoordinatorDispatchOutcome::CompleteSnapshotOpenFailed {
+            terminal: bcsp_application::OpenDispatchTerminal::Failed,
+            error_code: "OPEN_TRANSIENT_HTTP",
+            ..
+        })
+    ));
 
-    let runtime = SharedRuntimeContext::new(
-        OpenCounterAudience::Local { run_id: trace(92) },
-        clock,
-        fixed_policy,
-    );
-    let projected = runtime
-        .open_status(
-            &mut fixture.storage.lock().expect("storage"),
-            &fixture.target,
-            &open_runtime.snapshot(&fixture.target).expect("runtime"),
-        )
-        .expect("project unknown Open");
+    let retry = status
+        .target_activities
+        .lock()
+        .expect("target activities")
+        .last()
+        .cloned()
+        .expect("retry activity");
+    assert_eq!(retry.work_state, ServiceWorkStateV2::RetryWait);
+    assert_eq!(retry.stage, Some(ServiceOperationStageV2::OpenFetch));
     assert_eq!(
-        projected.refresh.freshness.state,
-        OpenFreshnessState::Unknown
+        retry.error.as_ref().map(|error| error.code.as_str()),
+        Some("OPEN_TRANSIENT_HTTP")
+    );
+    let error = retry.error.expect("candidate Open error");
+    assert_eq!(error.http_status, Some(503));
+    assert!(error.trace_id.is_some());
+
+    let mut storage = fixture.storage.lock().expect("storage");
+    assert!(
+        storage
+            .published_catalog_snapshot(&fixture.target)
+            .expect("Catalog read")
+            .is_none(),
+        "Catalog-only data must not become serving state"
     );
     assert!(
-        projected
-            .sections
-            .iter()
-            .all(|section| section.state == OpenState::Unknown)
+        !storage
+            .complete_target_snapshot_state(&fixture.target)
+            .expect("complete target state")
+            .ready
     );
 }

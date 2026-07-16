@@ -240,7 +240,7 @@ fn fresh_schema_has_no_catalog_seed_and_migration_checksum_is_strict() {
     let temp = TempDir::new().expect("temp dir");
     let path = db_path(&temp);
     let storage = OperationalStorage::open(&path).expect("initialize schema");
-    assert_eq!(storage.migration_records().expect("migrations").len(), 3);
+    assert_eq!(storage.migration_records().expect("migrations").len(), 4);
     assert!(storage.discovered_targets().expect("targets").is_empty());
     let discovery = storage.discovery_state().expect("discovery state");
     assert_eq!((discovery.term_count, discovery.campus_count), (0, 0));
@@ -309,10 +309,126 @@ fn catalog_variant_fk_child_indexes_cover_fresh_and_v2_upgraded_databases() {
 
     let storage = OperationalStorage::open(&upgraded_path).expect("upgrade v2 database");
     let migrations = storage.migration_records().expect("upgraded migrations");
-    assert_eq!(migrations.len(), 3);
+    assert_eq!(migrations.len(), 4);
     assert_eq!(migrations[2].name, "catalog_variant_fk_indexes");
     drop(storage);
     assert_catalog_variant_fk_indexes(&upgraded_path);
+}
+
+#[test]
+fn v3_upgrade_closes_legacy_fatal_origin_without_deleting_online_history() {
+    let temp = TempDir::new().expect("upgrade temp dir");
+    let path = db_path(&temp);
+    let connection = Connection::open(&path).expect("raw v3 database");
+    for (migration_id, name, sql) in [
+        (
+            1,
+            "operational_catalog",
+            include_str!("../migrations/0001_operational_catalog.sql"),
+        ),
+        (
+            2,
+            "operational_open",
+            include_str!("../migrations/0002_operational_open.sql"),
+        ),
+        (
+            3,
+            "catalog_variant_fk_indexes",
+            include_str!("../migrations/0003_catalog_variant_fk_indexes.sql"),
+        ),
+    ] {
+        connection
+            .execute_batch(sql)
+            .expect("apply legacy migration");
+        connection
+            .execute(
+                "INSERT INTO bcsp_operational_migrations
+                    (migration_id, name, sha256, applied_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                (
+                    migration_id,
+                    name,
+                    format!("{:x}", Sha256::digest(sql.as_bytes())),
+                    COMPLETED,
+                ),
+            )
+            .expect("record legacy migration");
+    }
+    connection
+        .execute(
+            "INSERT INTO catalog_targets
+                (target_id, term_id, campus_code, created_at, updated_at)
+             VALUES ('legacy-online', '92026', 'ONLINE_NB', ?1, ?1)",
+            [COMPLETED],
+        )
+        .expect("seed retained ONLINE history");
+    connection
+        .execute(
+            "INSERT INTO catalog_targets
+                (target_id, term_id, campus_code, created_at, updated_at,
+                 current_content_version)
+             VALUES ('92026/NB', '92026', 'NB', ?1, ?1, 1)",
+            [COMPLETED],
+        )
+        .expect("seed matching Catalog snapshot");
+    connection
+        .execute(
+            "INSERT INTO open_batch_state
+                (target_id, last_attempt_sequence, last_observation_sequence,
+                 current_catalog_content_version, lkg_attempt_id,
+                 lkg_observation_sequence, lkg_observed_at,
+                 lkg_canonical_set_sha256, lkg_state_sha256,
+                 last_attempt_id, last_attempt_at, last_success_at)
+             VALUES (
+                 '92026/NB', 1, 1, 1,
+                 '00000000-0000-4000-8000-000000000123',
+                 1, ?1, ?2, ?3,
+                 '00000000-0000-4000-8000-000000000123', ?1, ?1
+             )",
+            [COMPLETED, HASH_A, HASH_B],
+        )
+        .expect("seed matching Open LKG snapshot");
+    connection
+        .execute(
+            "INSERT INTO open_origin_state
+                (origin_id, circuit_state, reason_code, opened_at, retry_at,
+                 diagnostic_recheck_required, updated_at)
+             VALUES ('rutgers', 'FATAL_DIAGNOSTIC', 'LEGACY_FATAL', ?1, NULL, 1, ?1)",
+            [COMPLETED],
+        )
+        .expect("seed legacy fatal origin");
+    drop(connection);
+
+    let storage = OperationalStorage::open(&path).expect("upgrade v3 database");
+    assert_eq!(storage.migration_records().expect("migrations").len(), 4);
+    let origin = storage
+        .open_origin_state("rutgers")
+        .expect("origin state")
+        .expect("retained origin row");
+    assert_eq!(origin.circuit_state.as_str(), "CLOSED");
+    assert_eq!(origin.reason_code, None);
+    assert_eq!(origin.opened_at, None);
+    assert_eq!(origin.retry_at, None);
+    assert!(!origin.diagnostic_recheck_required);
+    assert!(
+        storage
+            .complete_target_snapshot_state(&target("92026", "NB"))
+            .expect("matching complete snapshot state")
+            .ready,
+        "a matching RC2 Catalog/Open snapshot remains READY",
+    );
+    drop(storage);
+
+    let connection = Connection::open(&path).expect("inspect upgraded database");
+    let online_rows: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM catalog_targets
+             WHERE term_id = '92026' AND campus_code = 'ONLINE_NB'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("retained ONLINE row count");
+    assert_eq!(online_rows, 1, "migration retains historical ONLINE rows");
 }
 
 #[test]
@@ -350,7 +466,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
         .execute(
             "INSERT INTO bcsp_operational_migrations
                 (migration_id, name, sha256, applied_at)
-             VALUES (4, 'future', ?1, ?2)",
+             VALUES (5, 'future', ?1, ?2)",
             [HASH_A, COMPLETED],
         )
         .expect("future migration");
@@ -358,7 +474,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
     assert!(matches!(
         OperationalStorage::open(&future_path),
         Err(StorageError::UnknownMigration {
-            migration_id: 4,
+            migration_id: 5,
             ..
         })
     ));

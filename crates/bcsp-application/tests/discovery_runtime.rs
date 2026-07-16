@@ -15,11 +15,13 @@ const DISCOVERY_BODY: &[u8] = br#"{
   ],
   "campuses":[
     {"campusCode":"NB","enabled":true},
+    {"campusCode":"ONLINE_NB","enabled":true},
     {"campusCode":"CAMDEN","enabled":true},
     {"campusCode":"NWK","enabled":true}
   ],
   "targets":[
     {"termId":"92026","campusCode":"NB","enabled":true},
+    {"termId":"92026","campusCode":"ONLINE_NB","enabled":true},
     {"termId":"92026","campusCode":"CAMDEN","enabled":false},
     {"termId":"12027","campusCode":"NWK","enabled":true}
   ],

@@ -639,10 +639,10 @@ pub fn canonical_open_set_sha256(indexes: &[SectionIndex]) -> OpenCanonicalSetHa
 }
 
 fn classify_reqwest_error(error: reqwest::Error) -> OpenSectionsError {
-    if error.is_decode() {
-        OpenSectionsError::ContentDecoding
-    } else if error.is_timeout() {
+    if error.is_timeout() {
         OpenSectionsError::Timeout
+    } else if error.is_decode() {
+        OpenSectionsError::ContentDecoding
     } else {
         OpenSectionsError::Network
     }
@@ -727,7 +727,7 @@ fn same_origin(left: &Url, right: &Url) -> bool {
         && left.port_or_known_default() == right.port_or_known_default()
 }
 
-fn retry_after(headers: &HeaderMap) -> RetryAfterHeader {
+pub(crate) fn retry_after(headers: &HeaderMap) -> RetryAfterHeader {
     let mut values = headers.get_all(RETRY_AFTER).iter();
     let Some(value) = values.next() else {
         return RetryAfterHeader::Missing;

@@ -34,6 +34,11 @@ pub trait LocalSurfaceState: Send + Sync + 'static {
     fn reset_current_filters(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
     fn prepare_local_user_data_reset(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
     fn confirm_local_user_data_reset(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn pull_term(&self, _body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        Err(LocalSurfaceFailure::bad_request(
+            LocalApiErrorCode::MethodNotAllowed,
+        ))
+    }
     fn checkpoint_wal(&self) -> Result<(), LocalSurfaceFailure>;
 }
 
@@ -56,6 +61,8 @@ pub enum LocalApiErrorCode {
     ResetConfirmationInvalid,
     ResetConfirmationExpired,
     InvalidLocalState,
+    TermOutOfRange,
+    TermNotPublished,
     InternalError,
 }
 
@@ -77,6 +84,8 @@ impl LocalApiErrorCode {
         Self::ResetConfirmationInvalid,
         Self::ResetConfirmationExpired,
         Self::InvalidLocalState,
+        Self::TermOutOfRange,
+        Self::TermNotPublished,
         Self::InternalError,
     ];
 
@@ -98,6 +107,8 @@ impl LocalApiErrorCode {
             Self::ResetConfirmationInvalid => "local.error.reset_confirmation_invalid",
             Self::ResetConfirmationExpired => "local.error.reset_confirmation_expired",
             Self::InvalidLocalState => "local.error.invalid_state",
+            Self::TermOutOfRange => "local.error.term_out_of_range",
+            Self::TermNotPublished => "local.error.term_not_published",
             Self::InternalError => "error.internal",
         }
     }
@@ -120,6 +131,8 @@ impl LocalApiErrorCode {
             Self::ResetConfirmationInvalid => "RESET_CONFIRMATION_INVALID",
             Self::ResetConfirmationExpired => "RESET_CONFIRMATION_EXPIRED",
             Self::InvalidLocalState => "INVALID_LOCAL_STATE",
+            Self::TermOutOfRange => "TERM_OUT_OF_RANGE",
+            Self::TermNotPublished => "TERM_NOT_PUBLISHED",
             Self::InternalError => "INTERNAL_ERROR",
         }
     }
@@ -316,6 +329,9 @@ impl RouteExtension for LocalRouteExtension {
                 .surface_response(|surface| surface.prepare_local_user_data_reset(request.body())),
             (RequestMethod::Post, "/api/v1/local/user-data-reset/confirm") => self
                 .surface_response(|surface| surface.confirm_local_user_data_reset(request.body())),
+            (RequestMethod::Post, "/api/v1/local/terms/pull") => {
+                self.surface_response(|surface| surface.pull_term(request.body()))
+            }
             (RequestMethod::Post, "/api/v1/local/exit") => {
                 (self.request_exit)();
                 ExtensionResponse::no_content()
@@ -337,6 +353,7 @@ impl RouteExtension for LocalRouteExtension {
             | (_, "/api/v1/local/filters/reset")
             | (_, "/api/v1/local/user-data-reset/prepare")
             | (_, "/api/v1/local/user-data-reset/confirm")
+            | (_, "/api/v1/local/terms/pull")
             | (_, "/api/v1/local/exit") => method_not_allowed(),
             _ => self.product_routes.handle(request),
         }

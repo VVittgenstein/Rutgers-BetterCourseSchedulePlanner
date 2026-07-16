@@ -143,6 +143,13 @@ fn error_detail_tagged_union_is_bound_to_every_serde_variant() {
         "CURRENT_REVISION",
         &ApiErrorDetail::CurrentRevision { revision: 7 },
     );
+    assert_tagged_variant_binding(
+        "bcsp.http.error-detail.v1",
+        "TARGET_NOT_READY",
+        &ApiErrorDetail::TargetNotReady {
+            target: TermCampusKey::try_new("72026", "NB").unwrap(),
+        },
+    );
 }
 
 #[test]

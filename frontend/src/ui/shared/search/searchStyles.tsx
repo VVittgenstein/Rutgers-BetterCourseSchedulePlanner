@@ -46,6 +46,16 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
   margin: 0;
 }
 
+.bcsp-search-workspace__scope-error {
+  margin: 0;
+  padding: var(--bcsp-space-3);
+  border-bottom: 1px solid var(--bcsp-line);
+  border-left: 4px solid var(--bcsp-accent);
+  color: var(--bcsp-ink);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 .bcsp-search-workspace__header h3 {
   font-size: 1.1rem;
   font-weight: 850;

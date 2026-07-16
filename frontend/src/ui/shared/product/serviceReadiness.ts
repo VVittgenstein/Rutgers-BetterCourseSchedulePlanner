@@ -1,4 +1,5 @@
-import type { ServiceStatusV1 } from './contracts/service';
+import { isServiceStatusV2, type ServiceStatus } from './contracts/service';
+import type { ServiceStatusScope } from './ProductApi';
 
 export interface ServiceDatasetProgress {
   readonly current: number;
@@ -8,6 +9,7 @@ export interface ServiceDatasetProgress {
 }
 
 export interface SearchDataProgress {
+  readonly anyReady: boolean;
   readonly catalog: ServiceDatasetProgress;
   readonly current: number;
   readonly open: ServiceDatasetProgress;
@@ -17,7 +19,7 @@ export interface SearchDataProgress {
 }
 
 function datasetProgress(
-  status: ServiceStatusV1,
+  status: Exclude<ServiceStatus, { readonly contractVersion: 2 }>,
   dataset: 'catalog' | 'open',
 ): ServiceDatasetProgress {
   const summary = status[dataset];
@@ -31,10 +33,34 @@ function datasetProgress(
   return { current, stale, total: summary.totalTargetCount, unavailable };
 }
 
-export function searchDataProgress(status: ServiceStatusV1 | null): SearchDataProgress {
+export function searchDataProgress(status: ServiceStatus | null): SearchDataProgress {
   if (status === null) {
     const empty = { current: 0, stale: 0, total: 0, unavailable: 0 };
-    return { catalog: empty, current: 0, open: empty, percent: 0, ready: false, total: 0 };
+    return {
+      anyReady: false,
+      catalog: empty,
+      current: 0,
+      open: empty,
+      percent: 0,
+      ready: false,
+      total: 0,
+    };
+  }
+  if (isServiceStatusV2(status)) {
+    const current = status.automaticTermSummaries
+      .reduce((total, summary) => total + summary.readyTargetCount, 0);
+    const total = status.automaticTermSummaries
+      .reduce((sum, summary) => sum + summary.totalTargetCount, 0);
+    const empty = { current: 0, stale: 0, total: 0, unavailable: 0 };
+    return {
+      catalog: empty,
+      current,
+      open: empty,
+      percent: total === 0 ? 0 : Math.round((current / total) * 100),
+      anyReady: current > 0,
+      ready: total > 0 && current === total,
+      total,
+    };
   }
   const catalog = datasetProgress(status, 'catalog');
   const open = datasetProgress(status, 'open');
@@ -48,6 +74,7 @@ export function searchDataProgress(status: ServiceStatusV1 | null): SearchDataPr
     && catalog.current === catalog.total
     && open.current === open.total;
   return {
+    anyReady: catalog.current > 0 && open.current > 0,
     catalog,
     current,
     open,
@@ -57,6 +84,15 @@ export function searchDataProgress(status: ServiceStatusV1 | null): SearchDataPr
   };
 }
 
-export function isSearchDataReady(status: ServiceStatusV1 | null | undefined): boolean {
-  return status !== undefined && searchDataProgress(status).ready;
+export function isSearchDataReady(
+  status: ServiceStatus | null | undefined,
+  scope?: ServiceStatusScope,
+): boolean {
+  if (status === null || status === undefined) return false;
+  if (!isServiceStatusV2(status)) return searchDataProgress(status).ready;
+  if (scope === undefined || scope.term === null || scope.campuses.length === 0) return false;
+  const usable = new Set(status.targets
+    .filter((target) => target.usable)
+    .map((target) => `${target.target.term}\u0000${target.target.campus}`));
+  return scope.campuses.every((campus) => usable.has(`${scope.term}\u0000${campus}`));
 }

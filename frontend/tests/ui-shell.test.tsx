@@ -14,7 +14,7 @@ import type {
   FilterSchemaV1,
   ProductApiPort,
   ProductRuntimePort,
-  ServiceStatusV1,
+  ServiceStatusV2,
 } from '../src/ui/shared/product';
 
 const BOOTSTRAP = {
@@ -48,7 +48,7 @@ function contrast(left: string, right: string): number {
 
 function discovery(
   availability: CatalogDiscoveryResponseV1['status']['availability'] = 'CURRENT',
-  targetCount = 135,
+  targetCount = 2,
 ): CatalogDiscoveryResponseV1 {
   const point = {
     contentVersion: 7,
@@ -92,49 +92,52 @@ function discovery(
 }
 
 function serviceStatus(
-  level: ServiceStatusV1['level'] = 'READY',
-  availability: ServiceStatusV1['targets'][number]['catalogAvailability'] = 'CURRENT',
-  targetCount = 135,
-): ServiceStatusV1 {
+  level: ServiceStatusV2['level'] = 'READY',
+  availability: 'CURRENT' | 'STALE' | 'UNAVAILABLE' = 'CURRENT',
+  targetCount = 2,
+): ServiceStatusV2 {
   const targets = discovery('CURRENT', targetCount).targets.map(({ key }) => ({
-    catalogAvailability: availability,
     catalogContentVersion: availability === 'UNAVAILABLE' ? null : 7,
-    openAvailability: availability,
-    primary: true,
-    searchAvailable: availability !== 'UNAVAILABLE',
+    error: null,
+    lastCompleteAt: availability === 'UNAVAILABLE' ? null : OBSERVED_AT,
+    nextRetryAt: availability === 'STALE' ? '2026-07-14T16:31:00.000Z' : null,
+    primary: key.campus === 'NB',
+    snapshotAvailability: availability === 'UNAVAILABLE' ? 'NO_COMPLETE_SNAPSHOT' as const : 'READY' as const,
+    stage: availability === 'UNAVAILABLE' ? 'CATALOG_FETCH' as const : null,
     target: key,
+    usable: availability !== 'UNAVAILABLE',
+    workState: availability === 'STALE' ? 'RETRY_WAIT' as const
+      : availability === 'UNAVAILABLE' ? 'RUNNING' as const : 'IDLE' as const,
   }));
-  const availableTargetCount = targets.filter(({ searchAvailable }) => searchAvailable).length;
+  const readyTargetCount = targets.filter(({ usable }) => usable).length;
   return {
-    catalog: {
-      availableTargetCount,
-      currentTargetCount: availability === 'CURRENT' ? availableTargetCount : 0,
-      staleTargetCount: availability === 'STALE' ? availableTargetCount : 0,
-      totalTargetCount: targets.length,
-      unavailableTargetCount: availability === 'UNAVAILABLE' ? targets.length : 0,
-    },
-    contractVersion: 1,
+    contractVersion: 2,
     discovery: discovery(targetCount === 0 ? 'CURRENT' : availability === 'STALE'
       ? 'STALE_LAST_SUCCESS' : 'CURRENT', targetCount).status,
     issues: level === 'DEGRADED' ? [{
-      code: 'SYNTHETIC_STALE',
-      component: 'CATALOG',
-      recovery: 'AUTOMATIC_RETRY',
-      retryAt: null,
-      severity: 'DEGRADED',
-      target: targets[0]?.target ?? null,
+      code: 'SYNTHETIC_STALE', component: 'CATALOG', recovery: 'AUTOMATIC_RETRY',
+      retryAt: '2026-07-14T16:31:00.000Z', severity: 'DEGRADED', target: targets[0]?.target ?? null,
     }] : [],
     level,
     observedAt: OBSERVED_AT,
-    open: {
-      availableTargetCount,
-      currentTargetCount: availability === 'CURRENT' ? availableTargetCount : 0,
-      staleTargetCount: availability === 'STALE' ? availableTargetCount : 0,
-      totalTargetCount: targets.length,
-      unavailableTargetCount: availability === 'UNAVAILABLE' ? targets.length : 0,
-    },
-    operation: { nextRetryAt: null, phase: 'IDLE', startedAt: null, target: null },
+    operations: availability === 'UNAVAILABLE' && targets[0] !== undefined ? [{
+      target: targets[0].target,
+      stage: 'CATALOG_FETCH',
+      startedAt: OBSERVED_AT,
+    }] : [],
     runtime: 'PUBLIC',
+    termWindow: {
+      currentTerm: '2026-9',
+      nextTerm: '2027-0',
+      visibleTerms: [
+        { term: '2026-9', relativeOffset: 0, discovered: targetCount > 0, autoManaged: true, manualPullAllowed: false, watchable: true },
+        { term: '2027-0', relativeOffset: 1, discovered: false, autoManaged: true, manualPullAllowed: false, watchable: true },
+      ],
+    },
+    automaticTermSummaries: [
+      { term: '2026-9', readyTargetCount, totalTargetCount: targetCount },
+      { term: '2027-0', readyTargetCount: 0, totalTargetCount: 0 },
+    ],
     targets,
   };
 }
@@ -209,19 +212,21 @@ describe('P7.2 responsive product shell', () => {
   it('renders current metrics and lets native controls select published targets', async () => {
     const view = renderShell(runtimeWith(async () => discovery()));
 
-    const term = await screen.findByRole('combobox', { name: 'Term' }) as HTMLSelectElement;
+    const term = await screen.findByRole('radio', { name: /Fall 2026/u }) as HTMLInputElement;
     const newark = screen.getByRole('checkbox', { name: /Newark \/ NK/i }) as HTMLInputElement;
     const newBrunswick = screen.getByRole('checkbox', { name: /New Brunswick \/ NB/i }) as HTMLInputElement;
-    expect(term.value).toBe('2026-9');
-    expect(newBrunswick.checked).toBe(true);
+    expect(term.checked).toBe(true);
+    expect(newBrunswick.checked).toBe(false);
     expect(newark.checked).toBe(false);
     fireEvent.click(newark);
+    fireEvent.click(newBrunswick);
     expect(newark.checked).toBe(true);
     expect(newBrunswick.checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
 
-    expect(screen.getAllByText('18').length).toBeGreaterThan(0);
+    expect(view.container.querySelectorAll('[data-filter-row]')).toHaveLength(16);
     expect(screen.getByText('All course data is ready')).toBeTruthy();
-    expect(screen.getAllByText('135/135')).toHaveLength(2);
+    expect(screen.getAllByText('2/2')).toHaveLength(1);
     expect(screen.getByRole('group', { name: 'Interface language' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: /Sections/u })).toBeNull();
     expect(screen.getAllByRole('link', { name: /Courses|Watch desk/u })).toHaveLength(2);
@@ -232,6 +237,36 @@ describe('P7.2 responsive product shell', () => {
       rules: { 'color-contrast': { enabled: false } },
     });
     expect(accessibility.violations).toEqual([]);
+  }, 15_000);
+
+  it('reports partial target readiness without claiming that all data is ready', async () => {
+    const complete = serviceStatus('PARTIALLY_READY', 'CURRENT', 2);
+    const second = complete.targets[1]!;
+    const partial: ServiceStatusV2 = {
+      ...complete,
+      automaticTermSummaries: [
+        { term: '2026-9', readyTargetCount: 1, totalTargetCount: 2 },
+        { term: '2027-0', readyTargetCount: 0, totalTargetCount: 0 },
+      ],
+      targets: [complete.targets[0]!, {
+        ...second,
+        catalogContentVersion: null,
+        lastCompleteAt: null,
+        snapshotAvailability: 'NO_COMPLETE_SNAPSHOT',
+        stage: 'CATALOG_FETCH',
+        usable: false,
+        workState: 'RETRY_WAIT',
+      }],
+    };
+    renderShell(runtimeWith(async () => discovery(), undefined, async () => partial));
+
+    expect(await screen.findByText(
+      /1 Campus target is available|1 Campus targets are available/u,
+      { selector: '.bcsp-service-status__headline' },
+    )).toBeTruthy();
+    expect(screen.queryByText('All course data is ready')).toBeNull();
+    expect(screen.queryByText('Loading is incomplete; retrying')).toBeNull();
+    expect(screen.getByText('1/2')).toBeTruthy();
   });
 
   it('expands a retained ready snapshot when the service connection is interrupted', async () => {
@@ -244,8 +279,15 @@ describe('P7.2 responsive product shell', () => {
     expect(await screen.findByText('All course data is ready')).toBeTruthy();
     globalThis.dispatchEvent(new Event('online'));
 
-    expect(await screen.findAllByText('Service connection interrupted')).toHaveLength(2);
-    expect(screen.getByText('All course data is ready')).toBeTruthy();
+    expect(await screen.findByText(
+      'Service connection interrupted',
+      { selector: '.bcsp-service-status__headline' },
+    )).toBeTruthy();
+    expect(screen.getByText(
+      'Service connection interrupted',
+      { selector: '.bcsp-service-status__diagnostics p' },
+    )).toBeTruthy();
+    expect(screen.queryByText('All course data is ready')).toBeNull();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
   });
 
@@ -255,8 +297,11 @@ describe('P7.2 responsive product shell', () => {
       undefined,
       async () => serviceStatus('DEGRADED', 'STALE'),
     ));
-    expect(await screen.findAllByText('0/135')).toHaveLength(2);
-    expect(screen.getByText('Loading is incomplete; retrying')).toBeTruthy();
+    expect(await screen.findByText('2/2')).toBeTruthy();
+    expect(screen.getAllByText(/Course data remains available; a refresh failed and will retry/u).length)
+      .toBeGreaterThan(0);
+    expect(screen.queryByText('All course data is ready')).toBeNull();
+    expect(screen.getAllByText(/Refresh failed; retry scheduled/u).length).toBeGreaterThan(0);
     stale.unmount();
 
     const empty = renderShell(runtimeWith(
@@ -264,8 +309,9 @@ describe('P7.2 responsive product shell', () => {
       undefined,
       async () => serviceStatus('INITIALIZING', 'UNAVAILABLE', 0),
     ));
-    expect(await screen.findByRole('heading', { name: 'No catalog targets available' })).toBeTruthy();
-    expect(screen.queryByText('Fall 2026')).toBeNull();
+    expect(await screen.findByRole('heading', { name: 'Search courses' })).toBeTruthy();
+    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    expect(screen.getByText('Course targets have not been published for this term.')).toBeTruthy();
     empty.unmount();
 
     const catalogDiscovery = vi.fn<ProductApiPort['catalogDiscovery']>()
@@ -274,7 +320,7 @@ describe('P7.2 responsive product shell', () => {
     renderShell(runtimeWith(catalogDiscovery));
     expect(await screen.findByRole('alert')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Term' })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('radio', { name: /Fall 2026/u })).toBeTruthy());
     expect(catalogDiscovery.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
@@ -292,6 +338,8 @@ describe('P7.2 responsive product shell', () => {
     ));
 
     await screen.findByText('All course data is ready');
+    fireEvent.click(screen.getByRole('checkbox', { name: /New Brunswick \/ NB/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     expect(await screen.findByRole('heading', { name: 'No matching records' })).toBeTruthy();
     expect(searchCourses).toHaveBeenCalledTimes(1);

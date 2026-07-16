@@ -42,6 +42,7 @@ function localBootstrapEnvelope(sessionNonce: string): unknown {
             localeOverride: 'system',
             catalogRefreshMinutes: 60,
             openRefreshSeconds: 30,
+            watchFastLaneSeconds: 10,
             volumePercent: 70,
             soundPolicy: {
               notificationMode: 'ONE_SHOT',

@@ -6,17 +6,21 @@ use std::net::IpAddr;
 use bcsp_contracts::TermCampusKey;
 use reqwest::header::{
     ACCEPT, AGE, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, DATE, ETAG,
-    HeaderMap, LAST_MODIFIED, LOCATION,
+    HeaderMap, LAST_MODIFIED, LOCATION, RETRY_AFTER,
 };
 use reqwest::{Client, Method, Request, Response, StatusCode, Url, redirect::Policy};
 use thiserror::Error;
 
-use crate::open_sections::RedirectScope;
+#[cfg(test)]
+use crate::open_sections::RetryAfterValue;
+use crate::open_sections::{RedirectScope, RetryAfterHeader, retry_after};
 use crate::{RawCatalogCourse, SourceProvenance, decode_catalog_payload};
 
 pub const RUTGERS_CATALOG_ENDPOINT: &str = "https://classes.rutgers.edu/soc/api/courses.json";
 pub const CATALOG_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-pub const CATALOG_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
+pub const CATALOG_RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(30);
+pub const CATALOG_BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const CATALOG_TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
 pub const CATALOG_MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
 
 /// One canonical Rutgers Catalog target and its strictly decoded URL fields.
@@ -137,8 +141,8 @@ impl CatalogResponse {
 }
 
 /// Redacted response facts retained when a response cannot become a Catalog
-/// snapshot. The response body and upstream parser diagnostics are never
-/// retained.
+/// snapshot. The response body is never retained; callers may separately
+/// persist a bounded, sanitized error-chain summary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogFailureResponseMetadata {
     pub http_status: u16,
@@ -152,6 +156,8 @@ pub struct CatalogFailureResponseMetadata {
     pub date: Option<String>,
     pub age_seconds: Option<u64>,
     pub last_modified: Option<String>,
+    pub retry_after_raw: Option<String>,
+    pub retry_after: RetryAfterHeader,
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -184,6 +190,7 @@ pub struct CatalogFailure {
     #[source]
     kind: CatalogTransportError,
     response_metadata: Option<Box<CatalogFailureResponseMetadata>>,
+    error_chain: Option<String>,
 }
 
 impl CatalogFailure {
@@ -191,6 +198,7 @@ impl CatalogFailure {
         Self {
             kind,
             response_metadata: None,
+            error_chain: None,
         }
     }
 
@@ -201,6 +209,27 @@ impl CatalogFailure {
         Self {
             kind,
             response_metadata: Some(Box::new(response_metadata)),
+            error_chain: None,
+        }
+    }
+
+    fn before_response_with_chain(kind: CatalogTransportError, error_chain: String) -> Self {
+        Self {
+            kind,
+            response_metadata: None,
+            error_chain: Some(error_chain),
+        }
+    }
+
+    fn from_response_with_chain(
+        kind: CatalogTransportError,
+        response_metadata: CatalogFailureResponseMetadata,
+        error_chain: String,
+    ) -> Self {
+        Self {
+            kind,
+            response_metadata: Some(Box::new(response_metadata)),
+            error_chain: Some(error_chain),
         }
     }
 
@@ -210,6 +239,10 @@ impl CatalogFailure {
 
     pub fn response_metadata(&self) -> Option<&CatalogFailureResponseMetadata> {
         self.response_metadata.as_deref()
+    }
+
+    pub fn error_chain(&self) -> Option<&str> {
+        self.error_chain.as_deref()
     }
 
     pub fn into_parts(
@@ -225,6 +258,8 @@ impl CatalogFailure {
 #[derive(Clone, Copy)]
 struct TransportLimits {
     connect_timeout: Duration,
+    response_header_timeout: Duration,
+    body_idle_timeout: Duration,
     total_timeout: Duration,
     max_decoded_bytes: usize,
 }
@@ -232,6 +267,8 @@ struct TransportLimits {
 impl TransportLimits {
     const OFFICIAL: Self = Self {
         connect_timeout: CATALOG_CONNECT_TIMEOUT,
+        response_header_timeout: CATALOG_RESPONSE_HEADER_TIMEOUT,
+        body_idle_timeout: CATALOG_BODY_IDLE_TIMEOUT,
         total_timeout: CATALOG_TOTAL_TIMEOUT,
         max_decoded_bytes: CATALOG_MAX_DECODED_BYTES,
     };
@@ -251,6 +288,8 @@ pub struct CatalogClientBuildError;
 pub struct RutgersCatalogClient {
     client: Client,
     endpoint: Url,
+    response_header_timeout: Duration,
+    body_idle_timeout: Duration,
     max_decoded_bytes: usize,
 }
 
@@ -274,6 +313,10 @@ impl RutgersCatalogClient {
             || endpoint.password().is_some()
             || endpoint.path() != "/soc/api/courses.json"
             || !valid_endpoint(&endpoint, mode)
+            || limits.connect_timeout.is_zero()
+            || limits.response_header_timeout.is_zero()
+            || limits.body_idle_timeout.is_zero()
+            || limits.total_timeout.is_zero()
             || limits.max_decoded_bytes == 0
         {
             return Err(CatalogClientBuildError);
@@ -293,6 +336,8 @@ impl RutgersCatalogClient {
         Ok(Self {
             client,
             endpoint,
+            response_header_timeout: limits.response_header_timeout,
+            body_idle_timeout: limits.body_idle_timeout,
             max_decoded_bytes: limits.max_decoded_bytes,
         })
     }
@@ -311,8 +356,11 @@ impl RutgersCatalogClient {
             .get(self.request_url(request))
             .header(ACCEPT, "application/json")
             .build()
-            .map_err(|_| {
-                CatalogFailure::before_response(CatalogTransportError::RequestConstruction)
+            .map_err(|error| {
+                CatalogFailure::before_response_with_chain(
+                    CatalogTransportError::RequestConstruction,
+                    reqwest_error_chain(error),
+                )
             })
     }
 
@@ -325,11 +373,14 @@ impl RutgersCatalogClient {
         let outbound = self.build_request(request)?;
         debug_assert_eq!(outbound.method(), Method::GET);
         let requested_url = outbound.url().clone();
-        let response = self
-            .client
-            .execute(outbound)
-            .await
-            .map_err(|error| CatalogFailure::before_response(classify_reqwest_error(error)))?;
+        let response =
+            tokio::time::timeout(self.response_header_timeout, self.client.execute(outbound))
+                .await
+                .map_err(|_| CatalogFailure::before_response(CatalogTransportError::Timeout))?
+                .map_err(|error| {
+                    let kind = classify_reqwest_error(&error);
+                    CatalogFailure::before_response_with_chain(kind, reqwest_error_chain(error))
+                })?;
         if !same_origin(response.url(), &requested_url) {
             let metadata = CatalogFailureResponseMetadata::capture(&response);
             return Err(CatalogFailure::from_response(
@@ -380,13 +431,22 @@ impl RutgersCatalogClient {
         let headers = ResponseHeaders::capture(response.headers());
         let mut body = Vec::new();
         loop {
-            let chunk = match response.chunk().await {
-                Ok(Some(chunk)) => chunk,
-                Ok(None) => break,
-                Err(error) => {
+            let chunk = match tokio::time::timeout(self.body_idle_timeout, response.chunk()).await {
+                Ok(Ok(Some(chunk))) => chunk,
+                Ok(Ok(None)) => break,
+                Ok(Err(error)) => {
+                    failure_metadata.decoded_bytes = Some(body.len());
+                    let kind = classify_reqwest_error(&error);
+                    return Err(CatalogFailure::from_response_with_chain(
+                        kind,
+                        failure_metadata,
+                        reqwest_error_chain(error),
+                    ));
+                }
+                Err(_) => {
                     failure_metadata.decoded_bytes = Some(body.len());
                     return Err(CatalogFailure::from_response(
-                        classify_reqwest_error(error),
+                        CatalogTransportError::Timeout,
                         failure_metadata,
                     ));
                 }
@@ -411,10 +471,11 @@ impl RutgersCatalogClient {
         let provenance = SourceProvenance::from_body(request_id, observed_at_utc, &body);
         failure_metadata.decoded_bytes = Some(body.len());
         failure_metadata.decoded_body_sha256 = Some(provenance.body_sha256.clone());
-        let payload = decode_catalog_payload(&body).map_err(|_| {
-            CatalogFailure::from_response(
+        let payload = decode_catalog_payload(&body).map_err(|error| {
+            CatalogFailure::from_response_with_chain(
                 CatalogTransportError::InvalidJson,
                 failure_metadata.clone(),
+                format!("Catalog JSON decode: {error}"),
             )
         })?;
         let metadata = CatalogResponseMetadata {
@@ -494,18 +555,33 @@ impl CatalogFailureResponseMetadata {
             date: header_text(headers, DATE),
             age_seconds: header_text(headers, AGE).and_then(|value| value.parse().ok()),
             last_modified: header_text(headers, LAST_MODIFIED),
+            retry_after_raw: header_text(headers, RETRY_AFTER),
+            retry_after: retry_after(headers),
         }
     }
 }
 
-fn classify_reqwest_error(error: reqwest::Error) -> CatalogTransportError {
-    if error.is_decode() {
-        CatalogTransportError::ContentDecoding
-    } else if error.is_timeout() {
+fn classify_reqwest_error(error: &reqwest::Error) -> CatalogTransportError {
+    if error.is_timeout() {
         CatalogTransportError::Timeout
+    } else if error.is_decode() {
+        CatalogTransportError::ContentDecoding
     } else {
         CatalogTransportError::Network
     }
+}
+
+fn reqwest_error_chain(error: reqwest::Error) -> String {
+    use std::error::Error as _;
+
+    let error = error.without_url();
+    let mut chain = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(current) = source {
+        chain.push(current.to_string());
+        source = current.source();
+    }
+    chain.join(": ")
 }
 
 fn classify_http_failure(response: &Response) -> CatalogTransportError {
@@ -657,6 +733,56 @@ mod tests {
         (endpoint, receiver, handle)
     }
 
+    fn delayed_fake_upstream(
+        response: FakeResponse,
+        header_delay: Duration,
+        body_delay: Duration,
+    ) -> (Url, Receiver<String>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed Catalog upstream");
+        let address = listener.local_addr().expect("delayed upstream address");
+        let (sender, receiver) = channel();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept delayed request");
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1_024];
+            while request.windows(4).all(|window| window != b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).expect("read delayed request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            sender
+                .send(String::from_utf8(request).expect("ASCII request"))
+                .expect("capture delayed request");
+            thread::sleep(header_delay);
+            let mut head = format!("HTTP/1.1 {}\r\n", response.status);
+            for (name, value) in &response.headers {
+                head.push_str(name);
+                head.push_str(": ");
+                head.push_str(value);
+                head.push_str("\r\n");
+            }
+            if !response
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("Content-Length"))
+            {
+                head.push_str(&format!("Content-Length: {}\r\n", response.body.len()));
+            }
+            head.push_str("Connection: close\r\n\r\n");
+            if stream.write_all(head.as_bytes()).is_err() {
+                return;
+            }
+            let _ = stream.flush();
+            thread::sleep(body_delay);
+            let _ = stream.write_all(&response.body);
+        });
+        let endpoint =
+            Url::parse(&format!("http://{address}/soc/api/courses.json")).expect("fake endpoint");
+        (endpoint, receiver, handle)
+    }
+
     fn request(term: &str, campus: &str) -> CatalogRequest {
         CatalogRequest::try_from_target(
             TermCampusKey::try_new(term, campus).expect("synthetic target"),
@@ -691,6 +817,21 @@ mod tests {
         error
     }
 
+    fn timeout_test_client(endpoint: Url) -> RutgersCatalogClient {
+        RutgersCatalogClient::build(
+            endpoint,
+            TransportLimits {
+                connect_timeout: Duration::from_secs(1),
+                response_header_timeout: Duration::from_millis(40),
+                body_idle_timeout: Duration::from_millis(40),
+                total_timeout: Duration::from_secs(2),
+                max_decoded_bytes: CATALOG_MAX_DECODED_BYTES,
+            },
+            EndpointMode::TestLoopback,
+        )
+        .expect("timeout test client")
+    }
+
     #[test]
     fn target_identity_is_split_strictly_and_official_url_is_fixed() {
         let fall_request = request("92026", "ONLINE_NB");
@@ -703,7 +844,9 @@ mod tests {
             "https://classes.rutgers.edu/soc/api/courses.json?year=2026&term=9&campus=ONLINE_NB"
         );
         assert_eq!(CATALOG_CONNECT_TIMEOUT, Duration::from_secs(10));
-        assert_eq!(CATALOG_TOTAL_TIMEOUT, Duration::from_secs(120));
+        assert_eq!(CATALOG_RESPONSE_HEADER_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(CATALOG_BODY_IDLE_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(CATALOG_TOTAL_TIMEOUT, Duration::from_secs(300));
         assert_eq!(CATALOG_MAX_DECODED_BYTES, 67_108_864);
 
         let winter = request("02027", "NB");
@@ -788,6 +931,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn header_and_body_idle_timeouts_are_transport_timeouts() {
+        let (endpoint, capture, handle) = delayed_fake_upstream(
+            FakeResponse::json(SYNTHETIC_BODY.to_vec()),
+            Duration::from_millis(120),
+            Duration::ZERO,
+        );
+        let header_failure = timeout_test_client(endpoint)
+            .fetch(
+                &request("92026", "NB"),
+                "SYNTHETIC_HEADER_TIMEOUT",
+                "2030-01-01T00:00:00Z",
+            )
+            .await
+            .expect_err("delayed headers must time out");
+        capture.recv().expect("captured header-timeout request");
+        handle.join().expect("header-timeout upstream thread");
+        assert_eq!(header_failure.kind(), &CatalogTransportError::Timeout);
+        assert!(header_failure.response_metadata().is_none());
+
+        let (endpoint, capture, handle) = delayed_fake_upstream(
+            FakeResponse::json(SYNTHETIC_BODY.to_vec()),
+            Duration::ZERO,
+            Duration::from_millis(120),
+        );
+        let body_failure = timeout_test_client(endpoint)
+            .fetch(
+                &request("92026", "NB"),
+                "SYNTHETIC_BODY_TIMEOUT",
+                "2030-01-01T00:00:00Z",
+            )
+            .await
+            .expect_err("idle body must time out");
+        capture.recv().expect("captured body-timeout request");
+        handle.join().expect("body-timeout upstream thread");
+        assert_eq!(body_failure.kind(), &CatalogTransportError::Timeout);
+        assert_eq!(
+            body_failure
+                .response_metadata()
+                .and_then(|metadata| metadata.decoded_bytes),
+            Some(0)
+        );
+    }
+
+    #[tokio::test]
     async fn decoded_limit_applies_after_gzip_expansion() {
         let mut response = FakeResponse::json(EXPANDED_GZIP.to_vec());
         response
@@ -829,6 +1016,16 @@ mod tests {
             None
         );
 
+        let mut rate_limited = FakeResponse::status("429 Too Many Requests");
+        rate_limited.headers.push(("Retry-After", "120".to_owned()));
+        let rate_limited = fetch_fake(rate_limited).await;
+        let metadata = rate_limited.response_metadata().expect("429 metadata");
+        assert_eq!(metadata.retry_after_raw.as_deref(), Some("120"));
+        assert_eq!(
+            metadata.retry_after,
+            RetryAfterHeader::Valid(RetryAfterValue::DelaySeconds(120))
+        );
+
         let mut redirect = FakeResponse::status("302 Found");
         redirect
             .headers
@@ -857,6 +1054,10 @@ mod tests {
             Some(sha256_hex(b"not-json").as_str())
         );
         assert!(!invalid.to_string().contains("not-json"));
+        let chain = invalid.error_chain().expect("decode chain");
+        assert!(chain.contains("Catalog JSON decode"));
+        assert!(!chain.contains("not-json"));
+        assert!(!chain.contains("courses.json"));
     }
 
     #[tokio::test]

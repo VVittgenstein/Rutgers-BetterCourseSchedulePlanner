@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -12,9 +12,9 @@ use bcsp_contracts::{
 };
 use bcsp_open::{
     GeneralOpenInterval, OpenCounterAudience, OpenProjectionError, OpenProjectionRuntime,
-    ProjectedOpenStatusV1, project_open_status,
+    OpenRefreshIntervals, ProjectedOpenStatusV1, WatchOpenInterval, project_open_status,
 };
-use bcsp_operational_storage::{DiscoverySnapshot, OperationalStorage, StorageError};
+use bcsp_operational_storage::{OperationalStorage, StorageError};
 use bcsp_query::OpenEvidence;
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -28,7 +28,7 @@ use crate::{SharedQueryError, SharedQueryService};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RefreshPolicy {
     catalog_interval: Duration,
-    open_general_interval: GeneralOpenInterval,
+    open_intervals: OpenRefreshIntervals,
 }
 
 impl RefreshPolicy {
@@ -36,12 +36,26 @@ impl RefreshPolicy {
         catalog_interval: Duration,
         open_general_interval: GeneralOpenInterval,
     ) -> Result<Self, RefreshPolicyError> {
+        let watch = match open_general_interval.mode() {
+            bcsp_open::OpenRuntimeMode::Local => WatchOpenInterval::local_default(),
+            bcsp_open::OpenRuntimeMode::Public => WatchOpenInterval::public(),
+        };
+        Self::try_new_with_intervals(
+            catalog_interval,
+            OpenRefreshIntervals::new(open_general_interval, watch),
+        )
+    }
+
+    pub fn try_new_with_intervals(
+        catalog_interval: Duration,
+        open_intervals: OpenRefreshIntervals,
+    ) -> Result<Self, RefreshPolicyError> {
         if catalog_interval.is_zero() {
             return Err(RefreshPolicyError::ZeroCatalogInterval);
         }
         Ok(Self {
             catalog_interval,
-            open_general_interval,
+            open_intervals,
         })
     }
 
@@ -50,11 +64,15 @@ impl RefreshPolicy {
     }
 
     pub const fn open_general_interval(self) -> GeneralOpenInterval {
-        self.open_general_interval
+        self.open_intervals.general()
+    }
+
+    pub const fn open_intervals(self) -> OpenRefreshIntervals {
+        self.open_intervals
     }
 
     pub fn effective_open_interval(self, has_active_watch: bool) -> Duration {
-        self.open_general_interval.effective(has_active_watch)
+        self.open_intervals.effective(has_active_watch)
     }
 }
 
@@ -416,7 +434,7 @@ where
         let published = storage
             .published_discovery_snapshot()
             .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?;
-        let mut selector = to_catalog_discovery_response_v1(&published, &[], observed_at)
+        let selector = to_catalog_discovery_response_v1(&published, &[], observed_at)
             .map_err(SharedRuntimeError::CatalogDiscoveryProjection)?;
         let mut catalogs = Vec::new();
         for target in selector.targets.iter().map(|target| &target.key) {
@@ -427,40 +445,11 @@ where
                 catalogs.push(catalog);
             }
         }
-        let available = to_catalog_discovery_response_v1(&published, &catalogs, observed_at)
-            .map_err(SharedRuntimeError::CatalogDiscoveryProjection)?;
-        selector.core_code_dictionaries = available.core_code_dictionaries.clone();
-        let selectable_terms = selector
-            .targets
-            .iter()
-            .map(|target| target.key.term().clone())
-            .collect::<BTreeSet<_>>();
-        let latest_term = latest_automatic_term(&published.snapshot, &selectable_terms);
-        if !selector.targets.is_empty() && latest_term.is_none() {
-            return Ok(selector);
-        }
-        let automatic_targets = selector
-            .targets
-            .iter()
-            .map(|target| target.key.clone())
-            .filter(|target| latest_term.is_some_and(|term| target.term() == term))
-            .collect::<BTreeSet<_>>();
-
-        // Catalog publications arrive target by target. Returning the partial merge would make a
-        // browser freeze whichever subject subset happened to publish first. Check the cheap
-        // publication states for the whole automatically refreshed term before loading any full
-        // snapshot; valid-empty targets have a nonzero content version and count as complete.
-        for target in &automatic_targets {
-            let ready = storage
-                .target_state(target)
-                .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?
-                .is_some_and(|state| state.current_content_version > 0);
-            if !ready {
-                return Ok(selector);
-            }
-        }
-
-        Ok(available)
+        // Round 3 exposes dictionaries target by target. The product route applies the strict
+        // complete-snapshot gate to this merge, so an unrequested or failed Campus cannot leak
+        // options while a READY Campus no longer waits for unrelated terms or Campuses.
+        to_catalog_discovery_response_v1(&published, &catalogs, observed_at)
+            .map_err(SharedRuntimeError::CatalogDiscoveryProjection)
     }
 
     fn ensure_catalogs_published(
@@ -535,25 +524,6 @@ where
             circuit: snapshot.circuit.clone(),
         }
     }
-}
-
-fn latest_automatic_term<'a>(
-    snapshot: &'a DiscoverySnapshot,
-    selectable_terms: &BTreeSet<bcsp_contracts::TermId>,
-) -> Option<&'a bcsp_contracts::TermId> {
-    snapshot
-        .terms
-        .iter()
-        .filter(|term| selectable_terms.contains(&term.term_id))
-        .filter_map(|term| {
-            Some((
-                term.year?,
-                term.term_code.as_deref()?.parse::<u8>().ok()?,
-                &term.term_id,
-            ))
-        })
-        .max_by_key(|(year, term_code, _)| (*year, *term_code))
-        .map(|(_, _, term)| term)
 }
 
 fn open_evidence(status: bcsp_contracts::OpenSectionStatusV1) -> OpenEvidence {

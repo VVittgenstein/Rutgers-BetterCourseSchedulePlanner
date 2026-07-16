@@ -15,9 +15,13 @@ function noticeText(
   i18n: BcspI18nRuntime,
 ): { readonly title: string; readonly detail: string } {
   const section = sectionLabel(notice.sectionKey);
-  const suffix = [section, notice.detail].filter((value) => value !== null && value !== undefined).join(' · ');
+  const detail = notice.detail === 'TERM_OUT_OF_RANGE'
+    ? i18n.t('watch.term_out_of_range_detail')
+    : notice.detail;
+  const suffix = [section, detail].filter((value) => value !== null && value !== undefined).join(' · ');
   const title = {
     SELECTION_LIMIT: i18n.t('watch.toast.selection_limit'),
+    TERM_OUT_OF_RANGE: i18n.t('watch.toast.term_out_of_range'),
     START_REJECTED: i18n.t('watch.toast.start_rejected'),
     COMMAND_FAILED: i18n.t('watch.toast.command_failed'),
     CONNECTION_LOST: i18n.t('watch.toast.connection_lost'),

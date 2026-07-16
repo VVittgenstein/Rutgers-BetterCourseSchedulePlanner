@@ -43,10 +43,13 @@ pub use refresh_coordinator::{
     CatalogPullFailure, CatalogPullResponse, CoordinatorClock, CoordinatorDispatchOutcome,
     CoordinatorError, CoordinatorStatusSink, CoordinatorStatusSnapshot, NoopCoordinatorStatusSink,
     OpenDispatchTerminal, RefreshFuture, RefreshUpstream, ScheduledRefreshTarget,
-    SharedRefreshCoordinator, SystemCoordinatorClock,
+    SharedRefreshCoordinator, SystemCoordinatorClock, TargetWorkActivity, TargetWorkflowKind,
+    WorkflowOperationActivity, WorkflowOperationId,
 };
 pub use refresh_generation::DISCOVERY_REFRESH_INTERVAL;
-pub use refresh_runtime::{RefreshRuntime, RefreshRuntimeRegistrationError};
+pub use refresh_runtime::{
+    REFRESH_MAX_CONCURRENCY, RefreshRuntime, RefreshRuntimeRegistrationError,
+};
 pub use runtime_core::{
     ApplicationClock, FixedRefreshPolicyProvider, OpenRuntimeSnapshot, OpenRuntimeSnapshotRegistry,
     OpenRuntimeSnapshotRegistryError, RefreshPolicy, RefreshPolicyError, RefreshPolicyProvider,

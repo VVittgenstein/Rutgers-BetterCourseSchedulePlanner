@@ -199,6 +199,7 @@ version = "0.1.0"
 dependencies = [
  "bcsp-application",
  "bcsp-contracts",
+ "bcsp-domain",
  "bcsp-local-user-state",
  "bcsp-open",
  "bcsp-operational-storage",
@@ -210,6 +211,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -282,6 +284,7 @@ dependencies = [
  "axum",
  "bcsp-application",
  "bcsp-contracts",
+ "bcsp-domain",
  "bcsp-open",
  "bcsp-operational-storage",
  "bcsp-public-operations",

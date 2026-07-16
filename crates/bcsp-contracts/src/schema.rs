@@ -14,10 +14,10 @@ use crate::{
     OpenCircuitState, OpenEpisodeState, OpenFailureClass, OpenFreshnessState,
     OpenRefreshClassification, OpenSchedulerLane, OpenState, OpenUncertaintyReason,
     RutgersDayTimezone, ServiceAvailabilityV1, ServiceIssueComponentV1, ServiceIssueRecoveryV1,
-    ServiceIssueSeverityV1, ServiceLevelV1, ServiceOperationPhaseV1, ServiceRuntimeV1,
-    WS_PROTOCOL_VERSION, WatchAlertDisposition, WatchContinuousMixerStopReason,
-    WatchCueCancellationReason, WatchCueOutcome, WatchNotificationMode, WatchStartRejectionReason,
-    WatchStopReason,
+    ServiceIssueSeverityV1, ServiceLevelV1, ServiceOperationPhaseV1, ServiceOperationStageV2,
+    ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceWorkStateV2, WS_PROTOCOL_VERSION,
+    WatchAlertDisposition, WatchContinuousMixerStopReason, WatchCueCancellationReason,
+    WatchCueOutcome, WatchNotificationMode, WatchStartRejectionReason, WatchStopReason,
 };
 
 pub const CONTRACT_SCHEMA_VERSION: u16 = 1;
@@ -320,7 +320,10 @@ pub fn contract_manifest() -> ContractManifest {
                 exact_bytes: None,
                 max_bytes: None,
                 pattern: None,
-                semantic: Some("only integer 1 is accepted".to_owned()),
+                semantic: Some(
+                    "integer 2 is active; integer 1 is accepted only for explicit legacy migration"
+                        .to_owned(),
+                ),
             },
             ScalarConstraint {
                 id: "catalog-content-version".to_owned(),
@@ -2641,6 +2644,122 @@ pub fn contract_manifest() -> ContractManifest {
                     ("issues", "$array:$schema:bcsp.service.issue.v1"),
                 ],
             ),
+            enum_schema(
+                "bcsp.service.operation-stage.v2",
+                serialized_enum_values(ServiceOperationStageV2::ALL),
+            ),
+            enum_schema(
+                "bcsp.service.snapshot-availability.v2",
+                serialized_enum_values(ServiceSnapshotAvailabilityV2::ALL),
+            ),
+            enum_schema(
+                "bcsp.service.work-state.v2",
+                serialized_enum_values(ServiceWorkStateV2::ALL),
+            ),
+            schema(
+                "bcsp.service.visible-term.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("term", "$scalar:term-id"),
+                    ("relativeOffset", "$primitive:i8"),
+                    ("discovered", "$primitive:bool"),
+                    ("autoManaged", "$primitive:bool"),
+                    ("manualPullAllowed", "$primitive:bool"),
+                    ("watchable", "$primitive:bool"),
+                ],
+            ),
+            schema(
+                "bcsp.service.term-window.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("currentTerm", "$scalar:term-id"),
+                    ("nextTerm", "$scalar:term-id"),
+                    ("visibleTerms", "$array:$schema:bcsp.service.visible-term.v2"),
+                ],
+            ),
+            schema(
+                "bcsp.service.automatic-term-summary.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("term", "$scalar:term-id"),
+                    ("readyTargetCount", "$primitive:u64"),
+                    ("totalTargetCount", "$primitive:u64"),
+                ],
+            ),
+            schema(
+                "bcsp.service.operation.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("target", "$schema:bcsp.identity.term-campus-key.v1"),
+                    ("stage", "$schema:bcsp.service.operation-stage.v2"),
+                    ("startedAt", "$primitive:rfc3339-timestamp"),
+                ],
+            ),
+            schema(
+                "bcsp.service.target-error.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("code", "$primitive:string"),
+                    ("httpStatus", "$optional:$primitive:u16"),
+                    ("contentType", "$optional:$primitive:string"),
+                    ("contentEncoding", "$optional:$primitive:string"),
+                    ("decodedBytes", "$optional:$primitive:u64"),
+                    ("errorClass", "$optional:$primitive:string"),
+                    ("errorChain", "$optional:$primitive:string"),
+                    ("traceId", "$optional:$scalar:trace-id"),
+                ],
+            ),
+            schema(
+                "bcsp.service.target-status.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("target", "$schema:bcsp.identity.term-campus-key.v1"),
+                    ("primary", "$primitive:bool"),
+                    (
+                        "snapshotAvailability",
+                        "$schema:bcsp.service.snapshot-availability.v2",
+                    ),
+                    ("workState", "$schema:bcsp.service.work-state.v2"),
+                    (
+                        "stage",
+                        "$optional:$schema:bcsp.service.operation-stage.v2",
+                    ),
+                    ("usable", "$primitive:bool"),
+                    (
+                        "catalogContentVersion",
+                        "$optional:$scalar:catalog-content-version",
+                    ),
+                    ("lastCompleteAt", "$optional:$primitive:rfc3339-timestamp"),
+                    ("nextRetryAt", "$optional:$primitive:rfc3339-timestamp"),
+                    ("error", "$optional:$schema:bcsp.service.target-error.v2"),
+                ],
+            ),
+            schema(
+                "bcsp.service.status.v2",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$primitive:u16"),
+                    ("observedAt", "$primitive:rfc3339-timestamp"),
+                    ("runtime", "$schema:bcsp.service.runtime.v1"),
+                    ("level", "$schema:bcsp.service.level.v1"),
+                    ("discovery", "$schema:bcsp.catalog.discovery-status.v1"),
+                    ("termWindow", "$schema:bcsp.service.term-window.v2"),
+                    (
+                        "automaticTermSummaries",
+                        "$array:$schema:bcsp.service.automatic-term-summary.v2",
+                    ),
+                    ("operations", "$array:$schema:bcsp.service.operation.v2"),
+                    ("targets", "$array:$schema:bcsp.service.target-status.v2"),
+                    ("issues", "$array:$schema:bcsp.service.issue.v1"),
+                ],
+            ),
             enum_schema("bcsp.match.outcome.v1", match_outcomes),
             enum_schema("bcsp.match.reason-code.v1", match_reasons),
             schema(
@@ -2707,6 +2826,10 @@ pub fn contract_manifest() -> ContractManifest {
                     ),
                     ("RETRY_AFTER_SECONDS", &[("seconds", "$primitive:u32")]),
                     ("CURRENT_REVISION", &[("revision", "$primitive:u64")]),
+                    (
+                        "TARGET_NOT_READY",
+                        &[("target", "$schema:bcsp.identity.term-campus-key.v1")],
+                    ),
                 ],
             ),
             schema(

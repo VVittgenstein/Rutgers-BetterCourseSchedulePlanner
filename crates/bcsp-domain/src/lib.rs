@@ -11,6 +11,7 @@
 
 mod course;
 mod match_result;
+mod term_window;
 
 pub use bcsp_contracts::{
     CourseGroupKey, CourseVariantKey, MatchExplanation, MatchExplanationError, MatchOutcome,
@@ -21,6 +22,11 @@ pub use course::{
     SectionDuplicate, classify_section_duplicates,
 };
 pub use match_result::{MatchOutcomeAlgebra, evaluate_active_dimension};
+pub use term_window::{
+    RUTGERS_CALENDAR_SOURCES, RUTGERS_TERM_CALENDAR_DIAGNOSTIC_CODE, RUTGERS_TERM_CALENDAR_VERSION,
+    RUTGERS_TIME_ZONE, RutgersCalendarSource, RutgersTermSeason, RutgersTermWindow,
+    RutgersTermWindowError, RutgersTermWindowScope, RutgersVisibleTerm,
+};
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-domain";
 

@@ -97,6 +97,12 @@ function Read-Bootstrap {
     return Invoke-RestMethod -UseBasicParsing -Method Get -Uri ($Origin + 'api/v1/local/bootstrap') -TimeoutSec 10
 }
 
+function Read-ServiceStatus {
+    param([Parameter(Mandatory = $true)][string]$Origin)
+
+    return Invoke-RestMethod -UseBasicParsing -Method Get -Uri ($Origin + 'api/v1/service/status') -TimeoutSec 10
+}
+
 function Read-SharedText {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -461,6 +467,12 @@ try {
     Assert-Condition ($null -eq $first.data.state.currentFilters.value) 'First-run current filters are not empty.'
     Assert-Condition ([int]$first.data.state.activeWatchCount -eq 0) 'First-run active watch count is not zero.'
 
+    $serviceStatus = Read-ServiceStatus $run.Origin
+    Assert-Condition ([int]$serviceStatus.protocolVersion -eq 1) 'Service Status protocol version is not 1.'
+    Assert-Condition ([int]$serviceStatus.data.contractVersion -eq 2) 'Service Status contract version is not 2.'
+    $currentWatchableTerm = [string]$serviceStatus.data.termWindow.currentTerm
+    Assert-Condition ($currentWatchableTerm -match '^[0179][0-9]{4}$') 'Service Status did not expose a valid current Rutgers term.'
+
     if ($runBrowserSmoke) {
         Invoke-BrowserSmoke $run.Origin $BrowserSmokeScript $PlaywrightRoot $NodePath
         $postBrowser = Read-Bootstrap $run.Origin
@@ -469,7 +481,7 @@ try {
         $first = $postBrowser
     }
 
-    $marker = [ordered]@{ term = 'T2099F'; campus = 'TEST'; index = '99999' }
+    $marker = [ordered]@{ term = $currentWatchableTerm; campus = 'TEST'; index = '99999' }
     $selectionBody = [ordered]@{
         protocolVersion = 1
         payload = [ordered]@{

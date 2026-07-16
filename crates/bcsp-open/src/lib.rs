@@ -16,10 +16,13 @@ pub use freshness::{
 };
 pub use policy::{
     ACTIVE_WATCH_OPEN_INTERVAL_SECONDS, FATAL_DIAGNOSTIC_COOLDOWN_SECONDS, GeneralOpenInterval,
-    LOCAL_DEFAULT_OPEN_INTERVAL_SECONDS, LOCAL_MAXIMUM_OPEN_INTERVAL_SECONDS,
-    LOCAL_MINIMUM_OPEN_INTERVAL_SECONDS, MISSING_RETRY_AFTER_CIRCUIT_SECONDS, OpenFailureKind,
-    OpenIntervalError, OpenRuntimeMode, PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS, RetryDirective,
-    RetryMode, deterministic_jitter_v1, retry_directive,
+    LOCAL_DEFAULT_OPEN_INTERVAL_SECONDS, LOCAL_DEFAULT_WATCH_OPEN_INTERVAL_SECONDS,
+    LOCAL_MAXIMUM_OPEN_INTERVAL_SECONDS, LOCAL_MAXIMUM_WATCH_OPEN_INTERVAL_SECONDS,
+    LOCAL_MINIMUM_OPEN_INTERVAL_SECONDS, LOCAL_MINIMUM_WATCH_OPEN_INTERVAL_SECONDS,
+    MISSING_RETRY_AFTER_CIRCUIT_SECONDS, OpenFailureKind, OpenIntervalError, OpenRefreshIntervals,
+    OpenRuntimeMode, PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS, PUBLIC_WATCH_OPEN_INTERVAL_SECONDS,
+    RetryDirective, RetryMode, TargetRetryClass, WatchOpenInterval, deterministic_jitter_v1,
+    retry_directive, target_retry_directive,
 };
 pub use projection::{
     OpenCounterAudience, OpenProjectionError, OpenProjectionRuntime, OpenStatusReadStore,
@@ -31,8 +34,9 @@ pub use reconcile::{
     reconcile_open_set,
 };
 pub use scheduler::{
-    CompletionSchedule, MonotonicTime, OriginCircuit, OriginDispatch, OriginEdfScheduler,
-    OriginJobKey, OriginJobKind, OriginSchedulerLane, SchedulerError, restore_monotonic_due,
+    CompletionSchedule, MonotonicTime, OriginCircuit, OriginDispatch, OriginDispatchHint,
+    OriginEdfScheduler, OriginJobKey, OriginJobKind, OriginSchedulerLane, SchedulerError,
+    restore_monotonic_due,
 };
 pub use service::{
     OpenPullClock, OpenPullCommand, OpenPullExecution, OpenPullFailure, OpenPullPersistence,

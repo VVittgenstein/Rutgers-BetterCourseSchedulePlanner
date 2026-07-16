@@ -31,6 +31,7 @@ const EXPECTED_MANIFESTS = Object.freeze({
       ...SHARED_CAPABILITIES,
       'durable-episode-action-history',
       'local-run-counters',
+      'manual-term-pull',
       'persistent-current-filters',
       'persistent-selected-sections',
       'persistent-settings',
@@ -96,6 +97,19 @@ const ADDITIONAL_PRODUCT_MARKERS = Object.freeze({
   ]),
   LOCAL_RESET: Object.freeze(['local_user_data_reset']),
 });
+const PUBLIC_TARGET_DENY_CAPABILITIES = Object.freeze([
+  Object.freeze({
+    capability: 'LOCAL_TERM_PULL',
+    denyId: 'RC3-D-LOCAL_TERM_PULL-SOURCE',
+    validationId: 'RC3-Z-LOCAL_TERM_PULL-SOURCE',
+    markers: Object.freeze([
+      '/api/v1/local/terms/pull',
+      'local.scope.pull',
+      'manualPullAllowed',
+      'scope.pull_failed',
+    ]),
+  }),
+]);
 
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
@@ -266,6 +280,9 @@ export function verifyTargetArtifacts({
   const normalizedFiles = new Map(
     [...files].map(([filePath, contents]) => [normalizePath(filePath), contents]),
   );
+  const activeDenyCapabilities = target === 'public'
+    ? [...denyCapabilities, ...PUBLIC_TARGET_DENY_CAPABILITIES]
+    : denyCapabilities;
   const errors = [
     ...validateManifest(sourceManifest, target, 'source'),
     ...validateManifest(builtManifest, target, 'built'),
@@ -302,7 +319,7 @@ export function verifyTargetArtifacts({
   const violations = [];
   const zeroSurfaceAssertions = target === 'public'
     ? SCANNED_SURFACES.flatMap((surface) =>
-        denyCapabilities.map((row) => ({
+        activeDenyCapabilities.map((row) => ({
           denyId: row.denyId.replace(/-SOURCE$/u, `-${surface}`),
           surface,
           validationId: row.validationId.replace(/-SOURCE$/u, `-${surface}`),
@@ -310,7 +327,7 @@ export function verifyTargetArtifacts({
     : [];
   if (target === 'public') {
     for (const surface of SCANNED_SURFACES) {
-      for (const row of denyCapabilities) {
+      for (const row of activeDenyCapabilities) {
         for (const marker of markersFor(row)) {
           for (const [filePath, contents] of normalizedContents) {
             const scansBytes = surface === 'BUNDLE';

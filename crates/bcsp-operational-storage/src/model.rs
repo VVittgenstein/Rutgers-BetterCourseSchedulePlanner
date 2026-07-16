@@ -286,6 +286,20 @@ pub struct FinishRefreshFailureCommand {
     pub diagnostic_token: Option<String>,
 }
 
+/// Bounded, body-free HTTP evidence associated with a failed Catalog observation.
+///
+/// The transport is responsible for redacting and truncating `error_chain`; storage enforces the
+/// same durable boundary so raw upstream bodies, credentials, and unbounded error strings cannot
+/// enter the operational database accidentally.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CatalogFailureAudit {
+    pub http_status: Option<u16>,
+    pub content_type: Option<String>,
+    pub content_encoding: Option<String>,
+    pub decoded_bytes: Option<u64>,
+    pub error_chain: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogRefreshCommand {
     pub observation_id: TraceId,

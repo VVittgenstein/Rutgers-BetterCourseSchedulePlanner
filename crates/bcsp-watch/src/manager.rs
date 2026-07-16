@@ -31,6 +31,7 @@ pub(crate) enum CoreStartAdmission {
     },
     SectionNotFound,
     TargetUnavailable,
+    TermOutOfRange,
 }
 
 #[derive(Clone, Debug)]
@@ -221,6 +222,14 @@ where
                     }));
                     continue;
                 }
+                CoreStartAdmission::TermOutOfRange => {
+                    events.push(CoreEvent::StartResult(CoreStartResult {
+                        section,
+                        disposition: CoreStartDisposition::RejectedTermOutOfRange,
+                        watch_id: None,
+                    }));
+                    continue;
+                }
             };
 
             let previous = connection.watches.remove(&section);
@@ -276,7 +285,8 @@ where
                     CoreStartDisposition::RejectedLimit
                     | CoreStartDisposition::RejectedDuplicate
                     | CoreStartDisposition::RejectedSectionNotFound
-                    | CoreStartDisposition::RejectedTargetUnavailable => unreachable!(),
+                    | CoreStartDisposition::RejectedTargetUnavailable
+                    | CoreStartDisposition::RejectedTermOutOfRange => unreachable!(),
                 },
                 Some(section.clone()),
                 Some(watch_id),

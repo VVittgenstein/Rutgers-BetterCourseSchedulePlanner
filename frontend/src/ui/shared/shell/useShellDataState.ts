@@ -66,11 +66,7 @@ export function useShellDataState(
         filterCount: filterSchema.fields.length,
         filterSchema,
       };
-      setState(
-        discovery.targets.length === 0 || snapshot.discoveryState === 'UNAVAILABLE'
-          ? { status: 'EMPTY', ...snapshot }
-          : { status: 'READY', ...snapshot },
-      );
+      setState({ status: 'READY', ...snapshot });
     }).catch((error: unknown) => {
       if (!active || abort.signal.aborted) return;
       setState({
@@ -107,9 +103,7 @@ export function useShellDataState(
           filterCount: current.filterCount,
           filterSchema: current.filterSchema,
         };
-        return discovery.targets.length === 0 || discoveryState === 'UNAVAILABLE'
-          ? { status: 'EMPTY', ...snapshot }
-          : { status: 'READY', ...snapshot };
+        return { status: 'READY', ...snapshot };
       });
     }).catch(() => {
       // Service status owns retry cadence. Keep the last discovery snapshot.

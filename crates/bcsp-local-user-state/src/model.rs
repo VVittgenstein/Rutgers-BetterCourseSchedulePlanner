@@ -94,6 +94,42 @@ impl TryFrom<u16> for OpenRefreshSeconds {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
+pub struct WatchFastLaneSeconds(u8);
+
+impl WatchFastLaneSeconds {
+    pub const DEFAULT: Self = Self(10);
+    pub const MIN: u8 = 3;
+    pub const MAX: u8 = 60;
+
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    pub(crate) const fn is_valid(self) -> bool {
+        self.0 >= Self::MIN && self.0 <= Self::MAX
+    }
+}
+
+impl Default for WatchFastLaneSeconds {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl TryFrom<u8> for WatchFastLaneSeconds {
+    type Error = SettingValueError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        let value = Self(value);
+        value
+            .is_valid()
+            .then_some(value)
+            .ok_or(SettingValueError::WatchFastLaneOutOfRange)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct VolumePercent(u8);
 
 impl VolumePercent {
@@ -170,6 +206,8 @@ pub struct LocalSettings {
     pub locale_override: LocaleOverride,
     pub catalog_refresh_minutes: CatalogRefreshMinutes,
     pub open_refresh_seconds: OpenRefreshSeconds,
+    #[serde(default)]
+    pub watch_fast_lane_seconds: WatchFastLaneSeconds,
     pub volume_percent: VolumePercent,
     pub sound_policy: WatchPolicyV1,
 }
@@ -180,6 +218,7 @@ impl Default for LocalSettings {
             locale_override: LocaleOverride::System,
             catalog_refresh_minutes: CatalogRefreshMinutes::DEFAULT,
             open_refresh_seconds: OpenRefreshSeconds::DEFAULT,
+            watch_fast_lane_seconds: WatchFastLaneSeconds::DEFAULT,
             volume_percent: VolumePercent::DEFAULT,
             sound_policy: WatchPolicyV1::default(),
         }
@@ -193,6 +232,9 @@ impl LocalSettings {
         }
         if !self.open_refresh_seconds.is_valid() {
             return Err(SettingValueError::OpenRefreshOutOfRange);
+        }
+        if !self.watch_fast_lane_seconds.is_valid() {
+            return Err(SettingValueError::WatchFastLaneOutOfRange);
         }
         if !self.volume_percent.is_valid() {
             return Err(SettingValueError::VolumeOutOfRange);

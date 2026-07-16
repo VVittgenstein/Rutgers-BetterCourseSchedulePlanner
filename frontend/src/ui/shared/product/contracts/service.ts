@@ -79,3 +79,85 @@ export interface ServiceStatusV1 {
   readonly targets: readonly ServiceTargetStatusV1[];
   readonly issues: readonly ServiceIssueV1[];
 }
+
+export type ServiceTermRelativeOffsetV2 = -2 | -1 | 0 | 1 | 2;
+export type ServiceOperationStageV2 =
+  | 'CATALOG_FETCH'
+  | 'CATALOG_PROCESS'
+  | 'OPEN_FETCH'
+  | 'SNAPSHOT_PUBLISH';
+export type ServiceSnapshotAvailabilityV2 =
+  | 'UNREQUESTED'
+  | 'NO_COMPLETE_SNAPSHOT'
+  | 'READY';
+export type ServiceWorkStateV2 = 'IDLE' | 'QUEUED' | 'RUNNING' | 'RETRY_WAIT';
+
+export interface ServiceVisibleTermV2 {
+  readonly term: string;
+  readonly relativeOffset: ServiceTermRelativeOffsetV2;
+  readonly discovered: boolean;
+  readonly autoManaged: boolean;
+  readonly manualPullAllowed: boolean;
+  readonly watchable: boolean;
+}
+
+export interface ServiceTermWindowV2 {
+  readonly currentTerm: string;
+  readonly nextTerm: string;
+  readonly visibleTerms: readonly ServiceVisibleTermV2[];
+}
+
+export interface ServiceAutomaticTermSummaryV2 {
+  readonly term: string;
+  readonly readyTargetCount: number;
+  readonly totalTargetCount: number;
+}
+
+export interface ServiceOperationV2 {
+  readonly target: TermCampusKey;
+  readonly stage: ServiceOperationStageV2;
+  readonly startedAt: IsoDateTime;
+}
+
+export interface ServiceTargetErrorV2 {
+  readonly code: string;
+  readonly httpStatus: number | null;
+  readonly contentType: string | null;
+  readonly contentEncoding: string | null;
+  readonly decodedBytes: number | null;
+  readonly errorClass: string | null;
+  readonly errorChain: string | null;
+  readonly traceId: string | null;
+}
+
+export interface ServiceTargetStatusV2 {
+  readonly target: TermCampusKey;
+  readonly primary: boolean;
+  readonly snapshotAvailability: ServiceSnapshotAvailabilityV2;
+  readonly workState: ServiceWorkStateV2;
+  readonly stage: ServiceOperationStageV2 | null;
+  readonly usable: boolean;
+  readonly catalogContentVersion: number | null;
+  readonly lastCompleteAt: IsoDateTime | null;
+  readonly nextRetryAt: IsoDateTime | null;
+  readonly error: ServiceTargetErrorV2 | null;
+}
+
+export interface ServiceStatusV2 {
+  readonly contractVersion: 2;
+  readonly observedAt: IsoDateTime;
+  readonly runtime: ServiceRuntimeV1;
+  readonly level: ServiceLevelV1;
+  readonly discovery: CatalogDiscoveryStatusV1;
+  readonly termWindow: ServiceTermWindowV2;
+  readonly automaticTermSummaries: readonly ServiceAutomaticTermSummaryV2[];
+  readonly operations: readonly ServiceOperationV2[];
+  readonly targets: readonly ServiceTargetStatusV2[];
+  readonly issues: readonly ServiceIssueV1[];
+}
+
+export type ServiceStatus = ServiceStatusV1 | ServiceStatusV2;
+
+export function isServiceStatusV2(status: ServiceStatus): status is ServiceStatusV2 {
+  return status.contractVersion === 2;
+}

@@ -18,7 +18,7 @@ import type {
   OpenSectionStatusV1,
   OpenStatusRequestV1,
 } from './contracts/open';
-import type { ServiceStatusV1 } from './contracts/service';
+import type { ServiceStatus } from './contracts/service';
 import type { ProductClientPort } from './ProductClient';
 
 export const PRODUCT_API_ROUTES = {
@@ -34,13 +34,18 @@ export const PRODUCT_API_ROUTES = {
   openSectionStatus: { method: 'POST', path: '/api/v1/open/section-status' },
 } as const;
 
+export interface ServiceStatusScope {
+  readonly term: string | null;
+  readonly campuses: readonly string[];
+}
+
 export interface ProductApiPort {
   filterSchema(signal?: AbortSignal): Promise<FilterSchemaV1>;
   filterOptions(
     request: FilterOptionsRequestV2,
     signal?: AbortSignal,
   ): Promise<FilterOptionsResponseV2>;
-  serviceStatus(signal?: AbortSignal): Promise<ServiceStatusV1>;
+  serviceStatus(signal?: AbortSignal, scope?: ServiceStatusScope): Promise<ServiceStatus>;
   catalogDiscovery(
     request: CatalogDiscoveryRequestV1,
     signal?: AbortSignal,
@@ -93,8 +98,16 @@ export class ProductApi implements ProductApiPort {
     );
   }
 
-  serviceStatus(signal?: AbortSignal): Promise<ServiceStatusV1> {
-    return this.#client.get<ServiceStatusV1>(PRODUCT_API_ROUTES.serviceStatus.path, signal);
+  serviceStatus(signal?: AbortSignal, scope?: ServiceStatusScope): Promise<ServiceStatus> {
+    const query = new URLSearchParams();
+    if (scope?.term !== null && scope?.term !== undefined) query.set('activeTerm', scope.term);
+    for (const campus of scope?.campuses ?? []) query.append('activeCampus', campus);
+    const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+    const path = `${PRODUCT_API_ROUTES.serviceStatus.path}${suffix}`;
+    if (scope === undefined) return this.#client.get<ServiceStatus>(path, signal);
+    return this.#client.request<never, ServiceStatus>(path, signal === undefined
+      ? { authenticate: true, method: 'GET' }
+      : { authenticate: true, method: 'GET', signal });
   }
 
   catalogDiscovery(

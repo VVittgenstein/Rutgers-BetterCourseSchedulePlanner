@@ -1,22 +1,21 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bcsp_contracts::{
-    ApiErrorBody, ApiErrorCode, ApiErrorEnvelope, CatalogDiscoveryRequestV1, CourseDetailRequestV1,
-    CourseQueryRequestV1, FilterOptionsRequestV2, HttpRequestEnvelope, HttpSuccessEnvelope,
-    NormalizedFilterValuesV1, OpenSectionStatusRequestV1, OpenStatusRequestV1,
+    ApiErrorBody, ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope, CatalogDiscoveryRequestV1,
+    CourseDetailRequestV1, CourseQueryRequestV1, FilterOptionsRequestV2, HttpRequestEnvelope,
+    HttpSuccessEnvelope, NormalizedFilterValuesV1, OpenSectionStatusRequestV1, OpenStatusRequestV1,
     QueryContractVersion, SectionDetailRequestV1, SectionQueryRequestV1, ServiceIssueComponentV1,
     ServiceOperationV1, ServiceRuntimeV1, SystemTraceIdSource, TermCampusKey, TraceIdSource,
     decode_versioned_envelope_json,
 };
+use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_operational_storage::OperationalStorage;
 use bcsp_query::QueryError;
 use serde::Serialize;
 
-use crate::service_status::{
-    project_service_status, search_data_ready, unavailable_service_status,
-};
+use crate::service_status::{project_service_status_v2, unavailable_service_status};
 use crate::{
     ApplicationClock, ExtensionRequest, ExtensionResponse, ExtensionRoute, OpenRuntimeSnapshot,
     OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError, RefreshPolicyProvider,
@@ -164,31 +163,27 @@ where
             return api_error_response(400, ApiErrorCode::InvalidFilter);
         }
         let targets = request.targets();
-        let policy = match self.runtime.refresh_policy() {
-            Ok(policy) => policy,
-            Err(error) => {
-                return product_failure_response(ProductRouteFailure::Runtime(error));
-            }
-        };
         self.with_storage(|storage| {
-            self.require_search_ready(storage, policy)?;
+            self.validate_targets(storage, &targets)?;
+            self.request_target_refresh(storage, &targets)?;
+            self.require_targets_ready(storage, &targets)?;
             crate::SharedQueryService::new(storage)
                 .filter_options(&targets, &request)
                 .map_err(|error| ProductRouteFailure::Runtime(SharedRuntimeError::Query(error)))
         })
     }
 
-    fn service_status(&self) -> ExtensionResponse {
+    fn service_status(&self, request: &ExtensionRequest) -> ExtensionResponse {
+        let scoped_targets = match parse_status_scope(request.query()) {
+            Ok(targets) => targets,
+            Err(()) => return api_error_response(400, ApiErrorCode::InvalidFilter),
+        };
         let observed_at = self.runtime.now();
         let activity = self
             .service_status
             .snapshot()
             .map(|snapshot| snapshot.operation)
             .unwrap_or_else(|_| ServiceOperationV1::starting());
-        // Dynamic target policy providers may share the adapter's primary database lock.
-        // Read the policy before taking the product-storage guard so status projection can
-        // never recursively acquire that same non-reentrant mutex.
-        let refresh_policy = self.runtime.refresh_policy().ok();
         let mut storage = match self.storage.lock_operational() {
             Ok(storage) => storage,
             Err(_) => {
@@ -201,15 +196,22 @@ where
                 ));
             }
         };
-        let status = project_service_status(
-            &mut storage,
-            &self.runtime,
-            &self.open_runtime,
-            &self.service_status,
-            refresh_policy,
-        );
+        if !scoped_targets.is_empty() {
+            if let Err(error) = self.validate_targets(&mut storage, &scoped_targets) {
+                drop(storage);
+                return product_failure_response(error);
+            }
+            if let Err(error) = self.request_target_refresh(&mut storage, &scoped_targets) {
+                drop(storage);
+                return product_failure_response(error);
+            }
+        }
+        let status = project_service_status_v2(&mut storage, &self.runtime, &self.service_status);
         drop(storage);
-        success_response(status)
+        match status {
+            Ok(status) => success_response(status),
+            Err(status) => success_response(status),
+        }
     }
 
     fn catalog_discovery(&self, request: &ExtensionRequest) -> ExtensionResponse {
@@ -218,9 +220,36 @@ where
             Err(response) => return response,
         };
         self.with_storage(|storage| {
-            self.runtime
+            let mut discovery = self
+                .runtime
                 .catalog_discovery(storage)
-                .map_err(ProductRouteFailure::Runtime)
+                .map_err(ProductRouteFailure::Runtime)?;
+            discovery
+                .targets
+                .retain(|target| !is_online_alias(target.key.campus().as_str()));
+            let mut ready_targets = BTreeSet::new();
+            for target in &discovery.targets {
+                let state = storage
+                    .complete_target_snapshot_state(&target.key)
+                    .map_err(|source| {
+                        ProductRouteFailure::Runtime(SharedRuntimeError::Query(
+                            SharedQueryError::Storage {
+                                target: target.key.clone(),
+                                source,
+                            },
+                        ))
+                    })?;
+                if state.ready {
+                    ready_targets.insert(target.key.clone());
+                }
+            }
+            discovery
+                .subjects
+                .retain(|subject| ready_targets.contains(&subject.target));
+            discovery
+                .core_code_dictionaries
+                .retain(|dictionary| ready_targets.contains(&dictionary.target));
+            Ok(discovery)
         })
     }
 
@@ -239,9 +268,10 @@ where
             }
         };
         self.with_storage(|storage| {
-            self.require_search_ready(storage, policy)?;
             let targets = self.search_targets(storage, request.filters.values())?;
-            self.request_target_refresh(&targets)?;
+            self.validate_targets(storage, &targets)?;
+            self.request_target_refresh(storage, &targets)?;
+            self.require_targets_ready(storage, &targets)?;
             let snapshots = self.snapshots(&targets)?;
             self.runtime
                 .course_search_with_policy(
@@ -270,9 +300,10 @@ where
             }
         };
         self.with_storage(|storage| {
-            self.require_search_ready(storage, policy)?;
             let targets = self.search_targets(storage, request.filters.values())?;
-            self.request_target_refresh(&targets)?;
+            self.validate_targets(storage, &targets)?;
+            self.request_target_refresh(storage, &targets)?;
+            self.require_targets_ready(storage, &targets)?;
             let snapshots = self.snapshots(&targets)?;
             self.runtime
                 .section_search_with_policy(
@@ -302,10 +333,10 @@ where
                 return product_failure_response(ProductRouteFailure::Runtime(error));
             }
         };
-        if let Err(error) = self.request_target_refresh(&targets) {
-            return product_failure_response(error);
-        }
         self.with_storage(|storage| {
+            self.validate_targets(storage, &targets)?;
+            self.request_target_refresh(storage, &targets)?;
+            self.require_targets_ready(storage, &targets)?;
             let snapshots = self.snapshots(&targets)?;
             self.runtime
                 .course_detail_with_policy(
@@ -335,10 +366,10 @@ where
                 return product_failure_response(ProductRouteFailure::Runtime(error));
             }
         };
-        if let Err(error) = self.request_target_refresh(&targets) {
-            return product_failure_response(error);
-        }
         self.with_storage(|storage| {
+            self.validate_targets(storage, &targets)?;
+            self.request_target_refresh(storage, &targets)?;
+            self.require_targets_ready(storage, &targets)?;
             let snapshots = self.snapshots(&targets)?;
             self.runtime
                 .section_detail_with_policy(
@@ -364,10 +395,10 @@ where
                 return product_failure_response(ProductRouteFailure::Runtime(error));
             }
         };
-        if let Err(error) = self.request_target_refresh(std::slice::from_ref(&target)) {
-            return product_failure_response(error);
-        }
         self.with_storage(|storage| {
+            self.validate_targets(storage, std::slice::from_ref(&target))?;
+            self.request_target_refresh(storage, std::slice::from_ref(&target))?;
+            self.require_targets_ready(storage, std::slice::from_ref(&target))?;
             let snapshot = self.open_runtime.snapshot(&target)?;
             self.runtime
                 .open_status_with_policy(storage, &target, &snapshot, policy)
@@ -388,10 +419,10 @@ where
                 return product_failure_response(ProductRouteFailure::Runtime(error));
             }
         };
-        if let Err(error) = self.request_target_refresh(std::slice::from_ref(&target)) {
-            return product_failure_response(error);
-        }
         self.with_storage(|storage| {
+            self.validate_targets(storage, std::slice::from_ref(&target))?;
+            self.request_target_refresh(storage, std::slice::from_ref(&target))?;
+            self.require_targets_ready(storage, std::slice::from_ref(&target))?;
             let snapshot = self.open_runtime.snapshot(&target)?;
             self.runtime
                 .open_status_with_policy(storage, &target, &snapshot, policy)
@@ -426,6 +457,7 @@ where
             .into_iter()
             .map(|target| target.key)
             .filter(|target| target.term() == filters.term())
+            .filter(|target| !is_online_alias(target.campus().as_str()))
             .collect::<Vec<_>>();
         if targets.is_empty() {
             Err(ProductRouteFailure::CatalogUnavailable)
@@ -443,29 +475,117 @@ where
             .map_err(ProductRouteFailure::OpenRuntime)
     }
 
-    fn request_target_refresh(&self, targets: &[TermCampusKey]) -> Result<(), ProductRouteFailure> {
-        if let Some(demand) = &self.target_refresh_demand {
-            demand.request_all(targets)?;
+    fn request_target_refresh(
+        &self,
+        storage: &mut OperationalStorage,
+        targets: &[TermCampusKey],
+    ) -> Result<(), ProductRouteFailure> {
+        let Some(demand) = &self.target_refresh_demand else {
+            return Ok(());
+        };
+        let manual_terms = demand
+            .manual_terms_snapshot()?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let local_window = (self.service_status.runtime() == ServiceRuntimeV1::Local)
+            .then(|| RutgersTermWindow::at(self.runtime.now(), RutgersTermWindowScope::Local))
+            .transpose()
+            .map_err(|_| ProductRouteFailure::InvalidTarget)?;
+        let mut eligible = Vec::with_capacity(targets.len());
+        for target in targets {
+            let manual = local_window.as_ref().is_some_and(|window| {
+                window
+                    .visible_terms()
+                    .iter()
+                    .find(|term| term.term() == target.term())
+                    .is_some_and(|term| !term.auto_managed())
+            });
+            if manual && !manual_terms.contains(target.term()) {
+                let ready = storage
+                    .complete_target_snapshot_state(target)
+                    .map_err(|source| {
+                        ProductRouteFailure::Runtime(SharedRuntimeError::Query(
+                            SharedQueryError::Storage {
+                                target: target.clone(),
+                                source,
+                            },
+                        ))
+                    })?
+                    .ready;
+                if !ready {
+                    continue;
+                }
+            }
+            eligible.push(target.clone());
         }
+        demand.request_all(&eligible)?;
         Ok(())
     }
 
-    fn require_search_ready(
+    fn require_targets_ready(
         &self,
         storage: &mut OperationalStorage,
-        refresh_policy: crate::RefreshPolicy,
+        targets: &[TermCampusKey],
     ) -> Result<(), ProductRouteFailure> {
-        let status = project_service_status(
-            storage,
-            &self.runtime,
-            &self.open_runtime,
-            &self.service_status,
-            Some(refresh_policy),
-        );
-        if search_data_ready(&status) {
+        let mut unavailable = Vec::new();
+        for target in targets {
+            let state = storage
+                .complete_target_snapshot_state(target)
+                .map_err(|error| {
+                    ProductRouteFailure::Runtime(SharedRuntimeError::Query(
+                        SharedQueryError::Storage {
+                            target: target.clone(),
+                            source: error,
+                        },
+                    ))
+                })?;
+            if !state.ready {
+                unavailable.push(target.clone());
+            }
+        }
+        if unavailable.is_empty() {
             Ok(())
         } else {
-            Err(ProductRouteFailure::SearchDataNotReady)
+            Err(ProductRouteFailure::SearchDataNotReady(unavailable))
+        }
+    }
+
+    fn validate_targets(
+        &self,
+        storage: &mut OperationalStorage,
+        targets: &[TermCampusKey],
+    ) -> Result<(), ProductRouteFailure> {
+        if targets.is_empty() {
+            return Err(ProductRouteFailure::InvalidTarget);
+        }
+        let scope = match self.service_status.runtime() {
+            ServiceRuntimeV1::Local => RutgersTermWindowScope::Local,
+            ServiceRuntimeV1::Public => RutgersTermWindowScope::Public,
+        };
+        let window = RutgersTermWindow::at(self.runtime.now(), scope)
+            .map_err(|_| ProductRouteFailure::InvalidTarget)?;
+        let visible_terms = window
+            .visible_terms()
+            .iter()
+            .map(|term| term.term())
+            .collect::<BTreeSet<_>>();
+        let discovered = self
+            .runtime
+            .catalog_discovery(storage)
+            .map_err(ProductRouteFailure::Runtime)?
+            .targets
+            .into_iter()
+            .map(|target| target.key)
+            .filter(|target| !is_online_alias(target.campus().as_str()))
+            .collect::<BTreeSet<_>>();
+        if targets.iter().all(|target| {
+            visible_terms.contains(target.term())
+                && !is_online_alias(target.campus().as_str())
+                && discovered.contains(target)
+        }) {
+            Ok(())
+        } else {
+            Err(ProductRouteFailure::InvalidTarget)
         }
     }
 
@@ -503,7 +623,7 @@ where
         match (request.method(), request.path()) {
             (RequestMethod::Get, PRODUCT_FILTER_SCHEMA_PATH) => self.filter_schema(),
             (RequestMethod::Post, PRODUCT_FILTER_OPTIONS_PATH) => self.filter_options(&request),
-            (RequestMethod::Get, PRODUCT_SERVICE_STATUS_PATH) => self.service_status(),
+            (RequestMethod::Get, PRODUCT_SERVICE_STATUS_PATH) => self.service_status(&request),
             (RequestMethod::Post, PRODUCT_CATALOG_DISCOVERY_PATH) => {
                 self.catalog_discovery(&request)
             }
@@ -527,6 +647,37 @@ fn runtime_for(
     snapshots.get(target).cloned().unwrap_or_default()
 }
 
+fn parse_status_scope(query: Option<&str>) -> Result<Vec<TermCampusKey>, ()> {
+    let Some(query) = query else {
+        return Ok(Vec::new());
+    };
+    let mut term: Option<String> = None;
+    let mut campuses = Vec::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (name, value) = pair.split_once('=').ok_or(())?;
+        if value.is_empty() || value.contains('%') || value.contains('+') {
+            return Err(());
+        }
+        match name {
+            "activeTerm" if term.is_none() => term = Some(value.to_owned()),
+            "activeCampus" => campuses.push(value.to_owned()),
+            _ => return Err(()),
+        }
+    }
+    match (term, campuses.is_empty()) {
+        (None, true) => Ok(Vec::new()),
+        (Some(_), true) | (None, false) => Err(()),
+        (Some(term), false) => campuses
+            .into_iter()
+            .map(|campus| TermCampusKey::try_new(&term, &campus).map_err(|_| ()))
+            .collect(),
+    }
+}
+
+fn is_online_alias(campus: &str) -> bool {
+    matches!(campus, "ONLINE_NB" | "ONLINE_NK" | "ONLINE_CM")
+}
+
 fn decode_payload<T>(body: &[u8]) -> Result<T, ExtensionResponse>
 where
     T: for<'de> serde::Deserialize<'de>,
@@ -547,8 +698,18 @@ where
 }
 
 fn api_error_response(status: u16, code: ApiErrorCode) -> ExtensionResponse {
+    api_error_response_with_details(status, code, Vec::new())
+}
+
+fn api_error_response_with_details(
+    status: u16,
+    code: ApiErrorCode,
+    details: Vec<ApiErrorDetail>,
+) -> ExtensionResponse {
     let mut source = SystemTraceIdSource;
-    let envelope = ApiErrorEnvelope::new(ApiErrorBody::new(code, source.next_trace_id()));
+    let envelope = ApiErrorEnvelope::new(
+        ApiErrorBody::new(code, source.next_trace_id()).with_details(details),
+    );
     let body = serde_json::to_vec(&envelope).unwrap_or_else(|_| {
         br#"{"protocolVersion":1,"error":{"code":"INTERNAL_ERROR","messageKey":"error.internal","traceId":"00000000-0000-4000-8000-000000000001","details":[]}}"#.to_vec()
     });
@@ -560,7 +721,8 @@ enum ProductRouteFailure {
     OpenRuntime(OpenRuntimeSnapshotRegistryError),
     TargetDemand(TargetRefreshDemandError),
     CatalogUnavailable,
-    SearchDataNotReady,
+    SearchDataNotReady(Vec<TermCampusKey>),
+    InvalidTarget,
     SectionNotFound,
 }
 
@@ -577,9 +739,21 @@ impl From<TargetRefreshDemandError> for ProductRouteFailure {
 }
 
 fn product_failure_response(error: ProductRouteFailure) -> ExtensionResponse {
+    if let ProductRouteFailure::SearchDataNotReady(targets) = &error {
+        return api_error_response_with_details(
+            503,
+            ApiErrorCode::SearchDataNotReady,
+            targets
+                .iter()
+                .cloned()
+                .map(|target| ApiErrorDetail::TargetNotReady { target })
+                .collect(),
+        );
+    }
     let (status, code) = match error {
         ProductRouteFailure::CatalogUnavailable => (503, ApiErrorCode::CatalogNotReady),
-        ProductRouteFailure::SearchDataNotReady => (503, ApiErrorCode::SearchDataNotReady),
+        ProductRouteFailure::SearchDataNotReady(_) => unreachable!("handled above"),
+        ProductRouteFailure::InvalidTarget => (400, ApiErrorCode::InvalidFilter),
         ProductRouteFailure::SectionNotFound => (404, ApiErrorCode::SectionNotFound),
         ProductRouteFailure::OpenRuntime(_) => (500, ApiErrorCode::InternalError),
         ProductRouteFailure::TargetDemand(_) => (500, ApiErrorCode::InternalError),

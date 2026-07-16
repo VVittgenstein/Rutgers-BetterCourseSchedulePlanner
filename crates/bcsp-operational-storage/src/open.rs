@@ -6,8 +6,10 @@ use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::{Date, Month, OffsetDateTime};
 
-use crate::storage::parse_stored_trace_id;
-use crate::{OperationalStorage, StorageError, StorageResult};
+use crate::storage::{clear_staging, parse_stored_trace_id, publish_staged_in_transaction};
+use crate::{
+    EmptySnapshotDecision, OperationalStorage, PublishOutcome, StorageError, StorageResult,
+};
 
 const OPEN_DIAGNOSTIC_RETENTION_PER_TARGET: u64 = 256;
 
@@ -312,6 +314,33 @@ pub struct OpenCatalogSnapshot {
     pub sections: Vec<SectionKey>,
 }
 
+/// A staged Catalog candidate that can be reconciled with Open without exposing either half.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogCandidateOpenSnapshot {
+    pub observation_id: TraceId,
+    pub base_content_version: u64,
+    pub catalog: OpenCatalogSnapshot,
+}
+
+/// Result of attempting to publish one Catalog/Open pair.
+///
+/// `catalog` is absent when the Open response was unsafe and the staged Catalog was discarded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompleteSnapshotCommitOutcome {
+    pub catalog: Option<PublishOutcome>,
+    pub open: OpenCommitOutcome,
+}
+
+/// Storage-derived usability for one `(term, campus)` target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompleteTargetSnapshotState {
+    pub target: TermCampusKey,
+    pub catalog_content_version: u64,
+    pub open_catalog_content_version: u64,
+    pub open_lkg_attempt_id: Option<TraceId>,
+    pub ready: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpenSectionCurrent {
     pub section: SectionKey,
@@ -409,6 +438,8 @@ struct StartedOpenAttempt {
     captured_catalog_content_version: u64,
     started_at: String,
     effective_interval_seconds: Option<u64>,
+    candidate_catalog_observation_id: Option<TraceId>,
+    candidate_base_content_version: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -425,6 +456,31 @@ impl OperationalStorage {
     pub fn begin_open_pull_attempt(
         &mut self,
         command: &BeginOpenPullAttemptCommand,
+    ) -> StorageResult<u64> {
+        self.begin_open_pull_attempt_with_catalog(command, None)
+    }
+
+    /// Begins an Open attempt against staged Catalog rows rather than the serving Catalog.
+    pub fn begin_candidate_open_pull_attempt(
+        &mut self,
+        candidate: &CatalogCandidateOpenSnapshot,
+        command: &BeginOpenPullAttemptCommand,
+    ) -> StorageResult<u64> {
+        if command.target != candidate.catalog.target
+            || command.captured_catalog_content_version != candidate.catalog.content_version
+        {
+            return Err(StorageError::InvalidCommand {
+                field: "candidate_catalog",
+                reason: "must match the Open attempt target and captured version",
+            });
+        }
+        self.begin_open_pull_attempt_with_catalog(command, Some(candidate))
+    }
+
+    fn begin_open_pull_attempt_with_catalog(
+        &mut self,
+        command: &BeginOpenPullAttemptCommand,
+        candidate: Option<&CatalogCandidateOpenSnapshot>,
     ) -> StorageResult<u64> {
         validate_timestamp("started_at", &command.started_at)?;
         validate_rutgers_day(&command.rutgers_day)?;
@@ -450,7 +506,7 @@ impl OperationalStorage {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current_version = transaction
+        let serving_version = transaction
             .query_row(
                 "SELECT current_content_version FROM catalog_targets WHERE target_id = ?1",
                 [&target_id],
@@ -459,13 +515,37 @@ impl OperationalStorage {
             .optional()?
             .map(stored_u64)
             .transpose()?
-            .filter(|version| *version > 0)
-            .ok_or(StorageError::CatalogTargetNotPublished)?;
+            .unwrap_or(0);
+        let current_version = match candidate {
+            Some(candidate) => {
+                let staged_target_id = transaction
+                    .query_row(
+                        "SELECT target_id FROM catalog_refresh_observations
+                         WHERE observation_id = ?1 AND status = 'STAGED'",
+                        [candidate.observation_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .ok_or(StorageError::ObservationNotStaged(candidate.observation_id))?;
+                if staged_target_id != target_id
+                    || serving_version != candidate.base_content_version
+                {
+                    return Err(StorageError::CatalogContentVersionMismatch {
+                        requested: candidate.base_content_version,
+                        current: serving_version,
+                    });
+                }
+                candidate.catalog.content_version
+            }
+            None if serving_version > 0 => serving_version,
+            None => return Err(StorageError::CatalogTargetNotPublished),
+        };
         let existing = transaction
             .query_row(
                 "SELECT target_id, run_id, attempt_sequence, rutgers_day,
                         captured_catalog_content_version, started_at, lane,
-                        requested_interval_seconds, effective_interval_seconds, schedule_lag_ms
+                        requested_interval_seconds, effective_interval_seconds, schedule_lag_ms,
+                        candidate_catalog_observation_id, candidate_base_content_version
                  FROM open_pull_attempts WHERE attempt_id = ?1",
                 [&attempt_id],
                 |row| {
@@ -480,6 +560,8 @@ impl OperationalStorage {
                         row.get::<_, Option<i64>>(7)?,
                         row.get::<_, Option<i64>>(8)?,
                         row.get::<_, Option<i64>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<i64>>(11)?,
                     ))
                 },
             )
@@ -493,7 +575,12 @@ impl OperationalStorage {
                 && existing.6 == command.lane.as_str()
                 && existing.7 == requested_interval
                 && existing.8 == effective_interval
-                && existing.9 == schedule_lag;
+                && existing.9 == schedule_lag
+                && existing.10 == candidate.map(|candidate| candidate.observation_id.to_string())
+                && existing.11
+                    == candidate
+                        .map(|candidate| u64_to_i64(candidate.base_content_version))
+                        .transpose()?;
             if !matches {
                 return Err(StorageError::InvalidCommand {
                     field: "attempt_id",
@@ -569,8 +656,10 @@ impl OperationalStorage {
                 attempt_id, target_id, run_id, attempt_sequence, rutgers_day,
                 captured_catalog_content_version, started_at, classification, lane,
                 requested_interval_seconds, effective_interval_seconds, schedule_lag_ms,
-                lkg_age_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'STARTED', ?8, ?9, ?10, ?11, ?12)",
+                lkg_age_ms, candidate_catalog_observation_id,
+                candidate_base_content_version
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'STARTED', ?8, ?9, ?10, ?11, ?12,
+                       ?13, ?14)",
             params![
                 attempt_id,
                 target_id,
@@ -584,14 +673,30 @@ impl OperationalStorage {
                 effective_interval,
                 schedule_lag,
                 lkg_age_ms,
+                candidate.map(|candidate| candidate.observation_id.to_string()),
+                candidate
+                    .map(|candidate| u64_to_i64(candidate.base_content_version))
+                    .transpose()?,
             ],
         )?;
-        transaction.execute(
-            "INSERT INTO open_attempt_catalog_sections(attempt_id, section_index)
-             SELECT ?1, section_index FROM catalog_sections
-             WHERE target_id = ?2 AND content_version = ?3",
-            params![attempt_id, target_id, captured_version],
-        )?;
+        match candidate {
+            Some(candidate) => {
+                transaction.execute(
+                    "INSERT INTO open_attempt_catalog_sections(attempt_id, section_index)
+                     SELECT ?1, section_index FROM catalog_staging_sections
+                     WHERE observation_id = ?2",
+                    params![attempt_id, candidate.observation_id.to_string()],
+                )?;
+            }
+            None => {
+                transaction.execute(
+                    "INSERT INTO open_attempt_catalog_sections(attempt_id, section_index)
+                     SELECT ?1, section_index FROM catalog_sections
+                     WHERE target_id = ?2 AND content_version = ?3",
+                    params![attempt_id, target_id, captured_version],
+                )?;
+            }
+        }
         increment_attempted_counters(&transaction, &target_id, &run_id, &command.rutgers_day)?;
         transaction.commit()?;
         stored_u64(attempt_sequence)
@@ -602,6 +707,19 @@ impl OperationalStorage {
     pub fn finish_open_pull_success(
         &mut self,
         command: FinishOpenPullSuccessCommand,
+    ) -> StorageResult<OpenCommitOutcome> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let outcome = Self::finish_open_pull_success_transaction(&transaction, command, false)?;
+        transaction.commit()?;
+        Ok(outcome)
+    }
+
+    fn finish_open_pull_success_transaction(
+        transaction: &Transaction<'_>,
+        command: FinishOpenPullSuccessCommand,
+        accept_candidate_base_version: bool,
     ) -> StorageResult<OpenCommitOutcome> {
         validate_timestamp("completed_at", &command.completed_at)?;
         validate_open_http_audit(&command.http, true)?;
@@ -616,9 +734,6 @@ impl OperationalStorage {
             required_success_header("content_type", command.http.content_type.as_deref())?;
         let attempt_id = command.attempt_id.to_string();
 
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let attempt = load_started_open_attempt(&transaction, command.attempt_id)?;
         ensure_started_open_attempt_is_current(&transaction, &attempt, command.attempt_id)?;
         validate_timestamp_order(&attempt.started_at, &command.completed_at)?;
@@ -646,7 +761,11 @@ impl OperationalStorage {
             .count() as u64;
         let catalog_section_count = catalog_indices.len() as u64;
 
-        if current_catalog_content_version != attempt.captured_catalog_content_version {
+        let candidate_base_matches = accept_candidate_base_version
+            && attempt.candidate_base_content_version == Some(current_catalog_content_version);
+        if current_catalog_content_version != attempt.captured_catalog_content_version
+            && !candidate_base_matches
+        {
             finalize_non_applied_attempt(
                 &transaction,
                 &attempt,
@@ -667,7 +786,6 @@ impl OperationalStorage {
                 &attempt.rutgers_day,
                 OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
             )?;
-            transaction.commit()?;
             return Ok(OpenCommitOutcome {
                 attempt_id: command.attempt_id,
                 attempt_sequence: attempt.attempt_sequence,
@@ -688,17 +806,11 @@ impl OperationalStorage {
             });
         }
 
-        let classification = if response.canonical_indices.is_empty() {
-            if catalog_indices.is_empty() {
-                OpenAttemptClassification::ValidEmptyNoRows
-            } else {
-                OpenAttemptClassification::ValidApplied
-            }
-        } else if !catalog_indices.is_empty() && intersection_count == 0 {
-            OpenAttemptClassification::UnsafeZeroIntersection
-        } else {
-            OpenAttemptClassification::ValidApplied
-        };
+        let classification = classify_open_response(
+            &response.canonical_indices,
+            &catalog_indices,
+            intersection_count,
+        );
         let intended_states = catalog_indices
             .iter()
             .map(|index| {
@@ -739,7 +851,6 @@ impl OperationalStorage {
                 &attempt.rutgers_day,
                 OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
             )?;
-            transaction.commit()?;
             return Ok(OpenCommitOutcome {
                 attempt_id: command.attempt_id,
                 attempt_sequence: attempt.attempt_sequence,
@@ -988,7 +1099,6 @@ impl OperationalStorage {
             &attempt.rutgers_day,
             OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
         )?;
-        transaction.commit()?;
         Ok(OpenCommitOutcome {
             attempt_id: command.attempt_id,
             attempt_sequence: attempt.attempt_sequence,
@@ -1016,17 +1126,212 @@ impl OperationalStorage {
         })
     }
 
+    /// Atomically publishes a staged Catalog and the Open result reconciled against it.
+    ///
+    /// Unsafe Open evidence finalizes the Open attempt for diagnostics but discards the staged
+    /// Catalog, leaving the last complete serving pair untouched.
+    pub fn finish_candidate_open_pull_success(
+        &mut self,
+        catalog_observation_id: TraceId,
+        empty_decision: EmptySnapshotDecision,
+        mut command: FinishOpenPullSuccessCommand,
+    ) -> StorageResult<CompleteSnapshotCommitOutcome> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let attempt = load_started_open_attempt(&transaction, command.attempt_id)?;
+        ensure_started_open_attempt_is_current(&transaction, &attempt, command.attempt_id)?;
+        if attempt.candidate_catalog_observation_id != Some(catalog_observation_id) {
+            return Err(StorageError::InvalidCommand {
+                field: "candidate_catalog_observation_id",
+                reason: "must match the staged Catalog bound to the Open attempt",
+            });
+        }
+        let target_id = open_target_id(&attempt.target);
+        let current_version = stored_u64(transaction.query_row(
+            "SELECT current_content_version FROM catalog_targets WHERE target_id = ?1",
+            [&target_id],
+            |row| row.get::<_, i64>(0),
+        )?)?;
+        let candidate_base = attempt.candidate_base_content_version.ok_or(
+            StorageError::InvalidStoredProjection {
+                table: "open_pull_attempts",
+                field: "candidate_base_content_version",
+                reason: "candidate attempts require a base Catalog version",
+            },
+        )?;
+        if current_version != candidate_base {
+            return Err(StorageError::CatalogContentVersionMismatch {
+                requested: candidate_base,
+                current: current_version,
+            });
+        }
+
+        let response = canonicalize_open_response(
+            &attempt.target,
+            &command.open_sections,
+            command.source_value_count,
+        )?;
+        let catalog_indices = load_attempt_catalog_indices(&transaction, command.attempt_id)?;
+        command.watched_sections.retain(|section| {
+            section.target() == attempt.target && catalog_indices.contains(section.index().as_str())
+        });
+        let intersection_count = response
+            .canonical_indices
+            .intersection(&catalog_indices)
+            .count() as u64;
+        let classification = classify_open_response(
+            &response.canonical_indices,
+            &catalog_indices,
+            intersection_count,
+        );
+
+        if !classification.is_success() {
+            let completed_at = command.completed_at.clone();
+            let open = Self::finish_open_pull_success_transaction(&transaction, command, true)?;
+            clear_staging(&transaction, catalog_observation_id)?;
+            let updated = transaction.execute(
+                "UPDATE catalog_refresh_observations
+                 SET status = 'FAILED', completed_at = ?2,
+                     error_stage = 'SCHEMA', error_code = 'OPEN_CANDIDATE_UNSAFE',
+                     diagnostic_token = NULL
+                 WHERE observation_id = ?1 AND status = 'STAGED'",
+                params![catalog_observation_id.to_string(), completed_at],
+            )?;
+            if updated != 1 {
+                return Err(StorageError::ObservationNotStaged(catalog_observation_id));
+            }
+            transaction.commit()?;
+            return Ok(CompleteSnapshotCommitOutcome {
+                catalog: None,
+                open,
+            });
+        }
+
+        let catalog =
+            publish_staged_in_transaction(&transaction, catalog_observation_id, empty_decision)?;
+        let published_version = publish_outcome_content_version(&catalog);
+        if published_version != attempt.captured_catalog_content_version
+            || matches!(catalog, PublishOutcome::SuspectEmptyRetained { .. })
+        {
+            return Err(StorageError::CatalogContentVersionMismatch {
+                requested: attempt.captured_catalog_content_version,
+                current: published_version,
+            });
+        }
+        let open = Self::finish_open_pull_success_transaction(&transaction, command, false)?;
+        if !open.classification.is_success() || open.catalog_content_version != published_version {
+            return Err(StorageError::InvalidStoredProjection {
+                table: "open_batch_state",
+                field: "complete snapshot",
+                reason: "Open did not commit against the published Catalog candidate",
+            });
+        }
+        transaction.commit()?;
+        Ok(CompleteSnapshotCommitOutcome {
+            catalog: Some(catalog),
+            open,
+        })
+    }
+
+    /// Derives target usability from the two serving version pointers. No compatibility flag can
+    /// promote Catalog-only or Open-only RC2 data to READY.
+    pub fn complete_target_snapshot_state(
+        &self,
+        target: &TermCampusKey,
+    ) -> StorageResult<CompleteTargetSnapshotState> {
+        let target_id = open_target_id(target);
+        let catalog_content_version = self
+            .connection
+            .query_row(
+                "SELECT current_content_version FROM catalog_targets WHERE target_id = ?1",
+                [&target_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(stored_u64)
+            .transpose()?
+            .unwrap_or(0);
+        let open = self
+            .connection
+            .query_row(
+                "SELECT current_catalog_content_version, lkg_attempt_id
+                 FROM open_batch_state WHERE target_id = ?1",
+                [&target_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?;
+        let (open_catalog_content_version, open_lkg_attempt_id) = match open {
+            Some((version, attempt_id)) => (
+                stored_u64(version)?,
+                parse_optional_trace("open_batch_state", "lkg_attempt_id", attempt_id)?,
+            ),
+            None => (0, None),
+        };
+        let ready = catalog_content_version > 0
+            && open_lkg_attempt_id.is_some()
+            && open_catalog_content_version == catalog_content_version;
+        Ok(CompleteTargetSnapshotState {
+            target: target.clone(),
+            catalog_content_version,
+            open_catalog_content_version,
+            open_lkg_attempt_id,
+            ready,
+        })
+    }
+
     pub fn finish_open_pull_failure(
         &mut self,
+        command: &FinishOpenPullFailureCommand,
+    ) -> StorageResult<OpenCommitOutcome> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let outcome = Self::finish_open_pull_failure_transaction(&transaction, command)?;
+        transaction.commit()?;
+        Ok(outcome)
+    }
+
+    pub fn finish_candidate_open_pull_failure(
+        &mut self,
+        catalog_observation_id: TraceId,
+        command: &FinishOpenPullFailureCommand,
+    ) -> StorageResult<OpenCommitOutcome> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let attempt = load_started_open_attempt(&transaction, command.attempt_id)?;
+        if attempt.candidate_catalog_observation_id != Some(catalog_observation_id) {
+            return Err(StorageError::InvalidCommand {
+                field: "candidate_catalog_observation_id",
+                reason: "must match the staged Catalog bound to the Open attempt",
+            });
+        }
+        let outcome = Self::finish_open_pull_failure_transaction(&transaction, command)?;
+        clear_staging(&transaction, catalog_observation_id)?;
+        let updated = transaction.execute(
+            "UPDATE catalog_refresh_observations
+             SET status = 'FAILED', completed_at = ?2,
+                 error_stage = 'TRANSPORT', error_code = 'OPEN_CANDIDATE_FAILED',
+                 diagnostic_token = NULL
+             WHERE observation_id = ?1 AND status = 'STAGED'",
+            params![catalog_observation_id.to_string(), command.completed_at],
+        )?;
+        if updated != 1 {
+            return Err(StorageError::ObservationNotStaged(catalog_observation_id));
+        }
+        transaction.commit()?;
+        Ok(outcome)
+    }
+
+    fn finish_open_pull_failure_transaction(
+        transaction: &Transaction<'_>,
         command: &FinishOpenPullFailureCommand,
     ) -> StorageResult<OpenCommitOutcome> {
         validate_timestamp("completed_at", &command.completed_at)?;
         validate_safe_code("error_code", &command.error_code)?;
         validate_optional_safe_token("diagnostic_token", command.diagnostic_token.as_deref())?;
         validate_open_http_audit(&command.http, false)?;
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let attempt = load_started_open_attempt(&transaction, command.attempt_id)?;
         ensure_started_open_attempt_is_current(&transaction, &attempt, command.attempt_id)?;
         validate_timestamp_order(&attempt.started_at, &command.completed_at)?;
@@ -1058,7 +1363,6 @@ impl OperationalStorage {
             &attempt.rutgers_day,
             OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
         )?;
-        transaction.commit()?;
         Ok(OpenCommitOutcome {
             attempt_id: command.attempt_id,
             attempt_sequence: attempt.attempt_sequence,
@@ -1771,7 +2075,9 @@ fn load_started_open_attempt(
         .query_row(
             "SELECT t.term_id, t.campus_code, a.run_id, a.attempt_sequence,
                     a.rutgers_day, a.captured_catalog_content_version,
-                    a.started_at, a.effective_interval_seconds, a.classification
+                    a.started_at, a.effective_interval_seconds, a.classification,
+                    a.candidate_catalog_observation_id,
+                    a.candidate_base_content_version
              FROM open_pull_attempts a
              JOIN catalog_targets t ON t.target_id = a.target_id
              WHERE a.attempt_id = ?1",
@@ -1787,6 +2093,8 @@ fn load_started_open_attempt(
                     row.get::<_, String>(6)?,
                     row.get::<_, Option<i64>>(7)?,
                     row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<i64>>(10)?,
                 ))
             },
         )
@@ -1803,6 +2111,12 @@ fn load_started_open_attempt(
         captured_catalog_content_version: stored_u64(row.5)?,
         started_at: row.6,
         effective_interval_seconds: row.7.map(stored_u64).transpose()?,
+        candidate_catalog_observation_id: parse_optional_trace(
+            "open_pull_attempts",
+            "candidate_catalog_observation_id",
+            row.9,
+        )?,
+        candidate_base_content_version: row.10.map(stored_u64).transpose()?,
     })
 }
 
@@ -1859,6 +2173,39 @@ fn canonicalize_open_response(
         duplicate_count,
         canonical_set_sha256,
     })
+}
+
+fn classify_open_response(
+    canonical_indices: &BTreeSet<String>,
+    catalog_indices: &BTreeSet<String>,
+    intersection_count: u64,
+) -> OpenAttemptClassification {
+    if canonical_indices.is_empty() {
+        if catalog_indices.is_empty() {
+            OpenAttemptClassification::ValidEmptyNoRows
+        } else {
+            OpenAttemptClassification::ValidApplied
+        }
+    } else if !catalog_indices.is_empty() && intersection_count == 0 {
+        OpenAttemptClassification::UnsafeZeroIntersection
+    } else {
+        OpenAttemptClassification::ValidApplied
+    }
+}
+
+const fn publish_outcome_content_version(outcome: &PublishOutcome) -> u64 {
+    match outcome {
+        PublishOutcome::AppliedChanged {
+            content_version, ..
+        }
+        | PublishOutcome::AppliedUnchanged {
+            content_version, ..
+        }
+        | PublishOutcome::InitialValidEmpty { content_version }
+        | PublishOutcome::SuspectEmptyRetained {
+            content_version, ..
+        } => *content_version,
+    }
 }
 
 fn canonicalize_watched_sections(

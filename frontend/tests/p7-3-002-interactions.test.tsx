@@ -25,6 +25,7 @@ const SETTINGS: LocalSettings = {
   localeOverride: 'system',
   catalogRefreshMinutes: 60,
   openRefreshSeconds: 30,
+  watchFastLaneSeconds: 10,
   volumePercent: 70,
   soundPolicy: {
     notificationMode: 'ONE_SHOT',
@@ -121,6 +122,31 @@ afterEach(() => {
 });
 
 describe('P7.3-002 local interaction lifecycle', () => {
+  it('defaults the watch fast lane to 10 seconds and accepts only the 3–60 boundary range', async () => {
+    const updateSettings = vi.fn(async () => undefined);
+    renderSettings({ onUpdateSettings: updateSettings });
+    const input = screen.getByRole('spinbutton', {
+      name: 'Watch fast-lane interval (seconds)',
+    }) as HTMLInputElement;
+    const save = screen.getByRole('button', { name: 'Save settings' }) as HTMLButtonElement;
+
+    expect(input.value).toBe('10');
+    expect(input.min).toBe('3');
+    expect(input.max).toBe('60');
+    for (const invalid of ['2', '61']) {
+      fireEvent.change(input, { target: { value: invalid } });
+      expect(save.disabled).toBe(true);
+    }
+    for (const valid of ['3', '60']) {
+      fireEvent.change(input, { target: { value: valid } });
+      expect(save.disabled).toBe(false);
+      fireEvent.click(save);
+      await waitFor(() => expect(updateSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ watchFastLaneSeconds: Number(valid) }),
+      ));
+    }
+  });
+
   it('distinguishes every Settings save state and disables no-op saves', async () => {
     let finishSave!: () => void;
     const firstSave = new Promise<void>((resolve) => {

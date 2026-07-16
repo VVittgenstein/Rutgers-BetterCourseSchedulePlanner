@@ -1,11 +1,15 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use bcsp_application::{SessionNonce, SharedQueryError, SharedQueryService, SharedWatchSocket};
+use bcsp_application::{
+    SessionNonce, SharedQueryError, SharedQueryService, SharedWatchSocket, TargetRefreshDemand,
+};
 use bcsp_contracts::{
     ContractDecodeError, FilterRequestV1, HttpRequestEnvelope, HttpSuccessEnvelope, SectionKey,
-    SystemTraceIdSource, TermCampusKey, TraceId, TraceIdSource, decode_versioned_envelope_json,
+    SystemTraceIdSource, TermCampusKey, TermId, TraceId, TraceIdSource,
+    decode_versioned_envelope_json,
 };
+use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_user_state::{
     CurrentFiltersRevision, HistoryFilter, LocalSettings, PageRequest, PersonalStateError,
     PersonalStateStore, SavedViewContent, SavedViewDefinition, SavedViewIncompatibility,
@@ -14,6 +18,7 @@ use bcsp_local_user_state::{
 use bcsp_operational_storage::OperationalStorage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use time::OffsetDateTime;
 
 use crate::{LocalApiErrorCode, LocalPrimaryDatabase, LocalSurfaceFailure, LocalSurfaceState};
 
@@ -30,6 +35,7 @@ pub struct PersonalSurface {
     mutation_store: Mutex<PersonalStateStore>,
     watch: Arc<SharedWatchSocket>,
     pending_reset: Mutex<Option<PendingLocalUserDataReset>>,
+    target_refresh_demand: TargetRefreshDemand,
 }
 
 impl PersonalSurface {
@@ -43,7 +49,16 @@ impl PersonalSurface {
             mutation_store: Mutex::new(mutation_store),
             watch,
             pending_reset: Mutex::new(None),
+            target_refresh_demand: TargetRefreshDemand::default(),
         }
+    }
+
+    pub fn with_target_refresh_demand(
+        mut self,
+        target_refresh_demand: TargetRefreshDemand,
+    ) -> Self {
+        self.target_refresh_demand = target_refresh_demand;
+        self
     }
 
     fn with_store<T>(
@@ -136,6 +151,90 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&stored)
     }
 
+    fn pull_term(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Request {
+            contract_version: u16,
+            term: TermId,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+        enum Disposition {
+            Enqueued,
+            AlreadyRequested,
+            AlreadyReady,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Response {
+            contract_version: u16,
+            term: TermId,
+            disposition: Disposition,
+            target_count: u64,
+        }
+
+        let request: Request = decode_payload(body)?;
+        if request.contract_version != 1 {
+            return Err(LocalSurfaceFailure::bad_request(
+                LocalApiErrorCode::UnsupportedProtocolVersion,
+            ));
+        }
+        let window =
+            RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Local)
+                .map_err(|_| {
+                    LocalSurfaceFailure::unprocessable(LocalApiErrorCode::TermOutOfRange)
+                })?;
+        let visible = window
+            .visible_terms()
+            .iter()
+            .find(|term| term.term() == &request.term)
+            .filter(|term| !term.auto_managed())
+            .ok_or_else(|| LocalSurfaceFailure::unprocessable(LocalApiErrorCode::TermOutOfRange))?;
+        let mut database = self.lock_database()?;
+        let published = database
+            .operational_mut()
+            .published_discovery_snapshot()
+            .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?;
+        let targets = published
+            .snapshot
+            .campuses
+            .into_iter()
+            .map(|campus| campus.target)
+            .filter(|target| target.term() == visible.term())
+            .filter(|target| !is_online_alias(target.campus().as_str()))
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return Err(LocalSurfaceFailure::unprocessable(
+                LocalApiErrorCode::TermNotPublished,
+            ));
+        }
+        let ready = targets.iter().all(|target| {
+            database
+                .operational_mut()
+                .complete_target_snapshot_state(target)
+                .is_ok_and(|state| state.ready)
+        });
+        drop(database);
+        let disposition = if ready {
+            Disposition::AlreadyReady
+        } else if self
+            .target_refresh_demand
+            .request_manual_term(request.term.clone())
+            .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?
+        {
+            Disposition::Enqueued
+        } else {
+            Disposition::AlreadyRequested
+        };
+        encode(&Response {
+            contract_version: 1,
+            term: request.term,
+            disposition,
+            target_count: targets.len() as u64,
+        })
+    }
+
     fn selection(&self) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let selection = self.with_store(|store| store.selected_sections())?;
         encode(&selection)
@@ -150,6 +249,24 @@ impl LocalSurfaceState for PersonalSurface {
         }
 
         let update: Update = decode_payload(body)?;
+        let existing = self.with_store(|store| store.selected_sections())?;
+        let existing = existing
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        let window =
+            RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Public)
+                .map_err(|_| {
+                    LocalSurfaceFailure::unprocessable(LocalApiErrorCode::TermOutOfRange)
+                })?;
+        if update.sections.iter().any(|section| {
+            !existing.contains(section)
+                && section.term() != window.current_term()
+                && section.term() != window.next_term()
+        }) {
+            return Err(LocalSurfaceFailure::unprocessable(
+                LocalApiErrorCode::TermOutOfRange,
+            ));
+        }
         self.with_mutation_store(|store| {
             store.replace_selected_sections(update.expected_user_state_revision, &update.sections)
         })?;
@@ -279,10 +396,13 @@ impl LocalSurfaceState for PersonalSurface {
             };
             definition.is_some_and(|definition| {
                 definition.revision == command.expected_view_revision
-                    && legacy_saved_view_has_invalid_dynamic_option(
-                        database.operational_mut(),
-                        &definition,
-                    )
+                    && definition.content.filters().is_some_and(|filters| {
+                        !saved_view_scope_is_applicable(database.operational_mut(), filters)
+                            || saved_view_has_invalid_dynamic_option(
+                                database.operational_mut(),
+                                &definition,
+                            )
+                    })
             })
         };
         if dynamically_incompatible {
@@ -520,7 +640,7 @@ fn project_legacy_saved_view_dynamic_compatibility(
     project_legacy_saved_view_dynamic_compatibility_with(
         definitions,
         raw_snapshots,
-        |definition| legacy_saved_view_has_invalid_dynamic_option(storage, definition),
+        |definition| saved_view_has_invalid_dynamic_option(storage, definition),
     );
 }
 
@@ -550,13 +670,10 @@ fn project_legacy_saved_view_dynamic_compatibility_with(
     }
 }
 
-fn legacy_saved_view_has_invalid_dynamic_option(
+fn saved_view_has_invalid_dynamic_option(
     storage: &mut OperationalStorage,
     definition: &SavedViewDefinition,
 ) -> bool {
-    if definition.schema_version != 1 {
-        return false;
-    }
     let Some(filters) = definition.content.filters() else {
         return false;
     };
@@ -580,6 +697,50 @@ fn legacy_saved_view_has_invalid_dynamic_option(
     )
 }
 
+fn saved_view_scope_is_applicable(
+    storage: &mut OperationalStorage,
+    filters: &FilterRequestV1,
+) -> bool {
+    let Ok(window) =
+        RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Local)
+    else {
+        return false;
+    };
+    let values = filters.values();
+    if !window
+        .visible_terms()
+        .iter()
+        .any(|term| term.term() == values.term())
+    {
+        return false;
+    }
+    let Ok(discovered) = storage.discovered_targets() else {
+        return false;
+    };
+    let published = discovered
+        .into_iter()
+        .filter(|target| target.term() == values.term())
+        .filter(|target| !is_online_alias(target.campus().as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let targets = if values.campuses().is_empty() {
+        published.iter().cloned().collect::<Vec<_>>()
+    } else {
+        values
+            .campuses()
+            .iter()
+            .cloned()
+            .map(|campus| TermCampusKey::new(values.term().clone(), campus))
+            .collect::<Vec<_>>()
+    };
+    !targets.is_empty()
+        && targets.iter().all(|target| published.contains(target))
+        && targets.iter().all(|target| {
+            storage
+                .complete_target_snapshot_state(target)
+                .is_ok_and(|state| state.ready)
+        })
+}
+
 fn saved_view_search_targets(
     storage: &OperationalStorage,
     filters: &FilterRequestV1,
@@ -591,6 +752,7 @@ fn saved_view_search_targets(
             .ok()?
             .into_iter()
             .filter(|target| target.term() == values.term())
+            .filter(|target| !is_online_alias(target.campus().as_str()))
             .collect()
     } else {
         values
@@ -668,6 +830,10 @@ where
                 LocalSurfaceFailure::bad_request(LocalApiErrorCode::MalformedRequest)
             }
         })
+}
+
+fn is_online_alias(campus: &str) -> bool {
+    matches!(campus, "ONLINE_NB" | "ONLINE_NK" | "ONLINE_CM")
 }
 
 fn encode<T>(value: &T) -> Result<Vec<u8>, LocalSurfaceFailure>

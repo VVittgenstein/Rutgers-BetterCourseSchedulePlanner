@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -623,7 +624,7 @@ export const FILTER_PANEL_CSS = String.raw`
 }
 
 .filter-panel__gate:disabled {
-  cursor: wait;
+  cursor: not-allowed;
 }
 
 .filter-panel__head {
@@ -898,6 +899,9 @@ export function FilterPanel({
 }: FilterPanelProps) {
   const i18n = useBcspI18n();
   const formRef = useRef<HTMLFormElement>(null);
+  const courseSummaryRef = useRef<HTMLElement>(null);
+  const sectionSummaryRef = useRef<HTMLElement>(null);
+  const pendingGroupFocus = useRef<'COURSE' | 'SECTION' | null>(null);
   const [subjectQuery, setSubjectQuery] = useState('');
   const [courseOpen, setCourseOpen] = useState(true);
   const [sectionOpen, setSectionOpen] = useState(false);
@@ -908,9 +912,43 @@ export function FilterPanel({
         ? { ...field, requestField: 'keywords' as const }
         : field)
       .filter((field) => ACTIVE_REQUEST_FIELDS.has(field.requestField))
+      .filter((field) => field.requestField !== 'term' && field.requestField !== 'campuses')
       .sort((left, right) => left.chipOrder - right.chipOrder),
     [schema.fields],
   );
+
+  useLayoutEffect(() => {
+    const pending = pendingGroupFocus.current;
+    if (pending === null) return;
+    pendingGroupFocus.current = null;
+    const summary = pending === 'COURSE' ? courseSummaryRef.current : sectionSummaryRef.current;
+    if (summary === null) return;
+
+    summary.focus({ preventScroll: true });
+    const filterRail = summary.closest<HTMLElement>('.bcsp-search-workspace__filters');
+    const railStyle = filterRail === null ? null : globalThis.getComputedStyle?.(filterRail);
+    const railScrolls = filterRail !== null
+      && filterRail.scrollHeight > filterRail.clientHeight
+      && railStyle !== null
+      && /(auto|scroll)/u.test(railStyle.overflowY);
+    if (railScrolls && filterRail !== null) {
+      const railTop = filterRail.getBoundingClientRect().top;
+      const summaryTop = summary.getBoundingClientRect().top;
+      const stickyHeaderHeight = formRef.current
+        ?.querySelector<HTMLElement>('.filter-panel__head')
+        ?.getBoundingClientRect().height ?? 0;
+      filterRail.scrollTop += summaryTop - railTop - stickyHeaderHeight;
+      return;
+    }
+
+    const root = globalThis.document?.documentElement;
+    const navigationHeight = Number.parseFloat(root === undefined
+      ? '0'
+      : globalThis.getComputedStyle(root).getPropertyValue('--bcsp-navigation-height'));
+    const top = summary.getBoundingClientRect().top + globalThis.scrollY
+      - (Number.isFinite(navigationHeight) ? navigationHeight : 0);
+    globalThis.scrollTo?.({ behavior: 'auto', top: Math.max(0, top) });
+  }, [courseOpen, sectionOpen]);
   const invalidField = useMemo(() => {
     if (validationIssue === undefined) return undefined;
     const requestField = VALIDATION_FIELD[validationIssue.issue];
@@ -944,23 +982,6 @@ export function FilterPanel({
   const labelFor = (field: FilterFieldSchemaV1) =>
     isMessageKey(field.i18nKey) ? i18n.t(field.i18nKey) : field.stableId;
 
-  const termOptions = useMemo(() => {
-    const terms = new Map<string, string>();
-    for (const target of discovery.targets) {
-      if (!terms.has(target.key.term)) {
-        terms.set(target.key.term, knownText(target.termLabel) ?? target.key.term);
-      }
-    }
-    return [...terms.entries()];
-  }, [discovery.targets]);
-  const campusOptions = useMemo(() => {
-    const campuses = new Map<string, string>();
-    for (const target of discovery.targets) {
-      if (value.term !== null && target.key.term !== value.term) continue;
-      campuses.set(target.key.campus, knownText(target.campusLabel) ?? target.key.campus);
-    }
-    return [...campuses.entries()];
-  }, [discovery.targets, value.term]);
   const subjectOptions = useMemo(() => {
     const subjects = new Map<string, string>();
     for (const subject of discovery.subjects) {
@@ -1036,67 +1057,8 @@ export function FilterPanel({
     const label = labelFor(field);
     switch (field.requestField) {
       case 'term':
-        return (
-          <select
-            className="filter-panel__select"
-            aria-label={label}
-            value={value.term ?? ''}
-            disabled={disabled}
-            onChange={(event) => {
-              const term = event.target.value || null;
-              const availableCampuses = discovery.targets
-                .filter((target) => target.key.term === term)
-                .map((target) => target.key.campus);
-              const retained = value.campuses.filter((campus) => availableCampuses.includes(campus));
-              onChange({
-                ...value,
-                term,
-                campuses: retained.length > 0 ? retained : availableCampuses.slice(0, 1),
-                subjects: [],
-                keywords: [],
-                levels: [],
-                core: { ...value.core, codes: [] },
-                instructors: [],
-                meetingLocations: { ...value.meetingLocations, locations: [] },
-                examCodes: [],
-              });
-            }}
-          >
-            <option value="">{i18n.t('filter.term_placeholder')}</option>
-            {termOptions.map(([term, termLabel]) => <option key={term} value={term}>{termLabel} / {term}</option>)}
-          </select>
-        );
       case 'campuses':
-        return campusOptions.length === 0
-          ? <p className="bcsp-field__helper">{i18n.t('filter.no_campus')}</p>
-          : (
-            <div className="filter-panel__checks" role="group" aria-label={label}>
-              {campusOptions.map(([campus, campusLabel]) => (
-                <label className="filter-panel__check" key={campus}>
-                  <input
-                    type="checkbox"
-                    checked={value.campuses.includes(campus)}
-                    disabled={disabled}
-                    onChange={(event) => {
-                      const campuses = toggleValue(value.campuses, campus, event.target.checked);
-                      onChange({
-                        ...value,
-                        campuses,
-                        subjects: [],
-                        keywords: [],
-                        levels: [],
-                        core: { ...value.core, codes: [] },
-                        instructors: [],
-                        meetingLocations: { ...value.meetingLocations, locations: [] },
-                        examCodes: [],
-                      });
-                    }}
-                  />
-                  <span>{campusLabel} / <samp>{campus}</samp></span>
-                </label>
-              ))}
-            </div>
-          );
+        return null;
       case 'subjects':
         return (
           <div className="filter-panel__subject-picker">
@@ -1119,7 +1081,7 @@ export function FilterPanel({
             <div className="filter-panel__subject-list">
               {subjectOptions.length === 0 ? (
                 <p className="bcsp-field__helper" role={!searchAvailable ? 'status' : undefined}>
-                  {i18n.t(!searchAvailable ? 'filter.loading_options' : 'filter.subject_empty')}
+                  {i18n.t(!searchAvailable ? 'filter.apply_scope_first' : 'filter.subject_empty')}
                 </p>
               ) : (
                 <div className="filter-panel__checks" role="group" aria-label={i18n.t('filter.subject_list')}>
@@ -1304,7 +1266,7 @@ export function FilterPanel({
         aria-invalid={invalid || undefined}
       >
         <legend className="filter-panel__legend">
-          <span className="filter-panel__ordinal">{String(index + 1).padStart(2, '0')}</span>
+          <span className="filter-panel__ordinal">{String(index + 3).padStart(2, '0')}</span>
           <span className="filter-panel__label">{labelFor(field)}</span>
           <span className="filter-panel__scope">
             {i18n.t(field.scope === 'COURSE' ? 'filter.scope.course' : 'filter.scope.section')}
@@ -1324,8 +1286,6 @@ export function FilterPanel({
     );
   };
 
-  const targetFields = fields.filter(({ requestField }) =>
-    requestField === 'term' || requestField === 'campuses');
   const courseFields = fields.filter(({ requestField, scope }) =>
     scope === 'COURSE' && requestField !== 'term' && requestField !== 'campuses');
   const sectionFields = fields.filter(({ scope }) => scope === 'SECTION');
@@ -1335,7 +1295,7 @@ export function FilterPanel({
       <style data-bcsp-filter-panel="">{FILTER_PANEL_CSS}</style>
       <form ref={formRef} className="filter-panel" aria-label={i18n.t('filter.form_label')} onSubmit={submit}>
         <fieldset
-          aria-busy={!searchAvailable || undefined}
+          aria-busy={disabled && searchAvailable ? true : undefined}
           className="filter-panel__gate"
           disabled={disabled || !searchAvailable}
         >
@@ -1356,10 +1316,9 @@ export function FilterPanel({
           </button>
           {!searchAvailable ? (
             <div className="filter-panel__submit-status" role="status">
-              <span aria-hidden="true" className="filter-panel__loading-mark" />
               <span>
-                <strong>{i18n.t('filter.loading_options')}</strong>
-                {i18n.t('service.search_not_ready')}
+                <strong>{i18n.t('filter.apply_scope_first')}</strong>
+                {i18n.t('filter.apply_scope_detail')}
               </span>
             </div>
           ) : null}
@@ -1394,14 +1353,16 @@ export function FilterPanel({
           </button>
         </section>
 
-        <div className="filter-panel__grid">{targetFields.map(renderRow)}</div>
         <details className="filter-panel__group" open={courseOpen}
           onToggle={(event) => {
             const next = event.currentTarget.open;
             setCourseOpen(next);
-            if (next) setSectionOpen(false);
+            if (next) {
+              pendingGroupFocus.current = 'COURSE';
+              setSectionOpen(false);
+            }
           }}>
-          <summary className="filter-panel__group-summary">
+          <summary className="filter-panel__group-summary" ref={courseSummaryRef}>
             <span>03–09</span>
             <span>{i18n.t('filter.course_constraints')}</span>
             <span className="filter-panel__group-count">{courseFields.length}</span>
@@ -1412,9 +1373,12 @@ export function FilterPanel({
           onToggle={(event) => {
             const next = event.currentTarget.open;
             setSectionOpen(next);
-            if (next) setCourseOpen(false);
+            if (next) {
+              pendingGroupFocus.current = 'SECTION';
+              setCourseOpen(false);
+            }
           }}>
-          <summary className="filter-panel__group-summary">
+          <summary className="filter-panel__group-summary" ref={sectionSummaryRef}>
             <span>10–18</span>
             <span>{i18n.t('filter.section_constraints')}</span>
             <span className="filter-panel__group-count">{sectionFields.length}</span>

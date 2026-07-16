@@ -13,7 +13,7 @@ import type {
   FilterSchemaV1,
   ProductApiPort,
   ProductRuntimePort,
-  ServiceStatusV1,
+  ServiceStatusV2,
   SectionDetailResponseV1,
 } from '../src/ui/shared/product';
 import { AppRouterProvider, RouterLink, useAppRouter } from '../src/ui/shared/routing';
@@ -136,22 +136,33 @@ function runtimeWith(product: Partial<ProductApiPort>): ProductRuntimePort {
 }
 
 const readyStatus = {
-  catalog: {
-    availableTargetCount: 135,
-    currentTargetCount: 135,
-    staleTargetCount: 0,
-    totalTargetCount: 135,
-    unavailableTargetCount: 0,
+  contractVersion: 2,
+  observedAt: point.observedAt,
+  runtime: 'LOCAL',
+  level: 'PARTIALLY_READY',
+  discovery: discovery.status,
+  termWindow: {
+    currentTerm: '2026-9',
+    nextTerm: '2027-0',
+    visibleTerms: [
+      { term: '2026-9', relativeOffset: 0, discovered: true, autoManaged: true, manualPullAllowed: false, watchable: true },
+      { term: '2027-0', relativeOffset: 1, discovered: false, autoManaged: true, manualPullAllowed: false, watchable: true },
+    ],
   },
-  open: {
-    availableTargetCount: 135,
-    currentTargetCount: 135,
-    staleTargetCount: 0,
-    totalTargetCount: 135,
-    unavailableTargetCount: 0,
-  },
+  automaticTermSummaries: [{ term: '2026-9', readyTargetCount: 1, totalTargetCount: 1 }],
+  operations: [],
+  targets: [{
+    target: { campus: 'NB', term: '2026-9' }, primary: true,
+    snapshotAvailability: 'READY', workState: 'IDLE', stage: null, usable: true,
+    catalogContentVersion: 1, lastCompleteAt: point.observedAt, nextRetryAt: null, error: null,
+  }],
   issues: [],
-} as unknown as ServiceStatusV1;
+} satisfies ServiceStatusV2;
+
+function applyScope(): void {
+  fireEvent.click(screen.getByRole('checkbox', { name: /New Brunswick/u }));
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+}
 
 afterEach(() => {
   cleanup();
@@ -182,6 +193,7 @@ describe('search focus continuity', () => {
     Object.defineProperty(output, 'scrollIntoView', { configurable: true, value: scrollIntoView });
 
     expect(document.activeElement).not.toBe(outputHeading);
+    applyScope();
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await screen.findByText('Course results page 1');
     await waitFor(() => expect(document.activeElement).toBe(outputHeading));
@@ -250,6 +262,7 @@ describe('search focus continuity', () => {
       </BcspI18nProvider>,
     );
 
+    applyScope();
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await screen.findByText('Course results page 1');
 

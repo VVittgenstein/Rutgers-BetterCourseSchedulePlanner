@@ -145,6 +145,33 @@ fn publish_catalog(
     }
 }
 
+fn stage_catalog(
+    storage: &mut OperationalStorage,
+    target: &TermCampusKey,
+    label: &str,
+    indices: &[&str],
+    canonical_sha256: &str,
+) -> TraceId {
+    let snapshot = catalog_snapshot(target, indices, canonical_sha256);
+    let body = format!("synthetic-{label}");
+    let observation_id = trace(&format!("catalog-{label}"));
+    storage
+        .stage_catalog_refresh(CatalogRefreshCommand {
+            observation_id,
+            target: target.clone(),
+            started_at: STARTED.to_owned(),
+            completed_at: COMPLETED.to_owned(),
+            source_content_sha256: format!("{:x}", Sha256::digest(body.as_bytes())),
+            semantic_content_sha256: catalog_content_sha256_v1(target, &snapshot)
+                .expect("catalog hash"),
+            source_bytes: body.len() as u64,
+            raw_payload: None,
+            snapshot,
+        })
+        .expect("stage catalog");
+    observation_id
+}
+
 fn begin(
     storage: &mut OperationalStorage,
     target: &TermCampusKey,
@@ -213,6 +240,150 @@ fn failure_http() -> OpenHttpAuditMetadata {
     }
 }
 
+#[test]
+fn staged_catalog_and_open_publish_as_one_complete_snapshot() {
+    let scope = target("92026", "NB");
+    let mut storage = OperationalStorage::open_in_memory().expect("storage");
+    let catalog_observation =
+        stage_catalog(&mut storage, &scope, "complete-initial", &["00001"], HASH_A);
+    let candidate = storage
+        .candidate_open_catalog_snapshot(
+            &catalog_observation,
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+        )
+        .expect("candidate")
+        .expect("publishable candidate");
+    assert_eq!(candidate.base_content_version, 0);
+    assert_eq!(candidate.catalog.content_version, 1);
+    let open_attempt = begin_command(
+        &scope,
+        "complete-open-initial",
+        "complete-run",
+        candidate.catalog.content_version,
+        "2026-07-14",
+    );
+    storage
+        .begin_candidate_open_pull_attempt(&candidate, &open_attempt)
+        .expect("begin candidate Open");
+    let outcome = storage
+        .finish_candidate_open_pull_success(
+            catalog_observation,
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            FinishOpenPullSuccessCommand {
+                attempt_id: open_attempt.attempt_id,
+                completed_at: "2026-07-14T00:00:02Z".to_owned(),
+                open_sections: vec![section(&scope, "00001")],
+                source_value_count: 1,
+                watched_sections: Vec::new(),
+                http: success_http(16),
+            },
+        )
+        .expect("atomic complete snapshot");
+    assert!(outcome.catalog.is_some());
+    assert!(outcome.open.classification.is_success());
+    let state = storage
+        .complete_target_snapshot_state(&scope)
+        .expect("complete state");
+    assert!(state.ready);
+    assert_eq!(state.catalog_content_version, 1);
+    assert_eq!(state.open_catalog_content_version, 1);
+}
+
+#[test]
+fn failed_candidate_open_retains_the_previous_complete_pair() {
+    let scope = target("92026", "NB");
+    let mut storage = OperationalStorage::open_in_memory().expect("storage");
+    let initial_catalog = stage_catalog(
+        &mut storage,
+        &scope,
+        "complete-retained-v1",
+        &["00001"],
+        HASH_A,
+    );
+    let initial_candidate = storage
+        .candidate_open_catalog_snapshot(
+            &initial_catalog,
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+        )
+        .expect("candidate")
+        .expect("publishable");
+    let first_attempt = begin_command(
+        &scope,
+        "complete-retained-open-v1",
+        "complete-retained-run",
+        1,
+        "2026-07-14",
+    );
+    storage
+        .begin_candidate_open_pull_attempt(&initial_candidate, &first_attempt)
+        .expect("begin initial");
+    storage
+        .finish_candidate_open_pull_success(
+            initial_catalog,
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            FinishOpenPullSuccessCommand {
+                attempt_id: first_attempt.attempt_id,
+                completed_at: "2026-07-14T00:00:02Z".to_owned(),
+                open_sections: vec![section(&scope, "00001")],
+                source_value_count: 1,
+                watched_sections: Vec::new(),
+                http: success_http(16),
+            },
+        )
+        .expect("initial complete snapshot");
+
+    let replacement_catalog = stage_catalog(
+        &mut storage,
+        &scope,
+        "complete-retained-v2",
+        &["00002"],
+        HASH_B,
+    );
+    let replacement_candidate = storage
+        .candidate_open_catalog_snapshot(
+            &replacement_catalog,
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+        )
+        .expect("candidate")
+        .expect("publishable");
+    assert_eq!(replacement_candidate.catalog.content_version, 2);
+    let failed_attempt = begin_command(
+        &scope,
+        "complete-retained-open-v2",
+        "complete-retained-run",
+        2,
+        "2026-07-14",
+    );
+    storage
+        .begin_candidate_open_pull_attempt(&replacement_candidate, &failed_attempt)
+        .expect("begin replacement");
+    storage
+        .finish_candidate_open_pull_failure(
+            replacement_catalog,
+            &FinishOpenPullFailureCommand {
+                attempt_id: failed_attempt.attempt_id,
+                completed_at: "2026-07-14T00:00:03Z".to_owned(),
+                http: failure_http(),
+                error_code: "OPEN_TRANSIENT_HTTP".to_owned(),
+                diagnostic_token: None,
+            },
+        )
+        .expect("record failed candidate");
+
+    let state = storage
+        .complete_target_snapshot_state(&scope)
+        .expect("complete state");
+    assert!(state.ready);
+    assert_eq!(state.catalog_content_version, 1);
+    assert_eq!(state.open_catalog_content_version, 1);
+    let published = storage
+        .published_catalog_snapshot(&scope)
+        .expect("catalog read")
+        .expect("retained catalog");
+    assert_eq!(published.content_version, 1);
+    assert_eq!(published.snapshot.sections[0].key.index().as_str(), "00001");
+}
+
 fn fail(storage: &mut OperationalStorage, attempt: &str) {
     storage
         .finish_open_pull_failure(&FinishOpenPullFailureCommand {
@@ -245,7 +416,7 @@ fn existing_v1_database_migrates_to_open_storage_without_seed_rows() {
     drop(connection);
 
     let storage = OperationalStorage::open(&path).expect("migrate to current schema");
-    assert_eq!(storage.migration_records().expect("records").len(), 3);
+    assert_eq!(storage.migration_records().expect("records").len(), 4);
     let tables = storage.operational_table_names().expect("tables");
     assert!(tables.contains(&"open_pull_attempts".to_owned()));
     assert!(tables.contains(&"open_section_events".to_owned()));

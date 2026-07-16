@@ -15,6 +15,7 @@ export interface ProductClientOptions {
 
 export interface ProductRequestOptions<TRequest> {
   readonly method: ProductHttpMethod;
+  readonly authenticate?: boolean;
   readonly payload?: TRequest;
   readonly signal?: AbortSignal;
 }
@@ -76,6 +77,8 @@ export class ProductClient implements ProductClientPort {
     const changesState = options.method !== 'GET';
     if (changesState) {
       headers.set('content-type', 'application/json');
+    }
+    if (changesState || options.authenticate === true) {
       const session = this.#session();
       if (session !== null) headers.set('x-bcsp-session', session);
     }

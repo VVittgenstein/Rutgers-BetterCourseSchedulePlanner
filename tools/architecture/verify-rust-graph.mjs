@@ -112,8 +112,8 @@ export const GRAPH_SPEC = Object.freeze({
   'bcsp-local-runtime': {
     dir: 'crates/bcsp-local-runtime',
     kind: 'lib',
-    internal: ['bcsp-application', 'bcsp-contracts', 'bcsp-local-user-state', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-watch'],
-    external: [['include_dir', NORMAL], ['open', NORMAL], ['rusqlite', DEV], ['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL], ['tracing-subscriber', NORMAL]],
+    internal: ['bcsp-application', 'bcsp-contracts', 'bcsp-domain', 'bcsp-local-user-state', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-watch'],
+    external: [['include_dir', NORMAL], ['open', NORMAL], ['rusqlite', DEV], ['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL], ['tracing-subscriber', NORMAL]],
   },
   'bcsp-public-operations': {
     dir: 'crates/bcsp-public-operations',
@@ -124,7 +124,7 @@ export const GRAPH_SPEC = Object.freeze({
   'bcsp-public-runtime': {
     dir: 'crates/bcsp-public-runtime',
     kind: 'lib',
-    internal: ['bcsp-application', 'bcsp-contracts', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-public-operations', 'bcsp-watch'],
+    internal: ['bcsp-application', 'bcsp-contracts', 'bcsp-domain', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-public-operations', 'bcsp-watch'],
     external: [['axum', NORMAL], ['include_dir', NORMAL], ['reqwest', DEV], ['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tower', DEV], ['tracing', NORMAL], ['tracing-subscriber', NORMAL]],
   },
   'bcsp-local': {

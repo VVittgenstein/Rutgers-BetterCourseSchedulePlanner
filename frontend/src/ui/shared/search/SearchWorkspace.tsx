@@ -9,6 +9,7 @@ import {
   coerceFilterStateV2,
   createCourseQueryRequestV1,
   createNeutralFilterState,
+  isServiceStatusV2,
   isSearchDataReady,
   type CourseDetailResponseV1,
   type CourseGroupKey,
@@ -18,16 +19,21 @@ import {
   type ProductRuntimePort,
   type SectionDetailResponseV1,
   type SectionKey,
-  type ServiceStatusV1,
+  type ServiceStatus,
 } from '../product';
 import type { ShellDataState } from '../shell';
 import { RouterLink, useAppRouter } from '../routing';
 import { FilterPanel } from './filters';
 import {
   SearchSessionProvider,
+  type SearchScope,
   useOptionalSearchSession,
   useSearchSession,
 } from './SearchSession';
+import {
+  QueryScopeControl,
+  type QueryScopeUnavailableActionRenderer,
+} from './QueryScopeControl';
 import {
   CourseDetailView,
   CourseResultsView,
@@ -68,68 +74,117 @@ type PendingSearchFocus = 'OUTPUT' | 'COURSE_TRIGGER' | null;
 export interface SearchWorkspaceProps {
   readonly initialFilters?: FilterStateV1 | undefined;
   readonly onFiltersChange?: ((filters: FilterStateV1) => void) | undefined;
+  readonly renderUnavailableScopeAction?: QueryScopeUnavailableActionRenderer | undefined;
   readonly runtime: ProductRuntimePort;
-  readonly serviceStatus?: ServiceStatusV1 | null | undefined;
+  readonly serviceStatus?: ServiceStatus | null | undefined;
   readonly shellState: Extract<ShellDataState, { status: 'READY' }>;
 }
 
-interface RutgersTermRank {
-  readonly termCode: number;
-  readonly year: number;
-}
-
-function rutgersTermRank(term: string): RutgersTermRank | null {
-  const match = /^([0179])(\d{4})$/u.exec(term);
-  const termCodeText = match?.[1];
-  const yearText = match?.[2];
-  if (termCodeText === undefined || yearText === undefined) return null;
-  return { termCode: Number(termCodeText), year: Number(yearText) };
-}
-
-function initialTarget(
-  shellState: Extract<ShellDataState, { status: 'READY' }>,
-) {
-  const targets = shellState.discovery.targets;
-  const targetsWithSubjects = new Set(
-    shellState.discovery.subjects.map((subject) =>
-      `${subject.target.term}\u0000${subject.target.campus}`),
-  );
-  let selected = targets[0];
-  let selectedRank: RutgersTermRank | null = null;
-  let selectedHasSubjects = selected === undefined
-    ? false
-    : targetsWithSubjects.has(`${selected.key.term}\u0000${selected.key.campus}`);
-  for (const target of targets) {
-    const rank = rutgersTermRank(target.key.term);
-    if (rank === null) continue;
-    const hasSubjects = targetsWithSubjects.has(
-      `${target.key.term}\u0000${target.key.campus}`,
-    );
-    if (
-      selectedRank === null
-      || rank.year > selectedRank.year
-      || (rank.year === selectedRank.year && rank.termCode > selectedRank.termCode)
-      || (
-        rank.year === selectedRank.year
-        && rank.termCode === selectedRank.termCode
-        && hasSubjects
-        && !selectedHasSubjects
-      )
-    ) {
-      selected = target;
-      selectedRank = rank;
-      selectedHasSubjects = hasSubjects;
-    }
+function initialTerm(
+  _shellState: Extract<ShellDataState, { status: 'READY' }>,
+  serviceStatus: ServiceStatus | null | undefined,
+): string | null {
+  if (serviceStatus !== null && serviceStatus !== undefined && isServiceStatusV2(serviceStatus)) {
+    return serviceStatus.termWindow.currentTerm;
   }
-  return selected;
+  return null;
 }
 
 function createInitialFilters(
   shellState: Extract<ShellDataState, { status: 'READY' }>,
+  serviceStatus: ServiceStatus | null | undefined,
+  initialFilters?: FilterStateV1,
 ): FilterStateV1 {
-  const target = initialTarget(shellState);
-  const filters = createNeutralFilterState(target?.key.term ?? null);
-  return target === undefined ? filters : { ...filters, campuses: [target.key.campus] };
+  const term = initialTerm(shellState, serviceStatus);
+  const filters = initialFilters === undefined
+    ? createNeutralFilterState(term)
+    : coerceFilterStateV2(initialFilters, term);
+  return { ...filters, campuses: [], term };
+}
+
+function filtersForScope(filters: FilterStateV1, scope: SearchScope): FilterStateV1 {
+  const changed = filters.term !== scope.term
+    || filters.campuses.length !== scope.campuses.length
+    || filters.campuses.some((campus, index) => campus !== scope.campuses[index]);
+  if (!changed) return filters;
+  return {
+    ...filters,
+    campuses: [...scope.campuses],
+    term: scope.term,
+  };
+}
+
+interface ScopeFilterRevalidation {
+  readonly filters: FilterStateV1;
+  readonly removed: number;
+}
+
+function sameOption(left: string, right: string): boolean {
+  return left.localeCompare(right, 'en-US', { sensitivity: 'accent' }) === 0;
+}
+
+async function revalidateScopeFilters(
+  filters: FilterStateV1,
+  scope: SearchScope,
+  discovery: Extract<ShellDataState, { status: 'READY' }>['discovery'],
+  runtime: ProductRuntimePort,
+  signal: AbortSignal,
+): Promise<ScopeFilterRevalidation> {
+  if (scope.term === null) throw new Error('A term is required before applying a scope.');
+  const scoped = filtersForScope(filters, scope);
+  const targetKeys = new Set(scope.campuses.map((campus) => `${scope.term}\u0000${campus}`));
+  const validSubjects = new Set(discovery.subjects
+    .filter(({ target }) => targetKeys.has(`${target.term}\u0000${target.campus}`))
+    .map(({ code }) => code));
+  const validCoreCodes = new Set(discovery.coreCodeDictionaries
+    .filter(({ target }) => targetKeys.has(`${target.term}\u0000${target.campus}`))
+    .flatMap(({ options }) => options.map(({ code }) => code)));
+  const subjects = scoped.subjects.filter((value) => validSubjects.has(value));
+  const coreCodes = scoped.core.codes.filter((value) => validCoreCodes.has(value));
+  let removed = scoped.subjects.length - subjects.length
+    + scoped.core.codes.length - coreCodes.length;
+
+  const validate = async (field: FilterOptionsFieldV2, values: readonly string[]) => {
+    if (values.length === 0) return [];
+    if (runtime.product.filterOptions === undefined) {
+      throw new Error('Filter option validation is unavailable.');
+    }
+    const checks = await Promise.all(values.map(async (value) => {
+      const response = await runtime.product.filterOptions?.({
+        contractVersion: 2,
+        term: scope.term as string,
+        campuses: scope.campuses,
+        field,
+        query: value,
+        limit: 100,
+      }, signal);
+      return response?.options.some((option) => sameOption(option.value, value)) === true;
+    }));
+    const kept = values.filter((_value, index) => checks[index] === true);
+    removed += values.length - kept.length;
+    return kept;
+  };
+
+  const [keywords, levels, instructors, locations, examCodes] = await Promise.all([
+    validate('KEYWORD', scoped.keywords),
+    validate('COURSE_LEVEL', scoped.levels),
+    validate('INSTRUCTOR', scoped.instructors),
+    validate('MEETING_LOCATION', scoped.meetingLocations.locations),
+    validate('EXAM_CODE', scoped.examCodes),
+  ]);
+  return {
+    filters: {
+      ...scoped,
+      subjects,
+      core: { ...scoped.core, codes: coreCodes },
+      keywords,
+      levels,
+      instructors,
+      meetingLocations: { ...scoped.meetingLocations, locations },
+      examCodes,
+    },
+    removed,
+  };
 }
 
 function sectionHref(key: SectionKey): string {
@@ -265,6 +320,7 @@ function DirectSectionRoute({
 function SearchWorkspaceController({
   initialFilters,
   onFiltersChange,
+  renderUnavailableScopeAction,
   runtime,
   serviceStatus,
   shellState,
@@ -273,25 +329,43 @@ function SearchWorkspaceController({
   const { navigate, pathname } = useAppRouter();
   const session = useSearchSession();
   const directSection = useMemo(() => parseSectionRoute(pathname), [pathname]);
-  const fallbackFilters = useMemo(() =>
-    initialFilters === undefined
-      ? createInitialFilters(shellState)
-      : coerceFilterStateV2(initialFilters, createInitialFilters(shellState).term),
-  [initialFilters, shellState]);
+  const fallbackFilters = useMemo(
+    () => createInitialFilters(shellState, serviceStatus, initialFilters),
+    [initialFilters, serviceStatus, shellState],
+  );
   const filters = session.state.draftFilters ?? fallbackFilters;
+  const candidateScope = session.state.candidateScope ?? {
+    campuses: [],
+    term: fallbackFilters.term,
+  };
+  const appliedScope = session.state.appliedScope;
   const [query, setQuery] = useState<QueryState>({ kind: 'IDLE' });
   const [courseDetail, setCourseDetail] = useState<CourseDetailState>({ kind: 'CLOSED' });
   const searchAbort = useRef<AbortController | null>(null);
   const detailAbort = useRef<AbortController | null>(null);
+  const scopeApplyAbort = useRef<AbortController | null>(null);
   const filtersRef = useRef<HTMLElement | null>(null);
   const resultsRef = useRef<HTMLElement | null>(null);
   const resultsHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const pendingFocus = useRef<PendingSearchFocus>(null);
   const courseDetailReturnTarget = useRef<CourseDetailReturnTarget | null>(null);
-  const searchDataReady = isSearchDataReady(serviceStatus);
+  const externalFiltersSignature = useRef<string | null>(null);
+  const observedInitialFilters = useRef(false);
+  const [externalScopeRejected, setExternalScopeRejected] = useState(false);
+  const [scopeValidation, setScopeValidation] = useState<'PENDING' | 'REMOVED' | 'ERROR' | null>(null);
+  const invalidateScopeBoundWork = useCallback(() => {
+    searchAbort.current?.abort();
+    searchAbort.current = null;
+    detailAbort.current?.abort();
+    detailAbort.current = null;
+    scopeApplyAbort.current?.abort();
+    scopeApplyAbort.current = null;
+    pendingFocus.current = null;
+    courseDetailReturnTarget.current = null;
+  }, []);
+  const searchDataReady = isSearchDataReady(serviceStatus, appliedScope ?? undefined);
   const searchAvailable = searchDataReady
-    && filters.term !== null
-    && filters.campuses.length > 0;
+    && appliedScope !== null;
 
   useLayoutEffect(() => {
     if (filtersRef.current !== null) {
@@ -299,42 +373,44 @@ function SearchWorkspaceController({
     }
   }, [session.restoreFilterScrollTop]);
 
-  useEffect(() => () => {
-    searchAbort.current?.abort();
-    detailAbort.current?.abort();
-  }, []);
+  useEffect(() => () => invalidateScopeBoundWork(), [invalidateScopeBoundWork]);
 
   useEffect(() => {
-    if (session.state.draftFilters === null) {
-      session.setDraftFilters(fallbackFilters, false);
+    session.initializeScope(
+      { campuses: [], term: fallbackFilters.term },
+      null,
+      fallbackFilters,
+    );
+  }, [fallbackFilters, session.initializeScope]);
+
+  useEffect(() => {
+    const signature = initialFilters === undefined ? null : JSON.stringify(initialFilters);
+    if (!observedInitialFilters.current) {
+      observedInitialFilters.current = true;
+      externalFiltersSignature.current = signature;
       return;
     }
-    if (initialFilters !== undefined || session.state.draftWasEdited) return;
-    const next = createInitialFilters(shellState);
-    if (
-      filters.term === next.term
-      && filters.campuses.length === next.campuses.length
-      && filters.campuses.every((campus, index) => campus === next.campuses[index])
-    ) {
+    if (signature === externalFiltersSignature.current || initialFilters === undefined) return;
+    if (serviceStatus === null || serviceStatus === undefined) return;
+    externalFiltersSignature.current = signature;
+    const next = coerceFilterStateV2(initialFilters, initialFilters.term);
+    const scope = { campuses: next.campuses, term: next.term };
+    if (!isSearchDataReady(serviceStatus, scope)) {
+      setExternalScopeRejected(true);
       return;
     }
-    searchAbort.current?.abort();
-    detailAbort.current?.abort();
-    pendingFocus.current = null;
-    courseDetailReturnTarget.current = null;
-    session.setDraftFilters(next, false);
+    if (JSON.stringify(next) === JSON.stringify(session.state.draftFilters)) return;
+    invalidateScopeBoundWork();
+    setExternalScopeRejected(false);
+    session.applyScope(scope, next);
     setQuery({ kind: 'IDLE' });
     setCourseDetail({ kind: 'CLOSED' });
-    onFiltersChange?.(next);
   }, [
-    fallbackFilters,
-    filters,
     initialFilters,
-    onFiltersChange,
-    session.setDraftFilters,
+    invalidateScopeBoundWork,
+    serviceStatus,
+    session.applyScope,
     session.state.draftFilters,
-    session.state.draftWasEdited,
-    shellState,
   ]);
 
   useEffect(() => {
@@ -397,12 +473,12 @@ function SearchWorkspaceController({
         : createCourseQueryRequestV1(filters, { page, pageSize: 25 });
       session.recordSubmission(request);
       const response = await runtime.product.searchCourses(request, abort.signal);
-      if (!abort.signal.aborted) {
+      if (!abort.signal.aborted && searchAbort.current === abort) {
         session.recordSuccess(request, response);
         setQuery({ kind: 'COURSES' });
       }
     } catch (error) {
-      if (abort.signal.aborted) return;
+      if (abort.signal.aborted || searchAbort.current !== abort) return;
       setQuery(error instanceof FilterSerializationError
         ? { kind: 'VALIDATION_ERROR', issue: error.issue }
         : error instanceof ProductClientError && (
@@ -469,6 +545,56 @@ function SearchWorkspaceController({
     }, signal);
     return response ?? Promise.reject(new Error('Filter options are unavailable.'));
   }, [filters.campuses, filters.term, runtime]);
+
+  const applyScope = useCallback((scope: SearchScope) => {
+    invalidateScopeBoundWork();
+    const abort = new AbortController();
+    scopeApplyAbort.current = abort;
+    pendingFocus.current = null;
+    courseDetailReturnTarget.current = null;
+    const scoped = filtersForScope(filters, scope);
+    const targetBoundSelectionCount = scoped.subjects.length
+      + scoped.keywords.length
+      + scoped.levels.length
+      + scoped.core.codes.length
+      + scoped.instructors.length
+      + scoped.meetingLocations.locations.length
+      + scoped.examCodes.length;
+    if (targetBoundSelectionCount === 0) {
+      session.applyScope(scope, scoped);
+      onFiltersChange?.(scoped);
+      setScopeValidation(null);
+      setQuery({ kind: 'IDLE' });
+      setCourseDetail({ kind: 'CLOSED' });
+      return;
+    }
+    setScopeValidation('PENDING');
+    void revalidateScopeFilters(filters, scope, shellState.discovery, runtime, abort.signal)
+      .then(({ filters: next, removed }) => {
+        if (abort.signal.aborted) return;
+        session.applyScope(scope, next);
+        onFiltersChange?.(next);
+        setScopeValidation(removed > 0 ? 'REMOVED' : null);
+        setQuery({ kind: 'IDLE' });
+        setCourseDetail({ kind: 'CLOSED' });
+      })
+      .catch(() => {
+        if (!abort.signal.aborted) setScopeValidation('ERROR');
+      });
+  }, [
+    filters,
+    invalidateScopeBoundWork,
+    onFiltersChange,
+    runtime,
+    session.applyScope,
+    shellState.discovery,
+  ]);
+
+  const changeCandidateScope = useCallback((scope: SearchScope) => {
+    scopeApplyAbort.current?.abort();
+    setScopeValidation(null);
+    session.setCandidateScope(scope);
+  }, [session.setCandidateScope]);
 
   const retainedResponse = session.state.lastSuccessfulResponse;
   const empty = retainedResponse !== null && retainedResponse.items.length === 0;
@@ -554,6 +680,31 @@ function SearchWorkspaceController({
           <h3 id="bcsp-search-filter-title">{i18n.t('search.filters_title')}</h3>
           <p>{i18n.t('search.course_intro')}</p>
         </header>
+        {externalScopeRejected ? (
+          <p className="bcsp-search-workspace__scope-error" role="alert">
+            {i18n.t('scope.external_definition_unavailable')}
+          </p>
+        ) : null}
+        {scopeValidation === 'REMOVED' ? (
+          <p className="bcsp-search-workspace__scope-error" role="status">
+            {i18n.t('scope.invalid_options_removed')}
+          </p>
+        ) : null}
+        {scopeValidation === 'ERROR' ? (
+          <p className="bcsp-search-workspace__scope-error" role="alert">
+            {i18n.t('scope.validation_failed')}
+          </p>
+        ) : null}
+        <QueryScopeControl
+          actionPending={scopeValidation === 'PENDING'}
+          applied={appliedScope}
+          candidate={candidateScope}
+          discovery={shellState.discovery}
+          onApply={applyScope}
+          onCandidateChange={changeCandidateScope}
+          renderUnavailableAction={renderUnavailableScopeAction}
+          status={serviceStatus ?? null}
+        />
         <FilterPanel
           disabled={query.kind === 'LOADING' || !searchAvailable}
           discovery={shellState.discovery}

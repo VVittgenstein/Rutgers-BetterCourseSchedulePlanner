@@ -11,6 +11,7 @@ pub(crate) enum CoreStartDisposition {
     RejectedDuplicate,
     RejectedSectionNotFound,
     RejectedTargetUnavailable,
+    RejectedTermOutOfRange,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

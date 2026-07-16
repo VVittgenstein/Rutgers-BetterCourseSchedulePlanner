@@ -17,10 +17,11 @@ mod raw_catalog;
 mod selector;
 
 pub use catalog::{
-    CATALOG_CONNECT_TIMEOUT, CATALOG_MAX_DECODED_BYTES, CATALOG_TOTAL_TIMEOUT,
-    CatalogClientBuildError, CatalogFailure, CatalogFailureResponseMetadata, CatalogRequest,
-    CatalogRequestError, CatalogResponse, CatalogResponseMetadata, CatalogTransportError,
-    RUTGERS_CATALOG_ENDPOINT, RutgersCatalogClient,
+    CATALOG_BODY_IDLE_TIMEOUT, CATALOG_CONNECT_TIMEOUT, CATALOG_MAX_DECODED_BYTES,
+    CATALOG_RESPONSE_HEADER_TIMEOUT, CATALOG_TOTAL_TIMEOUT, CatalogClientBuildError,
+    CatalogFailure, CatalogFailureResponseMetadata, CatalogRequest, CatalogRequestError,
+    CatalogResponse, CatalogResponseMetadata, CatalogTransportError, RUTGERS_CATALOG_ENDPOINT,
+    RutgersCatalogClient,
 };
 pub use discovery::{
     DiscoveredCampus, DiscoveredSubject, DiscoveredTarget, DiscoveredTerm, DiscoveryDecodeError,

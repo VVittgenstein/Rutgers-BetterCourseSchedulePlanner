@@ -71,6 +71,7 @@ export interface WatchTelemetryResourceState {
 
 export type WatchNoticeCode =
   | 'SELECTION_LIMIT'
+  | 'TERM_OUT_OF_RANGE'
   | 'START_REJECTED'
   | 'COMMAND_FAILED'
   | 'CONNECTION_LOST'
@@ -109,6 +110,8 @@ export interface LiveWatchValue {
   readonly starting: boolean;
   isSelected(sectionKey: SectionKey): boolean;
   isActive(sectionKey: SectionKey): boolean;
+  isWatchable(sectionKey: SectionKey): boolean;
+  updateWatchableTerms(terms: readonly string[]): void;
   select(sectionKey: SectionKey): void;
   remove(sectionKey: SectionKey): void;
   startSelected(policy: WatchPolicyV1): Promise<void>;
@@ -256,6 +259,7 @@ export interface LiveWatchProviderProps {
   readonly runtime: ProductRuntimePort;
   readonly audio?: WatchAudioController | undefined;
   readonly initialSelected?: readonly SectionKey[] | undefined;
+  readonly initialWatchableTerms?: readonly string[] | undefined;
   readonly initialVolume?: number | undefined;
   readonly onSelectedChange?: ((selected: readonly SectionKey[]) => void) | undefined;
   readonly onVolumeChange?: ((volume: number) => void) | undefined;
@@ -265,6 +269,7 @@ export function LiveWatchProvider({
   audio,
   children,
   initialSelected = [],
+  initialWatchableTerms,
   initialVolume = 70,
   onSelectedChange,
   onVolumeChange,
@@ -292,6 +297,8 @@ export function LiveWatchProvider({
   >([]);
   const [telemetryLoading, setTelemetryLoading] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [watchableTerms, setWatchableTerms] = useState<ReadonlySet<string> | null>(() =>
+    initialWatchableTerms === undefined ? null : new Set(initialWatchableTerms));
   const selectedRef = useRef(selected);
   const activeRef = useRef(active);
   const pendingRef = useRef(pending);
@@ -313,6 +320,7 @@ export function LiveWatchProvider({
   const audioProviderMounted = useRef(false);
   const startAttempt = useRef(0);
   const startingRef = useRef(false);
+  const watchableTermsRef = useRef(watchableTerms);
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { activeRef.current = active; }, [active]);
@@ -322,6 +330,7 @@ export function LiveWatchProvider({
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { telemetryResourcesRef.current = telemetryResources; }, [telemetryResources]);
   useEffect(() => { continuousEpisodeIdsRef.current = continuousEpisodeIds; }, [continuousEpisodeIds]);
+  useEffect(() => { watchableTermsRef.current = watchableTerms; }, [watchableTerms]);
 
   const addNotice = useCallback((
     code: WatchNoticeCode,
@@ -694,6 +703,10 @@ export function LiveWatchProvider({
   }, [audioController]);
 
   const select = useCallback((sectionKey: SectionKey) => {
+    if (watchableTermsRef.current?.has(sectionKey.term) === false) {
+      addNotice('TERM_OUT_OF_RANGE', 'ALERT', sectionKey);
+      return;
+    }
     if (selectedRef.current.some((value) => sameSection(value, sectionKey))) return;
     if (selectedRef.current.length >= MAX_SELECTED_SECTIONS) {
       addNotice('SELECTION_LIMIT', 'ALERT', sectionKey, String(MAX_SELECTED_SECTIONS));
@@ -704,6 +717,12 @@ export function LiveWatchProvider({
     setSelected(next);
     onSelectedChange?.(next);
   }, [addNotice, onSelectedChange]);
+
+  const updateWatchableTerms = useCallback((terms: readonly string[]) => {
+    const next = new Set(terms);
+    watchableTermsRef.current = next;
+    setWatchableTerms(next);
+  }, []);
 
   const remove = useCallback((sectionKey: SectionKey) => {
     if (activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey))) return;
@@ -762,6 +781,8 @@ export function LiveWatchProvider({
   const startSelected = useCallback(async (policy: WatchPolicyV1) => {
     if (startingRef.current) return;
     const inactive = selectedRef.current.filter((sectionKey) =>
+      watchableTermsRef.current?.has(sectionKey.term) !== false
+      &&
       !activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey))
       && !pendingRef.current.some((pendingKey) => sameSection(pendingKey, sectionKey)));
     if (inactive.length === 0) return;
@@ -1077,6 +1098,8 @@ export function LiveWatchProvider({
     starting,
     isSelected: (sectionKey) => selected.some((value) => sameSection(value, sectionKey)),
     isActive: (sectionKey) => active.some((watch) => sameSection(watch.sectionKey, sectionKey)),
+    isWatchable: (sectionKey) => watchableTerms?.has(sectionKey.term) !== false,
+    updateWatchableTerms,
     select,
     remove,
     startSelected,
@@ -1128,7 +1151,9 @@ export function LiveWatchProvider({
     telemetryResources,
     testSound,
     updatePolicy,
+    updateWatchableTerms,
     volume,
+    watchableTerms,
     starting,
   ]);
 

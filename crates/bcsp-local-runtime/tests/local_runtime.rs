@@ -11,24 +11,30 @@ use std::time::{Duration, Instant};
 use bcsp_application::{
     ExtensionRequest, NoopWatchDispatchSink, OpenRuntimeSnapshot, PRODUCT_CATALOG_DISCOVERY_PATH,
     PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_SERVICE_STATUS_PATH, RequestMethod, RouteExtension,
-    SharedWatchSocket, WebSocketExtension,
+    SharedWatchSocket, TargetRefreshDemand, WebSocketExtension,
 };
 use bcsp_contracts::{
-    CatalogDiscoveryRequestV1, FilterRequestV1, FilterValuesInputV1, HttpRequestEnvelope,
-    NormalizedFilterValuesV1, SectionKey, TermId, TraceId, WatchClientCommandV1, WatchPolicyV1,
-    WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope,
+    CampusCode, CatalogDiscoveryRequestV1, FilterRequestV1, FilterValuesInputV1,
+    HttpRequestEnvelope, NormalizedFilterValuesV1, SectionKey, TermCampusKey, TermId, TraceId,
+    WatchClientCommandV1, WatchPolicyV1, WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope,
 };
+use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_runtime::{
     LocalRuntimeError, LocalRuntimePaths, LocalSurfaceState, PersonalSurface, PreparedLocalRuntime,
     prepare_and_start_with,
 };
 use bcsp_local_user_state::{
     CatalogRefreshMinutes, LocalSettings, OpenRefreshSeconds, PersonalStateStore, SettingsRevision,
-    UserStateRevision,
+    UserStateRevision, WatchFastLaneSeconds,
 };
 use bcsp_open::OpenCounterAudience;
+use bcsp_operational_storage::{
+    DiscoveredCampus, DiscoveredTerm, DiscoveryRefreshCommand, DiscoverySnapshot,
+    DiscoverySourceKind, DiscoverySourceVersion,
+};
 use bcsp_watch::WatchStartAdmission;
 use rusqlite::{Connection, TransactionBehavior};
+use time::OffsetDateTime;
 use tokio::sync::mpsc;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -76,6 +82,134 @@ fn filter_request(term: &str) -> FilterRequestV1 {
     FilterRequestV1::new(NormalizedFilterValuesV1::try_new(values).unwrap())
 }
 
+fn manual_term_discovery(term: TermId) -> DiscoverySnapshot {
+    let source_digest = "a".repeat(64);
+    let source_version_id = format!("selector:{source_digest}");
+    let source = DiscoverySourceVersion {
+        source_version_id: source_version_id.clone(),
+        source_kind: DiscoverySourceKind::Selector,
+        source_identity: "RUTGERS_SELECTOR".to_owned(),
+        content_sha256: source_digest,
+        canonical_facts: serde_json::json!({"test": true}),
+        observed_at: "2026-07-17T00:00:00Z".to_owned(),
+    };
+    let campus = |code: &str| DiscoveredCampus {
+        target: TermCampusKey::new(term.clone(), CampusCode::try_from(code).unwrap()),
+        display_name: Some(code.to_owned()),
+        category: None,
+        enabled: Some(true),
+        canonical_facts: serde_json::json!({"test": true}),
+        source_version_id: source_version_id.clone(),
+    };
+    DiscoverySnapshot {
+        sources: vec![source],
+        terms: vec![DiscoveredTerm {
+            term_id: term.clone(),
+            year: None,
+            term_code: None,
+            display_name: Some(term.as_str().to_owned()),
+            published: Some(true),
+            canonical_facts: serde_json::json!({"test": true}),
+            source_version_id: source_version_id.clone(),
+        }],
+        campuses: vec![campus("NB"), campus("ONLINE_NB")],
+        subjects: Vec::new(),
+    }
+}
+
+fn seed_ready_query_scope(prepared: &PreparedLocalRuntime, terms: &[&str]) {
+    const STARTED: &str = "2026-07-17T00:00:00Z";
+    const COMPLETED: &str = "2026-07-17T00:00:01Z";
+    let source_digest = "b".repeat(64);
+    let source_version_id = format!("selector:{source_digest}");
+    let terms = terms
+        .iter()
+        .map(|term| TermId::try_from(*term).unwrap())
+        .collect::<Vec<_>>();
+    let snapshot = DiscoverySnapshot {
+        sources: vec![DiscoverySourceVersion {
+            source_version_id: source_version_id.clone(),
+            source_kind: DiscoverySourceKind::Selector,
+            source_identity: "RUTGERS_SELECTOR".to_owned(),
+            content_sha256: source_digest,
+            canonical_facts: serde_json::json!({"test": true}),
+            observed_at: STARTED.to_owned(),
+        }],
+        terms: terms
+            .iter()
+            .map(|term| DiscoveredTerm {
+                term_id: term.clone(),
+                year: None,
+                term_code: None,
+                display_name: Some(term.as_str().to_owned()),
+                published: Some(true),
+                canonical_facts: serde_json::json!({"test": true}),
+                source_version_id: source_version_id.clone(),
+            })
+            .collect(),
+        campuses: terms
+            .iter()
+            .map(|term| DiscoveredCampus {
+                target: TermCampusKey::new(
+                    term.clone(),
+                    CampusCode::try_from("NB").expect("NB Campus"),
+                ),
+                display_name: Some("New Brunswick".to_owned()),
+                category: None,
+                enabled: Some(true),
+                canonical_facts: serde_json::json!({"test": true}),
+                source_version_id: source_version_id.clone(),
+            })
+            .collect(),
+        subjects: Vec::new(),
+    };
+    let database = prepared.operational().database();
+    let mut database = database.lock().unwrap();
+    database
+        .operational_mut()
+        .apply_discovery_refresh(DiscoveryRefreshCommand {
+            observation_id: trace(0x800),
+            started_at: STARTED.to_owned(),
+            completed_at: COMPLETED.to_owned(),
+            snapshot,
+        })
+        .expect("publish ready-scope discovery fixture");
+    drop(database);
+
+    let connection = Connection::open(prepared.paths().database()).expect("fixture connection");
+    for (position, term) in terms.into_iter().enumerate() {
+        let target_id = format!("{term}/NB");
+        let attempt_id = trace(0x810 + u64::try_from(position).unwrap());
+        connection
+            .execute(
+                "INSERT INTO catalog_targets
+                    (target_id, term_id, campus_code, created_at, updated_at,
+                     current_content_version)
+                 VALUES (?1, ?2, 'NB', ?3, ?3, 1)",
+                (&target_id, term.as_str(), COMPLETED),
+            )
+            .expect("seed ready Catalog target");
+        connection
+            .execute(
+                "INSERT INTO open_batch_state
+                    (target_id, last_attempt_sequence, last_observation_sequence,
+                     current_catalog_content_version, lkg_attempt_id,
+                     lkg_observation_sequence, lkg_observed_at,
+                     lkg_canonical_set_sha256, lkg_state_sha256,
+                     last_attempt_id, last_attempt_at, last_success_at)
+                 VALUES (?1, 1, 1, 1, ?2, 1, ?3, ?4, ?5, ?2, ?3, ?3)",
+                (
+                    &target_id,
+                    attempt_id.to_string(),
+                    COMPLETED,
+                    "c".repeat(64),
+                    "d".repeat(64),
+                ),
+            )
+            .expect("seed matching Open LKG");
+    }
+}
+
 #[test]
 fn package_paths_ignore_the_working_directory_and_restart_empty() {
     let temp = TestDirectory::new("paths");
@@ -110,6 +244,127 @@ fn package_paths_ignore_the_working_directory_and_restart_empty() {
     assert_eq!(
         find_sqlite_files(temp.path()),
         vec![root.join("data/rbcsp.sqlite")]
+    );
+}
+
+#[test]
+fn local_manual_term_pull_is_window_bounded_idempotent_and_excludes_online_aliases() {
+    let temp = TestDirectory::new("manual-term-pull");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let window = RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Local)
+        .expect("test execution date is covered by the bundled calendar");
+    let manual_term = window
+        .visible_terms()
+        .iter()
+        .find(|term| !term.auto_managed())
+        .expect("Local window exposes manual terms")
+        .term()
+        .clone();
+    let database = prepared.operational().database();
+    database
+        .lock()
+        .unwrap()
+        .operational_mut()
+        .apply_discovery_refresh(DiscoveryRefreshCommand {
+            observation_id: trace(0x701),
+            started_at: "2026-07-17T00:00:00Z".to_owned(),
+            completed_at: "2026-07-17T00:00:01Z".to_owned(),
+            snapshot: manual_term_discovery(manual_term.clone()),
+        })
+        .expect("publish manual-term discovery fixture");
+    let demand = TargetRefreshDemand::default();
+    let mutation_store = PersonalStateStore::open(prepared.paths().database()).unwrap();
+    let surface = PersonalSurface::new(
+        database,
+        mutation_store,
+        Arc::new(
+            SharedWatchSocket::try_new(
+                Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+                Arc::new(NoopWatchDispatchSink),
+            )
+            .unwrap(),
+        ),
+    )
+    .with_target_refresh_demand(demand.clone());
+    let body = serde_json::to_vec(&HttpRequestEnvelope::new(serde_json::json!({
+        "contractVersion": 1,
+        "term": manual_term,
+    })))
+    .unwrap();
+
+    let first: serde_json::Value =
+        serde_json::from_slice(&surface.pull_term(&body).expect("first pull request")).unwrap();
+    assert_eq!(first["data"]["disposition"], "ENQUEUED");
+    assert_eq!(
+        first["data"]["targetCount"], 1,
+        "ONLINE_NB is not a real target"
+    );
+    let second: serde_json::Value =
+        serde_json::from_slice(&surface.pull_term(&body).expect("duplicate pull request")).unwrap();
+    assert_eq!(second["data"]["disposition"], "ALREADY_REQUESTED");
+    assert_eq!(
+        demand.manual_terms_snapshot().expect("manual demand"),
+        vec![manual_term]
+    );
+
+    let automatic = serde_json::to_vec(&HttpRequestEnvelope::new(serde_json::json!({
+        "contractVersion": 1,
+        "term": window.current_term(),
+    })))
+    .unwrap();
+    assert_eq!(
+        surface.pull_term(&automatic),
+        Err(bcsp_local_runtime::LocalSurfaceFailure::unprocessable(
+            bcsp_local_runtime::LocalApiErrorCode::TermOutOfRange,
+        )),
+        "the Local pull surface cannot be used for the automatic terms",
+    );
+}
+
+#[test]
+fn local_selection_retains_legacy_out_of_range_rows_but_rejects_new_ones() {
+    let temp = TestDirectory::new("selection-term-window");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let database = prepared.operational().database();
+    let old = SectionKey::try_new("92025", "NB", "12345").unwrap();
+    database
+        .lock()
+        .unwrap()
+        .personal_mut()
+        .replace_selected_sections(UserStateRevision::try_from(1).unwrap(), &[old.clone()])
+        .expect("seed a legacy selection outside the current window");
+    let surface = PersonalSurface::new(
+        database,
+        PersonalStateStore::open(prepared.paths().database()).unwrap(),
+        Arc::new(
+            SharedWatchSocket::try_new(
+                Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+                Arc::new(NoopWatchDispatchSink),
+            )
+            .unwrap(),
+        ),
+    );
+    let remove = serde_json::to_vec(&HttpRequestEnvelope::new(serde_json::json!({
+        "expectedUserStateRevision": 1,
+        "sections": [],
+    })))
+    .unwrap();
+    assert!(
+        surface.put_selection(&remove).is_ok(),
+        "legacy rows remain removable"
+    );
+    let add = serde_json::to_vec(&HttpRequestEnvelope::new(serde_json::json!({
+        "expectedUserStateRevision": 1,
+        "sections": [old],
+    })))
+    .unwrap();
+    assert_eq!(
+        surface.put_selection(&add),
+        Err(bcsp_local_runtime::LocalSurfaceFailure::unprocessable(
+            bcsp_local_runtime::LocalApiErrorCode::TermOutOfRange,
+        )),
     );
 }
 
@@ -165,6 +420,7 @@ fn configured_refresh_policy_is_live_bounded_and_scoped_to_a_fresh_run() {
         let minimum = LocalSettings {
             catalog_refresh_minutes: CatalogRefreshMinutes::try_from(1).unwrap(),
             open_refresh_seconds: OpenRefreshSeconds::try_from(3).unwrap(),
+            watch_fast_lane_seconds: WatchFastLaneSeconds::try_from(60).unwrap(),
             ..LocalSettings::default()
         };
         let state_revision = database.personal().user_state_revision().unwrap();
@@ -189,6 +445,7 @@ fn configured_refresh_policy_is_live_bounded_and_scoped_to_a_fresh_run() {
         let maximum = LocalSettings {
             catalog_refresh_minutes: CatalogRefreshMinutes::try_from(1_440).unwrap(),
             open_refresh_seconds: OpenRefreshSeconds::try_from(3_600).unwrap(),
+            watch_fast_lane_seconds: WatchFastLaneSeconds::try_from(60).unwrap(),
             ..LocalSettings::default()
         };
         let state_revision = database.personal().user_state_revision().unwrap();
@@ -209,7 +466,7 @@ fn configured_refresh_policy_is_live_bounded_and_scoped_to_a_fresh_run() {
     );
     assert_eq!(
         maximum.effective_open_interval(true),
-        Duration::from_secs(10)
+        Duration::from_secs(60)
     );
     let runtime = prepared
         .core()
@@ -490,7 +747,7 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
         )),
         200
     );
-    let selection = r#"{"protocolVersion":1,"payload":{"expectedUserStateRevision":1,"sections":[{"term":"2026FA","campus":"NB","index":"12345"}]}}"#;
+    let selection = r#"{"protocolVersion":1,"payload":{"expectedUserStateRevision":1,"sections":[{"term":"72026","campus":"NB","index":"12345"}]}}"#;
     assert_eq!(
         status(&request(
             authority,
@@ -796,16 +1053,14 @@ async fn only_an_authenticated_ui_exit_request_signals_ordered_shutdown() {
 async fn saved_view_http_routes_cover_crud_dirty_state_cas_and_no_url_restore() {
     let temp = TestDirectory::new("saved-view-http");
     let (_root, executable) = package(&temp);
-    let running = PreparedLocalRuntime::from_executable(executable)
-        .unwrap()
-        .start()
-        .await
-        .unwrap();
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    seed_ready_query_scope(&prepared, &["72026", "92026"]);
+    let running = prepared.start().await.unwrap();
     let origin = running.origin().to_owned();
     let authority = origin.strip_prefix("http://").unwrap();
     let nonce = running.nonce().as_str();
-    let filters_a = serde_json::to_value(filter_request("T2026F")).unwrap();
-    let filters_b = serde_json::to_value(filter_request("T2027S")).unwrap();
+    let filters_a = serde_json::to_value(filter_request("72026")).unwrap();
+    let filters_b = serde_json::to_value(filter_request("92026")).unwrap();
 
     let initial = success_payload(&request(
         authority,
@@ -1080,16 +1335,14 @@ async fn saved_view_http_routes_cover_crud_dirty_state_cas_and_no_url_restore() 
 async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_reset() {
     let temp = TestDirectory::new("reset-scopes");
     let (_root, executable) = package(&temp);
-    let running = PreparedLocalRuntime::from_executable(executable)
-        .unwrap()
-        .start()
-        .await
-        .unwrap();
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    seed_ready_query_scope(&prepared, &["72026"]);
+    let running = prepared.start().await.unwrap();
     let origin = running.origin().to_owned();
     let authority = origin.strip_prefix("http://").unwrap();
     let nonce = running.nonce().as_str();
     let database_path = running.prepared().paths().database().to_path_buf();
-    let filters = serde_json::to_value(filter_request("T2026F")).unwrap();
+    let filters = serde_json::to_value(filter_request("72026")).unwrap();
 
     let connection = Connection::open(&database_path).unwrap();
     connection
@@ -1214,7 +1467,7 @@ async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_
     );
     let selection = serde_json::json!({
         "expectedUserStateRevision": 1,
-        "sections": [{"term": "T2026F", "campus": "CAMPUS_A", "index": "12345"}],
+        "sections": [{"term": "72026", "campus": "CAMPUS_A", "index": "12345"}],
     });
     let selection = post_api(
         authority,
@@ -1312,6 +1565,10 @@ async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_
     assert_eq!(
         bootstrap["state"]["settings"]["value"]["openRefreshSeconds"],
         30
+    );
+    assert_eq!(
+        bootstrap["state"]["settings"]["value"]["watchFastLaneSeconds"],
+        10
     );
     assert_eq!(bootstrap["state"]["currentFilters"]["revision"], 0);
     assert!(bootstrap["state"]["currentFilters"]["value"].is_null());

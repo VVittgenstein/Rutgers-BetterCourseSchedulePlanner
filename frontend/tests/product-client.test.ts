@@ -90,6 +90,29 @@ describe('ProductClient', () => {
 });
 
 describe('ProductApi', () => {
+  it('authenticates only the scoped service-status read and preserves repeated Campus values', async () => {
+    const success = readGolden<HttpSuccessEnvelope<unknown>>('http-success-v1.json');
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json(success));
+    const api = new ProductApi(new ProductClient({
+      baseUrl: 'https://planner.invalid/',
+      fetch: fetchMock,
+      session: () => 'scope-session',
+    }));
+
+    await api.serviceStatus();
+    await api.serviceStatus(undefined, { term: '72026', campuses: ['NB', 'NK'] });
+
+    const [unscopedUrl, unscopedInit] = fetchMock.mock.calls[0] ?? [];
+    expect(String(unscopedUrl)).toBe('https://planner.invalid/api/v1/service/status');
+    expect(new Headers(unscopedInit?.headers).has('x-bcsp-session')).toBe(false);
+    const [scopedUrl, scopedInit] = fetchMock.mock.calls[1] ?? [];
+    const scoped = new URL(String(scopedUrl));
+    expect(scoped.pathname).toBe('/api/v1/service/status');
+    expect(scoped.searchParams.get('activeTerm')).toBe('72026');
+    expect(scoped.searchParams.getAll('activeCampus')).toEqual(['NB', 'NK']);
+    expect(new Headers(scopedInit?.headers).get('x-bcsp-session')).toBe('scope-session');
+  });
+
   it('binds every typed operation to the eight shared Rust routes', async () => {
     const rustRequest = readGolden<HttpRequestEnvelope<{
       readonly sectionKey: { readonly term: string; readonly campus: string; readonly index: string };

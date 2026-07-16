@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 
 use bcsp_contracts::{
     ContractSchema, OpenEpisodeState, SchemaDirection, UnknownFieldPolicy, WatchAlertDisposition,
-    WatchCueOutcome, WatchNotificationMode, contract_manifest,
+    WatchCueOutcome, WatchNotificationMode, WatchStartRejectionReason, WatchStopReason,
+    contract_manifest,
 };
 use serde::Serialize;
 
@@ -45,6 +46,14 @@ fn watch_enum_schemas_bind_to_wire_names() {
         (
             "bcsp.watch.cue-outcome.v1",
             wire_values(WatchCueOutcome::ALL),
+        ),
+        (
+            "bcsp.watch.start-rejection-reason.v1",
+            wire_values(WatchStartRejectionReason::ALL),
+        ),
+        (
+            "bcsp.watch.stop-reason.v1",
+            wire_values(WatchStopReason::ALL),
         ),
     ] {
         assert_eq!(
