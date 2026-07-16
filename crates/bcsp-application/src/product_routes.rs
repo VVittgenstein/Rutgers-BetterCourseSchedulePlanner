@@ -6,17 +6,19 @@ use bcsp_contracts::{
     ApiErrorBody, ApiErrorCode, ApiErrorEnvelope, CatalogDiscoveryRequestV1, CourseDetailRequestV1,
     CourseQueryRequestV1, HttpRequestEnvelope, HttpSuccessEnvelope, NormalizedFilterValuesV1,
     OpenSectionStatusRequestV1, OpenStatusRequestV1, SectionDetailRequestV1, SectionQueryRequestV1,
-    SystemTraceIdSource, TermCampusKey, TraceIdSource, decode_versioned_envelope_json,
+    ServiceIssueComponentV1, ServiceOperationV1, ServiceRuntimeV1, SystemTraceIdSource,
+    TermCampusKey, TraceIdSource, decode_versioned_envelope_json,
 };
 use bcsp_operational_storage::OperationalStorage;
 use bcsp_query::QueryError;
 use serde::Serialize;
 
+use crate::service_status::{project_service_status, unavailable_service_status};
 use crate::{
     ApplicationClock, ExtensionRequest, ExtensionResponse, ExtensionRoute, OpenRuntimeSnapshot,
     OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError, RefreshPolicyProvider,
-    RequestMethod, RouteExtension, SharedQueryError, SharedRuntimeContext, SharedRuntimeError,
-    TargetRefreshDemand, TargetRefreshDemandError,
+    RequestMethod, RouteExtension, ServiceStatusRegistry, SharedQueryError, SharedRuntimeContext,
+    SharedRuntimeError, TargetRefreshDemand, TargetRefreshDemandError,
 };
 
 pub const PRODUCT_FILTER_SCHEMA_PATH: &str = "/api/v1/query/filter-schema";
@@ -27,6 +29,7 @@ pub const PRODUCT_COURSE_DETAIL_PATH: &str = "/api/v1/query/course-detail";
 pub const PRODUCT_SECTION_DETAIL_PATH: &str = "/api/v1/query/section-detail";
 pub const PRODUCT_OPEN_STATUS_PATH: &str = "/api/v1/open/status";
 pub const PRODUCT_OPEN_SECTION_STATUS_PATH: &str = "/api/v1/open/section-status";
+pub const PRODUCT_SERVICE_STATUS_PATH: &str = "/api/v1/service/status";
 
 pub static SHARED_PRODUCT_ROUTE_INVENTORY: &[ExtensionRoute] = &[
     ExtensionRoute::new(RequestMethod::Get, PRODUCT_FILTER_SCHEMA_PATH),
@@ -37,6 +40,7 @@ pub static SHARED_PRODUCT_ROUTE_INVENTORY: &[ExtensionRoute] = &[
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_SECTION_DETAIL_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_OPEN_STATUS_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_OPEN_SECTION_STATUS_PATH),
+    ExtensionRoute::new(RequestMethod::Get, PRODUCT_SERVICE_STATUS_PATH),
 ];
 
 pub type SharedProductStorage = Arc<Mutex<OperationalStorage>>;
@@ -72,6 +76,7 @@ pub struct SharedProductRoutes<C, P, S = SharedProductStorage> {
     storage: S,
     runtime: SharedRuntimeContext<C, P>,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
+    service_status: Arc<ServiceStatusRegistry>,
     target_refresh_demand: Option<TargetRefreshDemand>,
 }
 
@@ -80,7 +85,7 @@ where
     C: ApplicationClock,
     P: RefreshPolicyProvider,
 {
-    pub const fn new(
+    pub fn new(
         storage: SharedProductStorage,
         runtime: SharedRuntimeContext<C, P>,
         open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
@@ -89,6 +94,7 @@ where
             storage,
             runtime,
             open_runtime,
+            service_status: Arc::new(ServiceStatusRegistry::new(ServiceRuntimeV1::Local)),
             target_refresh_demand: None,
         }
     }
@@ -104,7 +110,7 @@ where
     P: RefreshPolicyProvider,
     S: ProductStorageAccess,
 {
-    pub const fn with_storage_access(
+    pub fn with_storage_access(
         storage: S,
         runtime: SharedRuntimeContext<C, P>,
         open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
@@ -113,6 +119,7 @@ where
             storage,
             runtime,
             open_runtime,
+            service_status: Arc::new(ServiceStatusRegistry::new(ServiceRuntimeV1::Local)),
             target_refresh_demand: None,
         }
     }
@@ -120,6 +127,15 @@ where
     pub fn with_target_refresh_demand(mut self, demand: TargetRefreshDemand) -> Self {
         self.target_refresh_demand = Some(demand);
         self
+    }
+
+    pub fn with_service_status(mut self, service_status: Arc<ServiceStatusRegistry>) -> Self {
+        self.service_status = service_status;
+        self
+    }
+
+    pub fn service_status_registry(&self) -> Arc<ServiceStatusRegistry> {
+        Arc::clone(&self.service_status)
     }
 
     pub const fn storage_access(&self) -> &S {
@@ -132,6 +148,40 @@ where
 
     fn filter_schema(&self) -> ExtensionResponse {
         success_response(self.runtime.filter_schema())
+    }
+
+    fn service_status(&self) -> ExtensionResponse {
+        let observed_at = self.runtime.now();
+        let activity = self
+            .service_status
+            .snapshot()
+            .map(|snapshot| snapshot.operation)
+            .unwrap_or_else(|_| ServiceOperationV1::starting());
+        // Dynamic target policy providers may share the adapter's primary database lock.
+        // Read the policy before taking the product-storage guard so status projection can
+        // never recursively acquire that same non-reentrant mutex.
+        let refresh_policy = self.runtime.refresh_policy().ok();
+        let mut storage = match self.storage.lock_operational() {
+            Ok(storage) => storage,
+            Err(_) => {
+                return success_response(unavailable_service_status(
+                    observed_at,
+                    self.service_status.runtime(),
+                    activity,
+                    ServiceIssueComponentV1::Storage,
+                    "SERVICE_STATUS_STORAGE_UNAVAILABLE",
+                ));
+            }
+        };
+        let status = project_service_status(
+            &mut storage,
+            &self.runtime,
+            &self.open_runtime,
+            &self.service_status,
+            refresh_policy,
+        );
+        drop(storage);
+        success_response(status)
     }
 
     fn catalog_discovery(&self, request: &ExtensionRequest) -> ExtensionResponse {
@@ -391,6 +441,7 @@ where
     fn handle(&self, request: ExtensionRequest) -> ExtensionResponse {
         match (request.method(), request.path()) {
             (RequestMethod::Get, PRODUCT_FILTER_SCHEMA_PATH) => self.filter_schema(),
+            (RequestMethod::Get, PRODUCT_SERVICE_STATUS_PATH) => self.service_status(),
             (RequestMethod::Post, PRODUCT_CATALOG_DISCOVERY_PATH) => {
                 self.catalog_discovery(&request)
             }
@@ -464,7 +515,7 @@ impl From<TargetRefreshDemandError> for ProductRouteFailure {
 
 fn product_failure_response(error: ProductRouteFailure) -> ExtensionResponse {
     let (status, code) = match error {
-        ProductRouteFailure::CatalogUnavailable => (503, ApiErrorCode::UpstreamUnavailable),
+        ProductRouteFailure::CatalogUnavailable => (503, ApiErrorCode::CatalogNotReady),
         ProductRouteFailure::SectionNotFound => (404, ApiErrorCode::SectionNotFound),
         ProductRouteFailure::OpenRuntime(_) => (500, ApiErrorCode::InternalError),
         ProductRouteFailure::TargetDemand(_) => (500, ApiErrorCode::InternalError),
@@ -485,15 +536,20 @@ fn runtime_failure_status(error: SharedRuntimeError) -> (u16, ApiErrorCode) {
         SharedRuntimeError::Query(SharedQueryError::Query {
             source: QueryError::SectionNotFound,
         }) => (404, ApiErrorCode::SectionNotFound),
+        SharedRuntimeError::Query(SharedQueryError::Query {
+            source: QueryError::UnknownCoreCode { .. },
+        }) => (400, ApiErrorCode::InvalidFilter),
         SharedRuntimeError::Query(
             SharedQueryError::EmptyTargetSet
-            | SharedQueryError::TargetNotPublished { .. }
             | SharedQueryError::PublicationChanged { .. }
             | SharedQueryError::FtsUnavailable { .. }
             | SharedQueryError::Storage { .. }
             | SharedQueryError::Projection { .. }
             | SharedQueryError::TextEvidence { .. },
         ) => (503, ApiErrorCode::UpstreamUnavailable),
+        SharedRuntimeError::Query(SharedQueryError::TargetNotPublished { .. }) => {
+            (503, ApiErrorCode::CatalogNotReady)
+        }
         SharedRuntimeError::Query(
             SharedQueryError::DuplicateTarget { .. }
             | SharedQueryError::FilterTermMismatch { .. }

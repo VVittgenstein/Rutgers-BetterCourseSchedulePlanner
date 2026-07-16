@@ -4,14 +4,13 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 022
 
-readonly EXPECTED_SOURCE_COMMIT='ceeeabb798cc262475c4d2fe220a4a7921995cde'
 readonly PACKAGE_ID='LINUX_PUBLIC_DEPLOYMENT_PACKAGE'
 readonly TARGET='x86_64-unknown-linux-gnu'
 readonly RELEASE_VERSION='0.1.0'
 readonly ARCHIVE_NAME='rbcsp-linux-x86_64-0.1.0.tar.gz'
 
 usage() {
-  printf 'usage: build.sh --source-root PATH [--output-root PATH] [--build-root PATH]\n' >&2
+  printf 'usage: build.sh --source-root PATH [--source-commit SHA] [--output-root PATH] [--build-root PATH]\n' >&2
   exit 2
 }
 
@@ -42,6 +41,7 @@ capture_version() {
 }
 
 SOURCE_ROOT=''
+REQUESTED_SOURCE_COMMIT=''
 OUTPUT_ROOT=''
 BUILD_ROOT=''
 while [[ "$#" -gt 0 ]]; do
@@ -49,6 +49,11 @@ while [[ "$#" -gt 0 ]]; do
     --source-root)
       [[ "$#" -ge 2 ]] || usage
       SOURCE_ROOT="$2"
+      shift 2
+      ;;
+    --source-commit)
+      [[ "$#" -ge 2 ]] || usage
+      REQUESTED_SOURCE_COMMIT="$2"
       shift 2
       ;;
     --output-root)
@@ -105,16 +110,28 @@ done
 "$TAR_BIN" --version | grep -q 'GNU tar' || die 'GNU tar is required for deterministic archives'
 
 require_directory "$SOURCE_ROOT"
-source_commit="$("$GIT_BIN" -C "$SOURCE_ROOT" rev-parse HEAD)"
-[[ "$source_commit" == "$EXPECTED_SOURCE_COMMIT" ]] || \
-  die "--source-root must be the frozen commit $EXPECTED_SOURCE_COMMIT; found $source_commit"
+source_commit="$("$GIT_BIN" -C "$SOURCE_ROOT" rev-parse --verify HEAD)"
+[[ "$source_commit" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || \
+  die '--source-root HEAD is not a full hexadecimal commit id'
+if [[ -n "$REQUESTED_SOURCE_COMMIT" ]]; then
+  [[ "$REQUESTED_SOURCE_COMMIT" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || \
+    die '--source-commit must be a full lowercase hexadecimal commit id'
+  requested_commit="$("$GIT_BIN" -C "$SOURCE_ROOT" rev-parse --verify "${REQUESTED_SOURCE_COMMIT}^{commit}")" || \
+    die '--source-commit does not resolve to a commit'
+  [[ "$requested_commit" == "$REQUESTED_SOURCE_COMMIT" ]] || \
+    die '--source-commit must be the canonical full commit id'
+  [[ "$source_commit" == "$REQUESTED_SOURCE_COMMIT" ]] || \
+    die "--source-root HEAD is $source_commit, not requested commit $REQUESTED_SOURCE_COMMIT"
+elif "$GIT_BIN" -C "$SOURCE_ROOT" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+  die '--source-root must be a detached checkout unless --source-commit is supplied'
+fi
 [[ -z "$("$GIT_BIN" -C "$SOURCE_ROOT" status --porcelain --untracked-files=all)" ]] || \
   die '--source-root must be a clean checkout'
 
 readonly RELEASE_INPUTS="$SOURCE_ROOT/packaging/release-inputs.json"
-readonly METADATA_GENERATOR="$REPOSITORY_ROOT/packaging/generate-release-metadata.mjs"
-readonly ABOUT_CONFIG="$REPOSITORY_ROOT/packaging/about.toml"
-readonly MIT_TEMPLATE="$REPOSITORY_ROOT/packaging/licenses/MIT.txt"
+readonly METADATA_GENERATOR="$SOURCE_ROOT/packaging/generate-release-metadata.mjs"
+readonly ABOUT_CONFIG="$SOURCE_ROOT/packaging/about.toml"
+readonly MIT_TEMPLATE="$SOURCE_ROOT/packaging/licenses/MIT.txt"
 for required in "$RELEASE_INPUTS" "$METADATA_GENERATOR" "$ABOUT_CONFIG" \
   "$MIT_TEMPLATE" "$SOURCE_ROOT/LICENSE" "$SOURCE_ROOT/Cargo.lock" \
   "$SOURCE_ROOT/frontend/package-lock.json"; do
@@ -130,14 +147,14 @@ const matches = input.packages?.filter((entry) => entry.id === packageId) ?? [];
 if (input.schemaVersion !== 1 || input.packageCount !== 2 || matches.length !== 1) process.exit(10);
 const packageConfig = matches[0];
 if (input.releaseVersion !== '0.1.0' || packageConfig.target !== target || packageConfig.archiveName !== archiveName) process.exit(11);
-if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 20) process.exit(12);
+if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 21) process.exit(12);
 const files = [...packageConfig.allowlist].sort();
-if (new Set(files).size !== 20 || files.some((fileName) => fileName.startsWith('/') || fileName.includes('..') || fileName.includes('\\'))) process.exit(13);
+if (new Set(files).size !== 21 || files.some((fileName) => fileName.startsWith('/') || fileName.includes('..') || fileName.includes('\\'))) process.exit(13);
 process.stdout.write(`${files.join('\n')}\n`);
 NODE
 )" || die 'the frozen Linux package definition is invalid'
 mapfile -t EXPECTED_FILES <<< "$allowlist_text"
-[[ "${#EXPECTED_FILES[@]}" -eq 20 ]] || die 'the Linux package allowlist must contain exactly 20 files'
+[[ "${#EXPECTED_FILES[@]}" -eq 21 ]] || die 'the Linux package allowlist must contain exactly 21 files'
 
 capture_version "$RUSTC_BIN" '1.97.0' --version
 capture_version "$CARGO_BIN" '1.97.0' --version
@@ -191,6 +208,8 @@ export CARGO_ENCODED_RUSTFLAGS="-C${unit_separator}link-arg=-Wl,--build-id=none$
 readonly BUILT_BINARY="$TARGET_ROOT/$TARGET/release/bcsp-server"
 require_file "$BUILT_BINARY"
 install -D -m 0755 -- "$BUILT_BINARY" "$PACKAGE_ROOT/bin/bcsp-server"
+install -m 0644 -- "$BCSP_PUBLIC_WEB_DIST/capability-manifest.json" \
+  "$PACKAGE_ROOT/FRONTEND-CAPABILITIES.json"
 install -m 0644 -- "$SOURCE_ROOT/LICENSE" "$PACKAGE_ROOT/LICENSE"
 printf '%s\n' "$RELEASE_VERSION" > "$PACKAGE_ROOT/VERSION"
 
@@ -276,7 +295,7 @@ install -m 0644 -- "$MIT_TEMPLATE" "$METADATA_SOURCE_ROOT/packaging/licenses/MIT
 
 actual_files="$(find "$PACKAGE_ROOT" -type f -printf '%P\n' | sort)"
 expected_files="$(printf '%s\n' "${EXPECTED_FILES[@]}")"
-[[ "$actual_files" == "$expected_files" ]] || die 'the staged package does not match the exact 20-file allowlist'
+[[ "$actual_files" == "$expected_files" ]] || die 'the staged package does not match the exact 21-file allowlist'
 [[ -z "$(find "$PACKAGE_ROOT" \( -type l -o \( ! -type d ! -type f \) \) -print -quit)" ]] || \
   die 'the staged package contains a symbolic link or special file'
 
@@ -292,5 +311,8 @@ rm -f -- "$TEMP_ARCHIVE"
 )
 mv -f -- "$TEMP_ARCHIVE" "$ARCHIVE_PATH"
 
-bash "$REPOSITORY_ROOT/packaging/linux/verify.sh" --archive "$ARCHIVE_PATH"
+bash "$SOURCE_ROOT/packaging/linux/verify.sh" \
+  --archive "$ARCHIVE_PATH" \
+  --source-commit "$source_commit" \
+  --source-date-epoch "$source_date_epoch"
 printf 'Created %s\nSHA256 %s\n' "$ARCHIVE_PATH" "$(sha256sum "$ARCHIVE_PATH" | awk '{print $1}')"

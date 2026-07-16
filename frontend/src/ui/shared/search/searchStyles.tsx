@@ -1,8 +1,8 @@
 export const SEARCH_WORKSPACE_CSS = String.raw`
 .bcsp-search-workspace {
   display: grid;
-  grid-template-columns: minmax(17rem, 0.38fr) minmax(0, 1fr);
-  margin-top: var(--bcsp-space-5);
+  grid-template-columns: clamp(20rem, 22vw, 24rem) minmax(0, 1fr);
+  margin-top: var(--bcsp-space-3);
   border-top: 1px solid var(--bcsp-line);
   border-right: 1px solid var(--bcsp-line);
   border-bottom: 1px solid var(--bcsp-line);
@@ -95,13 +95,15 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
   text-transform: uppercase;
 }
 
-.bcsp-search-workspace__back:hover {
-  color: var(--bcsp-accent);
+@media (hover: hover) and (pointer: fine) {
+  .bcsp-search-workspace__back:hover {
+    color: var(--bcsp-accent);
+  }
 }
 
 @media (max-width: 67.999rem) {
   .bcsp-search-workspace {
-    grid-template-columns: minmax(15rem, 0.42fr) minmax(0, 1fr);
+    grid-template-columns: minmax(18rem, 21rem) minmax(0, 1fr);
   }
 }
 

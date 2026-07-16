@@ -29,8 +29,10 @@ pub enum CreditValueParseError {
 }
 
 /// Parse the canonical Rutgers credit display without guessing arranged or
-/// unbounded values. Decimal precision is capped at two places because the
-/// query wire contract uses hundredths.
+/// unbounded values. Rutgers also encodes decimal credits with an underscore
+/// (`3_0`, `1_5`); both forms are normalized to the same hundredths contract.
+/// Decimal precision is capped at two places because the query wire contract
+/// uses hundredths.
 pub fn parse_credit_value(value: &str) -> Result<CreditValue, CreditValueParseError> {
     let normalized = value.trim().to_ascii_uppercase();
     if normalized.is_empty()
@@ -62,7 +64,8 @@ fn parse_decimal(value: &str) -> Result<u32, CreditValueParseError> {
     if value.is_empty() || value.starts_with('+') || value.starts_with('-') {
         return Err(CreditValueParseError::Invalid);
     }
-    let components = value.split('.').collect::<Vec<_>>();
+    let normalized = value.replace('_', ".");
+    let components = normalized.split('.').collect::<Vec<_>>();
     let (whole, fractional) = match components.as_slice() {
         [whole] => (*whole, ""),
         [whole, fractional] => (*whole, *fractional),
@@ -117,6 +120,20 @@ mod tests {
             CreditValue {
                 minimum: 100,
                 maximum: 300
+            }
+        );
+        assert_eq!(
+            parse_credit_value("3_0").unwrap(),
+            CreditValue {
+                minimum: 300,
+                maximum: 300
+            }
+        );
+        assert_eq!(
+            parse_credit_value("1_5").unwrap(),
+            CreditValue {
+                minimum: 150,
+                maximum: 150
             }
         );
     }

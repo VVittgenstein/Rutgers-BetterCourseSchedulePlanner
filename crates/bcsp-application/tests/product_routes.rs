@@ -6,19 +6,21 @@ use bcsp_application::{
     OpenRuntimeSnapshotRegistry, PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH,
     PRODUCT_COURSE_SEARCH_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
     PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
-    RefreshPolicy, RefreshPolicyProvider, RefreshPolicyReadError, RequestMethod, RouteExtension,
-    SHARED_PRODUCT_ROUTE_INVENTORY, SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand,
+    PRODUCT_SERVICE_STATUS_PATH, RefreshPolicy, RefreshPolicyProvider, RefreshPolicyReadError,
+    RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY, SharedProductRoutes,
+    SharedRuntimeContext, TargetRefreshDemand,
 };
 use bcsp_catalog::{normalize_target, to_catalog_refresh_command, to_discovery_refresh_command};
 use bcsp_contracts::{
-    ApiErrorCode, ApiErrorEnvelope, CatalogDiscoveryRequestV1, CatalogDiscoveryResponseV1,
-    CatalogFieldKnowledge, CatalogSubjectProvenanceV1, CourseDetailRequestV1,
-    CourseDetailResponseV1, CourseQueryRequestV1, CourseQueryResponseV1, CourseSortV1,
-    FilterRequestV1, FilterSchemaV1, FilterSearchTextV1, FilterValuesInputV1, HttpRequestEnvelope,
-    HttpSuccessEnvelope, LiveOpenStateV1, OpenBatchKey, OpenRefreshStatusV1, OpenSchedulerLane,
-    OpenSectionStatusRequestV1, OpenSectionStatusV1, OpenState, OpenStatusRequestV1, PageRequestV1,
-    SectionDetailRequestV1, SectionDetailResponseV1, SectionKey, SectionQueryRequestV1,
-    SectionQueryResponseV1, SectionSortV1, TermCampusKey, TermId, TraceId,
+    ApiErrorCode, ApiErrorEnvelope, CampusCode, CatalogDiscoveryRequestV1,
+    CatalogDiscoveryResponseV1, CatalogFieldKnowledge, CatalogSubjectProvenanceV1,
+    CourseDetailRequestV1, CourseDetailResponseV1, CourseQueryRequestV1, CourseQueryResponseV1,
+    CourseSortV1, FilterRequestV1, FilterSchemaV1, FilterSearchTextV1, FilterTokenV1,
+    FilterValuesInputV1, HttpRequestEnvelope, HttpSuccessEnvelope, LiveOpenStateV1, OpenBatchKey,
+    OpenRefreshStatusV1, OpenSchedulerLane, OpenSectionStatusRequestV1, OpenSectionStatusV1,
+    OpenState, OpenStatusRequestV1, PageRequestV1, SectionDetailRequestV1, SectionDetailResponseV1,
+    SectionKey, SectionQueryRequestV1, SectionQueryResponseV1, SectionSortV1,
+    ServiceAvailabilityV1, ServiceLevelV1, ServiceStatusV1, TermCampusKey, TermId, TraceId,
 };
 use bcsp_open::{GeneralOpenInterval, OpenCounterAudience};
 use bcsp_operational_storage::{
@@ -140,6 +142,10 @@ fn publish_catalog_subject(
         "subjectDescription": subject_description,
         "courseNumber": "111",
         "title": "Introduction to a Synthetic Subject",
+        "coreCodes": [{
+            "coreCode": "CCO",
+            "coreCodeDescription": "Communication"
+        }],
         "sections": [{
             "campusCode": target.campus().as_str(),
             "index": "10001",
@@ -288,6 +294,27 @@ where
         .into_data()
 }
 
+fn get<Response>(routes: &impl RouteExtension, path: &'static str) -> Response
+where
+    Response: DeserializeOwned,
+{
+    let response = routes.handle(ExtensionRequest::new(
+        RequestMethod::Get,
+        path,
+        None,
+        Vec::new(),
+    ));
+    assert_eq!(
+        response.status(),
+        200,
+        "{}",
+        String::from_utf8_lossy(response.body())
+    );
+    serde_json::from_slice::<HttpSuccessEnvelope<Response>>(response.body())
+        .expect("success envelope")
+        .into_data()
+}
+
 #[derive(Clone)]
 struct StorageLockSensitivePolicy {
     storage: Arc<Mutex<OperationalStorage>>,
@@ -317,7 +344,7 @@ fn search_filters() -> FilterRequestV1 {
 #[test]
 fn shared_inventory_serves_real_sqlite_catalog_query_detail_and_open_projections() {
     let fixture = fixture();
-    assert_eq!(SHARED_PRODUCT_ROUTE_INVENTORY.len(), 8);
+    assert_eq!(SHARED_PRODUCT_ROUTE_INVENTORY.len(), 9);
     assert!(SHARED_PRODUCT_ROUTE_INVENTORY.iter().all(|route| {
         route.path().starts_with("/api/v1/")
             && matches!(route.method(), RequestMethod::Get | RequestMethod::Post)
@@ -407,6 +434,28 @@ fn shared_inventory_serves_real_sqlite_catalog_query_detail_and_open_projections
 }
 
 #[test]
+fn service_status_is_read_only_and_reports_catalog_search_independently_from_open() {
+    let fixture = fixture();
+    let target = fixture.target.clone();
+    let demand = TargetRefreshDemand::default();
+    let routes = fixture.routes.with_target_refresh_demand(demand.clone());
+
+    let status: ServiceStatusV1 = get(&routes, PRODUCT_SERVICE_STATUS_PATH);
+
+    assert!(matches!(
+        status.level,
+        ServiceLevelV1::Ready | ServiceLevelV1::PartiallyReady | ServiceLevelV1::Degraded
+    ));
+    assert!(
+        status
+            .targets
+            .iter()
+            .any(|state| state.target == target && state.search_available)
+    );
+    assert!(demand.snapshot().expect("demand snapshot").is_empty());
+}
+
+#[test]
 fn product_routes_read_dynamic_policy_before_locking_the_shared_database() {
     let fixture = fixture();
     let policy = RefreshPolicy::try_new(Duration::from_secs(600), GeneralOpenInterval::public())
@@ -420,7 +469,23 @@ fn product_routes_read_dynamic_policy_before_locking_the_shared_database() {
         },
     );
     let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
+    open_runtime
+        .replace(
+            fixture.target.clone(),
+            OpenRuntimeSnapshot {
+                lane: OpenSchedulerLane::ActiveWatch,
+                active_watch_count: 1,
+                ..OpenRuntimeSnapshot::default()
+            },
+        )
+        .expect("register target runtime");
     let routes = SharedProductRoutes::new(fixture.storage.clone(), runtime, open_runtime);
+
+    let status: ServiceStatusV1 = get(&routes, PRODUCT_SERVICE_STATUS_PATH);
+    assert!(status.targets.iter().any(|target| {
+        target.target == fixture.target
+            && target.open_availability == ServiceAvailabilityV1::Current
+    }));
 
     let courses: CourseQueryResponseV1 = post(
         &routes,
@@ -544,6 +609,9 @@ fn discovery_never_exposes_a_partial_latest_term_catalog_subject_dictionary() {
         CatalogDiscoveryRequestV1::new(),
     );
     assert!(partial.subjects.is_empty());
+    assert_eq!(partial.core_code_dictionaries.len(), 1);
+    assert_eq!(partial.core_code_dictionaries[0].target, first_target);
+    assert_eq!(partial.core_code_dictionaries[0].options[0].code, "CCO");
 
     publish_catalog_subject(
         &mut routes.storage().lock().expect("operational storage lock"),
@@ -599,6 +667,60 @@ fn product_routes_require_typed_http_envelopes_and_do_not_guess_unlisted_routes(
         Vec::new(),
     ));
     assert_eq!(response.status(), 404);
+}
+
+#[test]
+fn unpublished_search_target_returns_catalog_not_ready() {
+    let fixture = fixture();
+    let mut input =
+        FilterValuesInputV1::for_term(TermId::try_from("92026").expect("synthetic term"));
+    input.campuses = vec![CampusCode::try_from("NWK").expect("synthetic campus")];
+    let request = CourseQueryRequestV1 {
+        filters: FilterRequestV1::new(
+            bcsp_contracts::NormalizedFilterValuesV1::try_new(input).expect("filters"),
+        ),
+        page: PageRequestV1::default(),
+        sort: CourseSortV1::default(),
+    };
+    let body = serde_json::to_vec(&HttpRequestEnvelope::new(request)).expect("request envelope");
+
+    let response = fixture.routes.handle(ExtensionRequest::new(
+        RequestMethod::Post,
+        PRODUCT_COURSE_SEARCH_PATH,
+        None,
+        body,
+    ));
+
+    assert_eq!(response.status(), 503);
+    let error: ApiErrorEnvelope = serde_json::from_slice(response.body()).expect("error envelope");
+    assert_eq!(error.error().code(), ApiErrorCode::CatalogNotReady);
+}
+
+#[test]
+fn unknown_target_scoped_core_code_returns_invalid_filter() {
+    let fixture = fixture();
+    let mut input =
+        FilterValuesInputV1::for_term(TermId::try_from("92026").expect("synthetic term"));
+    input.core.codes = vec![FilterTokenV1::try_from("NOT_A_REAL_CORE").expect("core token")];
+    let request = CourseQueryRequestV1 {
+        filters: FilterRequestV1::new(
+            bcsp_contracts::NormalizedFilterValuesV1::try_new(input).expect("filters"),
+        ),
+        page: PageRequestV1::default(),
+        sort: CourseSortV1::default(),
+    };
+    let body = serde_json::to_vec(&HttpRequestEnvelope::new(request)).expect("request envelope");
+
+    let response = fixture.routes.handle(ExtensionRequest::new(
+        RequestMethod::Post,
+        PRODUCT_COURSE_SEARCH_PATH,
+        None,
+        body,
+    ));
+
+    assert_eq!(response.status(), 400);
+    let error: ApiErrorEnvelope = serde_json::from_slice(response.body()).expect("error envelope");
+    assert_eq!(error.error().code(), ApiErrorCode::InvalidFilter);
 }
 
 #[test]

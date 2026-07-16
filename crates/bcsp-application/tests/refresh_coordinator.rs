@@ -22,9 +22,10 @@ use bcsp_contracts::{
     OpenFreshnessState, OpenRefreshStatusV1, OpenSchedulerLane, OpenSectionStatusRequestV1,
     OpenSectionStatusV1, OpenState, OpenStatusRequestV1, PageRequestV1, SectionDetailRequestV1,
     SectionDetailResponseV1, SectionIndex, SectionKey, SectionQueryRequestV1,
-    SectionQueryResponseV1, SectionSortV1, TermCampusKey, TermId, TraceId, TraceIdSource,
-    WatchClientCommandV1, WatchPolicyV1, WatchServerEventV1, WatchStartItemResultV1,
-    WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope, WsServerEnvelope,
+    SectionQueryResponseV1, SectionSortV1, ServiceOperationPhaseV1, ServiceOperationV1,
+    TermCampusKey, TermId, TraceId, TraceIdSource, WatchClientCommandV1, WatchPolicyV1,
+    WatchServerEventV1, WatchStartItemResultV1, WatchStartItemV1, WatchStartItemsV1,
+    WsClientEnvelope, WsServerEnvelope,
 };
 use bcsp_open::{GeneralOpenInterval, MonotonicTime, OpenCounterAudience};
 use bcsp_operational_storage::OperationalStorage;
@@ -133,6 +134,7 @@ impl TraceIdSource for FakeIds {
 
 #[derive(Default)]
 struct RecordingStatus {
+    activities: Mutex<Vec<ServiceOperationV1>>,
     snapshots: Mutex<Vec<CoordinatorStatusSnapshot>>,
     stopped: AtomicBool,
 }
@@ -144,6 +146,13 @@ impl CoordinatorStatusSink for RecordingStatus {
 
     fn mark_stopped(&self) {
         self.stopped.store(true, Ordering::SeqCst);
+    }
+
+    fn publish_activity(&self, operation: ServiceOperationV1) {
+        self.activities
+            .lock()
+            .expect("activity lock")
+            .push(operation);
     }
 }
 
@@ -587,6 +596,7 @@ async fn fake_upstream_drives_all_product_routes_and_watch_without_client_amplif
     let upstream = FakeUpstreamHandle(Arc::clone(&upstream_state));
     let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
     let fixed_policy = FixedRefreshPolicyProvider::new(policy(GeneralOpenInterval::public()));
+    let status = Arc::new(RecordingStatus::default());
     let mut coordinator = SharedRefreshCoordinator::with_parts(
         Arc::clone(&fixture.storage),
         upstream,
@@ -597,7 +607,7 @@ async fn fake_upstream_drives_all_product_routes_and_watch_without_client_amplif
         OpenCounterAudience::Public,
         Arc::clone(&socket),
         Arc::clone(&open_runtime),
-        Arc::new(RecordingStatus::default()),
+        status.clone(),
     );
     coordinator
         .register_target(
@@ -621,6 +631,24 @@ async fn fake_upstream_drives_all_product_routes_and_watch_without_client_amplif
     ));
     assert_eq!(upstream_state.catalog_calls.load(Ordering::SeqCst), 1);
     assert_eq!(upstream_state.open_calls.load(Ordering::SeqCst), 1);
+    let phases = status
+        .activities
+        .lock()
+        .expect("activity lock")
+        .iter()
+        .map(|operation| operation.phase)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        phases,
+        vec![
+            ServiceOperationPhaseV1::CatalogFetch,
+            ServiceOperationPhaseV1::CatalogProcess,
+            ServiceOperationPhaseV1::CatalogPublish,
+            ServiceOperationPhaseV1::Idle,
+            ServiceOperationPhaseV1::OpenFetch,
+            ServiceOperationPhaseV1::Idle,
+        ]
+    );
 
     let events = watch_events(&mut receiver);
     assert!(
@@ -884,6 +912,7 @@ async fn failed_refreshes_retain_catalog_and_project_open_lkg_as_stale() {
     )));
     let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
     let fixed_policy = FixedRefreshPolicyProvider::new(policy(GeneralOpenInterval::public()));
+    let status = Arc::new(RecordingStatus::default());
     let mut coordinator = SharedRefreshCoordinator::with_parts(
         Arc::clone(&fixture.storage),
         upstream,
@@ -894,7 +923,7 @@ async fn failed_refreshes_retain_catalog_and_project_open_lkg_as_stale() {
         OpenCounterAudience::Public,
         socket,
         Arc::clone(&open_runtime),
-        Arc::new(RecordingStatus::default()),
+        status.clone(),
     );
     coordinator
         .register_target(
@@ -914,6 +943,16 @@ async fn failed_refreshes_retain_catalog_and_project_open_lkg_as_stale() {
             ..
         })
     ));
+    let latest_activity = status
+        .activities
+        .lock()
+        .expect("activity lock")
+        .last()
+        .cloned()
+        .expect("failed Open activity");
+    assert_eq!(latest_activity.phase, ServiceOperationPhaseV1::RetryWait);
+    assert_eq!(latest_activity.target, Some(fixture.target.clone()));
+    assert!(latest_activity.next_retry_at.is_some());
     let runtime =
         SharedRuntimeContext::new(OpenCounterAudience::Public, clock.clone(), fixed_policy);
     let projected = runtime

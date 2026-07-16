@@ -5,6 +5,7 @@ import { filterSerializationIssueMessageKeys } from '../i18n/presenter';
 import { useBcspI18n } from '../i18n/runtime';
 import {
   FilterSerializationError,
+  ProductClientError,
   createCourseQueryRequestV1,
   createNeutralFilterState,
   createSectionQueryRequestV1,
@@ -17,6 +18,7 @@ import {
   type SectionDetailResponseV1,
   type SectionKey,
   type SectionQueryResponseV1,
+  type ServiceStatusV1,
 } from '../product';
 import type { ShellDataState } from '../shell';
 import { RouterLink, useAppRouter } from '../routing';
@@ -39,6 +41,7 @@ type QueryState =
     readonly issue: FilterSerializationIssue;
   }
   | { readonly kind: 'ERROR' }
+  | { readonly kind: 'NOT_READY' }
   | { readonly kind: 'COURSES'; readonly response: CourseQueryResponseV1 }
   | { readonly kind: 'SECTIONS'; readonly response: SectionQueryResponseV1 };
 
@@ -65,6 +68,7 @@ export interface SearchWorkspaceProps {
   readonly initialFilters?: FilterStateV1 | undefined;
   readonly onFiltersChange?: ((filters: FilterStateV1) => void) | undefined;
   readonly runtime: ProductRuntimePort;
+  readonly serviceStatus?: ServiceStatusV1 | null | undefined;
   readonly shellState: Extract<ShellDataState, { status: 'READY' }>;
 }
 
@@ -177,6 +181,9 @@ function SearchState({
   if (kind === 'ERROR') {
     return <StatePanel detail={t('search.error_body')} heading={t('search.error_title')} kind="error" />;
   }
+  if (kind === 'NOT_READY') {
+    return <StatePanel detail={t('service.search_not_ready')} heading={t('app.loading_title')} kind="loading" />;
+  }
   return <StatePanel detail={t('search.start_body')} heading={t('search.start_title')} kind="empty" />;
 }
 
@@ -258,6 +265,7 @@ export function SearchWorkspace({
   initialFilters,
   onFiltersChange,
   runtime,
+  serviceStatus,
   shellState,
 }: SearchWorkspaceProps) {
   const i18n = useBcspI18n();
@@ -277,6 +285,13 @@ export function SearchWorkspace({
   const resultsHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const pendingFocus = useRef<PendingSearchFocus>(null);
   const courseDetailReturnTarget = useRef<CourseDetailReturnTarget | null>(null);
+  const searchAvailable = serviceStatus === undefined
+    ? true
+    : serviceStatus !== null
+      && filters.term !== null
+      && filters.campuses.length > 0
+      && filters.campuses.every((campus) => serviceStatus.targets.some(({ target, searchAvailable: available }) =>
+        target.term === filters.term && target.campus === campus && available));
 
   useEffect(() => () => {
     searchAbort.current?.abort();
@@ -312,6 +327,10 @@ export function SearchWorkspace({
   }, [mode, directSection]);
 
   useEffect(() => {
+    if (query.kind === 'NOT_READY' && searchAvailable) setQuery({ kind: 'IDLE' });
+  }, [query.kind, searchAvailable]);
+
+  useEffect(() => {
     if (pendingFocus.current === null) return;
     if (query.kind === 'LOADING' || courseDetail.kind === 'LOADING') return;
     if (query.kind === 'VALIDATION_ERROR') {
@@ -345,6 +364,10 @@ export function SearchWorkspace({
   }, [courseDetail.kind, query.kind]);
 
   const runSearch = useCallback(async (page = 1) => {
+    if (!searchAvailable) {
+      setQuery({ kind: 'NOT_READY' });
+      return;
+    }
     searchAbort.current?.abort();
     detailAbort.current?.abort();
     const abort = new AbortController();
@@ -370,9 +393,11 @@ export function SearchWorkspace({
       if (abort.signal.aborted) return;
       setQuery(error instanceof FilterSerializationError
         ? { kind: 'VALIDATION_ERROR', issue: error.issue }
-        : { kind: 'ERROR' });
+        : error instanceof ProductClientError && error.apiError?.error.code === 'CATALOG_NOT_READY'
+          ? { kind: 'NOT_READY' }
+          : { kind: 'ERROR' });
     }
-  }, [filters, mode, runtime]);
+  }, [filters, mode, runtime, searchAvailable]);
 
   const openCourseDetail = useCallback((key: CourseGroupKey) => {
     detailAbort.current?.abort();
@@ -487,6 +512,7 @@ export function SearchWorkspace({
             setCourseDetail({ kind: 'CLOSED' });
           }}
           onSubmit={() => void runSearch(1)}
+          searchAvailable={searchAvailable}
           schema={shellState.filterSchema}
           validationIssue={query.kind === 'VALIDATION_ERROR'
             ? {

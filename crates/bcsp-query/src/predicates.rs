@@ -228,13 +228,13 @@ fn evaluate_credits(
             presence: CatalogFieldPresence::Present { value },
         } => match parse_credit_value(value) {
             Ok(course) => {
-                let overlaps_minimum = selected
+                let contains_minimum = selected
                     .minimum_hundredths()
-                    .is_none_or(|minimum| course.maximum_hundredths() >= minimum);
-                let overlaps_maximum = selected
+                    .is_none_or(|minimum| course.minimum_hundredths() >= minimum);
+                let contains_maximum = selected
                     .maximum_hundredths()
-                    .is_none_or(|maximum| course.minimum_hundredths() <= maximum);
-                if overlaps_minimum && overlaps_maximum {
+                    .is_none_or(|maximum| course.maximum_hundredths() <= maximum);
+                if contains_minimum && contains_maximum {
                     PredicateEvaluation::matched()
                 } else {
                     PredicateEvaluation::no_match(field)

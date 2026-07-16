@@ -435,15 +435,27 @@ impl PersonalStateStore {
         )? != 0)
     }
 
+    pub fn consistent_read<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> PersonalStateResult<T>,
+    ) -> PersonalStateResult<T> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let value = operation(self)?;
+        transaction.commit()?;
+        Ok(value)
+    }
+
     pub fn snapshot(&self, page: PageRequest) -> PersonalStateResult<PersonalStateSnapshot> {
-        Ok(PersonalStateSnapshot {
-            state_revision: self.user_state_revision()?,
-            settings: self.settings()?,
-            current_filters: self.current_filters()?,
-            saved_views: self.saved_views()?,
-            selected_sections: self.selected_sections()?,
-            episode_history: self.episode_history(&HistoryFilter::default(), page)?,
-            active_watch_count: 0,
+        self.consistent_read(|store| {
+            Ok(PersonalStateSnapshot {
+                state_revision: store.user_state_revision()?,
+                settings: store.settings()?,
+                current_filters: store.current_filters()?,
+                saved_views: store.saved_views()?,
+                selected_sections: store.selected_sections()?,
+                episode_history: store.episode_history(&HistoryFilter::default(), page)?,
+                active_watch_count: 0,
+            })
         })
     }
 

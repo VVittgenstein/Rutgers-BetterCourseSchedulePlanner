@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { chromium } from 'playwright';
@@ -11,8 +11,12 @@ const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
     : undefined);
 const outputDirectory = resolve(
   process.cwd(),
-  '../project-governance/current/p7/evidence/p7-2-001',
+  process.env.BCSP_VISUAL_OUTPUT ?? '../.cache/rc-iteration/round-01/visual-shell',
 );
+const filterSchema = JSON.parse(await readFile(
+  resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
+  'utf8',
+));
 const observedAt = '2026-07-14T16:30:00.000Z';
 
 const point = {
@@ -37,8 +41,23 @@ function discovery(availability, targetCount = 5) {
     ['OL', 'Online'],
     ['BH', 'Busch'],
   ];
+  const targets = campus.slice(0, targetCount).map(([code, label]) => ({
+    campusLabel: known(label),
+    key: { campus: code, term: '2026-9' },
+    provenance,
+    termLabel: known('Fall 2026'),
+  }));
   return {
     contractVersion: 1,
+    coreCodeDictionaries: targets.map(({ key }) => ({
+      contentVersion: point.contentVersion,
+      options: [
+        { code: 'CCO', description: known('Contemporary Challenges') },
+        { code: 'QQ', description: known('Quantitative and Formal Reasoning') },
+      ],
+      provenance,
+      target: key,
+    })),
     observedAt,
     sources: [],
     status: {
@@ -51,22 +70,63 @@ function discovery(availability, targetCount = 5) {
       latestAttempt: point,
     },
     subjects: [],
-    targets: campus.slice(0, targetCount).map(([code, label]) => ({
-      campusLabel: known(label),
-      key: { campus: code, term: '2026-9' },
-      provenance,
-      termLabel: known('Fall 2026'),
-    })),
+    targets,
+  };
+}
+
+function serviceStatus(level, phase, availability, targetCount = 5) {
+  const discoveryStatus = discovery(availability, targetCount).status;
+  const catalogAvailable = level === 'INITIALIZING' || level === 'ERROR' ? 0 : targetCount;
+  const openAvailable = level === 'READY' || level === 'DEGRADED' ? targetCount : 0;
+  const stale = level === 'DEGRADED';
+  const targets = discovery(availability, targetCount).targets.map(({ key }, index) => ({
+    catalogAvailability: catalogAvailable === 0 ? 'UNAVAILABLE' : stale ? 'STALE' : 'CURRENT',
+    catalogContentVersion: catalogAvailable === 0 ? null : point.contentVersion,
+    openAvailability: openAvailable === 0 ? 'UNAVAILABLE' : stale ? 'STALE' : 'CURRENT',
+    primary: index === 0,
+    searchAvailable: catalogAvailable > 0,
+    target: key,
+  }));
+  const issues = level === 'DEGRADED' || level === 'ERROR'
+    ? [{
+      code: level === 'DEGRADED' ? 'OPEN_LKG_STALE' : 'DISCOVERY_UNAVAILABLE',
+      component: level === 'DEGRADED' ? 'OPEN' : 'DISCOVERY',
+      recovery: 'AUTOMATIC_RETRY',
+      retryAt: '2026-07-14T16:31:00.000Z',
+      severity: level === 'DEGRADED' ? 'DEGRADED' : 'BLOCKING',
+      target: level === 'DEGRADED' ? targets[0]?.target ?? null : null,
+    }]
+    : [];
+  return {
+    catalog: { availableTargetCount: catalogAvailable, totalTargetCount: targetCount },
+    contractVersion: 1,
+    discovery: discoveryStatus,
+    issues,
+    level,
+    observedAt,
+    open: { availableTargetCount: openAvailable, totalTargetCount: targetCount },
+    operation: {
+      nextRetryAt: phase === 'RETRY_WAIT' ? '2026-07-14T16:31:00.000Z' : null,
+      phase,
+      startedAt: observedAt,
+      target: ['CATALOG_FETCH', 'CATALOG_PROCESS', 'CATALOG_PUBLISH', 'OPEN_FETCH'].includes(phase)
+        ? targets[0]?.target ?? null
+        : null,
+    },
+    runtime: 'LOCAL',
+    targets,
   };
 }
 
 const success = (data) => ({ protocolVersion: 1, data });
 const scenarios = [
-  { name: 'ready-desktop', availability: 'CURRENT', viewport: { width: 1440, height: 1000 } },
-  { name: 'stale-mobile', availability: 'STALE_LAST_SUCCESS', viewport: { width: 390, height: 844 } },
-  { name: 'empty-mobile', availability: 'CURRENT', targetCount: 0, viewport: { width: 390, height: 844 } },
-  { name: 'error-desktop', error: true, viewport: { width: 1024, height: 768 } },
-  { name: 'loading-desktop', loading: true, viewport: { width: 1024, height: 768 } },
+  { name: 'ready-ultrawide', availability: 'CURRENT', level: 'READY', phase: 'IDLE', viewport: { width: 2560, height: 1280 } },
+  { name: 'ready-fullhd-zh', availability: 'CURRENT', language: 'zh-CN', level: 'READY', phase: 'IDLE', viewport: { width: 1920, height: 1080 } },
+  { name: 'partial-desktop', availability: 'CURRENT', level: 'PARTIALLY_READY', phase: 'OPEN_FETCH', viewport: { width: 1440, height: 900 } },
+  { name: 'degraded-tablet', availability: 'STALE_LAST_SUCCESS', level: 'DEGRADED', phase: 'RETRY_WAIT', viewport: { width: 1024, height: 900 } },
+  { name: 'ready-mobile', availability: 'CURRENT', level: 'READY', phase: 'IDLE', viewport: { width: 390, height: 844 } },
+  { name: 'initializing-mobile', availability: 'UNAVAILABLE_NO_FIRST_SUCCESS', level: 'INITIALIZING', loading: true, phase: 'DISCOVERING', viewport: { width: 390, height: 844 } },
+  { name: 'error-desktop', availability: 'UNAVAILABLE_NO_FIRST_SUCCESS', error: true, level: 'ERROR', phase: 'RETRY_WAIT', viewport: { width: 1440, height: 900 } },
 ];
 
 await mkdir(outputDirectory, { recursive: true });
@@ -92,7 +152,18 @@ try {
     await page.route('**/api/v1/query/filter-schema', async (route) => {
       if (scenario.loading) await new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000));
       await route.fulfill({
-        body: JSON.stringify(success({ contractVersion: 1, fields: Array.from({ length: 22 }, () => ({})) })),
+        body: JSON.stringify(success(filterSchema)),
+        contentType: 'application/json',
+      }).catch(() => undefined);
+    });
+    await page.route('**/api/v1/service/status', async (route) => {
+      await route.fulfill({
+        body: JSON.stringify(success(serviceStatus(
+          scenario.level,
+          scenario.phase,
+          scenario.availability,
+          scenario.targetCount,
+        ))),
         contentType: 'application/json',
       }).catch(() => undefined);
     });
@@ -127,22 +198,52 @@ try {
         ? 'Catalog index unavailable'
         : scenario.targetCount === 0
           ? 'No catalog targets available'
-          : 'Course search is ready';
+          : 'Build a precise search';
     try {
-      await page.getByRole('heading', { name: expected }).waitFor();
+      await page.getByRole('heading', { name: expected }).first().waitFor();
     } catch (error) {
       const rendered = await page.locator('body').innerText().catch(() => '<body unavailable>');
       throw new Error(`${scenario.name}: expected ${expected}\n${rendered}`, { cause: error });
     }
-    if (scenario.name === 'ready-desktop') {
-      await page.getByRole('button', { name: /Fall 2026 Newark \/ NK/i }).click();
+    if (scenario.language === 'zh-CN') {
+      await page.locator('.bcsp-language__button').nth(1).click();
+      await page.getByRole('heading', { name: '搜索课程', exact: true }).first().waitFor();
     }
-    const viewport = await page.evaluate(() => ({
+    const measurements = await page.evaluate(() => {
+      const rectangle = (selector) => {
+        const element = document.querySelector(selector);
+        if (element === null) return null;
+        const bounds = element.getBoundingClientRect();
+        return { left: bounds.left, right: bounds.right, width: bounds.width };
+      };
+      return {
       clientWidth: document.documentElement.clientWidth,
+      filter: rectangle('.bcsp-search-workspace__filters'),
+      railCount: document.querySelectorAll('.bcsp-rail').length,
+      results: rectangle('.bcsp-search-workspace__results'),
+      search: rectangle('.bcsp-search-workspace'),
       scrollWidth: document.documentElement.scrollWidth,
-    }));
-    if (viewport.scrollWidth > viewport.clientWidth) {
-      throw new Error(`${scenario.name}: horizontal overflow ${viewport.scrollWidth}/${viewport.clientWidth}`);
+      };
+    });
+    if (measurements.scrollWidth > measurements.clientWidth) {
+      throw new Error(`${scenario.name}: horizontal overflow ${measurements.scrollWidth}/${measurements.clientWidth}`);
+    }
+    if (measurements.railCount !== 0) {
+      throw new Error(`${scenario.name}: legacy full-height rail is still mounted`);
+    }
+    if (!scenario.loading && !scenario.error && (scenario.targetCount ?? 5) > 0) {
+      if (measurements.search === null || measurements.results === null || measurements.filter === null) {
+        throw new Error(`${scenario.name}: search workspace measurements unavailable`);
+      }
+      if (scenario.viewport.width >= 1920 && measurements.search.width < scenario.viewport.width * 0.9) {
+        throw new Error(`${scenario.name}: search workspace uses only ${measurements.search.width}/${scenario.viewport.width}px`);
+      }
+      if (scenario.viewport.width >= 1920 && measurements.results.width < scenario.viewport.width * 0.6) {
+        throw new Error(`${scenario.name}: result column uses only ${measurements.results.width}/${scenario.viewport.width}px`);
+      }
+      if (scenario.viewport.width <= 390 && Math.abs(measurements.search.width - measurements.results.width) > 2) {
+        throw new Error(`${scenario.name}: narrow layout did not stack to one column`);
+      }
     }
     await page.screenshot({
       animations: 'disabled',
@@ -155,4 +256,4 @@ try {
   await browser.close();
 }
 
-process.stdout.write(`P7.2-001 shell snapshots: PASS (${scenarios.length}/${scenarios.length})\n`);
+process.stdout.write(`RC Round 1 shell snapshots: PASS (${scenarios.length}/${scenarios.length})\n`);

@@ -2,23 +2,23 @@ use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use bcsp_contracts::{
-    CATALOG_CONTRACT_VERSION, CatalogCommentV1, CatalogContentVersion, CatalogDiagnosticCode,
-    CatalogDiscoveryAvailability, CatalogDiscoveryErrorClass, CatalogDiscoveryErrorV1,
-    CatalogDiscoveryPointV1, CatalogDiscoveryProvenanceV1, CatalogDiscoveryRequestV1,
-    CatalogDiscoveryResponseV1, CatalogDiscoverySourceId, CatalogDiscoverySourceKind,
-    CatalogDiscoverySourceV1, CatalogDiscoveryStatusV1, CatalogEntityCountsV1,
-    CatalogFieldKnowledge, CatalogFieldPresence, CatalogInstructorReliability, CatalogModality,
-    CatalogOccurrenceEvidence, CatalogOccurrenceKeyV1, CatalogOccurrenceKind,
-    CatalogOpenStatusProvenance, CatalogPayloadDigest, CatalogPrerequisiteState,
-    CatalogProvenanceV1, CatalogRefreshCheckpointPointV1, CatalogRefreshCheckpointV1,
-    CatalogRefreshClassification, CatalogRefreshErrorClass, CatalogRefreshObservationV1,
-    CatalogRefreshPointV1, CatalogRefreshStatusV1, CatalogRequiredness,
-    CatalogSnapshotOpenStatusV1, CatalogSourceKind, CatalogSubjectCode, CatalogSubjectProvenanceV1,
-    CatalogSubjectV1, CatalogSynchronicity, CatalogTargetV1, CatalogTimeKnowledgeV1,
-    CatalogUnitMajorV1, CatalogUnknownReason, ContractSchema, CourseGroupKey, CourseVariantKey,
-    NormalizedCatalogV1, NormalizedCourseGroupV1, NormalizedCourseVariantV1,
-    NormalizedOccurrenceV1, NormalizedSectionV1, SectionKey, TermCampusKey, TraceId,
-    contract_manifest,
+    CATALOG_CONTRACT_VERSION, CatalogCommentV1, CatalogContentVersion, CatalogCoreCodeDictionaryV1,
+    CatalogCoreCodeOptionV1, CatalogDiagnosticCode, CatalogDiscoveryAvailability,
+    CatalogDiscoveryErrorClass, CatalogDiscoveryErrorV1, CatalogDiscoveryPointV1,
+    CatalogDiscoveryProvenanceV1, CatalogDiscoveryRequestV1, CatalogDiscoveryResponseV1,
+    CatalogDiscoverySourceId, CatalogDiscoverySourceKind, CatalogDiscoverySourceV1,
+    CatalogDiscoveryStatusV1, CatalogEntityCountsV1, CatalogFieldKnowledge, CatalogFieldPresence,
+    CatalogInstructorReliability, CatalogModality, CatalogOccurrenceEvidence,
+    CatalogOccurrenceKeyV1, CatalogOccurrenceKind, CatalogOpenStatusProvenance,
+    CatalogPayloadDigest, CatalogPrerequisiteState, CatalogProvenanceV1,
+    CatalogRefreshCheckpointPointV1, CatalogRefreshCheckpointV1, CatalogRefreshClassification,
+    CatalogRefreshErrorClass, CatalogRefreshObservationV1, CatalogRefreshPointV1,
+    CatalogRefreshStatusV1, CatalogRequiredness, CatalogSnapshotOpenStatusV1, CatalogSourceKind,
+    CatalogSubjectCode, CatalogSubjectProvenanceV1, CatalogSubjectV1, CatalogSynchronicity,
+    CatalogTargetV1, CatalogTimeKnowledgeV1, CatalogUnitMajorV1, CatalogUnknownReason,
+    ContractSchema, CourseGroupKey, CourseVariantKey, NormalizedCatalogV1, NormalizedCourseGroupV1,
+    NormalizedCourseVariantV1, NormalizedOccurrenceV1, NormalizedSectionV1, SectionKey,
+    TermCampusKey, TraceId, contract_manifest,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -270,6 +270,16 @@ fn catalog_object_manifest_fields_bind_to_serde_shapes() {
             discovery: discovery_provenance(),
         },
     };
+    let core_code_option = CatalogCoreCodeOptionV1 {
+        code: "CC".to_owned(),
+        description: CatalogFieldKnowledge::present("Contemporary Challenges".to_owned()),
+    };
+    let core_code_dictionary = CatalogCoreCodeDictionaryV1 {
+        target: target(),
+        content_version: CatalogContentVersion::try_from(1).unwrap(),
+        provenance: provenance.clone(),
+        options: vec![core_code_option.clone()],
+    };
     let discovery_response = CatalogDiscoveryResponseV1 {
         contract_version: CATALOG_CONTRACT_VERSION,
         observed_at: timestamp(),
@@ -277,6 +287,7 @@ fn catalog_object_manifest_fields_bind_to_serde_shapes() {
         sources: vec![discovery_source.clone()],
         targets: vec![target_projection.clone()],
         subjects: vec![subject.clone()],
+        core_code_dictionaries: vec![core_code_dictionary.clone()],
     };
     let occurrence_key = CatalogOccurrenceKeyV1 {
         section: section_key(),
@@ -450,6 +461,11 @@ fn catalog_object_manifest_fields_bind_to_serde_shapes() {
     );
     assert_object_binding("bcsp.catalog.provenance.v1", &provenance);
     assert_object_binding("bcsp.catalog.subject.v1", &subject);
+    assert_object_binding("bcsp.catalog.core-code-option.v1", &core_code_option);
+    assert_object_binding(
+        "bcsp.catalog.core-code-dictionary.v1",
+        &core_code_dictionary,
+    );
     assert_object_binding("bcsp.catalog.occurrence-key.v1", &occurrence_key);
     assert_object_binding("bcsp.catalog.normalized-course-group.v1", &group);
     assert_object_binding("bcsp.catalog.normalized-course-variant.v1", &variant);

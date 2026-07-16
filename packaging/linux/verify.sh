@@ -7,15 +7,13 @@ export LC_ALL=C
 export LANG=C
 export TZ=UTC
 
-readonly EXPECTED_SOURCE_COMMIT='ceeeabb798cc262475c4d2fe220a4a7921995cde'
-readonly EXPECTED_SOURCE_DATE_EPOCH='1784148947'
 readonly PACKAGE_ID='LINUX_PUBLIC_DEPLOYMENT_PACKAGE'
 readonly TARGET='x86_64-unknown-linux-gnu'
 readonly RELEASE_VERSION='0.1.0'
 readonly ARCHIVE_NAME='rbcsp-linux-x86_64-0.1.0.tar.gz'
 
 usage() {
-  printf 'usage: verify.sh --archive PATH\n' >&2
+  printf 'usage: verify.sh --archive PATH --source-commit SHA --source-date-epoch EPOCH\n' >&2
   exit 2
 }
 
@@ -29,6 +27,8 @@ require_command() {
 }
 
 ARCHIVE_PATH=''
+EXPECTED_SOURCE_COMMIT=''
+EXPECTED_SOURCE_DATE_EPOCH=''
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --archive)
@@ -36,10 +36,25 @@ while [[ "$#" -gt 0 ]]; do
       ARCHIVE_PATH="$2"
       shift 2
       ;;
+    --source-commit)
+      [[ "$#" -ge 2 ]] || usage
+      EXPECTED_SOURCE_COMMIT="$2"
+      shift 2
+      ;;
+    --source-date-epoch)
+      [[ "$#" -ge 2 ]] || usage
+      EXPECTED_SOURCE_DATE_EPOCH="$2"
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
 [[ -n "$ARCHIVE_PATH" ]] || usage
+[[ "$EXPECTED_SOURCE_COMMIT" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || \
+  die '--source-commit must be a full lowercase hexadecimal commit id'
+[[ "$EXPECTED_SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || \
+  die '--source-date-epoch must be a non-negative integer'
+readonly EXPECTED_SOURCE_COMMIT EXPECTED_SOURCE_DATE_EPOCH
 
 readonly REPOSITORY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly NODE_BIN="${NODE_BIN:-node}"
@@ -67,9 +82,9 @@ const matches = input.packages?.filter((entry) => entry.id === packageId) ?? [];
 if (input.schemaVersion !== 1 || input.packageCount !== 2 || matches.length !== 1) process.exit(10);
 const packageConfig = matches[0];
 if (input.releaseVersion !== '0.1.0' || packageConfig.target !== target || packageConfig.archiveName !== archiveName) process.exit(11);
-if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 20) process.exit(12);
+if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 21) process.exit(12);
 const files = [...packageConfig.allowlist].sort();
-if (new Set(files).size !== 20) process.exit(13);
+if (new Set(files).size !== 21) process.exit(13);
 process.stdout.write(`${files.join('\n')}\n`);
 NODE
 )" || die 'the frozen Linux package definition is invalid'
@@ -77,7 +92,7 @@ mapfile -t EXPECTED_FILES <<< "$allowlist_text"
 
 archive_listing="$("$TAR_BIN" -tzf "$ARCHIVE_PATH")"
 mapfile -t ARCHIVE_FILES <<< "$archive_listing"
-[[ "${#ARCHIVE_FILES[@]}" -eq 20 ]] || die "archive must contain exactly 20 files; found ${#ARCHIVE_FILES[@]}"
+[[ "${#ARCHIVE_FILES[@]}" -eq 21 ]] || die "archive must contain exactly 21 files; found ${#ARCHIVE_FILES[@]}"
 [[ "$archive_listing" == "$(printf '%s\n' "${EXPECTED_FILES[@]}")" ]] || \
   die 'archive entries do not match the exact Linux allowlist and order'
 for entry in "${ARCHIVE_FILES[@]}"; do
@@ -98,7 +113,7 @@ mkdir -p -- "$CANDIDATE_ROOT"
 
 actual_files="$(find "$CANDIDATE_ROOT" -type f -printf '%P\n' | sort)"
 expected_files="$(printf '%s\n' "${EXPECTED_FILES[@]}")"
-[[ "$actual_files" == "$expected_files" ]] || die 'extracted files do not match the exact 20-file allowlist'
+[[ "$actual_files" == "$expected_files" ]] || die 'extracted files do not match the exact 21-file allowlist'
 [[ -z "$(find "$CANDIDATE_ROOT" -type l -print -quit)" ]] || die 'candidate contains a symbolic link'
 [[ -z "$(find "$CANDIDATE_ROOT" ! -type d ! -type f -print -quit)" ]] || die 'candidate contains a special file'
 for forbidden in data share tests; do
@@ -145,6 +160,7 @@ const hash = (name) => crypto.createHash('sha256').update(fs.readFileSync(path.j
 const manifest = read('MANIFEST.json');
 const provenance = read('BUILD-PROVENANCE.json');
 const sbom = read('SBOM.cdx.json');
+const capabilities = read('FRONTEND-CAPABILITIES.json');
 const allFiles = fs.readdirSync(root, { recursive: true, withFileTypes: true })
   .filter((entry) => entry.isFile())
   .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'))
@@ -168,6 +184,11 @@ if (new Set(sumPaths).size !== sumPaths.length || JSON.stringify(sumPaths) !== J
 for (const entry of sumEntries) if (hash(entry[2]) !== entry[1]) process.exit(27);
 if (provenance.schemaVersion !== 1 || provenance.packageId !== packageId || provenance.archiveName !== archiveName || provenance.version !== releaseVersion || provenance.source?.commit !== sourceCommit || provenance.build?.target !== target) process.exit(28);
 if (provenance.source?.dateEpoch !== Number(sourceDateEpoch) || provenance.artifact?.path !== 'bin/bcsp-server' || provenance.artifact?.sha256 !== hash('bin/bcsp-server')) process.exit(29);
+if (capabilities.schemaVersion !== 1 || capabilities.kind !== 'TARGET_BUILD_ALLOWLIST' || capabilities.target !== 'public' || capabilities.readiness !== 'UI_INTEGRATION_COMPLETE') process.exit(32);
+for (const key of ['allowedCapabilities', 'allowedRoutes', 'allowedI18nCatalogs']) {
+  const values = capabilities[key];
+  if (!Array.isArray(values) || values.length === 0 || new Set(values).size !== values.length) process.exit(33);
+}
 if (sbom.bomFormat !== 'CycloneDX' || sbom.specVersion !== '1.6' || sbom.version !== 1 || sbom.metadata?.component?.version !== releaseVersion || !Array.isArray(sbom.components) || !Array.isArray(sbom.dependencies)) process.exit(30);
 const metadataText = ['BUILD-PROVENANCE.json', 'MANIFEST.json', 'SBOM.cdx.json', 'THIRD-PARTY-NOTICES.txt'].map((name) => fs.readFileSync(path.join(root, name), 'utf8')).join('\n');
 if (/file:\/\//iu.test(metadataText) || /(?:^|["'\s])[A-Za-z]:[\\/]/u.test(metadataText)) process.exit(31);
@@ -187,4 +208,4 @@ readonly REPACKED="$TEMP_ROOT/repacked.tar.gz"
 )
 cmp -- "$ARCHIVE_PATH" "$REPACKED" || die 'archive is not byte-for-byte deterministic'
 
-printf 'linux package verification: PASS (20 files)\n'
+printf 'linux package verification: PASS (21 files)\n'

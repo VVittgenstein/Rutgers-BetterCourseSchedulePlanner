@@ -354,6 +354,7 @@ pub async fn build_production_runtime() -> Result<PublicRuntime, PublicRuntimeEr
         create_public_product_routes(serving_storage.clone(), open_runtime.clone())
             .map_err(PublicRuntimeError::ProductComposition)?
             .with_target_refresh_demand(target_refresh_demand.clone());
+    let service_status = product_routes.service_status_registry();
     let mut runtime = PublicRuntime::spawn_with_open_runtime(
         config,
         serving_storage,
@@ -364,6 +365,9 @@ pub async fn build_production_runtime() -> Result<PublicRuntime, PublicRuntimeEr
     let policy = FixedRefreshPolicyProvider::new(
         crate::fixed_public_refresh_policy().map_err(PublicRuntimeError::ProductComposition)?,
     );
+    service_status
+        .set_delegate(runtime.scheduler.clone())
+        .map_err(|_| PublicRuntimeError::StatusComposition)?;
     let mut ids = SystemTraceIdSource;
     let refresh = OfficialRefreshRuntime::spawn_with_target_refresh_demand(
         crate::PublicProductStorageAccess::new(store),
@@ -372,7 +376,7 @@ pub async fn build_production_runtime() -> Result<PublicRuntime, PublicRuntimeEr
         OpenCounterAudience::Public,
         runtime.watch.clone(),
         open_runtime,
-        runtime.scheduler.clone(),
+        service_status,
         target_refresh_demand,
     )
     .map_err(PublicRuntimeError::RefreshStartup)?;
@@ -976,6 +980,8 @@ pub enum PublicRuntimeError {
     OperationalState(#[source] PublicOperationsError),
     #[error("public product routes could not be composed")]
     ProductComposition(#[source] RefreshPolicyError),
+    #[error("public service status could not be composed")]
+    StatusComposition,
     #[error("public watch runtime could not be initialized")]
     WatchInitialization,
     #[error("official Rutgers refresh clients could not be initialized")]
@@ -998,6 +1004,7 @@ impl PublicRuntimeError {
             Self::Configuration(error) => error.code(),
             Self::OperationalState(error) => error.code(),
             Self::ProductComposition(_) => "PUBLIC_PRODUCT_COMPOSITION_FAILED",
+            Self::StatusComposition => "PUBLIC_STATUS_COMPOSITION_FAILED",
             Self::WatchInitialization => "PUBLIC_WATCH_INITIALIZATION_FAILED",
             Self::RefreshStartup(_) => "PUBLIC_REFRESH_INITIALIZATION_FAILED",
             Self::Bind => "PUBLIC_BIND_FAILED",
@@ -1277,7 +1284,7 @@ mod tests {
         let routes = create_public_product_routes(serving_storage.clone(), open_runtime.clone())
             .expect("shared public product routes");
         assert!(Arc::ptr_eq(routes.storage_access(), &serving_storage));
-        assert_eq!(routes.route_inventory().len(), 8);
+        assert_eq!(routes.route_inventory().len(), 9);
 
         let runtime = PublicRuntime::spawn_with_open_runtime(
             test_config(),
@@ -1345,6 +1352,24 @@ mod tests {
                 .len(),
             bcsp_contracts::FILTER_FIELD_COUNT
         );
+
+        let service_status = client
+            .get(request_url(
+                &runtime,
+                bcsp_application::PRODUCT_SERVICE_STATUS_PATH,
+            ))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .send()
+            .await
+            .expect("shared service status");
+        assert_eq!(service_status.status(), StatusCode::OK);
+        let service_status = service_status
+            .json::<Value>()
+            .await
+            .expect("service status JSON");
+        assert_eq!(service_status["protocolVersion"], 1);
+        assert_eq!(service_status["data"]["contractVersion"], 1);
+        assert_eq!(service_status["data"]["runtime"], "PUBLIC");
 
         let unauthenticated = client
             .post(request_url(

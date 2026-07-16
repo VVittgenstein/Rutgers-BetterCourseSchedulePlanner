@@ -55,6 +55,7 @@ define_api_error_codes! {
         "SELECTION_LIMIT_EXCEEDED",
         "error.selection_limit_exceeded"
     ),
+    CatalogNotReady => ("CATALOG_NOT_READY", "error.catalog_not_ready"),
     UpstreamUnavailable => ("UPSTREAM_UNAVAILABLE", "error.upstream_unavailable"),
     AudioBlocked => ("AUDIO_BLOCKED", "error.audio_blocked"),
     InternalError => ("INTERNAL_ERROR", "error.internal"),

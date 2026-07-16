@@ -41,7 +41,7 @@ describe('workspace navigation focus', () => {
     expect(document.activeElement).not.toBe(workspace);
     expect(screen.getByRole('link', { name: /Watch desk/u }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByText(/Select up to nine Sections/u)).toBeTruthy();
-    expect(screen.getAllByText('Copyright (c) 2026 VVittgenstein')).toHaveLength(2);
+    expect(screen.getAllByText('Copyright (c) 2026 VVittgenstein')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('link', { name: /Courses/u }));
 

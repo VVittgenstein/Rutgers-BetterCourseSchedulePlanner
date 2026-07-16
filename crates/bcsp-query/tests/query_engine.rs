@@ -364,22 +364,139 @@ fn active_section_filter_requires_a_real_section_witness() {
 }
 
 #[test]
-fn variable_credit_ranges_use_inclusive_overlap_without_guessing_arranged_values() {
+fn course_search_materializes_only_section_witnesses_but_detail_stays_complete() {
     let mut catalog = empty_catalog("NB", 1);
     let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
-    variant_mut(&mut catalog, &keys.variant).credits =
-        CatalogFieldKnowledge::present("1.5-4".to_owned());
+    let rejected = add_section(&mut catalog, &keys.variant, "00002");
+    section_mut(&mut catalog, &rejected).section_number =
+        CatalogFieldKnowledge::present("02".to_owned());
     let catalogs = vec![catalog];
     let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
 
-    let mut overlap = neutral_input();
-    overlap.credits = Some(CreditRangeV1::try_new(Some(400), Some(500)).unwrap());
-    let request = course_request(overlap, PageRequestV1::default(), CourseSortV1::default());
+    let mut input = neutral_input();
+    input.section_numbers = vec![token("01")];
+    let request = course_request(input, PageRequestV1::default(), CourseSortV1::default());
+    let response = engine.course_search(&request, None).unwrap();
+    let variant = &response.items[0].variants[0];
+    assert_eq!(variant.sections.len(), 1);
+    assert_eq!(variant.sections[0].section.key, keys.section);
+    assert!(
+        variant
+            .sections
+            .iter()
+            .all(|section| section.explanation.outcome() != MatchOutcome::NoMatch)
+    );
+
+    let detail = engine
+        .course_detail(&CourseDetailRequestV1::new(keys.group))
+        .unwrap();
+    assert_eq!(detail.course.variants[0].sections.len(), 2);
+    assert!(
+        detail.course.variants[0]
+            .sections
+            .iter()
+            .any(|section| section.section.key == rejected)
+    );
+}
+
+#[test]
+fn unknown_core_code_is_rejected_against_selected_catalog_targets() {
+    let mut catalog = empty_catalog("NB", 1);
+    add_course(&mut catalog, "01:198:111", "00001", 'a');
+    let catalogs = vec![catalog];
+    let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
+    let mut input = neutral_input();
+    input.core.codes = vec![token("NOT_A_REAL_CORE")];
+    let request = course_request(input, PageRequestV1::default(), CourseSortV1::default());
+    assert_eq!(
+        engine.course_search(&request, None),
+        Err(QueryError::UnknownCoreCode {
+            code: "NOT_A_REAL_CORE".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn core_any_and_all_are_evaluated_within_each_variant() {
+    let mut catalog = empty_catalog("NB", 1);
+    let first = add_course(&mut catalog, "01:198:111", "00001", 'a');
+    let second = add_variant(&mut catalog, &first.group, "00002", 'b');
+    variant_mut(&mut catalog, &first.variant).core_codes =
+        CatalogFieldKnowledge::present(vec!["CC".to_owned()]);
+    variant_mut(&mut catalog, &second.variant).core_codes =
+        CatalogFieldKnowledge::present(vec!["QR".to_owned()]);
+    let catalogs = vec![catalog];
+    let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
+
+    let mut any = neutral_input();
+    any.core.codes = vec![token("CC"), token("QR")];
+    any.core.mode = FilterSetModeV1::Any;
+    let response = engine
+        .course_search(
+            &course_request(any, PageRequestV1::default(), CourseSortV1::default()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(response.page.total, 1);
+    assert_eq!(response.items[0].variants.len(), 2);
+
+    let mut all = neutral_input();
+    all.core.codes = vec![token("CC"), token("QR")];
+    all.core.mode = FilterSetModeV1::All;
+    let response = engine
+        .course_search(
+            &course_request(all, PageRequestV1::default(), CourseSortV1::default()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(response.page.total, 0);
+}
+
+#[test]
+fn credit_ranges_require_full_containment_without_guessing_arranged_values() {
+    let mut catalog = empty_catalog("NB", 1);
+    let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+    variant_mut(&mut catalog, &keys.variant).credits =
+        CatalogFieldKnowledge::present("1_0-3_0".to_owned());
+    let catalogs = vec![catalog];
+    let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
+
+    let mut too_narrow = neutral_input();
+    too_narrow.credits = Some(CreditRangeV1::try_new(None, Some(200)).unwrap());
+    let request = course_request(
+        too_narrow,
+        PageRequestV1::default(),
+        CourseSortV1::default(),
+    );
+    assert_eq!(engine.course_search(&request, None).unwrap().page.total, 0);
+
+    let mut contains = neutral_input();
+    contains.credits = Some(CreditRangeV1::try_new(Some(100), Some(300)).unwrap());
+    let request = course_request(contains, PageRequestV1::default(), CourseSortV1::default());
     assert_eq!(engine.course_search(&request, None).unwrap().page.total, 1);
 
-    let mut disjoint = neutral_input();
-    disjoint.credits = Some(CreditRangeV1::try_new(Some(401), Some(500)).unwrap());
-    let request = course_request(disjoint, PageRequestV1::default(), CourseSortV1::default());
+    let mut boundary_catalog = catalogs[0].clone();
+    variant_mut(&mut boundary_catalog, &keys.variant).credits =
+        CatalogFieldKnowledge::present("2_0".to_owned());
+    let boundary_catalogs = vec![boundary_catalog];
+    let engine = QueryEngine::try_new(&boundary_catalogs, now(), []).unwrap();
+    let mut boundary = neutral_input();
+    boundary.credits = Some(CreditRangeV1::try_new(None, Some(200)).unwrap());
+    let request = course_request(boundary, PageRequestV1::default(), CourseSortV1::default());
+    assert_eq!(engine.course_search(&request, None).unwrap().page.total, 1);
+
+    let mut fixed_catalog = catalogs[0].clone();
+    variant_mut(&mut fixed_catalog, &keys.variant).credits =
+        CatalogFieldKnowledge::present("3_0".to_owned());
+    let fixed_catalogs = vec![fixed_catalog];
+    let engine = QueryEngine::try_new(&fixed_catalogs, now(), []).unwrap();
+    let mut maximum_two = neutral_input();
+    maximum_two.credits = Some(CreditRangeV1::try_new(None, Some(200)).unwrap());
+    let request = course_request(
+        maximum_two,
+        PageRequestV1::default(),
+        CourseSortV1::default(),
+    );
     assert_eq!(engine.course_search(&request, None).unwrap().page.total, 0);
 
     let mut arranged_catalog = catalogs[0].clone();
@@ -395,6 +512,26 @@ fn variable_credit_ranges_use_inclusive_overlap_without_guessing_arranged_values
     assert_eq!(
         response.items[0].explanation.outcome(),
         MatchOutcome::Uncertain
+    );
+
+    let mut invalid_catalog = catalogs[0].clone();
+    variant_mut(&mut invalid_catalog, &keys.variant).credits =
+        CatalogFieldKnowledge::present("3 OR 4".to_owned());
+    let invalid_catalogs = vec![invalid_catalog];
+    let engine = QueryEngine::try_new(&invalid_catalogs, now(), []).unwrap();
+    let mut input = neutral_input();
+    input.credits = Some(CreditRangeV1::try_new(None, Some(200)).unwrap());
+    let request = course_request(input, PageRequestV1::default(), CourseSortV1::default());
+    let response = engine.course_search(&request, None).unwrap();
+    let credit_match = response.items[0].variants[0]
+        .filter_matches
+        .iter()
+        .find(|entry| entry.field_id == FilterFieldId::CourseCredits)
+        .expect("credit explanation");
+    assert_eq!(credit_match.explanation.outcome(), MatchOutcome::Uncertain);
+    assert_eq!(
+        credit_match.explanation.reasons()[0].code(),
+        MatchReasonCode::InvalidValue
     );
 }
 
@@ -472,15 +609,13 @@ fn only_matching_variant_controls_relevance_title_and_section_display_outcome() 
         .iter()
         .find(|item| item.group.key == group_a.group)
         .unwrap();
-    let rejected_item = group_a_item
-        .variants
-        .iter()
-        .find(|item| item.variant.key == rejected.variant)
-        .unwrap();
-    assert_eq!(rejected_item.explanation.outcome(), MatchOutcome::NoMatch);
-    assert_eq!(
-        rejected_item.sections[0].explanation.outcome(),
-        MatchOutcome::NoMatch
+    assert_eq!(group_a_item.variants.len(), 1);
+    assert_eq!(group_a_item.variants[0].variant.key, group_a.variant);
+    assert!(
+        group_a_item
+            .variants
+            .iter()
+            .all(|item| item.variant.key != rejected.variant)
     );
 
     let title_request = CourseQueryRequestV1 {

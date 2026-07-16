@@ -40,8 +40,8 @@ main() {
     bcsp_assert_mode 755 "$release_path/$support_file"
     bcsp_assert_owner root:root "$release_path/$support_file"
   done
-  for support_file in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
-    SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
+  for support_file in BUILD-PROVENANCE.json FRONTEND-CAPABILITIES.json LICENSE \
+    MANIFEST.json SBOM.cdx.json SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
     [[ -f "$release_path/$support_file" ]] || bcsp_die "current release is missing $support_file"
     bcsp_assert_mode 644 "$release_path/$support_file"
     bcsp_assert_owner root:root "$release_path/$support_file"

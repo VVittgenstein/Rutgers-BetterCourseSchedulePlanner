@@ -38,8 +38,8 @@ for required in systemd caddy config ops docs; do
     exit 1
   }
 done
-for required in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
-  SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
+for required in BUILD-PROVENANCE.json FRONTEND-CAPABILITIES.json LICENSE \
+  MANIFEST.json SBOM.cdx.json SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
   [[ -f "$CANDIDATE_ROOT/$required" ]] || {
     printf 'disposable-host: candidate is missing %s\n' "$required" >&2
     exit 1
@@ -49,7 +49,7 @@ done
   printf 'disposable-host: final candidate must not contain tests/\n' >&2
   exit 1
 }
-expected_top_level=$'BUILD-PROVENANCE.json\nLICENSE\nMANIFEST.json\nSBOM.cdx.json\nSHA256SUMS\nTHIRD-PARTY-NOTICES.txt\nVERSION\nbin\ncaddy\nconfig\ndocs\nops\nsystemd'
+expected_top_level=$'BUILD-PROVENANCE.json\nFRONTEND-CAPABILITIES.json\nLICENSE\nMANIFEST.json\nSBOM.cdx.json\nSHA256SUMS\nTHIRD-PARTY-NOTICES.txt\nVERSION\nbin\ncaddy\nconfig\ndocs\nops\nsystemd'
 actual_top_level="$(find "$CANDIDATE_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
 [[ "$actual_top_level" == "$expected_top_level" ]] || {
   printf 'disposable-host: candidate top-level allowlist mismatch\n' >&2
@@ -177,8 +177,8 @@ bash "$OPS_ROOT/install.sh" ci-v1 "$CANDIDATE_ROOT"
 systemd-analyze verify /etc/systemd/system/bcsp.service
 systemd-analyze security --no-pager bcsp.service > "$TEST_TMP/systemd-security.txt"
 bash "$OPS_ROOT/verify.sh"
-for metadata in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
-  SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
+for metadata in BUILD-PROVENANCE.json FRONTEND-CAPABILITIES.json LICENSE \
+  MANIFEST.json SBOM.cdx.json SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
   cmp -s -- "$CANDIDATE_ROOT/$metadata" "/opt/bcsp/releases/ci-v1/$metadata"
 done
 [[ ! -e /opt/bcsp/releases/ci-v1/share ]]
@@ -273,8 +273,8 @@ mkdir -p "$BAD_CANDIDATE/bin"
 for required in systemd caddy config ops docs; do
   cp -R -- "$CANDIDATE_ROOT/$required" "$BAD_CANDIDATE/$required"
 done
-for required in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
-  SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
+for required in BUILD-PROVENANCE.json FRONTEND-CAPABILITIES.json LICENSE \
+  MANIFEST.json SBOM.cdx.json SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
   cp -- "$CANDIDATE_ROOT/$required" "$BAD_CANDIDATE/$required"
 done
 cat > "$BAD_CANDIDATE/bin/bcsp-server" <<'BAD_BINARY'

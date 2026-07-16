@@ -3,6 +3,12 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ArchivePath,
 
+    [Parameter(Mandatory = $true)]
+    [string]$SourceCommit,
+
+    [Parameter(Mandatory = $true)]
+    [long]$SourceDateEpoch,
+
     [string]$DumpBinPath,
 
     [string]$BrowserSmokeScript,
@@ -16,8 +22,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $PackageId = 'WINDOWS_LOCAL_RELEASE_ARCHIVE'
-$ExpectedSourceCommit = 'ceeeabb798cc262475c4d2fe220a4a7921995cde'
-$ExpectedSourceDateEpoch = 1784148947
+if ($SourceCommit -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$') {
+    throw 'SourceCommit must be a full lowercase hexadecimal commit id.'
+}
+if ($SourceDateEpoch -lt 0) {
+    throw 'SourceDateEpoch must be a non-negative integer.'
+}
 $RepositoryRoot = [System.IO.Path]::GetFullPath(
     (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 )
@@ -319,7 +329,7 @@ try {
     try {
         $entries = @($zip.Entries)
         $entryNames = @($entries | ForEach-Object { $_.FullName } | Sort-Object)
-        Assert-Condition ($entryNames.Count -eq 11) "ZIP must contain exactly 11 entries; found $($entryNames.Count)."
+        Assert-Condition ($entryNames.Count -eq 12) "ZIP must contain exactly 12 entries; found $($entryNames.Count)."
         Assert-Condition (($entryNames | Select-Object -Unique).Count -eq $entryNames.Count) 'ZIP contains duplicate entries.'
         Assert-Condition (($entryNames -join "`n") -eq ($expectedFiles -join "`n")) 'ZIP entries do not exactly match the frozen Windows allowlist.'
         foreach ($entry in $entries) {
@@ -357,7 +367,7 @@ try {
     $sumText = [System.IO.File]::ReadAllText($sumPath)
     Assert-Condition (-not $sumText.Contains("`r")) 'SHA256SUMS must use LF line endings.'
     $sumLines = @($sumText.TrimEnd("`n").Split("`n"))
-    Assert-Condition ($sumLines.Count -eq 10) "SHA256SUMS must contain 10 entries; found $($sumLines.Count)."
+    Assert-Condition ($sumLines.Count -eq 11) "SHA256SUMS must contain 11 entries; found $($sumLines.Count)."
     $sumNames = New-Object System.Collections.Generic.List[string]
     foreach ($line in $sumLines) {
         Assert-Condition ($line -cmatch '^(?<hash>[0-9a-f]{64})  (?<path>[^/\\]+)$') "Invalid SHA256SUMS line: $line"
@@ -371,6 +381,7 @@ try {
     $manifest = Get-Content -LiteralPath (Join-Path $candidateRoot 'MANIFEST.json') -Raw | ConvertFrom-Json
     $provenance = Get-Content -LiteralPath (Join-Path $candidateRoot 'BUILD-PROVENANCE.json') -Raw | ConvertFrom-Json
     $sbom = Get-Content -LiteralPath (Join-Path $candidateRoot 'SBOM.cdx.json') -Raw | ConvertFrom-Json
+    $capabilities = Get-Content -LiteralPath (Join-Path $candidateRoot 'FRONTEND-CAPABILITIES.json') -Raw | ConvertFrom-Json
     $notices = [System.IO.File]::ReadAllText((Join-Path $candidateRoot 'THIRD-PARTY-NOTICES.txt'))
     Assert-Condition ($notices.Trim().Length -gt 0) 'THIRD-PARTY-NOTICES.txt is empty.'
     Assert-Condition ([string]$sbom.bomFormat -eq 'CycloneDX' -and [string]$sbom.specVersion -eq '1.6') 'SBOM must be CycloneDX 1.6.'
@@ -382,16 +393,40 @@ try {
         [string]$manifest.archiveName -ceq $package.archiveName -and
         [string]$manifest.version -ceq $releaseInputs.releaseVersion -and
         [string]$manifest.target -ceq $package.target -and
-        [string]$manifest.sourceCommit -ceq $ExpectedSourceCommit -and
-        [long]$manifest.sourceDateEpoch -eq $ExpectedSourceDateEpoch -and
-        [int]$manifest.fileCount -eq 9
+        [string]$manifest.sourceCommit -ceq $SourceCommit -and
+        [long]$manifest.sourceDateEpoch -eq $SourceDateEpoch -and
+        [int]$manifest.fileCount -eq 10
     ) 'MANIFEST.json identity is invalid.'
+
+    Assert-Condition (
+        [int]$capabilities.schemaVersion -eq 1 -and
+        [string]$capabilities.kind -ceq 'TARGET_BUILD_ALLOWLIST' -and
+        [string]$capabilities.target -ceq 'local' -and
+        [string]$capabilities.readiness -ceq 'UI_INTEGRATION_COMPLETE'
+    ) 'FRONTEND-CAPABILITIES.json identity is invalid.'
+    foreach ($property in @('allowedCapabilities', 'allowedRoutes', 'allowedI18nCatalogs')) {
+        $propertyMatch = @($capabilities.PSObject.Properties | Where-Object { $_.Name -ceq $property })
+        Assert-Condition (
+            $propertyMatch.Count -eq 1 -and
+            $propertyMatch[0].Value -is [System.Array]
+        ) "FRONTEND-CAPABILITIES.json $property must be an array."
+        $values = [string[]]@($propertyMatch[0].Value | ForEach-Object { [string]$_ })
+        Assert-Condition (
+            $values.Count -gt 0 -and
+            @($values | Where-Object { $_.Length -eq 0 }).Count -eq 0
+        ) "FRONTEND-CAPABILITIES.json $property must contain non-empty values."
+        $unique = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($value in $values) {
+            Assert-Condition ($unique.Add($value)) "FRONTEND-CAPABILITIES.json $property contains a duplicate value: $value"
+        }
+    }
 
     $executablePath = Join-Path $candidateRoot 'RBCSP.exe'
     Assert-Condition (
         [int]$provenance.schemaVersion -eq 1 -and
         [string]$provenance.packageId -ceq $PackageId -and
-        [string]$provenance.source.commit -ceq $ExpectedSourceCommit -and
+        [string]$provenance.source.commit -ceq $SourceCommit -and
+        [long]$provenance.source.dateEpoch -eq $SourceDateEpoch -and
         [string]$provenance.build.target -ceq $package.target -and
         [string]$provenance.artifact.path -ceq 'RBCSP.exe' -and
         [string]$provenance.artifact.sha256 -ceq (Get-LowerSha256 $executablePath)

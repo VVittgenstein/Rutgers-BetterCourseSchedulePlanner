@@ -239,6 +239,10 @@ where
     C: ApplicationClock,
     P: RefreshPolicyProvider,
 {
+    pub fn now(&self) -> OffsetDateTime {
+        self.clock.now()
+    }
+
     pub const fn new(counter_audience: OpenCounterAudience, clock: C, policy: P) -> Self {
         Self {
             counter_audience,
@@ -311,6 +315,7 @@ where
         runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
         policy: RefreshPolicy,
     ) -> Result<CourseQueryResponseV1, SharedRuntimeError> {
+        self.ensure_catalogs_published(storage, targets)?;
         let (now, evidence) =
             self.query_evidence_with_policy(storage, targets, runtime_for, policy)?;
         SharedQueryService::new(storage)
@@ -337,6 +342,7 @@ where
         runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
         policy: RefreshPolicy,
     ) -> Result<SectionQueryResponseV1, SharedRuntimeError> {
+        self.ensure_catalogs_published(storage, targets)?;
         let (now, evidence) =
             self.query_evidence_with_policy(storage, targets, runtime_for, policy)?;
         SharedQueryService::new(storage)
@@ -363,6 +369,7 @@ where
         runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
         policy: RefreshPolicy,
     ) -> Result<CourseDetailResponseV1, SharedRuntimeError> {
+        self.ensure_catalogs_published(storage, targets)?;
         let (now, evidence) =
             self.query_evidence_with_policy(storage, targets, runtime_for, policy)?;
         SharedQueryService::new(storage)
@@ -389,6 +396,7 @@ where
         runtime_for: impl Fn(&TermCampusKey) -> OpenRuntimeSnapshot,
         policy: RefreshPolicy,
     ) -> Result<SectionDetailResponseV1, SharedRuntimeError> {
+        self.ensure_catalogs_published(storage, targets)?;
         let (now, evidence) =
             self.query_evidence_with_policy(storage, targets, runtime_for, policy)?;
         SharedQueryService::new(storage)
@@ -408,8 +416,20 @@ where
         let published = storage
             .published_discovery_snapshot()
             .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?;
-        let selector = to_catalog_discovery_response_v1(&published, &[], observed_at)
+        let mut selector = to_catalog_discovery_response_v1(&published, &[], observed_at)
             .map_err(SharedRuntimeError::CatalogDiscoveryProjection)?;
+        let mut catalogs = Vec::new();
+        for target in selector.targets.iter().map(|target| &target.key) {
+            if let Some(catalog) = storage
+                .published_catalog_snapshot(target)
+                .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?
+            {
+                catalogs.push(catalog);
+            }
+        }
+        let available = to_catalog_discovery_response_v1(&published, &catalogs, observed_at)
+            .map_err(SharedRuntimeError::CatalogDiscoveryProjection)?;
+        selector.core_code_dictionaries = available.core_code_dictionaries.clone();
         let selectable_terms = selector
             .targets
             .iter()
@@ -440,17 +460,30 @@ where
             }
         }
 
-        let mut catalogs = Vec::new();
-        for target in selector.targets.iter().map(|target| &target.key) {
-            if let Some(catalog) = storage
-                .published_catalog_snapshot(target)
-                .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?
-            {
-                catalogs.push(catalog);
+        Ok(available)
+    }
+
+    fn ensure_catalogs_published(
+        &self,
+        storage: &OperationalStorage,
+        targets: &[TermCampusKey],
+    ) -> Result<(), SharedRuntimeError> {
+        for target in targets {
+            let state = storage.target_state(target).map_err(|source| {
+                SharedRuntimeError::Query(SharedQueryError::Storage {
+                    target: target.clone(),
+                    source,
+                })
+            })?;
+            if !state.is_some_and(|state| state.current_content_version > 0) {
+                return Err(SharedRuntimeError::Query(
+                    SharedQueryError::TargetNotPublished {
+                        target: target.clone(),
+                    },
+                ));
             }
         }
-        to_catalog_discovery_response_v1(&published, &catalogs, observed_at)
-            .map_err(SharedRuntimeError::CatalogDiscoveryProjection)
+        Ok(())
     }
 
     fn query_evidence_with_policy(

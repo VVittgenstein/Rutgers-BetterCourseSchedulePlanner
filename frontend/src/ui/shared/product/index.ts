@@ -2,6 +2,7 @@ export * from './contracts/catalog';
 export * from './contracts/common';
 export * from './contracts/open';
 export * from './contracts/query';
+export * from './contracts/service';
 export * from './contracts/watch';
 export * from './bootstrap';
 export * from './filters';

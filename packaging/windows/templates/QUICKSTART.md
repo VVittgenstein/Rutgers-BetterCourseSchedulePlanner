@@ -11,7 +11,7 @@ C:\Users\<you>\Applications\RBCSP
 Extract the complete archive into that folder. Do not run RBCSP inside the ZIP
 viewer, do not copy `RBCSP.exe` by itself, and do not use `Program Files` or
 another read-only or administrator-owned folder. The extracted folder should
-contain the eleven release files, including `RBCSP.exe`, `Start-RBCSP.bat`,
+contain the twelve release files, including `RBCSP.exe`, `Start-RBCSP.bat`,
 `VERSION`, `MANIFEST.json`, and `SHA256SUMS`. It should not contain a `data`
 folder before the first run.
 
@@ -68,7 +68,7 @@ backup unit.
 3. Keep a copy of the current release archive for rollback.
 4. Extract the new archive into a separate temporary folder and verify its
    hashes and `VERSION`.
-5. Copy the new release's eleven root files into the existing RBCSP folder,
+5. Copy the new release's twelve root files into the existing RBCSP folder,
    replacing the old root files but leaving the existing `data` folder intact.
    Do not delete the whole existing folder first.
 6. Start the new `RBCSP.exe` and verify search, settings, Saved views, history,
@@ -85,7 +85,7 @@ If an upgrade fails:
 1. Exit RBCSP completely.
 2. Preserve the failed folder for diagnosis, but do not continue writing to
    its database.
-3. Restore the previous release's eleven root files.
+3. Restore the previous release's twelve root files.
 4. Replace `data` with the complete backup made before the upgrade. Keep the
    failed `data` folder under a different name until recovery is confirmed.
 5. Start the restored version and verify local state.
@@ -122,7 +122,7 @@ the folder deletes both the program and its package-relative local data.
 - **A second launch reports an instance problem:** close any stale RBCSP
   process, wait a few seconds, and try once more.
 - **The launcher reports a nonzero exit code:** read the message printed above
-  it, verify that all eleven release files remain together, and confirm the
+  it, verify that all twelve release files remain together, and confirm the
   folder is writable.
 
 Do not disable Windows security controls merely to run an unverified package.

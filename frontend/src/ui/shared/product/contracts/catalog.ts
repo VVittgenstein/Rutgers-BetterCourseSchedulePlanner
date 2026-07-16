@@ -93,6 +93,18 @@ export interface CatalogSubjectV1 {
   readonly provenance: CatalogSubjectProvenanceV1;
 }
 
+export interface CatalogCoreCodeOptionV1 {
+  readonly code: string;
+  readonly description: CatalogFieldKnowledge<string>;
+}
+
+export interface CatalogCoreCodeDictionaryV1 {
+  readonly target: TermCampusKey;
+  readonly contentVersion: number;
+  readonly provenance: CatalogProvenanceV1;
+  readonly options: readonly CatalogCoreCodeOptionV1[];
+}
+
 export interface CatalogDiscoveryResponseV1 {
   readonly contractVersion: ContractVersionV1;
   readonly observedAt: IsoDateTime;
@@ -100,6 +112,7 @@ export interface CatalogDiscoveryResponseV1 {
   readonly sources: readonly CatalogDiscoverySourceV1[];
   readonly targets: readonly CatalogTargetV1[];
   readonly subjects: readonly CatalogSubjectV1[];
+  readonly coreCodeDictionaries: readonly CatalogCoreCodeDictionaryV1[];
 }
 
 export interface CatalogOccurrenceKeyV1 {

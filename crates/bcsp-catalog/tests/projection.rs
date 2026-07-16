@@ -210,6 +210,23 @@ fn discovery_bundle(observed_at: &str) -> DiscoverySnapshot {
     .expect("synthetic multi-source discovery")
 }
 
+fn discovery_for_target(term: &str, campus: &str, observed_at: &str) -> DiscoverySnapshot {
+    let body = format!(
+        r#"{{
+          "terms":[{{"termId":"{term}","display":"Synthetic term","published":true}}],
+          "campuses":[{{"campusCode":"{campus}","display":"Synthetic campus","enabled":true}}],
+          "targets":[{{"termId":"{term}","campusCode":"{campus}","enabled":true}}],
+          "subjects":[]
+        }}"#
+    );
+    DiscoverySnapshot::try_from_bundle(vec![DiscoverySourceInput::new(
+        DiscoverySourceKind::Selector,
+        decode_discovery_payload(body.as_bytes()).expect("synthetic discovery JSON"),
+        SourceProvenance::from_body("SYNTHETIC_CORE_SELECTOR", observed_at, body.as_bytes()),
+    )])
+    .expect("synthetic target discovery")
+}
+
 #[test]
 fn restart_projects_catalog_details_and_isolates_multiple_targets() {
     let directory = TempDir::new().expect("temporary storage directory");
@@ -484,6 +501,188 @@ fn restart_projects_catalog_details_and_isolates_multiple_targets() {
     let mut corrupted = first;
     corrupted.snapshot.course_variants[0].canonical_facts["title"] = serde_json::json!("CORRUPTED");
     assert!(to_normalized_catalog_v1(&corrupted).is_err());
+}
+
+#[test]
+fn core_objects_and_compatible_strings_project_into_target_scoped_dictionary() {
+    let target = TermCampusKey::try_new("T2030", "SYN_CORE").expect("target");
+    let mut body: serde_json::Value =
+        serde_json::from_slice(&catalog_body("SYN_CORE", "SYN:CORE:001", "71001", false))
+            .expect("base Catalog JSON");
+    body[0]["coreCodes"] = serde_json::json!([
+        {
+            "coreCode": " CC ",
+            "coreCodeDescription": " Contemporary Challenges "
+        },
+        {
+            "code": "QR",
+            "description": "Quantitative Reasoning"
+        },
+        " WC ",
+        {
+            "coreCode": "CC",
+            "coreCodeDescription": "Conflicting CC description"
+        },
+        {
+            "coreCode": null,
+            "code": "SR",
+            "coreCodeDescription": null,
+            "description": "Social and Historical Analysis"
+        }
+    ]);
+    let body = serde_json::to_vec(&body).expect("object Core Catalog JSON");
+    let normalized = normalized_catalog(target.clone(), &body, "SYNTHETIC_CORE", STARTED);
+    let discovery = discovery_for_target("T2030", "SYN_CORE", STARTED);
+    let mut storage = OperationalStorage::open_in_memory().expect("storage");
+    storage
+        .apply_discovery_refresh(
+            to_discovery_refresh_command(&discovery, trace_id(40), STARTED, COMPLETED)
+                .expect("discovery command"),
+        )
+        .expect("discovery publication");
+    storage
+        .apply_catalog_refresh(
+            to_catalog_refresh_command(&normalized, trace_id(41), STARTED, COMPLETED)
+                .expect("Catalog command"),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+        )
+        .expect("Catalog publication");
+    let published_catalog = storage
+        .published_catalog_snapshot(&target)
+        .expect("Catalog read")
+        .expect("Catalog publication");
+    let projected_catalog =
+        to_normalized_catalog_v1(&published_catalog).expect("normalized Catalog projection");
+    assert_eq!(
+        projected_catalog.course_variants[0].core_codes,
+        CatalogFieldKnowledge::present(vec![
+            "CC".to_owned(),
+            "QR".to_owned(),
+            "SR".to_owned(),
+            "WC".to_owned(),
+        ])
+    );
+
+    let projected_discovery = to_catalog_discovery_response_v1(
+        &storage
+            .published_discovery_snapshot()
+            .expect("discovery read"),
+        &[published_catalog],
+        timestamp("2030-01-01T00:00:02Z"),
+    )
+    .expect("discovery dictionary projection");
+    assert_eq!(projected_discovery.core_code_dictionaries.len(), 1);
+    let dictionary = &projected_discovery.core_code_dictionaries[0];
+    assert_eq!(dictionary.target, target);
+    assert_eq!(dictionary.content_version.get(), 1);
+    assert_eq!(
+        dictionary
+            .options
+            .iter()
+            .map(|option| option.code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["CC", "QR", "SR", "WC"]
+    );
+    assert_eq!(
+        dictionary
+            .options
+            .iter()
+            .find(|option| option.code == "CC")
+            .expect("CC")
+            .description,
+        CatalogFieldKnowledge::unknown(CatalogUnknownReason::ConflictingEvidence)
+    );
+    assert_eq!(
+        dictionary
+            .options
+            .iter()
+            .find(|option| option.code == "QR")
+            .expect("QR")
+            .description,
+        CatalogFieldKnowledge::present("Quantitative Reasoning".to_owned())
+    );
+    assert_eq!(
+        dictionary
+            .options
+            .iter()
+            .find(|option| option.code == "SR")
+            .expect("SR")
+            .description,
+        CatalogFieldKnowledge::present("Social and Historical Analysis".to_owned())
+    );
+    assert_eq!(
+        dictionary
+            .options
+            .iter()
+            .find(|option| option.code == "WC")
+            .expect("WC")
+            .description,
+        CatalogFieldKnowledge::absent()
+    );
+}
+
+#[test]
+fn core_projection_preserves_empty_null_missing_and_malformed_knowledge() {
+    let cases = [
+        (
+            "SYN_CORE_EMPTY",
+            Some(serde_json::json!([])),
+            CatalogFieldKnowledge::present(Vec::new()),
+        ),
+        (
+            "SYN_CORE_NULL",
+            Some(serde_json::Value::Null),
+            CatalogFieldKnowledge::explicit_null(),
+        ),
+        ("SYN_CORE_MISSING", None, CatalogFieldKnowledge::absent()),
+        (
+            "SYN_CORE_BAD",
+            Some(serde_json::json!([{"coreCode": 7}])),
+            CatalogFieldKnowledge::unknown(CatalogUnknownReason::Malformed),
+        ),
+    ];
+    for (ordinal, (campus, core_codes, expected)) in cases.into_iter().enumerate() {
+        let target = TermCampusKey::try_new("T2030", campus).expect("target");
+        let mut body: serde_json::Value = serde_json::from_slice(&catalog_body(
+            campus,
+            &format!("SYN:{ordinal}:001"),
+            &format!("72{ordinal:03}"),
+            false,
+        ))
+        .expect("base Catalog JSON");
+        match core_codes {
+            Some(core_codes) => body[0]["coreCodes"] = core_codes,
+            None => {
+                body[0]
+                    .as_object_mut()
+                    .expect("course object")
+                    .remove("coreCodes");
+            }
+        }
+        let body = serde_json::to_vec(&body).expect("Catalog JSON");
+        let normalized = normalized_catalog(target.clone(), &body, "CORE_KNOWLEDGE", STARTED);
+        let mut storage = OperationalStorage::open_in_memory().expect("storage");
+        storage
+            .apply_catalog_refresh(
+                to_catalog_refresh_command(
+                    &normalized,
+                    trace_id(50 + u8::try_from(ordinal).unwrap()),
+                    STARTED,
+                    COMPLETED,
+                )
+                .expect("Catalog command"),
+                EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            )
+            .expect("Catalog publication");
+        let projected = to_normalized_catalog_v1(
+            &storage
+                .published_catalog_snapshot(&target)
+                .expect("Catalog read")
+                .expect("Catalog publication"),
+        )
+        .expect("Catalog projection");
+        assert_eq!(projected.course_variants[0].core_codes, expected);
+    }
 }
 
 #[test]

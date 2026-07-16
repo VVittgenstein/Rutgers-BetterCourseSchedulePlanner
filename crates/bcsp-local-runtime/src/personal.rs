@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bcsp_application::SessionNonce;
@@ -9,8 +9,8 @@ use bcsp_contracts::{
 };
 use bcsp_local_user_state::{
     CurrentFiltersRevision, HistoryFilter, LocalSettings, PageRequest, PersonalStateError,
-    SavedViewDefinition, SavedViewMatch, SavedViewRevision, SettingsRevision, UnixMillis,
-    UserStateRevision,
+    PersonalStateStore, SavedViewDefinition, SavedViewMatch, SavedViewRevision, SettingsRevision,
+    UnixMillis, UserStateRevision,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,35 +26,55 @@ struct PendingLocalUserDataReset {
 
 pub struct PersonalSurface {
     database: Arc<Mutex<LocalPrimaryDatabase>>,
+    mutation_store: Mutex<PersonalStateStore>,
     watch: Arc<SharedWatchSocket>,
-    pending_reset: Option<PendingLocalUserDataReset>,
+    pending_reset: Mutex<Option<PendingLocalUserDataReset>>,
 }
 
 impl PersonalSurface {
-    pub fn new(database: Arc<Mutex<LocalPrimaryDatabase>>, watch: Arc<SharedWatchSocket>) -> Self {
+    pub fn new(
+        database: Arc<Mutex<LocalPrimaryDatabase>>,
+        mutation_store: PersonalStateStore,
+        watch: Arc<SharedWatchSocket>,
+    ) -> Self {
         Self {
             database,
+            mutation_store: Mutex::new(mutation_store),
             watch,
-            pending_reset: None,
+            pending_reset: Mutex::new(None),
         }
     }
 
     fn with_store<T>(
         &self,
-        operation: impl FnOnce(
-            &mut bcsp_local_user_state::PersonalStateStore,
-        ) -> Result<T, PersonalStateError>,
+        operation: impl FnOnce(&PersonalStateStore) -> Result<T, PersonalStateError>,
     ) -> Result<T, LocalSurfaceFailure> {
-        let mut database = self
+        let database = self
             .database
             .lock()
             .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?;
-        operation(database.personal_mut()).map_err(map_personal_error)
+        operation(database.personal()).map_err(map_personal_error)
+    }
+
+    fn with_mutation_store<T>(
+        &self,
+        operation: impl FnOnce(&mut PersonalStateStore) -> Result<T, PersonalStateError>,
+    ) -> Result<T, LocalSurfaceFailure> {
+        let mut store = self.lock_mutation_store()?;
+        operation(&mut store).map_err(map_personal_error)
+    }
+
+    fn lock_mutation_store(
+        &self,
+    ) -> Result<MutexGuard<'_, PersonalStateStore>, LocalSurfaceFailure> {
+        self.mutation_store
+            .lock()
+            .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))
     }
 }
 
 impl LocalSurfaceState for PersonalSurface {
-    fn bootstrap(&mut self, nonce: &SessionNonce) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn bootstrap(&self, nonce: &SessionNonce) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Bootstrap<'a, T> {
@@ -73,12 +93,12 @@ impl LocalSurfaceState for PersonalSurface {
         })
     }
 
-    fn settings(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn settings(&self) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let settings = self.with_store(|store| store.settings())?;
         encode(&settings)
     }
 
-    fn put_settings(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn put_settings(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Update {
@@ -90,7 +110,7 @@ impl LocalSurfaceState for PersonalSurface {
         let update: Update = decode_payload(body)?;
         let revision =
             SettingsRevision::try_from(update.expected_revision).map_err(map_personal_error)?;
-        let stored = self.with_store(|store| {
+        let stored = self.with_mutation_store(|store| {
             store.compare_and_swap_settings(
                 update.expected_user_state_revision,
                 revision,
@@ -100,12 +120,12 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&stored)
     }
 
-    fn selection(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn selection(&self) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let selection = self.with_store(|store| store.selected_sections())?;
         encode(&selection)
     }
 
-    fn put_selection(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn put_selection(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Update {
@@ -114,25 +134,27 @@ impl LocalSurfaceState for PersonalSurface {
         }
 
         let update: Update = decode_payload(body)?;
-        self.with_store(|store| {
+        self.with_mutation_store(|store| {
             store.replace_selected_sections(update.expected_user_state_revision, &update.sections)
         })?;
         encode(&update.sections)
     }
 
-    fn history(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn history(&self) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let history = self.with_store(|store| {
-            store.episode_history(&HistoryFilter::default(), PageRequest::DEFAULT)
+            store.consistent_read(|store| {
+                store.episode_history(&HistoryFilter::default(), PageRequest::DEFAULT)
+            })
         })?;
         encode(&history)
     }
 
-    fn current_filters(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn current_filters(&self) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let current = self.with_store(|store| store.current_filters())?;
         encode(&current)
     }
 
-    fn put_current_filters(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn put_current_filters(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Update {
@@ -142,7 +164,7 @@ impl LocalSurfaceState for PersonalSurface {
         }
 
         let update: Update = decode_payload(body)?;
-        let current = self.with_store(|store| {
+        let current = self.with_mutation_store(|store| {
             store.replace_current_filters(
                 update.expected_user_state_revision,
                 update.expected_current_filters_revision,
@@ -152,7 +174,7 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&current)
     }
 
-    fn saved_views(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn saved_views(&self) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct SavedViewListItem {
@@ -169,25 +191,27 @@ impl LocalSurfaceState for PersonalSurface {
         }
 
         let library = self.with_store(|store| {
-            let current_filters = store.current_filters()?;
-            let views = store
-                .saved_views()?
-                .into_iter()
-                .map(|definition| SavedViewListItem {
-                    match_state: definition.match_current(&current_filters),
-                    definition,
+            store.consistent_read(|store| {
+                let current_filters = store.current_filters()?;
+                let views = store
+                    .saved_views()?
+                    .into_iter()
+                    .map(|definition| SavedViewListItem {
+                        match_state: definition.match_current(&current_filters),
+                        definition,
+                    })
+                    .collect();
+                Ok(SavedViewLibrary {
+                    state_revision: current_filters.state_revision,
+                    current_filters,
+                    views,
                 })
-                .collect();
-            Ok(SavedViewLibrary {
-                state_revision: current_filters.state_revision,
-                current_filters,
-                views,
             })
         })?;
         encode(&library)
     }
 
-    fn create_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn create_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Create {
@@ -199,7 +223,7 @@ impl LocalSurfaceState for PersonalSurface {
 
         let create: Create = decode_payload(body)?;
         let now = unix_millis_now()?;
-        let mutation = self.with_store(|store| {
+        let mutation = self.with_mutation_store(|store| {
             store.create_saved_view(
                 create.expected_user_state_revision,
                 create.expected_current_filters_revision,
@@ -211,9 +235,9 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&mutation)
     }
 
-    fn apply_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn apply_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let command: SavedViewCommand = decode_payload(body)?;
-        let current = self.with_store(|store| {
+        let current = self.with_mutation_store(|store| {
             store.apply_saved_view(
                 command.expected_user_state_revision,
                 command.expected_current_filters_revision,
@@ -224,7 +248,7 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&current)
     }
 
-    fn rename_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn rename_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Rename {
@@ -237,7 +261,7 @@ impl LocalSurfaceState for PersonalSurface {
 
         let rename: Rename = decode_payload(body)?;
         let now = unix_millis_now()?;
-        let mutation = self.with_store(|store| {
+        let mutation = self.with_mutation_store(|store| {
             store.rename_saved_view(
                 rename.expected_user_state_revision,
                 rename.expected_current_filters_revision,
@@ -250,7 +274,7 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&mutation)
     }
 
-    fn update_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn update_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Update {
@@ -263,7 +287,7 @@ impl LocalSurfaceState for PersonalSurface {
 
         let update: Update = decode_payload(body)?;
         let now = unix_millis_now()?;
-        let mutation = self.with_store(|store| {
+        let mutation = self.with_mutation_store(|store| {
             store.update_saved_view(
                 update.expected_user_state_revision,
                 update.expected_current_filters_revision,
@@ -276,7 +300,7 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&mutation)
     }
 
-    fn duplicate_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn duplicate_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Duplicate {
@@ -288,7 +312,7 @@ impl LocalSurfaceState for PersonalSurface {
 
         let duplicate: Duplicate = decode_payload(body)?;
         let now = unix_millis_now()?;
-        let mutation = self.with_store(|store| {
+        let mutation = self.with_mutation_store(|store| {
             store.duplicate_saved_view(
                 duplicate.expected_user_state_revision,
                 duplicate.id,
@@ -300,9 +324,9 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&mutation)
     }
 
-    fn delete_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn delete_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let command: SavedViewCommand = decode_payload(body)?;
-        let result = self.with_store(|store| {
+        let result = self.with_mutation_store(|store| {
             store.delete_saved_view(
                 command.expected_user_state_revision,
                 command.expected_current_filters_revision,
@@ -313,9 +337,9 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&result)
     }
 
-    fn delete_all_saved_views(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn delete_all_saved_views(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let command: CurrentFiltersCommand = decode_payload(body)?;
-        let result = self.with_store(|store| {
+        let result = self.with_mutation_store(|store| {
             store.delete_all_saved_views(
                 command.expected_user_state_revision,
                 command.expected_current_filters_revision,
@@ -324,9 +348,9 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&result)
     }
 
-    fn reset_current_filters(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn reset_current_filters(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let command: CurrentFiltersCommand = decode_payload(body)?;
-        let current = self.with_store(|store| {
+        let current = self.with_mutation_store(|store| {
             store.reset_current_filters(
                 command.expected_user_state_revision,
                 command.expected_current_filters_revision,
@@ -336,10 +360,7 @@ impl LocalSurfaceState for PersonalSurface {
         encode(&current)
     }
 
-    fn prepare_local_user_data_reset(
-        &mut self,
-        body: &[u8],
-    ) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn prepare_local_user_data_reset(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Prepare {
@@ -355,7 +376,10 @@ impl LocalSurfaceState for PersonalSurface {
         }
 
         let prepare: Prepare = decode_payload(body)?;
-        let current = self.with_store(|store| store.user_state_revision())?;
+        let mutation_store = self.lock_mutation_store()?;
+        let current = mutation_store
+            .user_state_revision()
+            .map_err(map_personal_error)?;
         if current != prepare.expected_user_state_revision {
             return Err(LocalSurfaceFailure::revision_conflict(
                 LocalApiErrorCode::UserStateRevisionConflict,
@@ -364,11 +388,17 @@ impl LocalSurfaceState for PersonalSurface {
         }
         let mut ids = SystemTraceIdSource;
         let token = ids.next_trace_id();
-        self.pending_reset = Some(PendingLocalUserDataReset {
+        let mut pending_reset = self
+            .pending_reset
+            .lock()
+            .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?;
+        *pending_reset = Some(PendingLocalUserDataReset {
             token,
             expected_state_revision: current,
             expires_at: Instant::now() + LOCAL_USER_DATA_RESET_TOKEN_TTL,
         });
+        drop(pending_reset);
+        drop(mutation_store);
         encode(&Prepared {
             confirmation_token: token,
             expected_user_state_revision: current,
@@ -376,10 +406,7 @@ impl LocalSurfaceState for PersonalSurface {
         })
     }
 
-    fn confirm_local_user_data_reset(
-        &mut self,
-        body: &[u8],
-    ) -> Result<Vec<u8>, LocalSurfaceFailure> {
+    fn confirm_local_user_data_reset(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Confirm {
@@ -387,20 +414,30 @@ impl LocalSurfaceState for PersonalSurface {
         }
 
         let confirm: Confirm = decode_payload(body)?;
-        let expected_state_revision = consume_reset_confirmation(
-            &mut self.pending_reset,
-            confirm.confirmation_token,
-            Instant::now(),
-        )?;
+        let mut mutation_store = self.lock_mutation_store()?;
+        let expected_state_revision = {
+            let mut pending_reset = self
+                .pending_reset
+                .lock()
+                .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?;
+            consume_reset_confirmation(
+                &mut pending_reset,
+                confirm.confirmation_token,
+                Instant::now(),
+            )?
+        };
 
         self.watch.stop();
         self.watch.flush_dispatch_sink();
-        let reset = self.with_store(|store| store.clear_personal_data(expected_state_revision))?;
+        let reset = mutation_store
+            .clear_personal_data(expected_state_revision)
+            .map_err(map_personal_error)?;
         encode(&reset)
     }
 
-    fn checkpoint_wal(&mut self) -> Result<(), LocalSurfaceFailure> {
-        self.with_store(|store| store.checkpoint_wal()).map(|_| ())
+    fn checkpoint_wal(&self) -> Result<(), LocalSurfaceFailure> {
+        self.with_mutation_store(|store| store.checkpoint_wal())
+            .map(|_| ())
     }
 }
 

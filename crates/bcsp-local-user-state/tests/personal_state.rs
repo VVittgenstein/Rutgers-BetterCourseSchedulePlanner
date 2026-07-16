@@ -49,6 +49,49 @@ fn current_revision(value: u64) -> CurrentFiltersRevision {
     CurrentFiltersRevision::try_from(value).unwrap()
 }
 
+#[test]
+fn consistent_read_keeps_one_wal_snapshot_across_a_concurrent_reset() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut writer = PersonalStateStore::open(&path).unwrap();
+    writer
+        .replace_current_filters(state_one(), CurrentFiltersRevision::ZERO, &filters())
+        .unwrap();
+    let reader = PersonalStateStore::open(&path).unwrap();
+    let (first_read, first_read_rx) = std::sync::mpsc::sync_channel(0);
+    let (writer_finished, writer_finished_rx) = std::sync::mpsc::sync_channel(0);
+
+    let reader = std::thread::spawn(move || {
+        reader.consistent_read(|store| {
+            let state_revision = store.user_state_revision()?;
+            first_read.send(()).unwrap();
+            writer_finished_rx.recv().unwrap();
+            let current_filters = store.current_filters()?;
+            Ok((state_revision, current_filters))
+        })
+    });
+
+    first_read_rx.recv().unwrap();
+    let reset = writer.clear_personal_data(state_one()).unwrap();
+    assert_eq!(reset.state_revision.get(), 2);
+    writer_finished.send(()).unwrap();
+
+    let (state_revision, current_filters) = reader.join().unwrap().unwrap();
+    assert_eq!(state_revision, state_one());
+    assert_eq!(current_filters.state_revision, state_one());
+    assert_eq!(current_filters.revision, current_revision(1));
+    assert!(current_filters.value.is_some());
+
+    let after = PersonalStateStore::open(&path)
+        .unwrap()
+        .snapshot(PageRequest::DEFAULT)
+        .unwrap();
+    assert_eq!(after.state_revision.get(), 2);
+    assert_eq!(after.current_filters.state_revision.get(), 2);
+    assert_eq!(after.current_filters.revision, CurrentFiltersRevision::ZERO);
+    assert!(after.current_filters.value.is_none());
+}
+
 fn identity(section: SectionKey, run: u64, episode: u64) -> EpisodeHistoryIdentity {
     EpisodeHistoryIdentity::new(section, trace(run), OpenEpisodeId::from(trace(episode)))
 }

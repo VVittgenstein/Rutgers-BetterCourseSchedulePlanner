@@ -215,15 +215,15 @@ bcsp_validate_candidate_root() {
   for required in systemd caddy config ops docs; do
     [[ -d "$package_root/$required" ]] || bcsp_die "package is missing $required/"
   done
-  for required in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
-    SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
+  for required in BUILD-PROVENANCE.json FRONTEND-CAPABILITIES.json LICENSE \
+    MANIFEST.json SBOM.cdx.json SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION; do
     [[ -f "$package_root/$required" ]] || bcsp_die "package is missing $required"
   done
-  expected_top_level=$'BUILD-PROVENANCE.json\nLICENSE\nMANIFEST.json\nSBOM.cdx.json\nSHA256SUMS\nTHIRD-PARTY-NOTICES.txt\nVERSION\nbin\ncaddy\nconfig\ndocs\nops\nsystemd'
+  expected_top_level=$'BUILD-PROVENANCE.json\nFRONTEND-CAPABILITIES.json\nLICENSE\nMANIFEST.json\nSBOM.cdx.json\nSHA256SUMS\nTHIRD-PARTY-NOTICES.txt\nVERSION\nbin\ncaddy\nconfig\ndocs\nops\nsystemd'
   actual_top_level="$(find "$package_root" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
   [[ "$actual_top_level" == "$expected_top_level" ]] || \
     bcsp_die "package top level does not match the public allowlist"
-  expected_files=$'BUILD-PROVENANCE.json\nLICENSE\nMANIFEST.json\nSBOM.cdx.json\nSHA256SUMS\nTHIRD-PARTY-NOTICES.txt\nVERSION\nbin/bcsp-server\ncaddy/Caddyfile.example\nconfig/bcsp.env.example\nconfig/bcsp.env.schema.json\ndocs/operator-runbook.md\nops/backup.sh\nops/install.sh\nops/lib.sh\nops/restore.sh\nops/rollback.sh\nops/upgrade.sh\nops/verify.sh\nsystemd/bcsp.service'
+  expected_files=$'BUILD-PROVENANCE.json\nFRONTEND-CAPABILITIES.json\nLICENSE\nMANIFEST.json\nSBOM.cdx.json\nSHA256SUMS\nTHIRD-PARTY-NOTICES.txt\nVERSION\nbin/bcsp-server\ncaddy/Caddyfile.example\nconfig/bcsp.env.example\nconfig/bcsp.env.schema.json\ndocs/operator-runbook.md\nops/backup.sh\nops/install.sh\nops/lib.sh\nops/restore.sh\nops/rollback.sh\nops/upgrade.sh\nops/verify.sh\nsystemd/bcsp.service'
   actual_files="$(find "$package_root" -type f -printf '%P\n' | LC_ALL=C sort)"
   [[ "$actual_files" == "$expected_files" ]] || \
     bcsp_die "package files do not match the public allowlist"
@@ -247,8 +247,9 @@ bcsp_install_release() {
       bcsp_die "existing release is incomplete: $target"
     cmp -s "$source_binary" "$target/bin/bcsp-server" || \
       bcsp_die "release id already exists with different binary content: $release_id"
-    for entry in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
-      SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION systemd caddy config ops docs; do
+    for entry in BUILD-PROVENANCE.json FRONTEND-CAPABILITIES.json LICENSE \
+      MANIFEST.json SBOM.cdx.json SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION \
+      systemd caddy config ops docs; do
       diff -qr -- "$package_root/$entry" "$target/$entry" >/dev/null || \
         bcsp_die "release id already exists with different support content: $release_id"
     done
@@ -259,8 +260,9 @@ bcsp_install_release() {
   stage="$(mktemp -d "$releases_root/.install-${release_id}.XXXXXX")"
   install -d -m 0755 "$stage/bin"
   install -m 0755 "$source_binary" "$stage/bin/bcsp-server"
-  for entry in BUILD-PROVENANCE.json LICENSE MANIFEST.json SBOM.cdx.json \
-    SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION systemd caddy config ops docs; do
+  for entry in BUILD-PROVENANCE.json FRONTEND-CAPABILITIES.json LICENSE \
+    MANIFEST.json SBOM.cdx.json SHA256SUMS THIRD-PARTY-NOTICES.txt VERSION \
+    systemd caddy config ops docs; do
     cp -R -- "$package_root/$entry" "$stage/$entry"
   done
   find "$stage" -type d -exec chmod 0755 {} +

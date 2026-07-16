@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use bcsp_application::{
     ExtensionRequest, ExtensionResponse, RequestMethod, RouteExtension, SessionNonce,
@@ -14,33 +14,27 @@ use thiserror::Error;
 static WEB_ASSETS: Dir<'_> = include_dir!("$OUT_DIR/web-assets");
 static RUNTIME_TEXT: &[u8] = include_bytes!("../assets/shell/runtime.txt");
 
-pub trait LocalSurfaceState: Send + 'static {
-    fn bootstrap(&mut self, nonce: &SessionNonce) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn settings(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn put_settings(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn selection(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn put_selection(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn history(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn current_filters(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn put_current_filters(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn saved_views(&mut self) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn create_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn apply_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn rename_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn update_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn duplicate_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn delete_saved_view(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn delete_all_saved_views(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn reset_current_filters(&mut self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn prepare_local_user_data_reset(
-        &mut self,
-        body: &[u8],
-    ) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn confirm_local_user_data_reset(
-        &mut self,
-        body: &[u8],
-    ) -> Result<Vec<u8>, LocalSurfaceFailure>;
-    fn checkpoint_wal(&mut self) -> Result<(), LocalSurfaceFailure>;
+pub trait LocalSurfaceState: Send + Sync + 'static {
+    fn bootstrap(&self, nonce: &SessionNonce) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn settings(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn put_settings(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn selection(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn put_selection(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn history(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn current_filters(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn put_current_filters(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn saved_views(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn create_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn apply_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn rename_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn update_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn duplicate_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn delete_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn delete_all_saved_views(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn reset_current_filters(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn prepare_local_user_data_reset(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn confirm_local_user_data_reset(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    fn checkpoint_wal(&self) -> Result<(), LocalSurfaceFailure>;
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -215,7 +209,7 @@ impl LocalSurfaceFailure {
 
 pub struct LocalRouteExtension {
     nonce: SessionNonce,
-    surface: Mutex<Box<dyn LocalSurfaceState>>,
+    surface: Box<dyn LocalSurfaceState>,
     request_exit: Box<dyn Fn() + Send + Sync>,
     product_routes: Arc<dyn RouteExtension>,
 }
@@ -237,32 +231,21 @@ impl LocalRouteExtension {
     ) -> Self {
         Self {
             nonce,
-            surface: Mutex::new(surface),
+            surface,
             request_exit: Box::new(request_exit),
             product_routes,
         }
     }
 
     pub fn checkpoint_wal(&self) -> Result<(), LocalSurfaceFailure> {
-        self.surface
-            .lock()
-            .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?
-            .checkpoint_wal()
+        self.surface.checkpoint_wal()
     }
 
     fn surface_response(
         &self,
-        operation: impl FnOnce(&mut dyn LocalSurfaceState) -> Result<Vec<u8>, LocalSurfaceFailure>,
+        operation: impl FnOnce(&dyn LocalSurfaceState) -> Result<Vec<u8>, LocalSurfaceFailure>,
     ) -> ExtensionResponse {
-        let mut surface = match self.surface.lock() {
-            Ok(surface) => surface,
-            Err(_) => {
-                return failure_response(LocalSurfaceFailure::internal(
-                    LocalApiErrorCode::InternalError,
-                ));
-            }
-        };
-        match operation(surface.as_mut()) {
+        match operation(self.surface.as_ref()) {
             Ok(body) => ExtensionResponse::json_bytes(200, body),
             Err(error) => failure_response(error),
         }

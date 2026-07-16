@@ -67,6 +67,21 @@ function discovery(subjectCount = 300): CatalogDiscoveryResponseV1 {
         termLabel: known('Fall 2026'),
       },
     ],
+    coreCodeDictionaries: ['NB', 'NK'].map((campus) => {
+      const target = { campus, term: 'T2026F' };
+      return {
+        contentVersion: 2,
+        options: [{ code: 'QQ', description: known('Quantitative and Formal Reasoning') }],
+        provenance: {
+          observationId: provenance.observationId,
+          observedAt: provenance.observedAt,
+          payloadDigest: provenance.payloadDigest,
+          source: 'RUTGERS_CATALOG' as const,
+          target,
+        },
+        target,
+      };
+    }),
     subjects: Array.from({ length: subjectCount }, (_, index) => {
       const code = `S${String(index).padStart(3, '0')}`;
       return {
@@ -83,20 +98,25 @@ function Harness({
   initial = { ...createNeutralFilterState('T2026F'), campuses: ['NB'] },
   onSubmit = vi.fn(),
   locale = 'en-US',
+  catalogDiscovery = discovery(),
+  searchAvailable = true,
 }: {
   readonly initial?: FilterStateV1;
   readonly onSubmit?: () => void;
   readonly locale?: SupportedLocale;
+  readonly catalogDiscovery?: CatalogDiscoveryResponseV1;
+  readonly searchAvailable?: boolean;
 }) {
   const [value, setValue] = useState(initial);
   return (
     <BcspI18nProvider initialLocale={locale}>
       <FilterPanel
         schema={SCHEMA}
-        discovery={discovery()}
+        discovery={catalogDiscovery}
         value={value}
         onChange={setValue}
         onSubmit={onSubmit}
+        searchAvailable={searchAvailable}
       />
       <output data-testid="filter-state">{JSON.stringify(value)}</output>
     </BcspI18nProvider>
@@ -172,7 +192,7 @@ describe('controlled 22-field FilterPanel', () => {
     fireEvent.change(screen.getByLabelText('Minimum credits'), { target: { value: '3' } });
     fireEvent.change(screen.getByLabelText('Maximum credits'), { target: { value: '4.5' } });
     fireEvent.change(screen.getByLabelText('Core code match mode'), { target: { value: 'ALL' } });
-    addToken('Core codes', '  qq  ');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'QQ · Quantitative and Formal Reasoning' }));
     fireEvent.change(screen.getByLabelText('Prerequisite presence'), { target: { value: 'HAS' } });
     addToken('Course locations', '  liv  ');
 
@@ -252,8 +272,9 @@ describe('controlled 22-field FilterPanel', () => {
     fireEvent.click(screen.getByText('Same-Section constraints'));
     fireEvent.click(within(screen.getByRole('group', { name: 'Open status' }))
       .getByRole('checkbox', { name: 'Open' }));
-    fireEvent.change(screen.getByLabelText('Core codes'), { target: { value: 'QQ' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add Core codes' }));
+    fireEvent.click(screen.getByText('Course constraints'));
+    fireEvent.change(screen.getByLabelText('Search published Core codes'), { target: { value: 'formal' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'QQ · Quantitative and Formal Reasoning' }));
 
     expect(state()).toMatchObject({
       campuses: ['NB'],
@@ -271,6 +292,75 @@ describe('controlled 22-field FilterPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     expect(state()).toEqual({ ...createNeutralFilterState('T2026F'), campuses: ['NB'] });
     expect(screen.getAllByLabelText('Search target preserved')).toHaveLength(2);
+  });
+
+  it('only selects Core codes from the published dictionary and preserves ANY/ALL semantics', () => {
+    render(<Harness />);
+
+    const coreSearch = screen.getByLabelText('Search published Core codes');
+    fireEvent.change(coreSearch, { target: { value: 'NOT-A-PUBLISHED-CODE' } });
+    expect(screen.getByText('0 Core codes shown')).toBeTruthy();
+    expect(screen.getByText('No published Core code matches this target and search.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Add.*Core/u })).toBeNull();
+    expect(state().core).toEqual({ codes: [], mode: 'ANY' });
+
+    fireEvent.change(coreSearch, { target: { value: 'quantitative' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /^QQ.*Quantitative and Formal Reasoning$/u }));
+    fireEvent.change(screen.getByLabelText('Core code match mode'), { target: { value: 'ALL' } });
+    expect(state().core).toEqual({ codes: ['QQ'], mode: 'ALL' });
+
+    fireEvent.change(screen.getByLabelText('Core code match mode'), { target: { value: 'ANY' } });
+    expect(state().core).toEqual({ codes: ['QQ'], mode: 'ANY' });
+  });
+
+  it('keeps other searches available while a selected target Core dictionary is loading', () => {
+    const catalogDiscovery = discovery();
+    const withoutNbDictionary = {
+      ...catalogDiscovery,
+      coreCodeDictionaries: catalogDiscovery.coreCodeDictionaries.filter(
+        ({ target }) => target.campus !== 'NB',
+      ),
+    };
+    const onSubmit = vi.fn();
+    render(<Harness catalogDiscovery={withoutNbDictionary} onSubmit={onSubmit} />);
+
+    expect(screen.getByText(/Core dictionary is still loading/u)).toBeTruthy();
+    expect((screen.getByLabelText('Search published Core codes') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Core code match mode') as HTMLSelectElement).disabled).toBe(true);
+    const submit = screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a Saved View Core code as incompatible and lets the user remove it', () => {
+    render(<Harness initial={{
+      ...createNeutralFilterState('T2026F'),
+      campuses: ['NB'],
+      core: { codes: ['LEGACY'], mode: 'ALL' },
+    }} />);
+
+    expect(screen.getByText('Saved incompatible Core codes')).toBeTruthy();
+    expect(screen.getByText('LEGACY')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove incompatible Core code LEGACY' }));
+    expect(state().core).toEqual({ codes: [], mode: 'ALL' });
+  });
+
+  it('clears ordinary Core selections when the selected target set changes', () => {
+    render(<Harness initial={{
+      ...createNeutralFilterState('T2026F'),
+      campuses: ['NB'],
+      core: { codes: ['QQ'], mode: 'ALL' },
+    }} />);
+
+    expect((screen.getByRole('checkbox', {
+      name: /^QQ.*Quantitative and Formal Reasoning$/u,
+    }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(screen.getByRole('group', { name: 'Campus' }))
+      .getByRole('checkbox', { name: /Newark/ }));
+
+    expect(state().campuses).toEqual(['NB', 'NK']);
+    expect(state().core).toEqual({ codes: [], mode: 'ALL' });
   });
 
   it('adds and removes availability windows, preserves the target, and submits once', () => {

@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use bcsp_application::{
     ExtensionRequest, NoopWatchDispatchSink, OpenRuntimeSnapshot, PRODUCT_CATALOG_DISCOVERY_PATH,
-    PRODUCT_FILTER_SCHEMA_PATH, RequestMethod, RouteExtension, SharedWatchSocket,
-    WebSocketExtension,
+    PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_SERVICE_STATUS_PATH, RequestMethod, RouteExtension,
+    SharedWatchSocket, WebSocketExtension,
 };
 use bcsp_contracts::{
     CatalogDiscoveryRequestV1, FilterRequestV1, FilterValuesInputV1, HttpRequestEnvelope,
@@ -294,39 +294,127 @@ fn catalog_writer_does_not_block_local_bootstrap_or_product_serving_reads() {
     assert_eq!(discovery.status(), 200);
     assert_eq!(find_sqlite_files(temp.path()).len(), 1);
 
-    let database = prepared.operational().database();
     let (mutation_started, mutation_started_rx) = std::sync::mpsc::sync_channel(0);
     let (mutation_finished, mutation_finished_rx) = std::sync::mpsc::channel();
+    let mutation_routes = routes.clone();
+    let mutation_body = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 0,
+            "filters": filter_request("T2026F"),
+        },
+    })
+    .to_string()
+    .into_bytes();
     let personal_mutation = std::thread::spawn(move || {
-        let mut database = database.lock().unwrap();
-        let state_revision = database.personal().user_state_revision().unwrap();
         let started_at = Instant::now();
         mutation_started
             .send(())
             .expect("announce personal mutation attempt");
-        let result = database.personal_mut().compare_and_swap_settings(
-            state_revision,
-            SettingsRevision::ZERO,
-            &LocalSettings::default(),
-        );
+        let response = mutation_routes.handle(ExtensionRequest::new(
+            RequestMethod::Put,
+            "/api/v1/local/current-filters",
+            None,
+            mutation_body,
+        ));
         mutation_finished
-            .send((result, started_at.elapsed()))
+            .send((response, started_at.elapsed()))
             .expect("publish personal mutation result");
     });
     mutation_started_rx
         .recv_timeout(Duration::from_secs(2))
         .expect("personal mutation attempt started");
     std::thread::sleep(Duration::from_millis(5_250));
+
+    assert!(
+        matches!(
+            mutation_finished_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ),
+        "personal mutation must remain pending while the Catalog writer owns SQLite's writer slot",
+    );
+    let prepare_routes = routes.clone();
+    let prepare_body = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"expectedUserStateRevision": 1},
+    })
+    .to_string()
+    .into_bytes();
+    let (prepare_response, prepare_response_rx) = std::sync::mpsc::channel();
+    let prepare_worker = std::thread::spawn(move || {
+        prepare_response
+            .send(prepare_routes.handle(ExtensionRequest::new(
+                RequestMethod::Post,
+                "/api/v1/local/user-data-reset/prepare",
+                None,
+                prepare_body,
+            )))
+            .unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        matches!(
+            prepare_response_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ),
+        "prepare must serialize behind the pending personal mutation",
+    );
+    for path in ["/api/v1/local/bootstrap", PRODUCT_SERVICE_STATUS_PATH] {
+        let read_routes = routes.clone();
+        let (read_response, read_response_rx) = std::sync::mpsc::channel();
+        let read_worker = std::thread::spawn(move || {
+            read_response
+                .send(read_routes.handle(ExtensionRequest::new(
+                    RequestMethod::Get,
+                    path,
+                    None,
+                    Vec::new(),
+                )))
+                .expect("publish read response");
+        });
+        let read = read_response_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or_else(|_| panic!("{path} must not wait behind a pending personal mutation"));
+        read_worker.join().expect("read worker");
+        assert_eq!(read.status(), 200, "{path}");
+    }
+
     transaction.rollback().unwrap();
-    let (mutation_result, mutation_elapsed) = mutation_finished_rx
+    let (mutation_response, mutation_elapsed) = mutation_finished_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("personal mutation completes after the Catalog writer releases");
-    mutation_result.expect("personal mutation waits for the Catalog writer");
+    assert_eq!(mutation_response.status(), 200);
+    let current_filters = routes.handle(ExtensionRequest::new(
+        RequestMethod::Get,
+        "/api/v1/local/current-filters",
+        None,
+        Vec::new(),
+    ));
+    assert_eq!(current_filters.status(), 200);
+    let current_filters: serde_json::Value =
+        serde_json::from_slice(current_filters.body()).unwrap();
+    assert_eq!(current_filters["data"]["revision"], 1);
+
+    let bootstrap = routes.handle(ExtensionRequest::new(
+        RequestMethod::Get,
+        "/api/v1/local/bootstrap",
+        None,
+        Vec::new(),
+    ));
+    assert_eq!(bootstrap.status(), 200);
+    let bootstrap: serde_json::Value = serde_json::from_slice(bootstrap.body()).unwrap();
+    assert_eq!(bootstrap["data"]["state"]["currentFilters"]["revision"], 1);
+    let prepared_reset = prepare_response_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("prepare completes after the earlier mutation");
+    assert_eq!(prepared_reset.status(), 200);
     assert!(
         mutation_elapsed >= Duration::from_secs(5),
         "personal mutation must remain in SQLite busy-wait beyond the old five-second limit"
     );
     personal_mutation.join().expect("personal mutation thread");
+    prepare_worker.join().expect("prepare worker");
 }
 
 #[test]
@@ -1316,7 +1404,8 @@ fn confirmed_reset_stops_active_watches_before_attempting_the_personal_transacti
     assert!(responses.try_recv().is_ok());
     assert_eq!(watch.total_active_watch_count(), 1);
 
-    let mut surface = PersonalSurface::new(database.clone(), watch.clone());
+    let mutation_store = PersonalStateStore::open(prepared.paths().database()).unwrap();
+    let surface = PersonalSurface::new(database.clone(), mutation_store, watch.clone());
     let prepare = serde_json::json!({
         "protocolVersion": 1,
         "payload": {"expectedUserStateRevision": 1},
@@ -1335,6 +1424,14 @@ fn confirmed_reset_stops_active_watches_before_attempting_the_personal_transacti
             .clear_personal_data(UserStateRevision::try_from(1).unwrap())
             .unwrap();
     }
+    assert_eq!(
+        surface.prepare_local_user_data_reset(prepare.as_bytes()),
+        Err(bcsp_local_runtime::LocalSurfaceFailure::revision_conflict(
+            bcsp_local_runtime::LocalApiErrorCode::UserStateRevisionConflict,
+            2,
+        )),
+        "a failed prepare must not replace the existing confirmation token",
+    );
     let confirm = serde_json::json!({
         "protocolVersion": 1,
         "payload": {"confirmationToken": token},
@@ -1352,6 +1449,136 @@ fn confirmed_reset_stops_active_watches_before_attempting_the_personal_transacti
         0,
         "watch cleanup must happen before even a failing reset transaction",
     );
+}
+
+#[test]
+fn confirmed_reset_serializes_a_later_filter_mutation_until_reset_commits() {
+    let temp = TestDirectory::new("confirm-mutation-serialization");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let database = prepared.operational().database();
+    let admission = Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None));
+    let watch =
+        Arc::new(SharedWatchSocket::try_new(admission, Arc::new(NoopWatchDispatchSink)).unwrap());
+    let connection_id = trace(110);
+    let (outbound, mut responses) = mpsc::unbounded_channel();
+    assert!(watch.connect(connection_id, outbound));
+    let items = WatchStartItemsV1::try_from(vec![WatchStartItemV1::new(
+        SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap(),
+        WatchPolicyV1::default(),
+    )])
+    .unwrap();
+    watch.receive_text(
+        connection_id,
+        &serde_json::to_string(&WsClientEnvelope::new(
+            trace(111),
+            WatchClientCommandV1::StartWatch { items },
+        ))
+        .unwrap(),
+    );
+    assert!(responses.try_recv().is_ok());
+    assert_eq!(watch.total_active_watch_count(), 1);
+
+    let mutation_store = PersonalStateStore::open(prepared.paths().database()).unwrap();
+    let surface = Arc::new(PersonalSurface::new(
+        database,
+        mutation_store,
+        watch.clone(),
+    ));
+    let prepare = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"expectedUserStateRevision": 1},
+    })
+    .to_string();
+    let prepared_reset = surface
+        .prepare_local_user_data_reset(prepare.as_bytes())
+        .unwrap();
+    let prepared_reset: serde_json::Value = serde_json::from_slice(&prepared_reset).unwrap();
+    let token = prepared_reset["data"]["confirmationToken"].clone();
+
+    let mut external_writer = Connection::open(prepared.paths().database()).unwrap();
+    external_writer
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    let transaction = external_writer
+        .transaction_with_behavior(TransactionBehavior::Exclusive)
+        .unwrap();
+    transaction
+        .execute(
+            "UPDATE bcsp_operational_migrations SET name = name WHERE migration_id = 1",
+            [],
+        )
+        .unwrap();
+
+    let confirm_surface = surface.clone();
+    let confirm_body = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"confirmationToken": token},
+    })
+    .to_string()
+    .into_bytes();
+    let (confirm_result, confirm_result_rx) = std::sync::mpsc::channel();
+    let confirm_worker = std::thread::spawn(move || {
+        confirm_result
+            .send(confirm_surface.confirm_local_user_data_reset(&confirm_body))
+            .unwrap();
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while watch.total_active_watch_count() != 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        watch.total_active_watch_count(),
+        0,
+        "watch stop proves confirm owns the mutation lane before it waits for SQLite",
+    );
+    assert!(matches!(
+        confirm_result_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+
+    let put_surface = surface.clone();
+    let put_body = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {
+            "expectedUserStateRevision": 1,
+            "expectedCurrentFiltersRevision": 0,
+            "filters": filter_request("T2026F"),
+        },
+    })
+    .to_string()
+    .into_bytes();
+    let (put_result, put_result_rx) = std::sync::mpsc::channel();
+    let put_worker = std::thread::spawn(move || {
+        put_result
+            .send(put_surface.put_current_filters(&put_body))
+            .unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(matches!(
+        put_result_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+
+    transaction.rollback().unwrap();
+    let confirmed = confirm_result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("confirm completes after the external writer releases")
+        .unwrap();
+    let confirmed: serde_json::Value = serde_json::from_slice(&confirmed).unwrap();
+    assert_eq!(confirmed["data"]["stateRevision"], 2);
+    assert_eq!(
+        put_result_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("later PUT runs after confirm completes"),
+        Err(bcsp_local_runtime::LocalSurfaceFailure::revision_conflict(
+            bcsp_local_runtime::LocalApiErrorCode::UserStateRevisionConflict,
+            2,
+        )),
+    );
+    confirm_worker.join().unwrap();
+    put_worker.join().unwrap();
 }
 
 fn request(authority: &str, request_line: &str, origin: &str, nonce: &str, body: &str) -> String {

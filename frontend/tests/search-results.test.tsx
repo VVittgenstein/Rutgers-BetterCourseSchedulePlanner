@@ -133,7 +133,7 @@ function occurrence(key = SECTION_KEY): NormalizedOccurrenceV1 {
 }
 
 function sectionItem(
-  outcome: 'MATCH' | 'UNCERTAIN',
+  outcome: 'MATCH' | 'UNCERTAIN' | 'NO_MATCH',
   key = SECTION_KEY,
 ): SectionQueryItemV1 {
   const reasons = outcome === 'UNCERTAIN'
@@ -189,7 +189,146 @@ const COURSE_RESPONSE: CourseQueryResponseV1 = {
 
 afterEach(cleanup);
 
+function expandCourseSections(label = 'Show 1 Sections'): void {
+  for (const disclosure of screen.getAllByText(label)) fireEvent.click(disclosure);
+}
+
 describe('typed search result and detail views', () => {
+  it('formats Rutgers encoded credit values without exposing their storage representation', () => {
+    const response: CourseQueryResponseV1 = {
+      ...COURSE_RESPONSE,
+      items: [{
+        ...COURSE_RESPONSE.items[0]!,
+        variants: [
+          {
+            ...COURSE_RESPONSE.items[0]!.variants[0]!,
+            variant: { ...FIRST_VARIANT, credits: known('3_0') },
+          },
+          {
+            ...COURSE_RESPONSE.items[0]!.variants[1]!,
+            variant: { ...SECOND_VARIANT, credits: known('1_5') },
+          },
+        ],
+      }],
+    };
+    render(
+      <CourseResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={response}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+    );
+
+    const variantFacts = screen.getAllByLabelText('Variant-defining fields');
+    expect(within(variantFacts[0]!).getByText('3')).toBeTruthy();
+    expect(within(variantFacts[1]!).getByText('1.5')).toBeTruthy();
+    expect(screen.queryByText('3_0')).toBeNull();
+    expect(screen.queryByText('1_5')).toBeNull();
+  });
+
+  it('defensively removes NO_MATCH variants and Sections from search responses', () => {
+    const hiddenTitle = 'Backend should not have returned this variant';
+    const courseResponse: CourseQueryResponseV1 = {
+      ...COURSE_RESPONSE,
+      items: [{
+        ...COURSE_RESPONSE.items[0]!,
+        variants: [
+          {
+            ...COURSE_RESPONSE.items[0]!.variants[0]!,
+            sections: [sectionItem('MATCH'), sectionItem('NO_MATCH', SECOND_SECTION_KEY)],
+          },
+          {
+            ...COURSE_RESPONSE.items[0]!.variants[1]!,
+            explanation: { outcome: 'NO_MATCH', reasons: [] },
+            variant: { ...SECOND_VARIANT, title: known(hiddenTitle) },
+          },
+        ],
+      }],
+    };
+    const courseView = render(
+      <CourseResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={courseResponse}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+    );
+
+    expect(screen.queryByRole('heading', { name: hiddenTitle })).toBeNull();
+    expect(screen.getByText('Show 1 Sections')).toBeTruthy();
+    fireEvent.click(screen.getByText('Show 1 Sections'));
+    expect(courseView.container.querySelector('[data-section-index="12345"]')).not.toBeNull();
+    expect(courseView.container.querySelector('[data-section-index="54321"]')).toBeNull();
+    courseView.unmount();
+
+    const sectionResponse: SectionQueryResponseV1 = {
+      contractVersion: 1,
+      items: [
+        {
+          courseFilterMatches: [],
+          section: sectionItem('MATCH'),
+          textMatch: null,
+          variant: FIRST_VARIANT,
+        },
+        {
+          courseFilterMatches: [],
+          section: sectionItem('NO_MATCH', SECOND_SECTION_KEY),
+          textMatch: null,
+          variant: SECOND_VARIANT,
+        },
+      ],
+      page: { page: 1, pageSize: 25, total: 2, totalPages: 1 },
+    };
+    const sectionView = render(
+      <SectionResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={sectionResponse}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+    );
+    expect(sectionView.container.querySelector('[data-section-index="12345"]')).not.toBeNull();
+    expect(sectionView.container.querySelector('[data-section-index="54321"]')).toBeNull();
+  });
+
+  it('keeps Sections unmounted by default and exposes the complete cards through native keyboard disclosure', () => {
+    const view = render(
+      <CourseResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={{
+          ...COURSE_RESPONSE,
+          items: [{
+            ...COURSE_RESPONSE.items[0]!,
+            variants: [COURSE_RESPONSE.items[0]!.variants[0]!],
+          }],
+        }}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+    );
+
+    const summary = screen.getByText('Show 1 Sections').closest('summary');
+    const details = summary?.closest('details');
+    expect(summary).not.toBeNull();
+    expect(details?.open).toBe(false);
+    expect(view.container.querySelector('[data-section-index="12345"]')).toBeNull();
+    expect(screen.queryByText('Ada Lovelace')).toBeNull();
+
+    summary?.focus();
+    expect(document.activeElement).toBe(summary);
+    fireEvent.keyDown(summary as HTMLElement, { key: 'Enter', code: 'Enter' });
+    if (details === null || details === undefined) throw new Error('native details disclosure is required');
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+
+    expect(screen.getByText('Hide 1 Sections')).toBeTruthy();
+    expect(view.container.querySelector('[data-section-index="12345"]')).not.toBeNull();
+    expect(screen.getByText('Live OPEN')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open section' }).getAttribute('href')).toBe('/sections/12345');
+    expect(screen.getByText('Occurrences · 1')).toBeTruthy();
+  });
+
   it('keeps course variants explicit and exposes section evidence, live freshness, and uncertainty', () => {
     render(
       <CourseResultsView
@@ -210,6 +349,8 @@ describe('typed search result and detail views', () => {
     expect(within(variantFacts[1]!).getByText('H')).toBeTruthy();
     expect(screen.getAllByText('MATCH').length).toBeGreaterThan(0);
     expect(screen.getAllByText('UNCERTAIN').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Live OPEN')).toBeNull();
+    expandCourseSections();
     expect(screen.getByText('Live OPEN')).toBeTruthy();
     const freshUntil = new Intl.DateTimeFormat('en-US', {
       dateStyle: 'medium',
@@ -233,6 +374,7 @@ describe('typed search result and detail views', () => {
     );
 
     expect(screen.getByRole('heading', { name: '课程结果' })).toBeTruthy();
+    expandCourseSections('显示 1 个课节');
     expect(screen.getAllByRole('link', { name: '打开课节' }).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Data Structures' })).toBeTruthy();
     expect(screen.getByText('实时状态：OPEN')).toBeTruthy();
@@ -252,6 +394,7 @@ describe('typed search result and detail views', () => {
       />,
     );
 
+    fireEvent.click(screen.getAllByText('Show 1 Sections')[0]!);
     const links = screen.getAllByRole('link', { name: 'Open section' });
     expect(links[0]?.getAttribute('href')).toBe('/catalog/2026-9/NB/section/12345');
     const click = createEvent.click(links[0]!, { button: 0 });
@@ -281,6 +424,7 @@ describe('typed search result and detail views', () => {
       />,
     );
 
+    fireEvent.click(screen.getAllByText('Show 1 Sections')[0]!);
     const link = screen.getAllByRole('link', { name: 'Open section' })[0]!;
     const click = createEvent.click(link, eventInit);
     fireEvent(link, click);

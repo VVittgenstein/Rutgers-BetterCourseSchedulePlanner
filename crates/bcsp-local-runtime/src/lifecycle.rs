@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use bcsp_application::{
     LoopbackServer, LoopbackServerError, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,
-    OpenRuntimeSnapshotRegistry, RouteExtension, SessionNonce, SharedWatchSocket,
-    TargetRefreshDemand, WebSocketExtension, spawn_loopback_server_with_socket,
+    OpenRuntimeSnapshotRegistry, RouteExtension, ServiceStatusRegistry, SessionNonce,
+    SharedWatchSocket, TargetRefreshDemand, WebSocketExtension, spawn_loopback_server_with_socket,
 };
 use bcsp_local_user_state::PersonalStateStore;
 use thiserror::Error;
@@ -65,6 +65,7 @@ pub struct PreparedLocalRuntime {
     operational: OperationalGate,
     core: LocalRuntimeCore,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
+    service_status: Arc<ServiceStatusRegistry>,
     watch: Arc<SharedWatchSocket>,
     target_refresh_demand: TargetRefreshDemand,
     extension: Arc<LocalRouteExtension>,
@@ -79,10 +80,11 @@ impl PreparedLocalRuntime {
         let core = create_local_runtime_core(database.clone());
         let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
         let target_refresh_demand = TargetRefreshDemand::default();
-        let product_routes: Arc<dyn RouteExtension> = Arc::new(
+        let product_routes =
             create_local_product_routes(database.clone(), core.clone(), open_runtime.clone())
-                .with_target_refresh_demand(target_refresh_demand.clone()),
-        );
+                .with_target_refresh_demand(target_refresh_demand.clone());
+        let service_status = product_routes.service_status_registry();
+        let product_routes: Arc<dyn RouteExtension> = Arc::new(product_routes);
         let history_store = PersonalStateStore::open(operational.paths().database())
             .map_err(LocalBootstrapError::PersonalState)?;
         let watch = create_local_watch_socket(
@@ -91,7 +93,9 @@ impl PreparedLocalRuntime {
             core.clone(),
             open_runtime.clone(),
         )?;
-        let personal = PersonalSurface::new(database, watch.clone());
+        let mutation_store = PersonalStateStore::open(operational.paths().database())
+            .map_err(LocalBootstrapError::PersonalState)?;
+        let personal = PersonalSurface::new(database, mutation_store, watch.clone());
         let nonce = SessionNonce::generate();
         let (shutdown_trigger, shutdown_requests) = local_shutdown_channel();
         let extension = Arc::new(LocalRouteExtension::with_product_routes(
@@ -104,6 +108,7 @@ impl PreparedLocalRuntime {
             operational,
             core,
             open_runtime,
+            service_status,
             watch,
             target_refresh_demand,
             extension,
@@ -166,6 +171,7 @@ impl PreparedLocalRuntime {
             &self.core,
             self.watch.clone(),
             self.open_runtime.clone(),
+            self.service_status.clone(),
             self.target_refresh_demand.clone(),
         )?;
         let extension: Arc<dyn RouteExtension> = self.extension.clone();

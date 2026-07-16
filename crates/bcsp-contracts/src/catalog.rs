@@ -459,6 +459,7 @@ pub struct CatalogDiscoveryResponseV1 {
     pub sources: Vec<CatalogDiscoverySourceV1>,
     pub targets: Vec<CatalogTargetV1>,
     pub subjects: Vec<CatalogSubjectV1>,
+    pub core_code_dictionaries: Vec<CatalogCoreCodeDictionaryV1>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -640,6 +641,27 @@ pub struct CatalogSubjectV1 {
     pub code: CatalogSubjectCode,
     pub label: CatalogFieldKnowledge<String>,
     pub provenance: CatalogSubjectProvenanceV1,
+}
+
+/// One selectable Core Curriculum code derived from a published Catalog.
+/// The description remains evidence so conflicting or malformed upstream
+/// labels cannot masquerade as an authoritative display value.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogCoreCodeOptionV1 {
+    pub code: String,
+    pub description: CatalogFieldKnowledge<String>,
+}
+
+/// Target-scoped Core Curriculum dictionary tied to the exact Catalog
+/// publication from which it was derived.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogCoreCodeDictionaryV1 {
+    pub target: TermCampusKey,
+    pub content_version: CatalogContentVersion,
+    pub provenance: CatalogProvenanceV1,
+    pub options: Vec<CatalogCoreCodeOptionV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

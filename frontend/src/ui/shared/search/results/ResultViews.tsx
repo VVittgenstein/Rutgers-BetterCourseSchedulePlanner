@@ -1,4 +1,4 @@
-import type { MouseEvent } from 'react';
+import { useId, useState, type MouseEvent } from 'react';
 
 import type {
   CatalogFieldKnowledge,
@@ -90,6 +90,14 @@ function formatArray(
   );
 }
 
+function formatCredits(value: string): string {
+  const encoded = /^(\d+)_(\d+)$/u.exec(value.trim());
+  if (encoded === null) return value;
+  const whole = encoded[1];
+  const fraction = encoded[2]?.replace(/0+$/u, '');
+  return fraction === undefined || fraction.length === 0 ? (whole ?? value) : `${whole}.${fraction}`;
+}
+
 function formatMinute(value: number): string {
   const hours = Math.floor(value / 60).toString().padStart(2, '0');
   const minutes = (value % 60).toString().padStart(2, '0');
@@ -133,7 +141,7 @@ function VariantFacts({ variant }: { readonly variant: NormalizedCourseVariantV1
   return (
     <div className="search-results__variant-facts" aria-label={i18n.t('result.variant_fields')}>
       <Fact label={i18n.t('result.title')} value={formatKnowledge(variant.title, i18n)} />
-      <Fact label={i18n.t('course.credits')} value={formatKnowledge(variant.credits, i18n)} />
+      <Fact label={i18n.t('course.credits')} value={formatKnowledge(variant.credits, i18n, formatCredits)} />
       <Fact label={i18n.t('result.supplement')} value={formatKnowledge(variant.supplementCode, i18n)} />
     </div>
   );
@@ -174,7 +182,11 @@ function SectionLink({
 }
 
 function OutcomeBadge({ explanation }: { readonly explanation: MatchExplanation }) {
-  const modifier = explanation.outcome === 'MATCH' ? 'match' : 'uncertain';
+  const modifier = explanation.outcome === 'MATCH'
+    ? 'match'
+    : explanation.outcome === 'UNCERTAIN'
+      ? 'uncertain'
+      : 'no-match';
   return (
     <span className={`search-results__badge search-results__badge--${modifier}`}>
       {explanation.outcome}
@@ -343,8 +355,8 @@ function VariantResult({
 }) {
   const i18n = useBcspI18n();
   return (
-    <details className="search-results__variant" data-variant-fingerprint={item.variant.key.fingerprint} open>
-      <summary className="search-results__variant-summary">
+    <article className="search-results__variant" data-variant-fingerprint={item.variant.key.fingerprint}>
+      <header className="search-results__variant-summary">
         <div>
           <span className="search-results__eyebrow">
             {i18n.t('result.variant', { fingerprint: item.variant.key.fingerprint })}
@@ -353,22 +365,64 @@ function VariantResult({
         </div>
         <div className="search-results__badges">
           <OutcomeBadge explanation={item.explanation} />
-          <span className="search-results__badge">
-            {i18n.t('result.sections_count', { count: i18n.formatNumber(item.sections.length) })}
-          </span>
         </div>
-      </summary>
+      </header>
       <VariantFacts variant={item.variant} />
-      <div className="search-results__section-list">
-        {item.sections.map((section) => (
-          <SectionResult
-            item={section}
-            key={formatSectionKey(section.section.key)}
-            onSectionNavigate={onSectionNavigate}
-            sectionHref={sectionHref}
-          />
-        ))}
-      </div>
+      <SectionDisclosure
+        onSectionNavigate={onSectionNavigate}
+        sectionHref={sectionHref}
+        sections={item.sections.filter(({ explanation }) => explanation.outcome !== 'NO_MATCH')}
+      />
+    </article>
+  );
+}
+
+function SectionDisclosure({
+  sections,
+  sectionHref,
+  onSectionNavigate,
+}: {
+  readonly sections: readonly SectionQueryItemV1[];
+  readonly sectionHref: (key: SectionKey) => string;
+  readonly onSectionNavigate?: ((key: SectionKey) => void) | undefined;
+}) {
+  const i18n = useBcspI18n();
+  const contentId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const reflectOpen = (open: boolean) => {
+    setExpanded(open);
+    if (open) setMounted(true);
+  };
+  return (
+    <details
+      className="search-results__section-disclosure"
+      onToggle={(event) => reflectOpen(event.currentTarget.open)}
+    >
+      <summary
+        aria-controls={mounted ? contentId : undefined}
+        className="search-results__section-disclosure-summary"
+        onClick={(event) => reflectOpen(!(event.currentTarget.parentElement as HTMLDetailsElement).open)}
+      >
+        <span>{i18n.t(expanded ? 'result.sections_collapse' : 'result.sections_expand', {
+          count: i18n.formatNumber(sections.length),
+        })}</span>
+        <span aria-hidden="true" className="search-results__section-disclosure-action">
+          {expanded ? '−' : '+'}
+        </span>
+      </summary>
+      {mounted ? (
+        <div className="search-results__section-list" id={contentId}>
+          {sections.map((section) => (
+            <SectionResult
+              item={section}
+              key={formatSectionKey(section.section.key)}
+              onSectionNavigate={onSectionNavigate}
+              sectionHref={sectionHref}
+            />
+          ))}
+        </div>
+      ) : null}
     </details>
   );
 }
@@ -385,6 +439,8 @@ function CourseGroupResult({
   readonly onSectionNavigate?: ((key: SectionKey) => void) | undefined;
 }) {
   const i18n = useBcspI18n();
+  const visibleVariants = item.variants.filter(({ explanation }) => explanation.outcome !== 'NO_MATCH');
+  if (visibleVariants.length === 0) return null;
   return (
     <article className="search-results__group" data-course-group={item.group.key.courseString}>
       <header className="search-results__group-header">
@@ -395,7 +451,7 @@ function CourseGroupResult({
             <span className="search-results__meta">{i18n.t('common.term')} {item.group.key.term}</span>
             <span className="search-results__meta">{i18n.t('common.campus')} {item.group.key.campus}</span>
             <span className="search-results__meta">
-              {i18n.t('result.explicit_variants', { count: i18n.formatNumber(item.variants.length) })}
+              {i18n.t('result.explicit_variants', { count: i18n.formatNumber(visibleVariants.length) })}
             </span>
           </div>
         </div>
@@ -408,7 +464,7 @@ function CourseGroupResult({
         </button>
       </header>
       <div className="search-results__variant-list">
-        {item.variants.map((variant) => (
+        {visibleVariants.map((variant) => (
           <VariantResult
             item={variant}
             key={variant.variant.key.fingerprint}
@@ -480,15 +536,17 @@ export function CourseResultsView({
   onPageChange,
 }: CourseResultsViewProps) {
   const i18n = useBcspI18n();
+  const visibleItems = response.items.filter((item) =>
+    item.variants.some(({ explanation }) => explanation.outcome !== 'NO_MATCH'));
   return (
     <section className="search-results" aria-label={i18n.t('result.course_results_label')}>
       <SearchResultsStyles />
       <ResultsHeader kind={i18n.t('result.course_results')} page={response.page} />
-      {response.items.length === 0 ? (
+      {visibleItems.length === 0 ? (
         <p className="search-results__empty">{i18n.t('result.no_courses')}</p>
       ) : (
         <div className="search-results__list">
-          {response.items.map((item) => (
+          {visibleItems.map((item) => (
             <CourseGroupResult
               item={item}
               key={formatGroupKey(item.group.key)}
@@ -512,15 +570,16 @@ export function SectionResultsView({
   onPageChange,
 }: SectionResultsViewProps) {
   const i18n = useBcspI18n();
+  const visibleItems = response.items.filter(({ section }) => section.explanation.outcome !== 'NO_MATCH');
   return (
     <section className="search-results" aria-label={i18n.t('result.section_results_label')}>
       <SearchResultsStyles />
       <ResultsHeader kind={i18n.t('result.section_results')} page={response.page} />
-      {response.items.length === 0 ? (
+      {visibleItems.length === 0 ? (
         <p className="search-results__empty">{i18n.t('result.no_sections')}</p>
       ) : (
         <div className="search-results__list">
-          {response.items.map((item) => (
+          {visibleItems.map((item) => (
             <article className="search-results__standalone-section" key={formatSectionKey(item.section.section.key)}>
               <header className="search-results__group-header">
                 <div>
@@ -559,7 +618,7 @@ function DetailFields({ variant }: { readonly variant: NormalizedCourseVariantV1
   const i18n = useBcspI18n();
   const fields = [
     [i18n.t('result.expanded_title'), formatKnowledge(variant.expandedTitle, i18n)],
-    [i18n.t('course.credits'), formatKnowledge(variant.credits, i18n)],
+    [i18n.t('course.credits'), formatKnowledge(variant.credits, i18n, formatCredits)],
     [i18n.t('result.supplement'), formatKnowledge(variant.supplementCode, i18n)],
     [i18n.t('course.description'), formatKnowledge(variant.description, i18n)],
     [i18n.t('result.prerequisite'), formatKnowledge(variant.prerequisiteNotes, i18n)],
@@ -599,8 +658,8 @@ export function CourseDetailView({ response, sectionHref, onSectionNavigate }: C
           <OutcomeBadge explanation={course.explanation} />
         </header>
         {course.variants.map((variant) => (
-          <details className="search-results__variant" key={variant.variant.key.fingerprint} open>
-            <summary className="search-results__variant-summary">
+          <article className="search-results__variant" key={variant.variant.key.fingerprint}>
+            <header className="search-results__variant-summary">
               <div>
                 <span className="search-results__eyebrow">
                   {i18n.t('result.variant', { fingerprint: variant.variant.key.fingerprint })}
@@ -608,17 +667,14 @@ export function CourseDetailView({ response, sectionHref, onSectionNavigate }: C
                 <h2 className="search-results__variant-title">{formatKnowledge(variant.variant.title, i18n)}</h2>
               </div>
               <OutcomeBadge explanation={variant.explanation} />
-            </summary>
+            </header>
             <DetailFields variant={variant.variant} />
-            {variant.sections.map((section) => (
-              <SectionResult
-                item={section}
-                key={formatSectionKey(section.section.key)}
-                onSectionNavigate={onSectionNavigate}
-                sectionHref={sectionHref}
-              />
-            ))}
-          </details>
+            <SectionDisclosure
+              onSectionNavigate={onSectionNavigate}
+              sectionHref={sectionHref}
+              sections={variant.sections}
+            />
+          </article>
         ))}
       </article>
     </section>

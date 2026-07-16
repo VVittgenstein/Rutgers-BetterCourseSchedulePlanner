@@ -210,10 +210,6 @@ a {
   background: var(--bcsp-accent);
 }
 
-.bcsp-state-panel--loading .bcsp-state-panel__marker {
-  animation: bcsp-marker-pulse 1.4s ease-in-out infinite alternate;
-}
-
 .bcsp-status-signal {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -238,10 +234,6 @@ a {
 .bcsp-status-signal[data-state='offline'] .bcsp-status-signal__mark {
   border-color: var(--bcsp-accent);
   background: var(--bcsp-accent);
-}
-
-.bcsp-status-signal[data-state='refreshing'] .bcsp-status-signal__mark {
-  animation: bcsp-marker-pulse 1.1s ease-in-out infinite alternate;
 }
 
 .bcsp-status-signal__label,
@@ -335,11 +327,6 @@ a {
 .bcsp-field__error {
   color: var(--bcsp-accent);
   font-weight: 700;
-}
-
-@keyframes bcsp-marker-pulse {
-  from { opacity: 0.35; }
-  to { opacity: 1; }
 }
 
 @media (max-width: 47.999rem) {

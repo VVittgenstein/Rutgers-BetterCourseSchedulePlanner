@@ -13,6 +13,7 @@ import type {
   FilterSchemaV1,
   ProductApiPort,
   ProductRuntimePort,
+  ServiceStatusV1,
 } from '../src/ui/shared/product';
 
 const BOOTSTRAP = {
@@ -64,6 +65,7 @@ function discovery(
     contractVersion: 1,
     observedAt: OBSERVED_AT,
     sources: [],
+    coreCodeDictionaries: [],
     status: {
       availability,
       error: availability === 'UNAVAILABLE_NO_FIRST_SUCCESS'
@@ -91,9 +93,46 @@ function discovery(
   };
 }
 
+function serviceStatus(
+  level: ServiceStatusV1['level'] = 'READY',
+  availability: ServiceStatusV1['targets'][number]['catalogAvailability'] = 'CURRENT',
+  targetCount = 2,
+): ServiceStatusV1 {
+  const targets = discovery('CURRENT', targetCount).targets.map(({ key }) => ({
+    catalogAvailability: availability,
+    catalogContentVersion: availability === 'UNAVAILABLE' ? null : 7,
+    openAvailability: availability,
+    primary: true,
+    searchAvailable: availability !== 'UNAVAILABLE',
+    target: key,
+  }));
+  const availableTargetCount = targets.filter(({ searchAvailable }) => searchAvailable).length;
+  return {
+    catalog: { availableTargetCount, totalTargetCount: targets.length },
+    contractVersion: 1,
+    discovery: discovery(targetCount === 0 ? 'CURRENT' : availability === 'STALE'
+      ? 'STALE_LAST_SUCCESS' : 'CURRENT', targetCount).status,
+    issues: level === 'DEGRADED' ? [{
+      code: 'SYNTHETIC_STALE',
+      component: 'CATALOG',
+      recovery: 'AUTOMATIC_RETRY',
+      retryAt: null,
+      severity: 'DEGRADED',
+      target: targets[0]?.target ?? null,
+    }] : [],
+    level,
+    observedAt: OBSERVED_AT,
+    open: { availableTargetCount, totalTargetCount: targets.length },
+    operation: { nextRetryAt: null, phase: 'IDLE', startedAt: null, target: null },
+    runtime: 'PUBLIC',
+    targets,
+  };
+}
+
 function runtimeWith(
   catalog: ProductApiPort['catalogDiscovery'],
   schema: ProductApiPort['filterSchema'] = async () => filterSchema,
+  status: ProductApiPort['serviceStatus'] = async () => serviceStatus(),
 ): ProductRuntimePort {
   const uncalled = async () => {
     throw new Error('not used by the shell foundation');
@@ -106,6 +145,7 @@ function runtimeWith(
       filterSchema: schema,
       openSectionStatus: uncalled,
       openStatus: uncalled,
+      serviceStatus: status,
       searchCourses: uncalled,
       searchSections: uncalled,
       sectionDetail: uncalled,
@@ -139,10 +179,15 @@ afterEach(() => {
 describe('P7.2 responsive product shell', () => {
   it('renders a truthful loading state while both shell resources are pending', async () => {
     const pending = new Promise<CatalogDiscoveryResponseV1>(() => undefined);
-    renderShell(runtimeWith(async () => pending));
+    renderShell(runtimeWith(
+      async () => pending,
+      undefined,
+      async () => serviceStatus('INITIALIZING', 'UNAVAILABLE', 0),
+    ));
 
-    expect((await screen.findByRole('status')).getAttribute('data-state')).toBe('loading');
-    expect(screen.getByRole('heading', { name: 'Opening the catalog console' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Opening the catalog console' })).toBeTruthy();
+    expect(document.querySelector('[data-state="loading"]')).not.toBeNull();
+    expect(screen.getByText('Initializing')).toBeTruthy();
   });
 
   it('renders current metrics and lets native controls select published targets', async () => {
@@ -159,8 +204,8 @@ describe('P7.2 responsive product shell', () => {
     expect(newBrunswick.checked).toBe(true);
 
     expect(screen.getAllByText('22').length).toBeGreaterThan(0);
-    expect(screen.getByText('Catalog current')).toBeTruthy();
-    expect(screen.getByText('Not observed yet')).toBeTruthy();
+    expect(screen.getByText('Search ready')).toBeTruthy();
+    expect(screen.getAllByText('2/2')).toHaveLength(2);
     expect(screen.getByRole('group', { name: 'Interface language' })).toBeTruthy();
 
     const accessibility = await axe.run(view.baseElement, {
@@ -169,24 +214,49 @@ describe('P7.2 responsive product shell', () => {
     expect(accessibility.violations).toEqual([]);
   });
 
+  it('expands a retained ready snapshot when the service connection is interrupted', async () => {
+    const statusRequest = vi.fn<ProductApiPort['serviceStatus']>()
+      .mockResolvedValueOnce(serviceStatus())
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(serviceStatus());
+    renderShell(runtimeWith(async () => discovery(), undefined, statusRequest));
+
+    expect(await screen.findByText('Search ready')).toBeTruthy();
+    globalThis.dispatchEvent(new Event('online'));
+
+    expect(await screen.findAllByText('Service connection interrupted')).toHaveLength(2);
+    expect(screen.getByText(
+      'The last service snapshot is retained while the browser reconnects with backoff.',
+    )).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
   it('distinguishes stale, valid-empty, and request-error states without fallback data', async () => {
-    const stale = renderShell(runtimeWith(async () => discovery('STALE_LAST_SUCCESS')));
-    expect(await screen.findByText('Catalog stale')).toBeTruthy();
+    const stale = renderShell(runtimeWith(
+      async () => discovery('STALE_LAST_SUCCESS'),
+      undefined,
+      async () => serviceStatus('DEGRADED', 'STALE'),
+    ));
+    expect(await screen.findByText('Running with degraded data')).toBeTruthy();
     stale.unmount();
 
-    const empty = renderShell(runtimeWith(async () => discovery('CURRENT', 0)));
+    const empty = renderShell(runtimeWith(
+      async () => discovery('CURRENT', 0),
+      undefined,
+      async () => serviceStatus('INITIALIZING', 'UNAVAILABLE', 0),
+    ));
     expect(await screen.findByRole('heading', { name: 'No catalog targets available' })).toBeTruthy();
     expect(screen.queryByText('Fall 2026')).toBeNull();
     empty.unmount();
 
     const catalogDiscovery = vi.fn<ProductApiPort['catalogDiscovery']>()
       .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce(discovery());
+      .mockResolvedValue(discovery());
     renderShell(runtimeWith(catalogDiscovery));
     expect(await screen.findByRole('alert')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(screen.getByText('Catalog current')).toBeTruthy());
-    expect(catalogDiscovery).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Term' })).toBeTruthy());
+    expect(catalogDiscovery.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('keeps the chosen ink, paper, accent, focus, and reduced-motion rules in the shared token layer', () => {

@@ -2,10 +2,9 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bcsp_application::{
-    NoopCoordinatorStatusSink, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,
-    OpenRuntimeSnapshotRegistry, ProductStorageAccess, ProductStorageLockError,
-    SharedProductRoutes, SharedProductStorage, SharedWatchSocket, SystemApplicationClock,
-    TargetRefreshDemand,
+    OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError, OpenRuntimeSnapshotRegistry,
+    ProductStorageAccess, ProductStorageLockError, ServiceStatusRegistry, SharedProductRoutes,
+    SharedProductStorage, SharedWatchSocket, SystemApplicationClock, TargetRefreshDemand,
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_operational_storage::OperationalStorage;
@@ -74,6 +73,7 @@ pub(crate) fn start_local_product_refresh(
     runtime: &LocalRuntimeCore,
     watch: Arc<SharedWatchSocket>,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
+    service_status: Arc<ServiceStatusRegistry>,
     target_refresh_demand: TargetRefreshDemand,
 ) -> Result<OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError> {
     let OpenCounterAudience::Local { run_id } = runtime.counter_audience() else {
@@ -86,7 +86,7 @@ pub(crate) fn start_local_product_refresh(
         runtime.counter_audience(),
         watch,
         open_runtime,
-        Arc::new(NoopCoordinatorStatusSink),
+        service_status,
         target_refresh_demand,
     )
 }

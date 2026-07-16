@@ -17,16 +17,18 @@ mod open;
 mod protocol;
 mod query;
 mod schema;
+mod service;
 mod watch;
 
 pub use catalog::{
     CATALOG_CONTRACT_VERSION, CatalogCommentV1, CatalogContentVersion, CatalogContentVersionError,
-    CatalogContractVersion, CatalogContractVersionError, CatalogDiagnosticCode,
-    CatalogDiagnosticCodeError, CatalogDiscoveryAvailability, CatalogDiscoveryErrorClass,
-    CatalogDiscoveryErrorV1, CatalogDiscoveryPointV1, CatalogDiscoveryProvenanceV1,
-    CatalogDiscoveryRequestV1, CatalogDiscoveryResponseV1, CatalogDiscoverySourceId,
-    CatalogDiscoverySourceIdError, CatalogDiscoverySourceKind, CatalogDiscoverySourceV1,
-    CatalogDiscoveryStatusV1, CatalogEntityCountsV1, CatalogFieldKnowledge, CatalogFieldPresence,
+    CatalogContractVersion, CatalogContractVersionError, CatalogCoreCodeDictionaryV1,
+    CatalogCoreCodeOptionV1, CatalogDiagnosticCode, CatalogDiagnosticCodeError,
+    CatalogDiscoveryAvailability, CatalogDiscoveryErrorClass, CatalogDiscoveryErrorV1,
+    CatalogDiscoveryPointV1, CatalogDiscoveryProvenanceV1, CatalogDiscoveryRequestV1,
+    CatalogDiscoveryResponseV1, CatalogDiscoverySourceId, CatalogDiscoverySourceIdError,
+    CatalogDiscoverySourceKind, CatalogDiscoverySourceV1, CatalogDiscoveryStatusV1,
+    CatalogEntityCountsV1, CatalogFieldKnowledge, CatalogFieldPresence,
     CatalogInstructorReliability, CatalogModality, CatalogOccurrenceEvidence,
     CatalogOccurrenceKeyV1, CatalogOccurrenceKind, CatalogOpenStatusProvenance,
     CatalogPayloadDigest, CatalogPayloadDigestError, CatalogPrerequisiteState, CatalogProvenanceV1,
@@ -90,6 +92,12 @@ pub use query::{
 pub use schema::{
     CONTRACT_SCHEMA_VERSION, ContractField, ContractManifest, ContractSchema, ContractVariant,
     ScalarConstraint, SchemaDirection, UnknownFieldPolicy, contract_manifest,
+};
+pub use service::{
+    SERVICE_STATUS_CONTRACT_VERSION, ServiceAvailabilitySummaryV1, ServiceAvailabilityV1,
+    ServiceIssueComponentV1, ServiceIssueRecoveryV1, ServiceIssueSeverityV1, ServiceIssueV1,
+    ServiceLevelV1, ServiceOperationPhaseV1, ServiceOperationV1, ServiceRuntimeV1, ServiceStatusV1,
+    ServiceTargetStatusV1,
 };
 pub use watch::{
     ACTIVE_WATCH_STATE_PERSISTENT, ActiveWatchId, ActiveWatchTargetV1,

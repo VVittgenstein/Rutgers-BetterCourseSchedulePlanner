@@ -14,6 +14,7 @@ mod refresh_coordinator;
 mod refresh_runtime;
 mod runtime_core;
 mod rutgers_refresh_upstream;
+mod service_status;
 mod target_refresh_demand;
 mod watch_socket;
 
@@ -33,9 +34,9 @@ pub use official_refresh_runtime::{
 pub use product_routes::{
     PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH, PRODUCT_COURSE_SEARCH_PATH,
     PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH, PRODUCT_OPEN_STATUS_PATH,
-    PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH, ProductStorageAccess,
-    ProductStorageLockError, SHARED_PRODUCT_ROUTE_INVENTORY, SharedProductRoutes,
-    SharedProductStorage,
+    PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH, PRODUCT_SERVICE_STATUS_PATH,
+    ProductStorageAccess, ProductStorageLockError, SHARED_PRODUCT_ROUTE_INVENTORY,
+    SharedProductRoutes, SharedProductStorage,
 };
 pub use query_service::{SharedQueryError, SharedQueryService};
 pub use refresh_coordinator::{
@@ -52,6 +53,9 @@ pub use runtime_core::{
 };
 pub use rutgers_refresh_upstream::{
     RutgersRefreshUpstream, RutgersRefreshUpstreamBuildError, SelectorTargetMembership,
+};
+pub use service_status::{
+    ServiceActivitySnapshot, ServiceStatusRegistry, ServiceStatusRegistryError,
 };
 pub use target_refresh_demand::{TargetRefreshDemand, TargetRefreshDemandError};
 pub use watch_socket::{

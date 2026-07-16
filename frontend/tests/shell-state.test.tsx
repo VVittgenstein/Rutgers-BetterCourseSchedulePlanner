@@ -89,6 +89,7 @@ function discovery(
       error: availability === 'CURRENT' ? null : { class: 'TRANSPORT', code: 'SYNTHETIC' },
     },
     sources: [],
+    coreCodeDictionaries: [],
     targets: Array.from({ length: targetCount }, (_, index) => ({
       key: { term: `SYNTHETIC-${index}`, campus: 'TEST' },
       termLabel: { knowledge: 'KNOWN', presence: { presence: 'PRESENT', value: 'Synthetic term' } },
@@ -138,6 +139,7 @@ function runtimeWith(product: Pick<ProductApiPort, 'filterSchema' | 'catalogDisc
     courseDetail: unused,
     openSectionStatus: unused,
     openStatus: unused,
+    serviceStatus: unused,
     searchCourses: unused,
     searchSections: unused,
     sectionDetail: unused,
@@ -200,8 +202,7 @@ describe('shell data state', () => {
     });
   });
 
-  it('hydrates late Catalog subjects in the background without reloading schema or leaving READY', async () => {
-    vi.useFakeTimers();
+  it('hydrates late Catalog dictionaries when the service revision changes without reloading schema', async () => {
     const schemaRequest = deferred<FilterSchemaV1>();
     const initialRequest = deferred<CatalogDiscoveryResponseV1>();
     const hydrationRequest = deferred<CatalogDiscoveryResponseV1>();
@@ -218,7 +219,10 @@ describe('shell data state', () => {
     const initial = discovery('CURRENT');
     const hydrated = catalogHydratedDiscovery(initial);
 
-    const { result } = renderHook(() => useShellDataState(runtime));
+    const { result, rerender } = renderHook(
+      ({ revision }) => useShellDataState(runtime, revision),
+      { initialProps: { revision: 'catalog-0' } },
+    );
     await act(async () => {
       schemaRequest.resolve(FILTER_SCHEMA);
       initialRequest.resolve(initial);
@@ -230,17 +234,11 @@ describe('shell data state', () => {
       filterSchema: FILTER_SCHEMA,
     });
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
+    rerender({ revision: 'catalog-1' });
+    await act(async () => { await Promise.resolve(); });
     expect(catalogDiscovery).toHaveBeenCalledTimes(2);
     expect(filterSchema).toHaveBeenCalledTimes(1);
     expect(result.current.state).toMatchObject({ status: 'READY', discovery: initial });
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
-    });
-    expect(catalogDiscovery).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       hydrationRequest.resolve(hydrated);
@@ -249,15 +247,12 @@ describe('shell data state', () => {
     expect(result.current.state).toMatchObject({ status: 'READY', discovery: hydrated });
     expect(hydrationSignals).toHaveLength(1);
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
-    });
+    rerender({ revision: 'catalog-1' });
     expect(catalogDiscovery).toHaveBeenCalledTimes(2);
     expect(filterSchema).toHaveBeenCalledTimes(1);
   });
 
-  it('recovers a first-start EMPTY discovery without reloading schema or requiring user retry', async () => {
-    vi.useFakeTimers();
+  it('recovers a first-start EMPTY discovery from service-driven revisions without reloading schema', async () => {
     const initial = discovery('UNAVAILABLE_NO_FIRST_SUCCESS', 0, 'first-start-empty');
     const stillEmpty = discovery('CURRENT', 0, 'discovery-in-progress');
     const recovered = catalogHydratedDiscovery(discovery('CURRENT', 1, 'discovery-published'));
@@ -272,22 +267,23 @@ describe('shell data state', () => {
     });
     const runtime = runtimeWith({ catalogDiscovery, filterSchema });
 
-    const { result } = renderHook(() => useShellDataState(runtime));
+    const { result, rerender } = renderHook(
+      ({ revision }) => useShellDataState(runtime, revision),
+      { initialProps: { revision: 'starting' } },
+    );
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
     expect(result.current.state).toMatchObject({ status: 'EMPTY', discovery: initial });
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
-    expect(result.current.state).toMatchObject({ status: 'EMPTY', discovery: initial });
+    rerender({ revision: 'discovered' });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.state).toMatchObject({ status: 'EMPTY', discovery: stillEmpty });
     expect(catalogDiscovery).toHaveBeenCalledTimes(2);
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
+    rerender({ revision: 'published' });
+    await act(async () => { await Promise.resolve(); });
     expect(result.current.state).toMatchObject({
       status: 'READY',
       discovery: recovered,
@@ -296,14 +292,11 @@ describe('shell data state', () => {
     expect(catalogDiscovery).toHaveBeenCalledTimes(3);
     expect(filterSchema).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
-    });
+    rerender({ revision: 'published' });
     expect(catalogDiscovery).toHaveBeenCalledTimes(3);
   });
 
-  it('cancels an in-flight discovery hydration when the shell unmounts', async () => {
-    vi.useFakeTimers();
+  it('cancels an in-flight service-driven discovery hydration when the shell unmounts', async () => {
     const hydrationRequest = deferred<CatalogDiscoveryResponseV1>();
     let hydrationSignal: AbortSignal | undefined;
     let discoveryCall = 0;
@@ -318,23 +311,22 @@ describe('shell data state', () => {
       catalogDiscovery,
     });
 
-    const { result, unmount } = renderHook(() => useShellDataState(runtime));
+    const { result, rerender, unmount } = renderHook(
+      ({ revision }) => useShellDataState(runtime, revision),
+      { initialProps: { revision: 'catalog-0' } },
+    );
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
     expect(result.current.state.status).toBe('READY');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
+    rerender({ revision: 'catalog-1' });
+    await act(async () => { await Promise.resolve(); });
     expect(catalogDiscovery).toHaveBeenCalledTimes(2);
     expect(hydrationSignal?.aborted).toBe(false);
 
     act(() => unmount());
     expect(hydrationSignal?.aborted).toBe(true);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
-    });
     expect(catalogDiscovery).toHaveBeenCalledTimes(2);
   });
 

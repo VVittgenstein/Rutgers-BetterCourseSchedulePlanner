@@ -16,10 +16,12 @@ import type {
   OpenSectionStatusV1,
   OpenStatusRequestV1,
 } from './contracts/open';
+import type { ServiceStatusV1 } from './contracts/service';
 import type { ProductClientPort } from './ProductClient';
 
 export const PRODUCT_API_ROUTES = {
   filterSchema: { method: 'GET', path: '/api/v1/query/filter-schema' },
+  serviceStatus: { method: 'GET', path: '/api/v1/service/status' },
   catalogDiscovery: { method: 'POST', path: '/api/v1/catalog/discovery' },
   courseSearch: { method: 'POST', path: '/api/v1/query/courses' },
   sectionSearch: { method: 'POST', path: '/api/v1/query/sections' },
@@ -31,6 +33,7 @@ export const PRODUCT_API_ROUTES = {
 
 export interface ProductApiPort {
   filterSchema(signal?: AbortSignal): Promise<FilterSchemaV1>;
+  serviceStatus(signal?: AbortSignal): Promise<ServiceStatusV1>;
   catalogDiscovery(
     request: CatalogDiscoveryRequestV1,
     signal?: AbortSignal,
@@ -70,6 +73,10 @@ export class ProductApi implements ProductApiPort {
 
   filterSchema(signal?: AbortSignal): Promise<FilterSchemaV1> {
     return this.#client.get<FilterSchemaV1>(PRODUCT_API_ROUTES.filterSchema.path, signal);
+  }
+
+  serviceStatus(signal?: AbortSignal): Promise<ServiceStatusV1> {
+    return this.#client.get<ServiceStatusV1>(PRODUCT_API_ROUTES.serviceStatus.path, signal);
   }
 
   catalogDiscovery(

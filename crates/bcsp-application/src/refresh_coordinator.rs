@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use bcsp_catalog::{normalize_target, to_catalog_refresh_command};
 use bcsp_contracts::{
-    OpenCircuitState, OpenCircuitStatusV1, OpenSchedulerLane, SystemTraceIdSource, TermCampusKey,
-    TraceId, TraceIdSource,
+    OpenCircuitState, OpenCircuitStatusV1, OpenSchedulerLane, ServiceOperationPhaseV1,
+    ServiceOperationV1, SystemTraceIdSource, TermCampusKey, TraceId, TraceIdSource,
 };
 use bcsp_open::{
     CompletionSchedule, MonotonicTime, OpenCounterAudience, OpenFailureKind, OpenPullClock,
@@ -165,6 +165,8 @@ pub trait CoordinatorStatusSink: Send + Sync + 'static {
     fn publish(&self, snapshot: CoordinatorStatusSnapshot);
 
     fn mark_stopped(&self);
+
+    fn publish_activity(&self, _operation: ServiceOperationV1) {}
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -393,6 +395,7 @@ where
         let Some(dispatch) = self.scheduler.start_next(now) else {
             self.publish_all_open_snapshots(now, None)?;
             self.publish_status(false);
+            self.publish_activity(ServiceOperationPhaseV1::Idle, None, None);
             return Ok(None);
         };
 
@@ -400,6 +403,14 @@ where
         self.overloaded = dispatch.scheduler_lag > dispatch.requested_interval;
         self.publish_all_open_snapshots(now, Some(&dispatch))?;
         self.publish_status(true);
+        self.publish_activity(
+            match dispatch.key.kind {
+                OriginJobKind::Catalog => ServiceOperationPhaseV1::CatalogFetch,
+                OriginJobKind::Open => ServiceOperationPhaseV1::OpenFetch,
+            },
+            Some(dispatch.key.target.clone()),
+            None,
+        );
 
         let execution = match dispatch.key.kind {
             OriginJobKind::Catalog => self.execute_catalog(&dispatch, policy).await,
@@ -428,6 +439,27 @@ where
                 }
                 self.publish_all_open_snapshots(completed_at, None)?;
                 self.publish_status(false);
+                let retrying = matches!(
+                    &outcome,
+                    CoordinatorDispatchOutcome::CatalogFailed { .. }
+                        | CoordinatorDispatchOutcome::OpenCompleted {
+                            terminal: OpenDispatchTerminal::Failed,
+                            ..
+                        }
+                );
+                let next_retry_at = retrying
+                    .then(|| self.scheduler.next_due(&dispatch.key))
+                    .flatten()
+                    .map(|due| wall_time_for_due(&self.clock, completed_at, due));
+                self.publish_activity(
+                    if retrying {
+                        ServiceOperationPhaseV1::RetryWait
+                    } else {
+                        ServiceOperationPhaseV1::Idle
+                    },
+                    retrying.then_some(dispatch.key.target.clone()),
+                    next_retry_at,
+                );
                 Ok(Some(outcome))
             }
             Err(error) => {
@@ -445,6 +477,15 @@ where
                 )?;
                 self.publish_all_open_snapshots(completed_at, None)?;
                 self.publish_status(false);
+                let next_retry_at = self
+                    .scheduler
+                    .next_due(&dispatch.key)
+                    .map(|due| wall_time_for_due(&self.clock, completed_at, due));
+                self.publish_activity(
+                    ServiceOperationPhaseV1::RetryWait,
+                    Some(dispatch.key.target.clone()),
+                    next_retry_at,
+                );
                 Err(error)
             }
         }
@@ -538,6 +579,11 @@ where
             }
         };
 
+        self.publish_activity(
+            ServiceOperationPhaseV1::CatalogProcess,
+            Some(dispatch.key.target.clone()),
+            None,
+        );
         let source_content_sha256 = response.provenance.body_sha256.clone();
         let source_bytes = response.provenance.decoded_bytes;
         let selector_confirms_target = response.selector_confirms_target;
@@ -584,6 +630,11 @@ where
                 ));
             }
         };
+        self.publish_activity(
+            ServiceOperationPhaseV1::CatalogPublish,
+            Some(dispatch.key.target.clone()),
+            None,
+        );
         let storage_access = self.storage.clone();
         let outcome = tokio::task::spawn_blocking(move || -> Result<_, CoordinatorError> {
             let mut storage = storage_access
@@ -830,6 +881,21 @@ where
             origin_circuit_open: !matches!(self.scheduler.circuit(), OriginCircuit::Closed),
             overloaded: self.overloaded,
             in_flight,
+        });
+    }
+
+    fn publish_activity(
+        &self,
+        phase: ServiceOperationPhaseV1,
+        target: Option<TermCampusKey>,
+        next_retry_at: Option<OffsetDateTime>,
+    ) {
+        self.status.publish_activity(ServiceOperationV1 {
+            phase,
+            target,
+            started_at: (!matches!(phase, ServiceOperationPhaseV1::Idle))
+                .then(|| self.clock.wall_now()),
+            next_retry_at,
         });
     }
 }

@@ -38,6 +38,10 @@
       "messageKey": "error.selection_limit_exceeded"
     },
     {
+      "wire": "CATALOG_NOT_READY",
+      "messageKey": "error.catalog_not_ready"
+    },
+    {
       "wire": "UPSTREAM_UNAVAILABLE",
       "messageKey": "error.upstream_unavailable"
     },

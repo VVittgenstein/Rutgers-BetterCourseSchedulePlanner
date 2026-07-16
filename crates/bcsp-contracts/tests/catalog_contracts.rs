@@ -2,11 +2,12 @@ use std::str::FromStr;
 
 use bcsp_contracts::{
     CATALOG_CONTRACT_VERSION, CatalogCommentV1, CatalogContentVersion, CatalogContractVersion,
-    CatalogDiagnosticCode, CatalogDiscoveryAvailability, CatalogDiscoveryErrorClass,
-    CatalogDiscoveryErrorV1, CatalogDiscoveryPointV1, CatalogDiscoveryProvenanceV1,
-    CatalogDiscoveryRequestV1, CatalogDiscoveryResponseV1, CatalogDiscoverySourceId,
-    CatalogDiscoverySourceKind, CatalogDiscoverySourceV1, CatalogDiscoveryStatusV1,
-    CatalogEntityCountsV1, CatalogFieldKnowledge, CatalogInstructorReliability, CatalogModality,
+    CatalogCoreCodeDictionaryV1, CatalogCoreCodeOptionV1, CatalogDiagnosticCode,
+    CatalogDiscoveryAvailability, CatalogDiscoveryErrorClass, CatalogDiscoveryErrorV1,
+    CatalogDiscoveryPointV1, CatalogDiscoveryProvenanceV1, CatalogDiscoveryRequestV1,
+    CatalogDiscoveryResponseV1, CatalogDiscoverySourceId, CatalogDiscoverySourceKind,
+    CatalogDiscoverySourceV1, CatalogDiscoveryStatusV1, CatalogEntityCountsV1,
+    CatalogFieldKnowledge, CatalogInstructorReliability, CatalogModality,
     CatalogOccurrenceEvidence, CatalogOccurrenceKeyV1, CatalogOccurrenceKind,
     CatalogOpenStatusProvenance, CatalogPayloadDigest, CatalogPrerequisiteState,
     CatalogProvenanceV1, CatalogRefreshCheckpointPointV1, CatalogRefreshCheckpointV1,
@@ -358,6 +359,7 @@ fn discovery_request_is_strict_and_response_is_additive() {
             },
             "futureSubjectField": true
         }],
+        "coreCodeDictionaries": [],
         "futureResponseField": true
     });
     let decoded: CatalogDiscoveryResponseV1 = serde_json::from_value(response).unwrap();
@@ -574,6 +576,15 @@ fn discovery_golden_includes_dynamic_subject_scope_and_provenance() {
             provenance: CatalogSubjectProvenanceV1::Discovery {
                 discovery: discovery_provenance(),
             },
+        }],
+        core_code_dictionaries: vec![CatalogCoreCodeDictionaryV1 {
+            target: target(),
+            content_version: CatalogContentVersion::try_from(1).unwrap(),
+            provenance: provenance(),
+            options: vec![CatalogCoreCodeOptionV1 {
+                code: "CC".to_owned(),
+                description: CatalogFieldKnowledge::present("Contemporary Challenges".to_owned()),
+            }],
         }],
     };
     let actual = format!("{}\n", serde_json::to_string_pretty(&value).unwrap());

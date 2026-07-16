@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bcsp_contracts::{
     CatalogContentVersion, CatalogFieldKnowledge, CatalogFieldPresence, CourseDetailRequestV1,
@@ -36,6 +36,8 @@ pub enum QueryError {
     ForeignOpenEvidence,
     #[error("filter term differs from the catalog corpus term")]
     FilterTermMismatch,
+    #[error("Core code {code} is not present in the selected Catalog targets")]
+    UnknownCoreCode { code: String },
     #[error("an active text filter requires a bound text-hit plan")]
     TextEvidenceUnavailable,
     #[error("a text-hit plan was supplied for an inactive text filter")]
@@ -217,7 +219,7 @@ impl<'a> QueryEngine<'a> {
             .corpus
             .variants_for(group)
             .into_iter()
-            .map(|variant| {
+            .filter_map(|variant| {
                 let (course_evaluation, course_filter_matches) =
                     evaluate_course_filter_matches(&group.key, variant, filters, text_hits);
                 let section_evaluations = self
@@ -240,7 +242,21 @@ impl<'a> QueryEngine<'a> {
                     PredicateEvaluation::matched()
                 };
                 let variant_evaluation = and_all([course_evaluation.clone(), section_witness]);
-                CourseVariantQueryItemV1 {
+                if variant_evaluation.outcome() == MatchOutcome::NoMatch {
+                    return None;
+                }
+                let sections = section_evaluations
+                    .into_iter()
+                    .filter_map(|(mut item, section_evaluation)| {
+                        let overall = and_all([course_evaluation.clone(), section_evaluation]);
+                        if section_filters_active && overall.outcome() == MatchOutcome::NoMatch {
+                            return None;
+                        }
+                        item.explanation = overall.into_explanation();
+                        Some(item)
+                    })
+                    .collect();
+                Some(CourseVariantQueryItemV1 {
                     variant: variant.clone(),
                     explanation: variant_evaluation.into_explanation(),
                     filter_matches: course_filter_matches,
@@ -252,16 +268,8 @@ impl<'a> QueryEngine<'a> {
                             }
                         })
                     }),
-                    sections: section_evaluations
-                        .into_iter()
-                        .map(|(mut item, section_evaluation)| {
-                            item.explanation =
-                                and_all([course_evaluation.clone(), section_evaluation])
-                                    .into_explanation();
-                            item
-                        })
-                        .collect(),
-                }
+                    sections,
+                })
             })
             .collect();
         CourseQueryItemV1 {
@@ -434,6 +442,36 @@ impl<'a> QueryEngine<'a> {
     fn validate_filters(&self, filters: &NormalizedFilterValuesV1) -> Result<(), QueryError> {
         if filters.term().as_str() != self.corpus.term() {
             return Err(QueryError::FilterTermMismatch);
+        }
+        if !filters.core().codes.is_empty() {
+            let authoritative_codes = self
+                .corpus
+                .groups()
+                .filter(|group| {
+                    filters.campuses().is_empty() || filters.campuses().contains(group.key.campus())
+                })
+                .flat_map(|group| self.corpus.variants_for(group))
+                .filter_map(|variant| match &variant.core_codes {
+                    CatalogFieldKnowledge::Known {
+                        presence: CatalogFieldPresence::Present { value },
+                    } => Some(value),
+                    CatalogFieldKnowledge::Known { .. } | CatalogFieldKnowledge::Unknown { .. } => {
+                        None
+                    }
+                })
+                .flatten()
+                .map(|code| code.to_ascii_uppercase())
+                .collect::<BTreeSet<_>>();
+            if let Some(code) = filters
+                .core()
+                .codes
+                .iter()
+                .find(|code| !authoritative_codes.contains(code.as_str()))
+            {
+                return Err(QueryError::UnknownCoreCode {
+                    code: code.as_str().to_owned(),
+                });
+            }
         }
         Ok(())
     }

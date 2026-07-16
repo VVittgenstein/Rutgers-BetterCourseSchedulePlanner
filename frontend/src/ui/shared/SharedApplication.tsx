@@ -4,36 +4,51 @@ import { ShellStyles } from './application';
 import {
   ActionButton,
   DesignSystemStyles,
-  Metric,
   StatePanel,
-  StatusSignal,
 } from './design-system';
 import type { SupportedLocale } from './i18n/contract';
-import { freshnessMessageKeys } from './i18n/presenter';
 import { useBcspI18n, type BcspI18nRuntime } from './i18n/runtime';
 import {
   PRODUCT_PROTOCOL_VERSION,
   useProductRuntimeState,
-  type CatalogDiscoveryResponseV1,
   type FilterStateV1,
   type ProductRuntimePort,
   type SectionKey,
+  type ServiceLevelV1,
+  type ServiceOperationPhaseV1,
+  type ServiceStatusV1,
   type WatchPolicyV1,
 } from './product';
 import { SearchWorkspace } from './search';
 import { AppRouterProvider, RouterLink, useAppRouter } from './routing';
-import { useShellDataState, type ShellDataState } from './shell';
+import {
+  useServiceStatus,
+  useShellDataState,
+  type ServiceStatusResource,
+  type ShellDataState,
+} from './shell';
 import {
   LiveWatchProvider,
   WatchToastRegion,
   WatchWorkspace,
   WatchWorkspaceStyles,
-  useLiveWatch,
 } from './watch';
 
 function retryBootstrap() {
   globalThis.location?.reload();
 }
+
+const BOOTSTRAP_SERVICE_RESOURCE: ServiceStatusResource = {
+  connection: 'CONNECTING',
+  retry: retryBootstrap,
+  revision: 'bootstrap',
+  snapshot: null,
+};
+
+const BOOTSTRAP_ERROR_RESOURCE: ServiceStatusResource = {
+  ...BOOTSTRAP_SERVICE_RESOURCE,
+  connection: 'INTERRUPTED',
+};
 
 export interface SharedWorkspaceExtension {
   readonly content: ReactNode;
@@ -197,23 +212,17 @@ function ShellFrame({
         ))}
       </nav>
       <main className="bcsp-main" id="bcsp-workspace" tabIndex={-1}>
-        <aside className="bcsp-rail">
-          <div className="bcsp-rail__section">
-            <p aria-hidden="true" className="bcsp-rail__sequence">{sequence}</p>
-            <div>
-              <p className="bcsp-section-label">{i18n.t('app.catalog_index')}</p>
-              <p className="bcsp-rail__note">{workspaceIntro}</p>
-            </div>
-          </div>
-          <div className="bcsp-rail__footer">Copyright (c) 2026 VVittgenstein</div>
-        </aside>
         <section className="bcsp-workspace" aria-labelledby="bcsp-workspace-title">
           <header className="bcsp-workspace__heading">
-            <div>
+            <div className="bcsp-workspace__identity">
               <p className="bcsp-section-label">[ {sequence} / {i18n.t('app.catalog_workspace')} ]</p>
-              <h2 className="bcsp-workspace__title" id="bcsp-workspace-title">
-                {workspaceTitle}
-              </h2>
+              <div className="bcsp-workspace__title-line">
+                <span aria-hidden="true" className="bcsp-workspace__sequence">{sequence}</span>
+                <h2 className="bcsp-workspace__title" id="bcsp-workspace-title">
+                  {workspaceTitle}
+                </h2>
+              </div>
+              <p className="bcsp-workspace__intro">{workspaceIntro}</p>
             </div>
             <p className="bcsp-workspace__protocol">
               {i18n.t('app.protocol')} / BCSP.V{PRODUCT_PROTOCOL_VERSION}
@@ -222,11 +231,11 @@ function ShellFrame({
           {children}
         </section>
       </main>
-      <footer className="bcsp-mobile-footer">
-        <span className="bcsp-mobile-footer__copyright">
+      <footer className="bcsp-footer">
+        <span className="bcsp-footer__copyright">
           Copyright (c) 2026 VVittgenstein
         </span>
-        <span className="bcsp-mobile-footer__protocol">
+        <span className="bcsp-footer__protocol">
           {i18n.t('app.protocol')} / BCSP.V{PRODUCT_PROTOCOL_VERSION}
         </span>
       </footer>
@@ -260,72 +269,116 @@ function InitialState({
   );
 }
 
-function statusTime(discovery: CatalogDiscoveryResponseV1, i18n: BcspI18nRuntime): string {
-  const observedAt = discovery.status.lastSuccess?.observedAt;
-  if (observedAt === undefined) return i18n.t('freshness.never_observed');
-  const value = Date.parse(observedAt);
-  if (!Number.isFinite(value)) return i18n.t('freshness.unknown');
-  return i18n.formatDate(value, { dateStyle: 'medium', timeStyle: 'short' });
+const SERVICE_LEVEL_KEYS = {
+  INITIALIZING: 'service.level.initializing',
+  PARTIALLY_READY: 'service.level.partially_ready',
+  READY: 'service.level.ready',
+  DEGRADED: 'service.level.degraded',
+  ERROR: 'service.level.error',
+} as const satisfies Record<ServiceLevelV1, Parameters<BcspI18nRuntime['t']>[0]>;
+
+const SERVICE_PHASE_KEYS = {
+  STARTING: 'service.phase.starting',
+  DISCOVERING: 'service.phase.discovering',
+  CATALOG_FETCH: 'service.phase.catalog_fetch',
+  CATALOG_PROCESS: 'service.phase.catalog_process',
+  CATALOG_PUBLISH: 'service.phase.catalog_publish',
+  OPEN_FETCH: 'service.phase.open_fetch',
+  IDLE: 'service.phase.idle',
+  RETRY_WAIT: 'service.phase.retry_wait',
+  STOPPED: 'service.phase.stopped',
+} as const satisfies Record<ServiceOperationPhaseV1, Parameters<BcspI18nRuntime['t']>[0]>;
+
+function targetLabel(status: ServiceStatusV1): string | null {
+  const target = status.operation.target;
+  return target === null ? null : `${target.term} / ${target.campus}`;
+}
+
+function ServiceStatusBand({ resource }: { readonly resource: ServiceStatusResource }) {
+  const i18n = useBcspI18n();
+  const status = resource.snapshot;
+  const interrupted = resource.connection === 'INTERRUPTED';
+  const expanded = interrupted
+    || status === null
+    || status.level !== 'READY'
+    || status.operation.phase !== 'IDLE';
+  const level = status === null
+    ? i18n.t('service.level.initializing')
+    : i18n.t(SERVICE_LEVEL_KEYS[status.level]);
+  const phase = status === null
+    ? i18n.t('service.phase.starting')
+    : i18n.t(SERVICE_PHASE_KEYS[status.operation.phase]);
+  const target = status === null ? null : targetLabel(status);
+  const issue = status?.issues[0];
+  return (
+    <section
+      aria-label={i18n.t('app.system_status')}
+      className="bcsp-service-status"
+      data-connection={resource.connection.toLowerCase()}
+      data-expanded={expanded || undefined}
+      data-level={status?.level.toLowerCase() ?? 'initializing'}
+      id="bcsp-system-status"
+    >
+      <div className="bcsp-service-status__lead">
+        <span className="bcsp-service-status__signal" aria-hidden="true" />
+        <div>
+          <p className="bcsp-service-status__kicker">{i18n.t('service.status_label')}</p>
+          <p className="bcsp-service-status__headline">{interrupted
+            ? i18n.t('service.connection_interrupted')
+            : level}</p>
+        </div>
+      </div>
+      <div className="bcsp-service-status__operation">
+        <span className="bcsp-service-status__label">{i18n.t('service.current_operation')}</span>
+        <strong>{phase}</strong>
+        {target === null ? null : <samp>{target}</samp>}
+      </div>
+      <dl className="bcsp-service-status__counts">
+        <div>
+          <dt>{i18n.t('service.catalog')}</dt>
+          <dd>{status === null ? '—' : `${status.catalog.availableTargetCount}/${status.catalog.totalTargetCount}`}</dd>
+        </div>
+        <div>
+          <dt>{i18n.t('service.open')}</dt>
+          <dd>{status === null ? '—' : `${status.open.availableTargetCount}/${status.open.totalTargetCount}`}</dd>
+        </div>
+      </dl>
+      {expanded ? (
+        <div className="bcsp-service-status__detail">
+          <p>{interrupted
+            ? i18n.t('service.connection_retained')
+            : issue === undefined
+              ? i18n.t('service.activity_detail')
+              : `${issue.component} / ${issue.code}`}</p>
+          {resource.connection === 'INTERRUPTED' ? (
+            <button className="bcsp-service-status__retry" onClick={resource.retry} type="button">
+              {i18n.t('action.retry')}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <p className="bcsp-visually-hidden" aria-atomic="true" aria-live="polite" role="status">
+        {interrupted ? i18n.t('service.connection_interrupted') : `${level}. ${phase}`}
+      </p>
+    </section>
+  );
 }
 
 function ReadyCatalogContent({
   experience,
   runtime,
+  serviceStatus,
   state,
 }: {
   readonly experience: SharedExperienceConfiguration;
   readonly runtime: ProductRuntimePort;
+  readonly serviceStatus: ServiceStatusV1 | null;
   readonly state: Extract<ShellDataState, { status: 'READY' }>;
 }) {
-  const i18n = useBcspI18n();
-  const discoveryLabel = state.discoveryState === 'CURRENT'
-    ? i18n.t('app.data_current')
-    : i18n.t('app.data_stale');
-  const discoverySignal = state.discoveryState === 'CURRENT' ? 'ready' : 'stale';
   const { pathname } = useAppRouter();
-  const watch = useLiveWatch();
-  const openStatus = watch.batchStatuses[0];
-  const openSignal = openStatus === undefined
-    ? 'unknown'
-    : openStatus.freshness.state === 'FRESH'
-      ? 'ready'
-      : 'stale';
-  const openDetail = openStatus === undefined
-    ? i18n.t('freshness.never_observed')
-    : `${openStatus.scheduler.schedulerLagMilliseconds}ms / ${openStatus.scheduler.requestedEffectiveIntervalSeconds}s`;
 
   return (
     <>
-      <section
-        aria-label={i18n.t('app.system_status')}
-        className="bcsp-status-grid"
-        id="bcsp-system-status"
-      >
-        <div>
-          <StatusSignal
-            detail={statusTime(state.discovery, i18n)}
-            label={discoveryLabel}
-            state={discoverySignal}
-          />
-        </div>
-        <Metric
-          label={i18n.t('app.targets')}
-          value={i18n.formatNumber(state.discovery.targets.length)}
-        />
-        <Metric
-          label={i18n.t('app.filter_definitions')}
-          value={i18n.formatNumber(state.filterCount)}
-        />
-        <div>
-          <StatusSignal
-            detail={openDetail}
-            label={openStatus === undefined
-              ? i18n.t('freshness.lag')
-              : i18n.t(freshnessMessageKeys[openStatus.freshness.state])}
-            state={openSignal}
-          />
-        </div>
-      </section>
       {pathname === '/watch'
         ? (
           <WatchWorkspace
@@ -338,6 +391,7 @@ function ReadyCatalogContent({
             initialFilters={experience.initialFilters}
             onFiltersChange={experience.onFiltersChange}
             runtime={runtime}
+            serviceStatus={serviceStatus}
             shellState={state}
           />
         )}
@@ -348,14 +402,21 @@ function ReadyCatalogContent({
 function ReadyCatalog({
   experience,
   runtime,
+  serviceStatus,
   state,
 }: {
   readonly runtime: ProductRuntimePort;
+  readonly serviceStatus: ServiceStatusV1 | null;
   readonly experience: SharedExperienceConfiguration;
   readonly state: Extract<ShellDataState, { status: 'READY' }>;
 }) {
   return (
-    <ReadyCatalogContent experience={experience} runtime={runtime} state={state} />
+    <ReadyCatalogContent
+      experience={experience}
+      runtime={runtime}
+      serviceStatus={serviceStatus}
+      state={state}
+    />
   );
 }
 
@@ -367,31 +428,37 @@ function ReadyRuntime({
   readonly runtime: ProductRuntimePort;
 }) {
   const { t } = useBcspI18n();
-  const { retry, state } = useShellDataState(runtime);
+  const service = useServiceStatus(runtime);
+  const { retry, state } = useShellDataState(runtime, service.revision);
   if (state.status === 'LOADING') {
-    return <InitialState detail={t('app.loading_body')} heading={t('app.loading_title')} kind="loading" />;
+    return <><ServiceStatusBand resource={service} /><InitialState detail={t('app.loading_body')} heading={t('app.loading_title')} kind="loading" /></>;
   }
   if (state.status === 'ERROR') {
     return (
-      <InitialState
-        detail={t('app.catalog_error_body')}
-        heading={t('app.catalog_error_title')}
-        kind="error"
-        retry={retry}
-      />
+      <><ServiceStatusBand resource={service} /><InitialState
+          detail={t('app.catalog_error_body')}
+          heading={t('app.catalog_error_title')}
+          kind="error"
+          retry={retry}
+        /></>
     );
   }
   if (state.status === 'EMPTY') {
     return (
-      <InitialState
-        detail={t('app.no_targets_body')}
-        heading={t('app.no_targets_title')}
-        kind="empty"
-        retry={retry}
-      />
+      <><ServiceStatusBand resource={service} /><InitialState
+          detail={t('app.no_targets_body')}
+          heading={t('app.no_targets_title')}
+          kind="empty"
+          retry={retry}
+        /></>
     );
   }
-  return <ReadyCatalog experience={experience} runtime={runtime} state={state} />;
+  return <><ServiceStatusBand resource={service} /><ReadyCatalog
+      experience={experience}
+      runtime={runtime}
+      serviceStatus={service.snapshot}
+      state={state}
+    /></>;
 }
 
 function ReadyProduct({
@@ -445,18 +512,24 @@ export function SharedApplication({
           workspaceExtensions={workspaceExtensions}
         >
           {productRuntime.status === 'LOADING' ? (
-            <InitialState
-              detail={i18n.t('app.loading_body')}
-              heading={i18n.t('app.loading_title')}
-              kind="loading"
-            />
+            <>
+              <ServiceStatusBand resource={BOOTSTRAP_SERVICE_RESOURCE} />
+              <InitialState
+                detail={i18n.t('app.loading_body')}
+                heading={i18n.t('app.loading_title')}
+                kind="loading"
+              />
+            </>
           ) : productRuntime.status === 'ERROR' ? (
-            <InitialState
-              detail={i18n.t('app.bootstrap_error_body')}
-              heading={i18n.t('app.bootstrap_error_title')}
-              kind="error"
-              retry={retryBootstrap}
-            />
+            <>
+              <ServiceStatusBand resource={BOOTSTRAP_ERROR_RESOURCE} />
+              <InitialState
+                detail={i18n.t('app.bootstrap_error_body')}
+                heading={i18n.t('app.bootstrap_error_title')}
+                kind="error"
+                retry={retryBootstrap}
+              />
+            </>
           ) : (
             <ReadyProduct
               experience={experience}

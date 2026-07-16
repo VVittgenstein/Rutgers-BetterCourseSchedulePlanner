@@ -39,6 +39,7 @@ export interface FilterPanelProps {
   readonly onChange: (next: FilterStateV1) => void;
   readonly onSubmit: () => void;
   readonly disabled?: boolean;
+  readonly searchAvailable?: boolean;
   readonly mode?: 'COURSES' | 'SECTIONS';
   readonly validationIssue?: {
     readonly issue: FilterSerializationIssue;
@@ -530,6 +531,17 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__kicker { margin: 0 0 var(--bcsp-space-1); color: var(--bcsp-ink-muted); }
 .filter-panel__title { margin: 0; font-size: clamp(1.75rem, 4vw, 3.75rem); letter-spacing: -0.055em; line-height: 0.9; text-transform: uppercase; }
 .filter-panel__head-note { max-width: 28ch; margin: 0; color: var(--bcsp-ink-muted); font-size: 0.8rem; }
+.filter-panel__submit-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  border-left: 3px solid var(--bcsp-accent);
+  color: var(--bcsp-ink-muted);
+  background: var(--bcsp-paper-raised);
+  font-family: var(--bcsp-font-data);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
 
 .filter-panel__active {
   display: grid;
@@ -624,12 +636,17 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__token-list { margin-top: 0.45rem; }
 .filter-panel__token samp { padding: 0.4rem 0.5rem; overflow-wrap: anywhere; }
 .filter-panel__checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); border-top: 1px solid var(--bcsp-line); border-left: 1px solid var(--bcsp-line); }
-.filter-panel__check { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.55rem; align-items: center; min-height: 2.75rem; padding: 0.55rem; border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); font-family: var(--bcsp-font-data); font-size: 0.72rem; }
+.filter-panel__check { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.55rem; align-items: center; min-height: 2.75rem; padding: 0.55rem; border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); font-family: var(--bcsp-font-data); font-size: 0.72rem; cursor: pointer; }
 .filter-panel__check input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--bcsp-accent); }
+.filter-panel__check:has(input:focus-visible) { z-index: 1; outline: 3px solid var(--bcsp-focus, var(--bcsp-accent)); outline-offset: -3px; }
+.filter-panel__check:has(input:disabled) { color: var(--bcsp-ink-muted); cursor: not-allowed; }
 .filter-panel__subject-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--bcsp-space-2); align-items: end; }
 .filter-panel__subject-count { min-width: 7rem; padding: 0.8rem 0; color: var(--bcsp-ink-muted); font-family: var(--bcsp-font-data); font-size: 0.7rem; text-align: right; }
 .filter-panel__subject-list { max-height: 18rem; overflow: auto; border-top: 1px solid var(--bcsp-line); }
 .filter-panel__subject-list .filter-panel__checks { border-top: 0; }
+.filter-panel__core-picker { display: grid; gap: var(--bcsp-space-2); }
+.filter-panel__incompatible { padding-top: var(--bcsp-space-2); border-top: 1px solid var(--bcsp-line); }
+.filter-panel__token--incompatible { border-color: var(--bcsp-accent); color: var(--bcsp-accent); }
 .filter-panel__credit-range, .filter-panel__building, .filter-panel__eligibility { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--bcsp-space-2); }
 .filter-panel__eligibility { align-items: start; }
 .filter-panel__unit-major { grid-column: 1 / -1; }
@@ -640,6 +657,7 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__window-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; background: var(--bcsp-paper-raised); }
 
 @media (hover: hover) and (pointer: fine) {
+  .filter-panel__check:hover:not(:has(input:disabled)) { background: var(--bcsp-paper); }
   .filter-panel__chip button:hover:not(:disabled),
   .filter-panel__token button:hover:not(:disabled),
   .filter-panel__window-list button:hover:not(:disabled) { color: var(--bcsp-accent-ink); background: var(--bcsp-accent); }
@@ -698,12 +716,14 @@ export function FilterPanel({
   onChange,
   onSubmit,
   disabled = false,
+  searchAvailable = true,
   mode = 'COURSES',
   validationIssue,
 }: FilterPanelProps) {
   const i18n = useBcspI18n();
   const formRef = useRef<HTMLFormElement>(null);
   const [subjectQuery, setSubjectQuery] = useState('');
+  const [coreQuery, setCoreQuery] = useState('');
   const [courseOpen, setCourseOpen] = useState(mode === 'COURSES');
   const [sectionOpen, setSectionOpen] = useState(mode === 'SECTIONS');
 
@@ -780,6 +800,50 @@ export function FilterPanel({
       || code.toLocaleLowerCase(i18n.locale).includes(query)
       || label.toLocaleLowerCase(i18n.locale).includes(query));
   }, [discovery.subjects, i18n.locale, subjectQuery, value.campuses, value.term]);
+  const selectedCoreTargets = useMemo(() => value.term === null
+    ? []
+    : value.campuses.map((campus) => `${value.term}\u0000${campus}`),
+  [value.campuses, value.term]);
+  const selectedCoreDictionaries = useMemo(() => {
+    const selected = new Set(selectedCoreTargets);
+    return (discovery.coreCodeDictionaries ?? []).filter((dictionary) =>
+      selected.has(`${dictionary.target.term}\u0000${dictionary.target.campus}`));
+  }, [discovery.coreCodeDictionaries, selectedCoreTargets]);
+  const coreDictionaryLoading = selectedCoreTargets.length > 0
+    && selectedCoreDictionaries.length !== selectedCoreTargets.length;
+  const coreDictionary = useMemo(() => {
+    const entries = new Map<string, { descriptions: Set<string>; incomplete: boolean }>();
+    for (const dictionary of selectedCoreDictionaries) {
+      for (const option of dictionary.options) {
+        const entry = entries.get(option.code) ?? { descriptions: new Set<string>(), incomplete: false };
+        const description = knownText(option.description)?.trim();
+        if (description === undefined || description === null || description.length === 0) {
+          entry.incomplete = true;
+        } else {
+          entry.descriptions.add(description);
+        }
+        entries.set(option.code, entry);
+      }
+    }
+    return [...entries.entries()]
+      .sort(([left], [right]) => left.localeCompare(right, 'en-US'))
+      .map(([code, entry]) => ({
+        code,
+        label: !entry.incomplete && entry.descriptions.size === 1
+          ? `${code} · ${[...entry.descriptions][0]}`
+          : code,
+      }));
+  }, [selectedCoreDictionaries]);
+  const validCoreCodes = useMemo(() => new Set(coreDictionary.map(({ code }) => code)), [coreDictionary]);
+  const coreOptions = useMemo(() => {
+    const query = coreQuery.trim().toLocaleLowerCase(i18n.locale);
+    return coreDictionary.filter(({ code, label }) => query.length === 0
+      || code.toLocaleLowerCase(i18n.locale).includes(query)
+      || label.toLocaleLowerCase(i18n.locale).includes(query));
+  }, [coreDictionary, coreQuery, i18n.locale]);
+  const incompatibleCoreCodes = coreDictionaryLoading
+    ? []
+    : value.core.codes.filter((code) => !validCoreCodes.has(code));
 
   const summaries = fields.map((field) => ({ field, summary: fieldSummary(field, value, i18n) }))
     .filter((entry): entry is { field: FilterFieldSchemaV1; summary: string } => entry.summary !== null);
@@ -819,6 +883,7 @@ export function FilterPanel({
                 term,
                 campuses: retained.length > 0 ? retained : availableCampuses.slice(0, 1),
                 subjects: [],
+                core: { ...value.core, codes: [] },
               });
             }}
           >
@@ -839,7 +904,12 @@ export function FilterPanel({
                     disabled={disabled}
                     onChange={(event) => {
                       const campuses = toggleValue(value.campuses, campus, event.target.checked);
-                      onChange({ ...value, campuses, subjects: [] });
+                      onChange({
+                        ...value,
+                        campuses,
+                        subjects: [],
+                        core: { ...value.core, codes: [] },
+                      });
                     }}
                   />
                   <span>{campusLabel} / <samp>{campus}</samp></span>
@@ -926,10 +996,74 @@ export function FilterPanel({
         return (
           <div className="filter-panel__control">
             <EnumSelect label={i18n.t('filter.core_mode')} value={value.core.mode}
-              options={['ANY', 'ALL']} disabled={disabled}
+              options={['ANY', 'ALL']}
+              disabled={disabled || coreDictionaryLoading || selectedCoreTargets.length === 0}
               onChange={(mode) => update('core', { ...value.core, mode })} />
-            <TokenListControl label={i18n.t('filter.core_codes')} values={value.core.codes} disabled={disabled}
-              onChange={(codes) => update('core', { ...value.core, codes })} placeholder={i18n.t('filter.core_placeholder')} />
+            <div className="filter-panel__core-picker">
+              <div className="filter-panel__subject-search">
+                <label>
+                  <span className="filter-panel__sub-label">{i18n.t('filter.core_search')}</span>
+                  <input
+                    className="filter-panel__input"
+                    type="search"
+                    value={coreQuery}
+                    disabled={disabled || coreDictionaryLoading || selectedCoreTargets.length === 0}
+                    placeholder={i18n.t('filter.core_placeholder')}
+                    onChange={(event) => setCoreQuery(event.target.value)}
+                  />
+                </label>
+                <output className="filter-panel__subject-count" aria-live="polite">
+                  {i18n.t('filter.core_count', { count: i18n.formatNumber(coreOptions.length) })}
+                </output>
+              </div>
+              {coreDictionaryLoading ? (
+                <p className="bcsp-field__helper" role="status">{i18n.t('filter.core_loading')}</p>
+              ) : (
+                <div className="filter-panel__subject-list">
+                  {coreOptions.length === 0 ? (
+                    <p className="bcsp-field__helper">{i18n.t('filter.core_empty')}</p>
+                  ) : (
+                    <div className="filter-panel__checks" role="group" aria-label={i18n.t('filter.core_list')}>
+                      {coreOptions.map(({ code, label: optionLabel }) => (
+                        <label className="filter-panel__check" key={code}>
+                          <input
+                            type="checkbox"
+                            checked={value.core.codes.includes(code)}
+                            disabled={disabled}
+                            onChange={(event) => update('core', {
+                              ...value.core,
+                              codes: toggleValue(value.core.codes, code, event.target.checked),
+                            })}
+                          />
+                          <span>{optionLabel}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {incompatibleCoreCodes.length === 0 ? null : (
+                <div className="filter-panel__incompatible">
+                  <p className="filter-panel__sub-label">{i18n.t('filter.core_incompatible')}</p>
+                  <ul className="filter-panel__token-list">
+                    {incompatibleCoreCodes.map((code) => (
+                      <li className="filter-panel__token filter-panel__token--incompatible" key={code}>
+                        <samp>{code}</samp>
+                        <button
+                          aria-label={i18n.t('filter.core_incompatible_remove', { code })}
+                          disabled={disabled}
+                          onClick={() => update('core', {
+                            ...value.core,
+                            codes: value.core.codes.filter((candidate) => candidate !== code),
+                          })}
+                          type="button"
+                        >×</button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         );
       case 'prerequisite':
@@ -989,6 +1123,7 @@ export function FilterPanel({
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (disabled || !searchAvailable || value.term === null || value.campuses.length === 0) return;
     const scrollContainer = event.currentTarget.closest<HTMLElement>('.bcsp-search-workspace__filters');
     if (scrollContainer !== null) scrollContainer.scrollTop = 0;
     setCourseOpen(false);
@@ -1054,9 +1189,12 @@ export function FilterPanel({
             {i18n.t('filter.matrix_note')}
           </p>
           <button className="bcsp-action bcsp-action--accent" type="submit"
-            disabled={disabled || value.term === null || value.campuses.length === 0}>
+            disabled={disabled || !searchAvailable || value.term === null || value.campuses.length === 0}>
             {i18n.t('action.search')}
           </button>
+          {!searchAvailable ? (
+            <p className="filter-panel__submit-status" role="status">{i18n.t('service.search_not_ready')}</p>
+          ) : null}
         </header>
 
         <section className="filter-panel__active" aria-labelledby="active-filter-title">

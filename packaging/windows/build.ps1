@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$SourceRoot,
 
+    [string]$SourceCommit,
+
     [string]$OutputRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'release\0.1.0'),
 
     [string]$BuildRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '.cache\p7-4-build\windows')
@@ -11,7 +13,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$ExpectedSourceCommit = 'ceeeabb798cc262475c4d2fe220a4a7921995cde'
 $PackageId = 'WINDOWS_LOCAL_RELEASE_ARCHIVE'
 $Target = 'x86_64-pc-windows-msvc'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -223,11 +224,11 @@ $RepositoryRoot = Resolve-FullPath (Split-Path -Parent (Split-Path -Parent $PSSc
 $SourceRoot = Resolve-FullPath $SourceRoot
 $OutputRoot = Resolve-FullPath $OutputRoot
 $BuildRoot = Resolve-FullPath $BuildRoot
-$ReleaseInputsPath = Join-Path $RepositoryRoot 'packaging\release-inputs.json'
-$MetadataGenerator = Join-Path $RepositoryRoot 'packaging\generate-release-metadata.mjs'
-$AboutConfig = Join-Path $RepositoryRoot 'packaging\about.toml'
-$WindowsTemplates = Join-Path $RepositoryRoot 'packaging\windows\templates'
-$LicensePath = Join-Path $RepositoryRoot 'LICENSE'
+$ReleaseInputsPath = Join-Path $SourceRoot 'packaging\release-inputs.json'
+$MetadataGenerator = Join-Path $SourceRoot 'packaging\generate-release-metadata.mjs'
+$AboutConfig = Join-Path $SourceRoot 'packaging\about.toml'
+$WindowsTemplates = Join-Path $SourceRoot 'packaging\windows\templates'
+$LicensePath = Join-Path $SourceRoot 'LICENSE'
 
 Assert-File $ReleaseInputsPath
 Assert-File $LicensePath
@@ -235,10 +236,29 @@ Assert-File (Join-Path $WindowsTemplates 'Start-RBCSP.bat')
 Assert-File (Join-Path $WindowsTemplates 'README.md')
 Assert-File (Join-Path $WindowsTemplates 'QUICKSTART.md')
 
-$sourceCommit = (& git -C $SourceRoot rev-parse HEAD).Trim()
-if ($LASTEXITCODE -ne 0 -or $sourceCommit -ne $ExpectedSourceCommit) {
-    throw "SourceRoot must be a checkout of $ExpectedSourceCommit; found $sourceCommit."
+$sourceHead = (& git -C $SourceRoot rev-parse --verify HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $sourceHead -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$') {
+    throw 'SourceRoot HEAD is not a full hexadecimal commit id.'
 }
+if (-not [string]::IsNullOrWhiteSpace($SourceCommit)) {
+    if ($SourceCommit -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$') {
+        throw 'SourceCommit must be a full lowercase hexadecimal commit id.'
+    }
+    $resolvedCommit = (& git -C $SourceRoot rev-parse --verify "$SourceCommit`^{commit}").Trim()
+    if ($LASTEXITCODE -ne 0 -or $resolvedCommit -cne $SourceCommit) {
+        throw 'SourceCommit must resolve to its canonical full commit id.'
+    }
+    if ($sourceHead -cne $SourceCommit) {
+        throw "SourceRoot HEAD is $sourceHead, not requested commit $SourceCommit."
+    }
+}
+else {
+    $null = & git -C $SourceRoot symbolic-ref --quiet HEAD 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        throw 'SourceRoot must be a detached checkout unless SourceCommit is supplied.'
+    }
+}
+$sourceCommit = $sourceHead
 $sourceStatus = @(& git -C $SourceRoot status --porcelain --untracked-files=all)
 if ($LASTEXITCODE -ne 0 -or $sourceStatus.Count -ne 0) {
     throw 'SourceRoot must be a clean checkout before the build starts.'
@@ -250,8 +270,8 @@ if ($package.Count -ne 1) {
     throw "release-inputs.json must define exactly one $PackageId package."
 }
 $package = $package[0]
-if ($package.target -ne $Target -or $package.allowlist.Count -ne 11) {
-    throw 'The frozen Windows release target or eleven-file allowlist changed unexpectedly.'
+if ($package.target -ne $Target -or $package.allowlist.Count -ne 12) {
+    throw 'The Windows release target or twelve-file allowlist changed unexpectedly.'
 }
 
 $PinnedNodeRoot = Join-Path $RepositoryRoot '.cache\p7-1-002-node-24.18.0-win-x64\runtime\node-v24.18.0-win-x64'
@@ -350,6 +370,8 @@ Invoke-Native $Cargo @(
 $builtExecutable = Join-Path $TargetRoot "$Target\release\bcsp-local.exe"
 Assert-File $builtExecutable
 Copy-Item -LiteralPath $builtExecutable -Destination (Join-Path $PackageRoot 'RBCSP.exe')
+Copy-Item -LiteralPath (Join-Path $env:BCSP_LOCAL_WEB_DIST 'capability-manifest.json') `
+    -Destination (Join-Path $PackageRoot 'FRONTEND-CAPABILITIES.json')
 Copy-Item -LiteralPath $LicensePath -Destination (Join-Path $PackageRoot 'LICENSE')
 Copy-Item -LiteralPath (Join-Path $WindowsTemplates 'Start-RBCSP.bat') -Destination $PackageRoot
 Copy-Item -LiteralPath (Join-Path $WindowsTemplates 'README.md') -Destination $PackageRoot
@@ -426,7 +448,7 @@ Invoke-Native $Node @(
 $actualFiles = @(Get-ChildItem -LiteralPath $PackageRoot -File | ForEach-Object { $_.Name } | Sort-Object)
 $expectedFiles = @($package.allowlist | ForEach-Object { [string]$_ } | Sort-Object)
 if (($actualFiles -join "`n") -ne ($expectedFiles -join "`n")) {
-    throw "Windows package root does not match the frozen eleven-file allowlist.`nActual: $($actualFiles -join ', ')"
+    throw "Windows package root does not match the twelve-file allowlist.`nActual: $($actualFiles -join ', ')"
 }
 
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null

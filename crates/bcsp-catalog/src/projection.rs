@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bcsp_contracts::{
-    CATALOG_CONTRACT_VERSION, CatalogCommentV1, CatalogContentVersion, CatalogDiagnosticCode,
-    CatalogDiscoveryAvailability, CatalogDiscoveryErrorClass, CatalogDiscoveryErrorV1,
-    CatalogDiscoveryPointV1, CatalogDiscoveryProvenanceV1, CatalogDiscoveryResponseV1,
-    CatalogDiscoverySourceId, CatalogDiscoverySourceKind, CatalogDiscoverySourceV1,
-    CatalogDiscoveryStatusV1, CatalogEntityCountsV1, CatalogFieldKnowledge, CatalogFieldPresence,
+    CATALOG_CONTRACT_VERSION, CatalogCommentV1, CatalogContentVersion, CatalogCoreCodeDictionaryV1,
+    CatalogCoreCodeOptionV1, CatalogDiagnosticCode, CatalogDiscoveryAvailability,
+    CatalogDiscoveryErrorClass, CatalogDiscoveryErrorV1, CatalogDiscoveryPointV1,
+    CatalogDiscoveryProvenanceV1, CatalogDiscoveryResponseV1, CatalogDiscoverySourceId,
+    CatalogDiscoverySourceKind, CatalogDiscoverySourceV1, CatalogDiscoveryStatusV1,
+    CatalogEntityCountsV1, CatalogFieldKnowledge, CatalogFieldPresence,
     CatalogInstructorReliability, CatalogModality, CatalogOccurrenceEvidence,
     CatalogOccurrenceKeyV1, CatalogOccurrenceKind, CatalogOpenStatusProvenance,
     CatalogPayloadDigest, CatalogPrerequisiteState, CatalogProvenanceV1,
@@ -232,6 +233,7 @@ pub fn to_catalog_discovery_response_v1(
     }
 
     merge_catalog_subjects(&mut subjects, catalogs, &selectable_target_keys)?;
+    let core_code_dictionaries = derive_core_code_dictionaries(catalogs, &selectable_target_keys)?;
 
     validate_discovery_counts(published)?;
     Ok(CatalogDiscoveryResponseV1 {
@@ -241,6 +243,7 @@ pub fn to_catalog_discovery_response_v1(
         sources,
         targets,
         subjects: subjects.into_values().collect(),
+        core_code_dictionaries,
     })
 }
 
@@ -378,6 +381,127 @@ fn merge_catalog_subjects(
         }
     }
     Ok(())
+}
+
+#[derive(Default)]
+struct CatalogCoreDescriptionEvidence {
+    present: BTreeSet<String>,
+    saw_explicit_null: bool,
+    saw_absent: bool,
+    saw_malformed: bool,
+}
+
+impl CatalogCoreDescriptionEvidence {
+    fn observe(&mut self, description: &CatalogFieldKnowledge<String>) {
+        match description {
+            CatalogFieldKnowledge::Known {
+                presence: CatalogFieldPresence::Present { value },
+            } => {
+                self.present.insert(value.clone());
+            }
+            CatalogFieldKnowledge::Known {
+                presence: CatalogFieldPresence::ExplicitNull,
+            } => self.saw_explicit_null = true,
+            CatalogFieldKnowledge::Known {
+                presence: CatalogFieldPresence::Absent,
+            } => self.saw_absent = true,
+            CatalogFieldKnowledge::Unknown { .. } => self.saw_malformed = true,
+        }
+    }
+
+    fn project(self) -> CatalogFieldKnowledge<String> {
+        if self.present.len() > 1 {
+            return CatalogFieldKnowledge::unknown(CatalogUnknownReason::ConflictingEvidence);
+        }
+        if let Some(value) = self.present.into_iter().next() {
+            return CatalogFieldKnowledge::present(value);
+        }
+        if self.saw_malformed {
+            CatalogFieldKnowledge::unknown(CatalogUnknownReason::Malformed)
+        } else if self.saw_explicit_null {
+            CatalogFieldKnowledge::explicit_null()
+        } else {
+            debug_assert!(self.saw_absent);
+            CatalogFieldKnowledge::absent()
+        }
+    }
+}
+
+fn derive_core_code_dictionaries(
+    catalogs: &[PublishedCatalogSnapshot],
+    selectable_targets: &BTreeSet<TermCampusKey>,
+) -> Result<Vec<CatalogCoreCodeDictionaryV1>, ProjectionError> {
+    let mut catalogs_by_target = BTreeMap::new();
+    for catalog in catalogs {
+        validate_catalog_publication(catalog)?;
+        if catalogs_by_target
+            .insert(catalog.target.clone(), catalog)
+            .is_some()
+        {
+            return Err(invalid(
+                "discovery.coreCodeDictionaries",
+                "duplicate Catalog publication target",
+            ));
+        }
+    }
+
+    let mut dictionaries = Vec::new();
+    for (target, catalog) in catalogs_by_target {
+        if !selectable_targets.contains(&target) {
+            continue;
+        }
+        let mut descriptions = BTreeMap::<String, CatalogCoreDescriptionEvidence>::new();
+        for variant in &catalog.snapshot.course_variants {
+            if variant.key.group().target() != target {
+                return Err(invalid(
+                    "discovery.coreCodeDictionaries",
+                    "Catalog variant target differs from its publication",
+                ));
+            }
+            let raw: RawCatalogCourse = decode_facts(
+                "discovery.coreCodeDictionaries.canonicalFacts",
+                &variant.canonical_facts,
+            )?;
+            let Presence::Value(values) = &raw.core_codes else {
+                if let Presence::Malformed(malformed) = &raw.core_codes {
+                    validate_malformed_digest(malformed.canonical_sha256.as_str())?;
+                }
+                continue;
+            };
+            let Some(entries) = project_core_code_entries(values) else {
+                // A partially malformed Core array is not authoritative. This
+                // mirrors the normalized variant field, which remains UNKNOWN.
+                continue;
+            };
+            for entry in entries {
+                descriptions
+                    .entry(entry.code)
+                    .or_default()
+                    .observe(&entry.description);
+            }
+        }
+
+        let CatalogSubjectProvenanceV1::Catalog {
+            content_version,
+            catalog: provenance,
+        } = catalog_subject_provenance(catalog)?
+        else {
+            unreachable!("Catalog publication always produces Catalog provenance")
+        };
+        dictionaries.push(CatalogCoreCodeDictionaryV1 {
+            target,
+            content_version,
+            provenance,
+            options: descriptions
+                .into_iter()
+                .map(|(code, description)| CatalogCoreCodeOptionV1 {
+                    code,
+                    description: description.project(),
+                })
+                .collect(),
+        });
+    }
+    Ok(dictionaries)
 }
 
 fn catalog_subject_provenance(
@@ -889,7 +1013,7 @@ fn project_variant(
         school_code: object_string_field_knowledge(&raw.school, "code")?,
         offering_unit: string_knowledge(&raw.offering_unit_code)?,
         offering_unit_title: string_knowledge(&raw.offering_unit_title)?,
-        core_codes: value_array_knowledge(&raw.core_codes, array_string)?,
+        core_codes: core_codes_knowledge(&raw.core_codes)?,
         campus_locations: value_array_knowledge(&raw.campus_locations, campus_location_code)?,
         section_keys,
     })
@@ -1610,6 +1734,108 @@ fn value_array_knowledge(
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProjectedCoreCodeEntry {
+    code: String,
+    description: CatalogFieldKnowledge<String>,
+}
+
+const CORE_CODE_MAX_BYTES: usize = 256;
+
+fn core_codes_knowledge(
+    value: &Presence<Vec<Value>>,
+) -> Result<CatalogFieldKnowledge<Vec<String>>, ProjectionError> {
+    match value {
+        Presence::Missing => Ok(CatalogFieldKnowledge::absent()),
+        Presence::Null => Ok(CatalogFieldKnowledge::explicit_null()),
+        Presence::Malformed(malformed) => {
+            validate_malformed_digest(malformed.canonical_sha256.as_str())?;
+            Ok(CatalogFieldKnowledge::unknown(
+                CatalogUnknownReason::Malformed,
+            ))
+        }
+        Presence::Value(values) => Ok(match project_core_code_entries(values) {
+            Some(entries) => {
+                let mut codes = entries
+                    .into_iter()
+                    .map(|entry| entry.code)
+                    .collect::<Vec<_>>();
+                codes.sort();
+                codes.dedup();
+                CatalogFieldKnowledge::present(codes)
+            }
+            None => CatalogFieldKnowledge::unknown(CatalogUnknownReason::Malformed),
+        }),
+    }
+}
+
+fn project_core_code_entries(values: &[Value]) -> Option<Vec<ProjectedCoreCodeEntry>> {
+    values.iter().map(project_core_code_entry).collect()
+}
+
+fn project_core_code_entry(value: &Value) -> Option<ProjectedCoreCodeEntry> {
+    match value {
+        Value::String(code) => Some(ProjectedCoreCodeEntry {
+            code: valid_core_code(code)?,
+            description: CatalogFieldKnowledge::absent(),
+        }),
+        Value::Object(object) => Some(ProjectedCoreCodeEntry {
+            code: preferred_nonempty_string(object, "coreCode", "code")?,
+            description: preferred_core_description(object),
+        }),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) => None,
+    }
+}
+
+fn nonempty_trimmed(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn valid_core_code(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= CORE_CODE_MAX_BYTES
+        && !value.chars().any(char::is_control))
+    .then(|| value.to_owned())
+}
+
+fn preferred_nonempty_string(
+    object: &Map<String, Value>,
+    primary: &str,
+    fallback: &str,
+) -> Option<String> {
+    [primary, fallback]
+        .into_iter()
+        .filter_map(|field| object.get(field))
+        .filter_map(Value::as_str)
+        .find_map(valid_core_code)
+}
+
+fn preferred_core_description(object: &Map<String, Value>) -> CatalogFieldKnowledge<String> {
+    let values = ["coreCodeDescription", "description"]
+        .into_iter()
+        .filter_map(|field| object.get(field))
+        .collect::<Vec<_>>();
+    if let Some(value) = values
+        .iter()
+        .filter_map(|value| value.as_str())
+        .find_map(nonempty_trimmed)
+    {
+        return CatalogFieldKnowledge::present(value);
+    }
+    if values.iter().any(|value| match value {
+        Value::Null | Value::String(_) => false,
+        Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => true,
+    }) {
+        CatalogFieldKnowledge::unknown(CatalogUnknownReason::Malformed)
+    } else if values.iter().any(|value| value.is_null()) {
+        CatalogFieldKnowledge::explicit_null()
+    } else {
+        CatalogFieldKnowledge::absent()
+    }
+}
+
 fn comments_knowledge(
     value: &Presence<Vec<Value>>,
 ) -> Result<CatalogFieldKnowledge<Vec<CatalogCommentV1>>, ProjectionError> {
@@ -2115,10 +2341,6 @@ fn object<'a>(
     value
         .as_object()
         .ok_or_else(|| invalid(context, "expected a JSON object"))
-}
-
-fn array_string(value: &Value) -> Option<String> {
-    value.as_str().map(str::to_owned)
 }
 
 fn campus_location_code(value: &Value) -> Option<String> {

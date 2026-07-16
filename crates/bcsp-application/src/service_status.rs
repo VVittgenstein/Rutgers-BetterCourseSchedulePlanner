@@ -1,0 +1,721 @@
+use std::collections::BTreeSet;
+use std::sync::{Arc, RwLock};
+
+use bcsp_catalog::to_catalog_discovery_response_v1;
+use bcsp_contracts::{
+    CatalogContentVersion, CatalogDiscoveryAvailability, CatalogDiscoveryErrorClass,
+    CatalogDiscoveryStatusV1, OpenFreshnessState, SERVICE_STATUS_CONTRACT_VERSION,
+    ServiceAvailabilitySummaryV1, ServiceAvailabilityV1, ServiceIssueComponentV1,
+    ServiceIssueRecoveryV1, ServiceIssueSeverityV1, ServiceIssueV1, ServiceLevelV1,
+    ServiceOperationPhaseV1, ServiceOperationV1, ServiceRuntimeV1, ServiceStatusV1,
+    ServiceTargetStatusV1, TermCampusKey,
+};
+use bcsp_operational_storage::{OpenBatchState, OperationalStorage, RefreshStatus, TargetState};
+use time::OffsetDateTime;
+
+use crate::{
+    ApplicationClock, CoordinatorStatusSink, CoordinatorStatusSnapshot,
+    OpenRuntimeSnapshotRegistry, RefreshPolicy, RefreshPolicyProvider, SharedRuntimeContext,
+};
+
+#[derive(Clone, Debug)]
+pub struct ServiceActivitySnapshot {
+    pub operation: ServiceOperationV1,
+    pub coordinator: CoordinatorStatusSnapshot,
+    pub scheduler_running: bool,
+}
+
+struct ServiceActivityState {
+    operation: ServiceOperationV1,
+    coordinator: CoordinatorStatusSnapshot,
+    scheduler_running: bool,
+}
+
+/// Process-local activity and scheduler facts shared by the status endpoint and refresh runtime.
+/// Durable Catalog/Open availability remains authoritative in operational storage.
+pub struct ServiceStatusRegistry {
+    runtime: ServiceRuntimeV1,
+    state: RwLock<ServiceActivityState>,
+    delegate: RwLock<Option<Arc<dyn CoordinatorStatusSink>>>,
+}
+
+impl ServiceStatusRegistry {
+    pub fn new(runtime: ServiceRuntimeV1) -> Self {
+        Self {
+            runtime,
+            state: RwLock::new(ServiceActivityState {
+                operation: ServiceOperationV1::starting(),
+                coordinator: CoordinatorStatusSnapshot::default(),
+                scheduler_running: false,
+            }),
+            delegate: RwLock::new(None),
+        }
+    }
+
+    pub const fn runtime(&self) -> ServiceRuntimeV1 {
+        self.runtime
+    }
+
+    pub fn set_delegate(
+        &self,
+        delegate: Arc<dyn CoordinatorStatusSink>,
+    ) -> Result<(), ServiceStatusRegistryError> {
+        let snapshot = self.snapshot()?;
+        delegate.publish(snapshot.coordinator);
+        if !snapshot.scheduler_running {
+            delegate.mark_stopped();
+        }
+        *self
+            .delegate
+            .write()
+            .map_err(|_| ServiceStatusRegistryError)? = Some(delegate);
+        Ok(())
+    }
+
+    pub fn snapshot(&self) -> Result<ServiceActivitySnapshot, ServiceStatusRegistryError> {
+        let state = self.state.read().map_err(|_| ServiceStatusRegistryError)?;
+        Ok(ServiceActivitySnapshot {
+            operation: state.operation.clone(),
+            coordinator: state.coordinator,
+            scheduler_running: state.scheduler_running,
+        })
+    }
+
+    fn delegate(&self) -> Option<Arc<dyn CoordinatorStatusSink>> {
+        self.delegate
+            .read()
+            .ok()
+            .and_then(|delegate| delegate.clone())
+    }
+}
+
+impl CoordinatorStatusSink for ServiceStatusRegistry {
+    fn publish(&self, snapshot: CoordinatorStatusSnapshot) {
+        if let Ok(mut state) = self.state.write() {
+            state.coordinator = snapshot;
+            state.scheduler_running = true;
+        }
+        if let Some(delegate) = self.delegate() {
+            delegate.publish(snapshot);
+        }
+    }
+
+    fn mark_stopped(&self) {
+        if let Ok(mut state) = self.state.write() {
+            state.scheduler_running = false;
+            state.operation = ServiceOperationV1 {
+                phase: ServiceOperationPhaseV1::Stopped,
+                target: None,
+                started_at: Some(OffsetDateTime::now_utc()),
+                next_retry_at: None,
+            };
+        }
+        if let Some(delegate) = self.delegate() {
+            delegate.mark_stopped();
+        }
+    }
+
+    fn publish_activity(&self, operation: ServiceOperationV1) {
+        if let Ok(mut state) = self.state.write() {
+            state.operation = operation.clone();
+        }
+        if let Some(delegate) = self.delegate() {
+            delegate.publish_activity(operation);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceStatusRegistryError;
+
+pub(crate) fn project_service_status<C, P>(
+    storage: &mut OperationalStorage,
+    runtime: &SharedRuntimeContext<C, P>,
+    open_runtime: &OpenRuntimeSnapshotRegistry,
+    registry: &ServiceStatusRegistry,
+    refresh_policy: Option<RefreshPolicy>,
+) -> ServiceStatusV1
+where
+    C: ApplicationClock,
+    P: RefreshPolicyProvider,
+{
+    let observed_at = runtime.now();
+    let activity = registry.snapshot().unwrap_or(ServiceActivitySnapshot {
+        operation: ServiceOperationV1::starting(),
+        coordinator: CoordinatorStatusSnapshot {
+            origin_circuit_open: true,
+            overloaded: true,
+            ..CoordinatorStatusSnapshot::default()
+        },
+        scheduler_running: false,
+    });
+    let published = match storage.published_discovery_snapshot() {
+        Ok(published) => published,
+        Err(_) => {
+            return unavailable_service_status(
+                observed_at,
+                registry.runtime(),
+                activity.operation,
+                ServiceIssueComponentV1::Storage,
+                "SERVICE_STATUS_STORAGE_UNAVAILABLE",
+            );
+        }
+    };
+    let discovery = match to_catalog_discovery_response_v1(&published, &[], observed_at) {
+        Ok(discovery) => discovery,
+        Err(_) => {
+            return unavailable_service_status(
+                observed_at,
+                registry.runtime(),
+                activity.operation,
+                ServiceIssueComponentV1::Discovery,
+                "DISCOVERY_STATUS_PROJECTION_FAILED",
+            );
+        }
+    };
+    let primary_term = latest_primary_term(&published.snapshot);
+    let mut issues = Vec::new();
+    if refresh_policy.is_none() {
+        issues.push(ServiceIssueV1 {
+            component: ServiceIssueComponentV1::Open,
+            target: None,
+            code: "OPEN_REFRESH_POLICY_UNAVAILABLE".to_owned(),
+            severity: ServiceIssueSeverityV1::Degraded,
+            recovery: ServiceIssueRecoveryV1::UserActionRequired,
+            retry_at: None,
+        });
+    }
+    if let Some(error) = &discovery.status.error {
+        issues.push(ServiceIssueV1 {
+            component: ServiceIssueComponentV1::Discovery,
+            target: None,
+            code: error.code.to_string(),
+            severity: if discovery.status.availability
+                == CatalogDiscoveryAvailability::UnavailableNoFirstSuccess
+            {
+                ServiceIssueSeverityV1::Blocking
+            } else {
+                ServiceIssueSeverityV1::Degraded
+            },
+            recovery: if error.class == CatalogDiscoveryErrorClass::Persist {
+                ServiceIssueRecoveryV1::UserActionRequired
+            } else {
+                ServiceIssueRecoveryV1::AutomaticRetry
+            },
+            retry_at: activity.operation.next_retry_at,
+        });
+    }
+
+    let mut targets = Vec::with_capacity(discovery.targets.len());
+    for discovered in &discovery.targets {
+        let target = discovered.key.clone();
+        let target_state = match storage.target_state(&target) {
+            Ok(state) => state,
+            Err(_) => {
+                issues.push(storage_issue(Some(target.clone())));
+                None
+            }
+        };
+        let (catalog_availability, catalog_content_version) =
+            catalog_availability(target_state.as_ref());
+        if let Some(issue) = catalog_issue(&target, target_state.as_ref(), catalog_availability) {
+            issues.push(issue);
+        }
+        let search_available = catalog_availability != ServiceAvailabilityV1::Unavailable;
+        let open_availability = if search_available {
+            let target_retry_at = (activity.operation.phase == ServiceOperationPhaseV1::RetryWait
+                && activity.operation.target.as_ref() == Some(&target))
+            .then_some(activity.operation.next_retry_at)
+            .flatten();
+            match storage.open_batch_state(&target) {
+                Ok(Some(batch)) => {
+                    if let Some(issue) = open_failure_issue(&target, &batch, target_retry_at) {
+                        issues.push(issue);
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => issues.push(storage_issue(Some(target.clone()))),
+            }
+            match (open_runtime.snapshot(&target), refresh_policy) {
+                (Ok(snapshot), Some(policy)) => {
+                    match runtime.open_status_with_policy(storage, &target, &snapshot, policy) {
+                        Ok(status) => match status.refresh.freshness.state {
+                            OpenFreshnessState::Fresh => ServiceAvailabilityV1::Current,
+                            OpenFreshnessState::Stale => ServiceAvailabilityV1::Stale,
+                            OpenFreshnessState::Unknown => ServiceAvailabilityV1::Unavailable,
+                        },
+                        Err(_) => ServiceAvailabilityV1::Unavailable,
+                    }
+                }
+                (Err(_), _) => {
+                    issues.push(storage_issue(Some(target.clone())));
+                    ServiceAvailabilityV1::Unavailable
+                }
+                (Ok(_), None) => ServiceAvailabilityV1::Unavailable,
+            }
+        } else {
+            ServiceAvailabilityV1::Unavailable
+        };
+        targets.push(ServiceTargetStatusV1 {
+            primary: primary_term
+                .as_ref()
+                .is_some_and(|term| target.term() == term),
+            target,
+            catalog_availability,
+            catalog_content_version,
+            open_availability,
+            search_available,
+        });
+    }
+
+    if activity.coordinator.origin_circuit_open {
+        issues.push(ServiceIssueV1 {
+            component: ServiceIssueComponentV1::Scheduler,
+            target: activity.operation.target.clone(),
+            code: "RUTGERS_ORIGIN_CIRCUIT_OPEN".to_owned(),
+            severity: if targets.iter().any(|target| target.search_available) {
+                ServiceIssueSeverityV1::Degraded
+            } else {
+                ServiceIssueSeverityV1::Blocking
+            },
+            recovery: ServiceIssueRecoveryV1::AutomaticRetry,
+            retry_at: activity.operation.next_retry_at,
+        });
+    }
+    if activity.coordinator.overloaded {
+        issues.push(ServiceIssueV1 {
+            component: ServiceIssueComponentV1::Scheduler,
+            target: activity.operation.target.clone(),
+            code: "REFRESH_SCHEDULER_OVERLOADED".to_owned(),
+            severity: ServiceIssueSeverityV1::Degraded,
+            recovery: ServiceIssueRecoveryV1::AutomaticRetry,
+            retry_at: activity.operation.next_retry_at,
+        });
+    }
+
+    let catalog = availability_summary(&targets, |target| target.catalog_availability);
+    let open = availability_summary(&targets, |target| target.open_availability);
+    let primary = targets
+        .iter()
+        .filter(|target| target.primary)
+        .collect::<Vec<_>>();
+    let readiness_scope = if primary.is_empty() {
+        targets.iter().collect::<Vec<_>>()
+    } else {
+        primary
+    };
+    let level = service_level(&discovery.status, &readiness_scope, &issues);
+
+    ServiceStatusV1 {
+        contract_version: SERVICE_STATUS_CONTRACT_VERSION,
+        observed_at,
+        runtime: registry.runtime(),
+        level,
+        operation: activity.operation,
+        discovery: discovery.status,
+        catalog,
+        open,
+        targets,
+        issues,
+    }
+}
+
+pub(crate) fn unavailable_service_status(
+    observed_at: OffsetDateTime,
+    runtime: ServiceRuntimeV1,
+    operation: ServiceOperationV1,
+    component: ServiceIssueComponentV1,
+    code: &str,
+) -> ServiceStatusV1 {
+    ServiceStatusV1 {
+        contract_version: SERVICE_STATUS_CONTRACT_VERSION,
+        observed_at,
+        runtime,
+        level: ServiceLevelV1::Error,
+        operation,
+        discovery: CatalogDiscoveryStatusV1 {
+            availability: CatalogDiscoveryAvailability::UnavailableNoFirstSuccess,
+            latest_attempt: None,
+            last_success: None,
+            is_stale: false,
+            error: None,
+        },
+        catalog: ServiceAvailabilitySummaryV1::default(),
+        open: ServiceAvailabilitySummaryV1::default(),
+        targets: Vec::new(),
+        issues: vec![ServiceIssueV1 {
+            component,
+            target: None,
+            code: code.to_owned(),
+            severity: ServiceIssueSeverityV1::Blocking,
+            recovery: ServiceIssueRecoveryV1::UserActionRequired,
+            retry_at: None,
+        }],
+    }
+}
+
+fn latest_primary_term(
+    snapshot: &bcsp_operational_storage::DiscoverySnapshot,
+) -> Option<bcsp_contracts::TermId> {
+    let target_terms = snapshot
+        .campuses
+        .iter()
+        .map(|campus| campus.target.term().clone())
+        .collect::<BTreeSet<_>>();
+    snapshot
+        .terms
+        .iter()
+        .filter(|term| target_terms.contains(&term.term_id))
+        .filter_map(|term| {
+            Some((
+                term.year?,
+                term.term_code.as_deref()?.parse::<u8>().ok()?,
+                term.term_id.clone(),
+            ))
+        })
+        .max_by_key(|(year, term_code, _)| (*year, *term_code))
+        .map(|(_, _, term)| term)
+}
+
+fn catalog_availability(
+    state: Option<&TargetState>,
+) -> (ServiceAvailabilityV1, Option<CatalogContentVersion>) {
+    let Some(state) = state.filter(|state| state.current_content_version > 0) else {
+        return (ServiceAvailabilityV1::Unavailable, None);
+    };
+    let version = CatalogContentVersion::try_from(state.current_content_version).ok();
+    let stale = state.last_attempt.as_ref().is_some_and(|attempt| {
+        matches!(
+            attempt.status,
+            RefreshStatus::Failed
+                | RefreshStatus::Interrupted
+                | RefreshStatus::EmptySuspectRetained
+        )
+    });
+    (
+        if stale {
+            ServiceAvailabilityV1::Stale
+        } else {
+            ServiceAvailabilityV1::Current
+        },
+        version,
+    )
+}
+
+fn catalog_issue(
+    target: &TermCampusKey,
+    state: Option<&TargetState>,
+    availability: ServiceAvailabilityV1,
+) -> Option<ServiceIssueV1> {
+    let attempt = state?.last_attempt.as_ref()?;
+    if !matches!(
+        attempt.status,
+        RefreshStatus::Failed | RefreshStatus::Interrupted | RefreshStatus::EmptySuspectRetained
+    ) {
+        return None;
+    }
+    Some(ServiceIssueV1 {
+        component: ServiceIssueComponentV1::Catalog,
+        target: Some(target.clone()),
+        code: attempt
+            .error_code
+            .clone()
+            .unwrap_or_else(|| "CATALOG_REFRESH_FAILED".to_owned()),
+        severity: if availability == ServiceAvailabilityV1::Unavailable {
+            ServiceIssueSeverityV1::Blocking
+        } else {
+            ServiceIssueSeverityV1::Degraded
+        },
+        recovery: ServiceIssueRecoveryV1::AutomaticRetry,
+        retry_at: None,
+    })
+}
+
+fn storage_issue(target: Option<TermCampusKey>) -> ServiceIssueV1 {
+    ServiceIssueV1 {
+        component: ServiceIssueComponentV1::Storage,
+        target,
+        code: "SERVICE_STATUS_STORAGE_UNAVAILABLE".to_owned(),
+        severity: ServiceIssueSeverityV1::Blocking,
+        recovery: ServiceIssueRecoveryV1::UserActionRequired,
+        retry_at: None,
+    }
+}
+
+fn open_failure_issue(
+    target: &TermCampusKey,
+    batch: &OpenBatchState,
+    retry_at: Option<OffsetDateTime>,
+) -> Option<ServiceIssueV1> {
+    let code = current_open_failure_code(
+        batch.last_attempt_sequence,
+        batch.last_failure_attempt_sequence,
+        batch.last_failure_error_code.as_deref(),
+    )?;
+    Some(ServiceIssueV1 {
+        component: ServiceIssueComponentV1::Open,
+        target: Some(target.clone()),
+        code: code.to_owned(),
+        severity: ServiceIssueSeverityV1::Degraded,
+        recovery: ServiceIssueRecoveryV1::AutomaticRetry,
+        retry_at,
+    })
+}
+
+fn current_open_failure_code<'a>(
+    last_attempt_sequence: u64,
+    last_failure_attempt_sequence: Option<u64>,
+    last_failure_error_code: Option<&'a str>,
+) -> Option<&'a str> {
+    (last_failure_attempt_sequence == Some(last_attempt_sequence))
+        .then_some(last_failure_error_code)
+        .flatten()
+}
+
+fn availability_summary(
+    targets: &[ServiceTargetStatusV1],
+    availability: impl Fn(&ServiceTargetStatusV1) -> ServiceAvailabilityV1,
+) -> ServiceAvailabilitySummaryV1 {
+    ServiceAvailabilitySummaryV1 {
+        total_target_count: u64::try_from(targets.len()).unwrap_or(u64::MAX),
+        available_target_count: u64::try_from(
+            targets
+                .iter()
+                .filter(|target| availability(target) != ServiceAvailabilityV1::Unavailable)
+                .count(),
+        )
+        .unwrap_or(u64::MAX),
+    }
+}
+
+fn service_level(
+    discovery: &CatalogDiscoveryStatusV1,
+    targets: &[&ServiceTargetStatusV1],
+    issues: &[ServiceIssueV1],
+) -> ServiceLevelV1 {
+    let scope = targets
+        .iter()
+        .map(|target| target.target.clone())
+        .collect::<BTreeSet<_>>();
+    let relevant_issue = |issue: &&ServiceIssueV1| {
+        issue
+            .target
+            .as_ref()
+            .is_none_or(|target| scope.contains(target))
+    };
+    let search_count = targets
+        .iter()
+        .filter(|target| target.search_available)
+        .count();
+    let open_count = targets
+        .iter()
+        .filter(|target| target.open_availability != ServiceAvailabilityV1::Unavailable)
+        .count();
+    let blocking = issues
+        .iter()
+        .filter(relevant_issue)
+        .any(|issue| issue.severity == ServiceIssueSeverityV1::Blocking);
+    let degraded = issues
+        .iter()
+        .filter(relevant_issue)
+        .any(|issue| issue.severity == ServiceIssueSeverityV1::Degraded)
+        || targets.iter().any(|target| {
+            target.catalog_availability == ServiceAvailabilityV1::Stale
+                || target.open_availability == ServiceAvailabilityV1::Stale
+        });
+    if blocking && search_count == 0 {
+        return ServiceLevelV1::Error;
+    }
+    if discovery.availability == CatalogDiscoveryAvailability::UnavailableNoFirstSuccess
+        || targets.is_empty()
+        || search_count == 0
+    {
+        return ServiceLevelV1::Initializing;
+    }
+    if search_count < targets.len() || open_count < targets.len() {
+        return if degraded {
+            ServiceLevelV1::Degraded
+        } else {
+            ServiceLevelV1::PartiallyReady
+        };
+    }
+    if degraded || blocking {
+        ServiceLevelV1::Degraded
+    } else {
+        ServiceLevelV1::Ready
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bcsp_contracts::{
+        CatalogDiscoveryAvailability, CatalogDiscoveryStatusV1, ServiceIssueRecoveryV1,
+        ServiceOperationPhaseV1,
+    };
+
+    use super::*;
+
+    fn discovery(availability: CatalogDiscoveryAvailability) -> CatalogDiscoveryStatusV1 {
+        CatalogDiscoveryStatusV1 {
+            availability,
+            latest_attempt: None,
+            last_success: None,
+            is_stale: false,
+            error: None,
+        }
+    }
+
+    fn target(
+        catalog: ServiceAvailabilityV1,
+        open: ServiceAvailabilityV1,
+    ) -> ServiceTargetStatusV1 {
+        ServiceTargetStatusV1 {
+            target: TermCampusKey::try_new("92026", "NB").expect("target"),
+            primary: true,
+            catalog_availability: catalog,
+            catalog_content_version: None,
+            open_availability: open,
+            search_available: catalog != ServiceAvailabilityV1::Unavailable,
+        }
+    }
+
+    #[test]
+    fn catalog_ready_while_open_pending_is_partially_ready() {
+        let target = target(
+            ServiceAvailabilityV1::Current,
+            ServiceAvailabilityV1::Unavailable,
+        );
+        assert_eq!(
+            service_level(
+                &discovery(CatalogDiscoveryAvailability::Current),
+                &[&target],
+                &[]
+            ),
+            ServiceLevelV1::PartiallyReady
+        );
+    }
+
+    #[test]
+    fn level_contract_covers_initializing_ready_and_error() {
+        assert_eq!(
+            service_level(
+                &discovery(CatalogDiscoveryAvailability::UnavailableNoFirstSuccess),
+                &[],
+                &[]
+            ),
+            ServiceLevelV1::Initializing
+        );
+
+        let ready = target(
+            ServiceAvailabilityV1::Current,
+            ServiceAvailabilityV1::Current,
+        );
+        assert_eq!(
+            service_level(
+                &discovery(CatalogDiscoveryAvailability::Current),
+                &[&ready],
+                &[]
+            ),
+            ServiceLevelV1::Ready
+        );
+
+        let unavailable = target(
+            ServiceAvailabilityV1::Unavailable,
+            ServiceAvailabilityV1::Unavailable,
+        );
+        let blocking = ServiceIssueV1 {
+            component: ServiceIssueComponentV1::Storage,
+            target: Some(unavailable.target.clone()),
+            code: "SERVICE_STATUS_STORAGE_UNAVAILABLE".to_owned(),
+            severity: ServiceIssueSeverityV1::Blocking,
+            recovery: ServiceIssueRecoveryV1::UserActionRequired,
+            retry_at: None,
+        };
+        assert_eq!(
+            service_level(
+                &discovery(CatalogDiscoveryAvailability::Current),
+                &[&unavailable],
+                &[blocking]
+            ),
+            ServiceLevelV1::Error
+        );
+    }
+
+    #[test]
+    fn lkg_with_degraded_issue_remains_searchable_and_degraded() {
+        let target = target(ServiceAvailabilityV1::Stale, ServiceAvailabilityV1::Stale);
+        let issue = ServiceIssueV1 {
+            component: ServiceIssueComponentV1::Catalog,
+            target: Some(target.target.clone()),
+            code: "CATALOG_UPSTREAM_TRANSPORT".to_owned(),
+            severity: ServiceIssueSeverityV1::Degraded,
+            recovery: ServiceIssueRecoveryV1::AutomaticRetry,
+            retry_at: None,
+        };
+        assert!(target.search_available);
+        assert_eq!(
+            service_level(
+                &discovery(CatalogDiscoveryAvailability::StaleLastSuccess),
+                &[&target],
+                &[issue]
+            ),
+            ServiceLevelV1::Degraded
+        );
+    }
+
+    #[test]
+    fn latest_open_failure_with_lkg_is_degraded_but_an_old_failure_is_not() {
+        assert_eq!(
+            current_open_failure_code(5, Some(5), Some("OPEN_UPSTREAM_TRANSPORT")),
+            Some("OPEN_UPSTREAM_TRANSPORT")
+        );
+        assert_eq!(
+            current_open_failure_code(6, Some(5), Some("OPEN_UPSTREAM_TRANSPORT")),
+            None
+        );
+
+        let target = target(
+            ServiceAvailabilityV1::Current,
+            ServiceAvailabilityV1::Current,
+        );
+        let issue = ServiceIssueV1 {
+            component: ServiceIssueComponentV1::Open,
+            target: Some(target.target.clone()),
+            code: "OPEN_UPSTREAM_TRANSPORT".to_owned(),
+            severity: ServiceIssueSeverityV1::Degraded,
+            recovery: ServiceIssueRecoveryV1::AutomaticRetry,
+            retry_at: None,
+        };
+        assert_eq!(
+            service_level(
+                &discovery(CatalogDiscoveryAvailability::Current),
+                &[&target],
+                &[issue]
+            ),
+            ServiceLevelV1::Degraded
+        );
+    }
+
+    #[test]
+    fn registry_records_real_activity_without_touching_storage() {
+        let registry = ServiceStatusRegistry::new(ServiceRuntimeV1::Local);
+        let target = TermCampusKey::try_new("92026", "NB").expect("target");
+        registry.publish_activity(ServiceOperationV1 {
+            phase: ServiceOperationPhaseV1::CatalogFetch,
+            target: Some(target.clone()),
+            started_at: Some(OffsetDateTime::UNIX_EPOCH),
+            next_retry_at: None,
+        });
+        let snapshot = registry.snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.operation.phase,
+            ServiceOperationPhaseV1::CatalogFetch
+        );
+        assert_eq!(snapshot.operation.target, Some(target));
+
+        registry.mark_stopped();
+        let stopped = registry.snapshot().expect("stopped snapshot");
+        assert_eq!(stopped.operation.phase, ServiceOperationPhaseV1::Stopped);
+        assert!(!stopped.scheduler_running);
+    }
+}

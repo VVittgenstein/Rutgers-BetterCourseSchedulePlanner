@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { CatalogDiscoveryResponseV1 } from '../product/contracts/catalog';
 import type { FilterSchemaV1 } from '../product/contracts/query';
 import type { ProductRuntimePort } from '../product/runtime';
-
-const DISCOVERY_HYDRATION_INTERVAL_MILLISECONDS = 2_000;
 
 export type ShellDiscoveryState =
   | 'CURRENT'
@@ -39,9 +37,13 @@ function classifyDiscovery(discovery: CatalogDiscoveryResponseV1): ShellDiscover
   return 'UNAVAILABLE';
 }
 
-export function useShellDataState(runtime: ProductRuntimePort): ShellDataResource {
+export function useShellDataState(
+  runtime: ProductRuntimePort,
+  discoveryRevision = 'initial',
+): ShellDataResource {
   const [requestGeneration, setRequestGeneration] = useState(0);
   const [state, setState] = useState<ShellDataState>({ status: 'LOADING' });
+  const lastDiscoveryRevision = useRef(discoveryRevision);
 
   const retry = useCallback(() => {
     setState({ status: 'LOADING' });
@@ -85,86 +87,38 @@ export function useShellDataState(runtime: ProductRuntimePort): ShellDataResourc
   }, [requestGeneration, runtime]);
 
   useEffect(() => {
-    const recoveringDiscovery = state.status === 'EMPTY';
-    const hydratingSubjects = state.status === 'READY'
-      && state.discoveryState === 'CURRENT'
-      && state.discovery.targets.length > 0
-      && state.discovery.subjects.length === 0;
-    if (!recoveringDiscovery && !hydratingSubjects) {
-      return undefined;
-    }
+    if (state.status === 'LOADING' || state.status === 'ERROR') return undefined;
+    if (lastDiscoveryRevision.current === discoveryRevision) return undefined;
+    lastDiscoveryRevision.current = discoveryRevision;
 
     const abort = new AbortController();
     let active = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    const schedule = () => {
-      timer = globalThis.setTimeout(() => {
-        timer = undefined;
-        void poll();
-      }, DISCOVERY_HYDRATION_INTERVAL_MILLISECONDS);
-    };
-    const poll = async () => {
-      try {
-        // This product route reads the local operational store. It never starts
-        // a Rutgers refresh, so multiple browser sessions cannot fan out to the
-        // upstream origin while waiting for discovery or Catalog publication.
-        const discovery = await runtime.product.catalogDiscovery(
-          { contractVersion: 1 },
-          abort.signal,
-        );
-        if (!active) return;
-        const discoveryState = classifyDiscovery(discovery);
-        if (
-          state.status === 'EMPTY'
-          && discoveryState !== 'UNAVAILABLE'
-          && discovery.targets.length > 0
-        ) {
-          setState((current) => {
-            if (current.status !== 'EMPTY' || current.discovery !== state.discovery) {
-              return current;
-            }
-            return {
-              status: 'READY',
-              discovery,
-              discoveryState,
-              filterCount: current.filterCount,
-              filterSchema: current.filterSchema,
-            };
-          });
-          return;
-        }
-        if (
-          state.status === 'READY'
-          && discoveryState === 'CURRENT'
-          && discovery.targets.length > 0
-          && discovery.subjects.length > 0
-        ) {
-          setState((current) => {
-            if (current.status !== 'READY' || current.discovery !== state.discovery) {
-              return current;
-            }
-            return {
-              ...current,
-              discovery,
-              discoveryState,
-            };
-          });
-          return;
-        }
-      } catch {
-        if (!active || abort.signal.aborted) return;
-      }
-      if (active) schedule();
-    };
-
-    schedule();
+    void Promise.resolve().then(() => runtime.product.catalogDiscovery(
+      { contractVersion: 1 },
+      abort.signal,
+    )).then((discovery) => {
+      if (!active) return;
+      const discoveryState = classifyDiscovery(discovery);
+      setState((current) => {
+        if (current.status !== 'READY' && current.status !== 'EMPTY') return current;
+        const snapshot = {
+          discovery,
+          discoveryState,
+          filterCount: current.filterCount,
+          filterSchema: current.filterSchema,
+        };
+        return discovery.targets.length === 0 || discoveryState === 'UNAVAILABLE'
+          ? { status: 'EMPTY', ...snapshot }
+          : { status: 'READY', ...snapshot };
+      });
+    }).catch(() => {
+      // Service status owns retry cadence. Keep the last discovery snapshot.
+    });
     return () => {
       active = false;
-      if (timer !== undefined) globalThis.clearTimeout(timer);
       abort.abort();
     };
-  }, [runtime, state]);
+  }, [discoveryRevision, runtime, state.status]);
 
   return { retry, state };
 }

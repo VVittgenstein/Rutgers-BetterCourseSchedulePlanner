@@ -1,10 +1,23 @@
 [CmdletBinding()]
 param(
-    [string]$ReleaseDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release\0.1.0')
+    [string]$ReleaseDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release\0.1.0'),
+
+    [Parameter(Mandatory = $true)]
+    [string]$SourceCommit,
+
+    [Parameter(Mandatory = $true)]
+    [long]$SourceDateEpoch
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($SourceCommit -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$') {
+    throw 'SourceCommit must be a full lowercase hexadecimal commit id.'
+}
+if ($SourceDateEpoch -lt 0) {
+    throw 'SourceDateEpoch must be a non-negative integer.'
+}
 
 $RepositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $InputsPath = Join-Path $PSScriptRoot 'release-inputs.json'
@@ -132,6 +145,30 @@ function Assert-Binary {
     }
 }
 
+function Assert-FrontendCapabilities {
+    param($Capabilities, [string]$ExpectedTarget, [string]$PackageId)
+    Assert-True (
+        [int]$Capabilities.schemaVersion -eq 1 -and
+        [string]$Capabilities.kind -ceq 'TARGET_BUILD_ALLOWLIST' -and
+        [string]$Capabilities.target -ceq $ExpectedTarget -and
+        [string]$Capabilities.readiness -ceq 'UI_INTEGRATION_COMPLETE'
+    ) "$PackageId frontend capabilities identity mismatch."
+
+    $validated = @{}
+    foreach ($property in @('allowedCapabilities', 'allowedRoutes', 'allowedI18nCatalogs')) {
+        $propertyMatch = @($Capabilities.PSObject.Properties | Where-Object { $_.Name -ceq $property })
+        Assert-True ($propertyMatch.Count -eq 1 -and $propertyMatch[0].Value -is [System.Array]) "$PackageId frontend capabilities $property must be an array."
+        $values = [string[]]@($propertyMatch[0].Value | ForEach-Object { [string]$_ })
+        Assert-True ($values.Count -gt 0 -and @($values | Where-Object { $_.Length -eq 0 }).Count -eq 0) "$PackageId frontend capabilities $property must contain non-empty values."
+        $unique = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($value in $values) {
+            Assert-True ($unique.Add($value)) "$PackageId frontend capabilities $property contains a duplicate value: $value"
+        }
+        $validated[$property] = $values
+    }
+    $validated
+}
+
 function Assert-CleanPayload {
     param([string]$Root, [string[]]$Files, [string]$PackageId, [string]$Binary)
     $contentPatterns = @(
@@ -204,6 +241,9 @@ function Test-Package {
     $binaryPath = Join-Path $Root $Binary
     Assert-True ([string]$provenance.artifact.path -ceq $Binary -and [long]$provenance.artifact.sizeBytes -eq (Get-Item -LiteralPath $binaryPath).Length -and [string]$provenance.artifact.sha256 -ceq (Get-Sha256 $binaryPath)) "$($Package.id) provenance artifact mismatch."
 
+    $frontendCapabilities = Read-Json (Join-Path $Root 'FRONTEND-CAPABILITIES.json')
+    $validatedFrontendCapabilities = Assert-FrontendCapabilities $frontendCapabilities ([string]$Package.frontendTarget) ([string]$Package.id)
+
     $sbom = Read-Json (Join-Path $Root 'SBOM.cdx.json')
     Assert-True ([string]$sbom.bomFormat -ceq 'CycloneDX' -and [string]$sbom.specVersion -ceq '1.6' -and [int]$sbom.version -eq 1) "$($Package.id) SBOM format mismatch."
     Assert-True (@($sbom.components).Count -gt 0 -and @($sbom.dependencies).Count -gt 0) "$($Package.id) SBOM graph is empty."
@@ -231,6 +271,7 @@ function Test-Package {
 
     [pscustomobject]@{
         Package = $Package; Manifest = $manifest; Provenance = $provenance; Components = $components
+        FrontendCapabilities = $validatedFrontendCapabilities
         FrontendRefs = [string[]](Sort-Ordinal @($frontendRefs)); ArchiveHash = Get-Sha256 $Archive
         FileCount = $Files.Count; ComponentCount = $components.Count
     }
@@ -241,8 +282,8 @@ try {
     $inputs = Read-Json $InputsPath
     Assert-True ([int]$inputs.schemaVersion -eq 1 -and [int]$inputs.packageCount -eq 2 -and @($inputs.packages).Count -eq 2) 'release-inputs.json must define exactly two packages.'
     $definitions = @{
-        WINDOWS_LOCAL_RELEASE_ARCHIVE = @('x86_64-pc-windows-msvc', 'apps/bcsp-local', 'local', 'data/rbcsp.sqlite', 11, 'RBCSP.exe', 'bcsp-local')
-        LINUX_PUBLIC_DEPLOYMENT_PACKAGE = @('x86_64-unknown-linux-gnu', 'apps/bcsp-server', 'public', '/var/lib/bcsp/rbcsp.sqlite', 20, 'bin/bcsp-server', 'bcsp-server')
+        WINDOWS_LOCAL_RELEASE_ARCHIVE = @('x86_64-pc-windows-msvc', 'apps/bcsp-local', 'local', 'data/rbcsp.sqlite', 12, 'RBCSP.exe', 'bcsp-local')
+        LINUX_PUBLIC_DEPLOYMENT_PACKAGE = @('x86_64-unknown-linux-gnu', 'apps/bcsp-server', 'public', '/var/lib/bcsp/rbcsp.sqlite', 21, 'bin/bcsp-server', 'bcsp-server')
     }
     $packages = @{}
     foreach ($package in @($inputs.packages)) {
@@ -283,6 +324,7 @@ try {
         $linux = Test-Package $linuxPackage $inputs $linuxArchive $linuxRoot $linuxFiles 'bin/bcsp-server' 'bcsp-server'
 
         Assert-True ([string]$windows.Manifest.version -ceq [string]$linux.Manifest.version -and [string]$windows.Manifest.sourceCommit -ceq [string]$linux.Manifest.sourceCommit -and [long]$windows.Manifest.sourceDateEpoch -eq [long]$linux.Manifest.sourceDateEpoch) 'Packages differ in version, source commit, or source epoch.'
+        Assert-True ([string]$windows.Manifest.sourceCommit -ceq $SourceCommit -and [long]$windows.Manifest.sourceDateEpoch -eq $SourceDateEpoch) 'Packages do not match the requested source commit and source epoch.'
         Assert-True ((ConvertTo-Json $windows.Provenance.tools -Compress) -ceq (ConvertTo-Json $linux.Provenance.tools -Compress)) 'Packages differ in toolchain provenance.'
         for ($index = 0; $index -lt @($windows.Provenance.inputs).Count; $index += 1) {
             Assert-True ([string]$windows.Provenance.inputs[$index].sha256 -ceq [string]$linux.Provenance.inputs[$index].sha256) "Packages differ in provenance input hash for $($windows.Provenance.inputs[$index].path)."
@@ -292,6 +334,26 @@ try {
         foreach ($reference in $common) { Assert-True ((ConvertTo-Json $windows.Components[$reference] -Depth 20 -Compress) -ceq (ConvertTo-Json $linux.Components[$reference] -Depth 20 -Compress)) "Shared SBOM component differs: $reference" }
         Assert-Sequence $windows.FrontendRefs $linux.FrontendRefs 'Embedded frontend components'
 
+        $requiredSharedCapabilities = @(
+            'course-search',
+            'course-section-details',
+            'current-page-audio',
+            'current-page-selection',
+            'current-page-toast',
+            'current-page-watch',
+            'en-us-zh-cn',
+            'filter-schema',
+            'open-status',
+            'refresh-diagnostics',
+            'section-search'
+        )
+        foreach ($capability in $requiredSharedCapabilities) {
+            Assert-True (@($windows.FrontendCapabilities.allowedCapabilities | Where-Object { $_ -ceq $capability }).Count -eq 1) "Windows frontend is missing shared capability: $capability"
+            Assert-True (@($linux.FrontendCapabilities.allowedCapabilities | Where-Object { $_ -ceq $capability }).Count -eq 1) "Linux frontend is missing shared capability: $capability"
+        }
+        Assert-True (@($windows.FrontendCapabilities.allowedCapabilities | Where-Object { $_ -ceq 'windows-launcher-lifecycle' }).Count -eq 1) 'Windows frontend is missing windows-launcher-lifecycle.'
+        Assert-True (@($linux.FrontendCapabilities.allowedCapabilities | Where-Object { $_ -ceq 'service-operations' }).Count -eq 1) 'Linux frontend is missing service-operations.'
+
         [pscustomobject]@{
             state = 'PASS'; version = [string]$inputs.releaseVersion; sourceCommit = [string]$windows.Manifest.sourceCommit
             sourceDateEpoch = [long]$windows.Manifest.sourceDateEpoch
@@ -300,6 +362,7 @@ try {
                 [pscustomobject]@{ id = [string]$linuxPackage.id; archive = [string]$linuxPackage.archiveName; sha256 = $linux.ArchiveHash; files = $linux.FileCount }
             )
             sharedComponents = $common.Count; frontendComponents = $windows.FrontendRefs.Count
+            sharedFrontendCapabilities = $requiredSharedCapabilities.Count
         } | ConvertTo-Json -Depth 5 -Compress
     }
     finally { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force } }

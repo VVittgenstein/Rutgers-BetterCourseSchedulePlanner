@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bcsp_contracts::{SystemTraceIdSource, TermCampusKey, TraceId, TraceIdSource};
+use bcsp_contracts::{
+    ServiceOperationPhaseV1, ServiceOperationV1, SystemTraceIdSource, TermCampusKey, TraceId,
+    TraceIdSource,
+};
 use bcsp_open::OpenCounterAudience;
 use bcsp_rutgers_client::{
     DiscoveryClientBuildError, DiscoveryFailure, DiscoveryTransportError, RutgersDiscoveryClient,
@@ -139,6 +142,7 @@ impl OfficialRefreshRuntime {
                     runtime.shutdown().await;
                 }
                 status.mark_stopped();
+                publish_discovering(&*status);
 
                 let observation_id = ids.next_trace_id();
                 let started_at = system_timestamp();
@@ -158,6 +162,7 @@ impl OfficialRefreshRuntime {
                     Err(()) => {
                         tracing::error!(code = "DISCOVERY_CLOCK_UNAVAILABLE");
                         wait_before_attempt = DISCOVERY_RETRY_INTERVAL;
+                        publish_retry_wait(&*status, DISCOVERY_RETRY_INTERVAL);
                         continue;
                     }
                 };
@@ -166,11 +171,12 @@ impl OfficialRefreshRuntime {
                     Err(()) => {
                         tracing::error!(code = "DISCOVERY_CLOCK_UNAVAILABLE");
                         wait_before_attempt = DISCOVERY_RETRY_INTERVAL;
+                        publish_retry_wait(&*status, DISCOVERY_RETRY_INTERVAL);
                         continue;
                     }
                 };
 
-                match discovery_result {
+                let discovery_succeeded = match discovery_result {
                     Ok(response) => match publish_discovery_for_refresh(
                         &storage,
                         response.snapshot(),
@@ -187,11 +193,13 @@ impl OfficialRefreshRuntime {
                             );
                             current_targets = published.targets;
                             wait_before_attempt = DISCOVERY_REFRESH_INTERVAL;
+                            true
                         }
                         Err(_) => {
                             membership.replace([]);
                             tracing::error!(code = "DISCOVERY_PUBLISH_FAILED");
                             wait_before_attempt = DISCOVERY_RETRY_INTERVAL;
+                            false
                         }
                     },
                     Err(failure) => {
@@ -205,7 +213,18 @@ impl OfficialRefreshRuntime {
                         );
                         tracing::warn!(code = discovery_failure_code(&failure));
                         wait_before_attempt = DISCOVERY_RETRY_INTERVAL;
+                        false
                     }
+                };
+                if discovery_succeeded {
+                    status.publish_activity(ServiceOperationV1 {
+                        phase: ServiceOperationPhaseV1::Idle,
+                        target: None,
+                        started_at: None,
+                        next_retry_at: None,
+                    });
+                } else {
+                    publish_retry_wait(&*status, DISCOVERY_RETRY_INTERVAL);
                 }
 
                 let demanded = target_refresh_demand.snapshot().unwrap_or_default();
@@ -307,6 +326,28 @@ fn system_timestamp() -> Result<String, ()> {
     OffsetDateTime::now_utc().format(&Rfc3339).map_err(|_| ())
 }
 
+fn publish_discovering(status: &dyn CoordinatorStatusSink) {
+    status.publish_activity(ServiceOperationV1 {
+        phase: ServiceOperationPhaseV1::Discovering,
+        target: None,
+        started_at: Some(OffsetDateTime::now_utc()),
+        next_retry_at: None,
+    });
+}
+
+fn publish_retry_wait(status: &dyn CoordinatorStatusSink, delay: Duration) {
+    let now = OffsetDateTime::now_utc();
+    let next_retry_at = time::Duration::try_from(delay)
+        .ok()
+        .and_then(|delay| now.checked_add(delay));
+    status.publish_activity(ServiceOperationV1 {
+        phase: ServiceOperationPhaseV1::RetryWait,
+        target: None,
+        started_at: Some(now),
+        next_retry_at,
+    });
+}
+
 fn discovery_failure_code(failure: &DiscoveryFailure) -> &'static str {
     match failure.kind() {
         DiscoveryTransportError::Timeout => "DISCOVERY_UPSTREAM_TIMEOUT",
@@ -336,12 +377,13 @@ pub enum OfficialRefreshRuntimeBuildError {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::time::Duration;
 
-    use bcsp_contracts::TermCampusKey;
+    use bcsp_contracts::{ServiceOperationPhaseV1, ServiceRuntimeV1, TermCampusKey};
     use bcsp_rutgers_client::OpenSectionsRequest;
 
-    use super::selected_refresh_targets;
-    use crate::ScheduledRefreshTarget;
+    use super::{publish_discovering, publish_retry_wait, selected_refresh_targets};
+    use crate::{ScheduledRefreshTarget, ServiceStatusRegistry};
 
     const SOURCE: &str =
         "selector:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -384,5 +426,21 @@ mod tests {
                 TermCampusKey::try_new("12027", "NWK").expect("target"),
             ])
         );
+    }
+
+    #[test]
+    fn discovery_activity_helpers_publish_discovering_and_retry_wait() {
+        let status = ServiceStatusRegistry::new(ServiceRuntimeV1::Local);
+        publish_discovering(&status);
+        let discovering = status.snapshot().expect("discovering snapshot").operation;
+        assert_eq!(discovering.phase, ServiceOperationPhaseV1::Discovering);
+        assert!(discovering.started_at.is_some());
+        assert!(discovering.next_retry_at.is_none());
+
+        publish_retry_wait(&status, Duration::from_secs(30));
+        let retry = status.snapshot().expect("retry snapshot").operation;
+        assert_eq!(retry.phase, ServiceOperationPhaseV1::RetryWait);
+        assert!(retry.started_at.is_some());
+        assert!(retry.next_retry_at.is_some());
     }
 }
