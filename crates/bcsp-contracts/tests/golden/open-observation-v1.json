@@ -1,0 +1,36 @@
+{
+  "contractVersion": 1,
+  "observationId": "00000000-0000-4000-8000-000000000001",
+  "refreshObservationId": "00000000-0000-4000-8000-000000000001",
+  "batch": {
+    "term": "T2026F",
+    "campus": "CAMPUS_A"
+  },
+  "sectionKey": {
+    "term": "T2026F",
+    "campus": "CAMPUS_A",
+    "index": "00001"
+  },
+  "pullSequence": 7,
+  "catalogContentVersion": 3,
+  "state": "OPEN",
+  "observedAt": "1970-01-01T00:00:01Z",
+  "freshUntil": "1970-01-01T00:00:36Z",
+  "schedulerLagMilliseconds": 250,
+  "counterSnapshot": {
+    "runCounts": {
+      "attempted": 9,
+      "succeeded": 7,
+      "failed": 2,
+      "empty": 1
+    },
+    "todayCounts": {
+      "attempted": 9,
+      "succeeded": 7,
+      "failed": 2,
+      "empty": 1
+    },
+    "rutgersDay": "2026-07-14",
+    "dayTimezone": "America/New_York"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "task": "P7.4-003-R1",
+  "status": "P7_4_LINUX_HASH_DISCOVERY_QUEUED",
+  "sourceCommit": "476565cbe8e19075214cdc1427c86cf2dcf4e966",
+  "sourceDateEpoch": 1784101290,
+  "windowsHashLocked": true,
+  "linuxHashLocked": false,
+  "countsAsAcceptance": false,
+  "nextTask": "P7.4-003-R2"
+}

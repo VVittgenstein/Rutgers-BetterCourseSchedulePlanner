@@ -1,0 +1,97 @@
+{
+    "schemaVersion":  1,
+    "taskId":  "P7.1-003-R1",
+    "state":  "PASS",
+    "primary":  {
+                    "commit":  "c2af7184aeec06704997f266530535003358c278",
+                    "parent":  "1d997f6d3cca70ef54ec5b7adb2124f0b5905fa3",
+                    "commitPaths":  73,
+                    "identitySources":  4
+                },
+    "repair":  {
+                   "expectedParent":  "c2af7184aeec06704997f266530535003358c278",
+                   "allowlistPaths":  10,
+                   "topology":  "DIRECT_SINGLE_PARENT_FAST_FORWARD_CHILD"
+               },
+    "gitStatusPolicy":  {
+                            "usesEffectiveCheckoutConfiguration":  true,
+                            "forcedCoreAutocrlfOverrideAllowed":  false,
+                            "runtimeCoreAutocrlfPublished":  false
+                        },
+    "canonicalTextPolicy":  {
+                                "kind":  "STRICT_UTF8_CANONICAL_LF_SHA256",
+                                "bomAllowed":  false,
+                                "nulAllowed":  false,
+                                "loneCrAllowed":  false,
+                                "crlfNormalizedToLf":  true,
+                                "finalNewlineRequired":  true,
+                                "protectedBaselineStillRawBytes":  true
+                            },
+    "isolatedAutocrlfClone":  {
+                                  "coreAutocrlf":  "true",
+                                  "trackedTextFiles":  3,
+                                  "normalStatusRows":  0,
+                                  "forcedFalseStatusRows":  3,
+                                  "observedCrlfFiles":  3,
+                                  "canonicalHashMatches":  3,
+                                  "rawHashDifferences":  3,
+                                  "state":  "PASS"
+                              },
+    "currentLocks":  {
+                         "cargoCanonicalSha256":  "26466CDEE7A2D36991AD4BD815A606D0732A98384496A59A9F0BE7CB8A9E6F15",
+                         "frontendNpmCanonicalSha256":  "97322B86E314BE69E4601CD4EE9187E359AA9FDB7B9186F193EF1D98B5A06466",
+                         "rawWorktreeHashesPublished":  false
+                     },
+    "primaryBuilderVerifyOnly":  "PASS",
+    "qualityGates":  [
+                         {
+                             "id":  "immutable-primary-boundary",
+                             "builderDisposition":  "PASS"
+                         },
+                         {
+                             "id":  "repair-commit-boundary",
+                             "builderDisposition":  "REQUIRED_AT_TRANSACTION"
+                         },
+                         {
+                             "id":  "effective-checkout-status",
+                             "builderDisposition":  "PASS"
+                         },
+                         {
+                             "id":  "canonical-text-hash-policy",
+                             "builderDisposition":  "PASS"
+                         },
+                         {
+                             "id":  "autocrlf-true-isolated-clone-self-test",
+                             "builderDisposition":  "PASS"
+                         },
+                         {
+                             "id":  "primary-p7-builder-verify",
+                             "builderDisposition":  "PASS"
+                         },
+                         {
+                             "id":  "protected-worktree-profile",
+                             "builderDisposition":  "REQUIRED_AT_VALIDATOR"
+                         },
+                         {
+                             "id":  "publication-safety",
+                             "builderDisposition":  "REQUIRED_AT_VALIDATOR"
+                         },
+                         {
+                             "id":  "repair-evidence-builder-verify",
+                             "builderDisposition":  "REQUIRED_AT_VALIDATOR"
+                         },
+                         {
+                             "id":  "fast-forward-remote-boundary",
+                             "builderDisposition":  "REQUIRED_AT_TRANSACTION"
+                         }
+                     ],
+    "rawCommandOutputPublished":  false,
+    "negativeSideEffects":  {
+                                "rutgersRequests":  0,
+                                "databaseMutations":  0,
+                                "packageBuilds":  0,
+                                "vultrMutations":  0,
+                                "releasePublications":  0,
+                                "productionMutations":  0
+                            }
+}

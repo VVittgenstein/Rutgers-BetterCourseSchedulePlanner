@@ -1,0 +1,426 @@
+ecosystem	name	version	license_expression	decision	scope	direct	lock_key	decision_reason	target_evidence
+npm	@asamuzakjp/css-color	5.1.11	MIT	APPROVED	dev	false	npm:node_modules/@asamuzakjp/css-color	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@asamuzakjp/dom-selector	7.1.1	MIT	APPROVED	dev	false	npm:node_modules/@asamuzakjp/dom-selector	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@asamuzakjp/generational-cache	1.0.1	MIT	APPROVED	dev	false	npm:node_modules/@asamuzakjp/generational-cache	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@asamuzakjp/nwsapi	2.3.9	MIT	APPROVED	dev	false	npm:node_modules/@asamuzakjp/nwsapi	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@babel/code-frame	7.27.1	MIT	APPROVED	dev	false	npm:node_modules/@babel/code-frame	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@babel/helper-validator-identifier	7.28.5	MIT	APPROVED	dev	false	npm:node_modules/@babel/helper-validator-identifier	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@babel/runtime	7.29.7	MIT	APPROVED	runtime	false	npm:node_modules/@babel/runtime	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@bramus/specificity	2.4.2	MIT	APPROVED	dev	false	npm:node_modules/@bramus/specificity	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@csstools/color-helpers	6.1.0	MIT-0	APPROVED	dev	false	npm:node_modules/@csstools/color-helpers	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@csstools/css-calc	3.2.1	MIT	APPROVED	dev	false	npm:node_modules/@csstools/css-calc	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@csstools/css-color-parser	4.1.9	MIT	APPROVED	dev	false	npm:node_modules/@csstools/css-color-parser	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@csstools/css-parser-algorithms	4.0.0	MIT	APPROVED	dev	false	npm:node_modules/@csstools/css-parser-algorithms	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@csstools/css-syntax-patches-for-csstree	1.1.6	MIT-0	APPROVED	dev	false	npm:node_modules/@csstools/css-syntax-patches-for-csstree	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@csstools/css-tokenizer	4.0.0	MIT	APPROVED	dev	false	npm:node_modules/@csstools/css-tokenizer	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@emnapi/core	1.11.1	MIT	APPROVED	dev	false	npm:node_modules/@emnapi/core	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@emnapi/runtime	1.11.1	MIT	APPROVED	dev	false	npm:node_modules/@emnapi/runtime	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@emnapi/wasi-threads	1.2.2	MIT	APPROVED	dev	false	npm:node_modules/@emnapi/wasi-threads	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@exodus/bytes	1.15.1	MIT	APPROVED	dev	false	npm:node_modules/@exodus/bytes	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@jridgewell/sourcemap-codec	1.5.5	MIT	APPROVED	dev	false	npm:node_modules/@jridgewell/sourcemap-codec	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@napi-rs/wasm-runtime	1.1.6	MIT	APPROVED	dev	false	npm:node_modules/@napi-rs/wasm-runtime	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@oxc-project/types	0.139.0	MIT	APPROVED	dev	false	npm:node_modules/@oxc-project/types	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-android-arm64	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-android-arm64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-darwin-arm64	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-darwin-arm64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-darwin-x64	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-darwin-x64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-freebsd-x64	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-freebsd-x64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-linux-arm-gnueabihf	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-linux-arm-gnueabihf	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-linux-arm64-gnu	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-linux-arm64-gnu	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-linux-arm64-musl	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-linux-arm64-musl	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-linux-ppc64-gnu	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-linux-ppc64-gnu	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-linux-s390x-gnu	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-linux-s390x-gnu	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-linux-x64-gnu	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-linux-x64-gnu	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-linux-x64-musl	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-linux-x64-musl	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-openharmony-arm64	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-openharmony-arm64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-wasm32-wasi	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-wasm32-wasi	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-win32-arm64-msvc	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-win32-arm64-msvc	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/binding-win32-x64-msvc	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/binding-win32-x64-msvc	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@rolldown/pluginutils	1.0.1	MIT	APPROVED	dev	false	npm:node_modules/@rolldown/pluginutils	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@standard-schema/spec	1.1.0	MIT	APPROVED	dev	false	npm:node_modules/@standard-schema/spec	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@testing-library/dom	10.4.1	MIT	APPROVED	dev	true	npm:node_modules/@testing-library/dom	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@testing-library/react	16.3.2	MIT	APPROVED	dev	true	npm:node_modules/@testing-library/react	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@tybys/wasm-util	0.10.3	MIT	APPROVED	dev	false	npm:node_modules/@tybys/wasm-util	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@types/aria-query	5.0.4	MIT	APPROVED	dev	false	npm:node_modules/@types/aria-query	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@types/chai	5.2.3	MIT	APPROVED	dev	false	npm:node_modules/@types/chai	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@types/deep-eql	4.0.2	MIT	APPROVED	dev	false	npm:node_modules/@types/deep-eql	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@types/estree	1.0.9	MIT	APPROVED	dev	false	npm:node_modules/@types/estree	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@types/jsdom	28.0.3	MIT	APPROVED	dev	true	npm:node_modules/@types/jsdom	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@types/node	26.1.1	MIT	APPROVED	dev	true	npm:node_modules/@types/node	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@types/react	19.2.17	MIT	APPROVED	dev	true	npm:node_modules/@types/react	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@types/react-dom	19.2.3	MIT	APPROVED	dev	true	npm:node_modules/@types/react-dom	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@types/tough-cookie	4.0.5	MIT	APPROVED	dev	false	npm:node_modules/@types/tough-cookie	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-aix-ppc64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-aix-ppc64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-darwin-arm64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-darwin-arm64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-darwin-x64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-darwin-x64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-freebsd-arm64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-freebsd-arm64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-freebsd-x64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-freebsd-x64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-linux-arm	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-linux-arm	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-linux-arm64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-linux-arm64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-linux-loong64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-linux-loong64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-linux-mips64el	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-linux-mips64el	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-linux-ppc64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-linux-ppc64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-linux-riscv64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-linux-riscv64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-linux-s390x	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-linux-s390x	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-linux-x64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-linux-x64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-netbsd-arm64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-netbsd-arm64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-netbsd-x64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-netbsd-x64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-openbsd-arm64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-openbsd-arm64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-openbsd-x64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-openbsd-x64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-sunos-x64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-sunos-x64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-win32-arm64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-win32-arm64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@typescript/typescript-win32-x64	7.0.2	Apache-2.0	APPROVED	runtime	false	npm:node_modules/@typescript/typescript-win32-x64	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@vitejs/plugin-react	6.0.3	MIT	APPROVED	dev	true	npm:node_modules/@vitejs/plugin-react	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@vitest/expect	4.1.10	MIT	APPROVED	dev	false	npm:node_modules/@vitest/expect	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@vitest/mocker	4.1.10	MIT	APPROVED	dev	false	npm:node_modules/@vitest/mocker	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@vitest/pretty-format	4.1.10	MIT	APPROVED	dev	false	npm:node_modules/@vitest/pretty-format	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@vitest/runner	4.1.10	MIT	APPROVED	dev	false	npm:node_modules/@vitest/runner	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@vitest/snapshot	4.1.10	MIT	APPROVED	dev	false	npm:node_modules/@vitest/snapshot	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@vitest/spy	4.1.10	MIT	APPROVED	dev	false	npm:node_modules/@vitest/spy	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	@vitest/utils	4.1.10	MIT	APPROVED	dev	false	npm:node_modules/@vitest/utils	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	ansi-regex	5.0.1	MIT	APPROVED	dev	false	npm:node_modules/ansi-regex	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	ansi-styles	5.2.0	MIT	APPROVED	dev	false	npm:node_modules/ansi-styles	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	aria-query	5.3.0	Apache-2.0	APPROVED	dev	false	npm:node_modules/aria-query	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	assertion-error	2.0.1	MIT	APPROVED	dev	false	npm:node_modules/assertion-error	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	axe-core	4.12.1	MPL-2.0	APPROVED	dev	true	npm:node_modules/axe-core	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	better-course-schedule-planner-frontend	0.0.1	ISC	APPROVED	runtime	true	npm:.	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	bidi-js	1.0.3	MIT	APPROVED	dev	false	npm:node_modules/bidi-js	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	chai	6.2.2	MIT	APPROVED	dev	false	npm:node_modules/chai	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	convert-source-map	2.0.0	MIT	APPROVED	dev	false	npm:node_modules/convert-source-map	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	cookie	1.1.1	MIT	APPROVED	runtime	false	npm:node_modules/cookie	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	css-tree	3.2.1	MIT	APPROVED	dev	false	npm:node_modules/css-tree	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	csstype	3.2.3	MIT	APPROVED	dev	false	npm:node_modules/csstype	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	data-urls	7.0.0	MIT	APPROVED	dev	false	npm:node_modules/data-urls	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	decimal.js	10.6.0	MIT	APPROVED	dev	false	npm:node_modules/decimal.js	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	dequal	2.0.3	MIT	APPROVED	dev	false	npm:node_modules/dequal	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	detect-libc	2.1.2	Apache-2.0	APPROVED	dev	false	npm:node_modules/detect-libc	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	dom-accessibility-api	0.5.16	MIT	APPROVED	dev	false	npm:node_modules/dom-accessibility-api	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	entities	8.0.0	BSD-2-Clause	APPROVED	dev	false	npm:node_modules/entities	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	es-module-lexer	2.3.1	MIT	APPROVED	dev	false	npm:node_modules/es-module-lexer	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	estree-walker	3.0.3	MIT	APPROVED	dev	false	npm:node_modules/estree-walker	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	expect-type	1.4.0	Apache-2.0	APPROVED	dev	false	npm:node_modules/expect-type	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	fdir	6.5.0	MIT	APPROVED	dev	false	npm:node_modules/fdir	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	fsevents	2.3.2	MIT	APPROVED	dev	false	npm:node_modules/fsevents	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	fsevents	2.3.3	MIT	APPROVED	dev	false	npm:node_modules/vite/node_modules/fsevents	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	html-encoding-sniffer	6.0.0	MIT	APPROVED	dev	false	npm:node_modules/html-encoding-sniffer	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	html-parse-stringify	3.0.1	MIT	APPROVED	runtime	false	npm:node_modules/html-parse-stringify	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	i18next	26.3.6	MIT	APPROVED	runtime	true	npm:node_modules/i18next	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	is-potential-custom-element-name	1.0.1	MIT	APPROVED	dev	false	npm:node_modules/is-potential-custom-element-name	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	js-tokens	4.0.0	MIT	APPROVED	dev	false	npm:node_modules/js-tokens	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	jsdom	29.1.1	MIT	APPROVED	dev	true	npm:node_modules/jsdom	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	lightningcss	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-android-arm64	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-android-arm64	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-darwin-arm64	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-darwin-arm64	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-darwin-x64	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-darwin-x64	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-freebsd-x64	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-freebsd-x64	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-linux-arm-gnueabihf	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-linux-arm-gnueabihf	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-linux-arm64-gnu	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-linux-arm64-gnu	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-linux-arm64-musl	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-linux-arm64-musl	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-linux-x64-gnu	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-linux-x64-gnu	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-linux-x64-musl	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-linux-x64-musl	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-win32-arm64-msvc	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-win32-arm64-msvc	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lightningcss-win32-x64-msvc	1.32.0	MPL-2.0	APPROVED	dev	false	npm:node_modules/lightningcss-win32-x64-msvc	DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES	NOT_APPLICABLE
+npm	lru-cache	11.5.2	BlueOak-1.0.0	APPROVED	dev	false	npm:node_modules/lru-cache	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	lz-string	1.5.0	MIT	APPROVED	dev	false	npm:node_modules/lz-string	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	magic-string	0.30.21	MIT	APPROVED	dev	false	npm:node_modules/magic-string	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	mdn-data	2.27.1	CC0-1.0	APPROVED	dev	false	npm:node_modules/mdn-data	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	nanoid	3.3.16	MIT	APPROVED	dev	false	npm:node_modules/nanoid	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	obug	2.1.3	MIT	APPROVED	dev	false	npm:node_modules/obug	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	parse5	8.0.1	MIT	APPROVED	dev	false	npm:node_modules/parse5	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	pathe	2.0.3	MIT	APPROVED	dev	false	npm:node_modules/pathe	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	picocolors	1.1.1	ISC	APPROVED	dev	false	npm:node_modules/picocolors	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	picomatch	4.0.5	MIT	APPROVED	dev	false	npm:node_modules/picomatch	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	playwright	1.61.1	Apache-2.0	APPROVED	dev	true	npm:node_modules/playwright	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	playwright-core	1.61.1	Apache-2.0	APPROVED	dev	false	npm:node_modules/playwright-core	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	postcss	8.5.19	MIT	APPROVED	dev	false	npm:node_modules/postcss	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	pretty-format	27.5.1	MIT	APPROVED	dev	false	npm:node_modules/pretty-format	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	punycode	2.3.1	MIT	APPROVED	dev	false	npm:node_modules/punycode	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	react	19.2.7	MIT	APPROVED	runtime	true	npm:node_modules/react	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	react-dom	19.2.7	MIT	APPROVED	runtime	true	npm:node_modules/react-dom	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	react-i18next	17.0.9	MIT	APPROVED	runtime	true	npm:node_modules/react-i18next	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	react-is	17.0.2	MIT	APPROVED	dev	false	npm:node_modules/react-is	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	react-router	7.18.1	MIT	APPROVED	runtime	false	npm:node_modules/react-router	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	react-router-dom	7.18.1	MIT	APPROVED	runtime	true	npm:node_modules/react-router-dom	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	require-from-string	2.0.2	MIT	APPROVED	dev	false	npm:node_modules/require-from-string	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	rolldown	1.1.5	MIT	APPROVED	dev	false	npm:node_modules/rolldown	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	saxes	6.0.0	ISC	APPROVED	dev	false	npm:node_modules/saxes	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	scheduler	0.27.0	MIT	APPROVED	runtime	false	npm:node_modules/scheduler	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	set-cookie-parser	2.7.2	MIT	APPROVED	runtime	false	npm:node_modules/set-cookie-parser	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	siginfo	2.0.0	ISC	APPROVED	dev	false	npm:node_modules/siginfo	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	source-map-js	1.2.1	BSD-3-Clause	APPROVED	dev	false	npm:node_modules/source-map-js	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	stackback	0.0.2	MIT	APPROVED	dev	false	npm:node_modules/stackback	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	std-env	4.2.0	MIT	APPROVED	dev	false	npm:node_modules/std-env	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	symbol-tree	3.2.4	MIT	APPROVED	dev	false	npm:node_modules/symbol-tree	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	tinybench	2.9.0	MIT	APPROVED	dev	false	npm:node_modules/tinybench	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	tinyexec	1.2.4	MIT	APPROVED	dev	false	npm:node_modules/tinyexec	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	tinyglobby	0.2.17	MIT	APPROVED	dev	false	npm:node_modules/tinyglobby	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	tinyrainbow	3.1.0	MIT	APPROVED	dev	false	npm:node_modules/tinyrainbow	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	tldts	7.4.8	MIT	APPROVED	dev	false	npm:node_modules/tldts	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	tldts-core	7.4.8	MIT	APPROVED	dev	false	npm:node_modules/tldts-core	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	tough-cookie	6.0.2	BSD-3-Clause	APPROVED	dev	false	npm:node_modules/tough-cookie	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	tr46	6.0.0	MIT	APPROVED	dev	false	npm:node_modules/tr46	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	tslib	2.8.1	0BSD	APPROVED	dev	false	npm:node_modules/tslib	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	typescript	7.0.2	Apache-2.0	APPROVED	runtime	true	npm:node_modules/typescript	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	undici	7.28.0	MIT	APPROVED	dev	false	npm:node_modules/undici	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	undici-types	7.28.0	MIT	APPROVED	dev	false	npm:node_modules/undici-types	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	undici-types	8.3.0	MIT	APPROVED	dev	false	npm:node_modules/@types/node/node_modules/undici-types	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	use-sync-external-store	1.6.0	MIT	APPROVED	runtime	false	npm:node_modules/use-sync-external-store	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	vite	8.1.4	MIT	APPROVED	dev	true	npm:node_modules/vite	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	vitest	4.1.10	MIT	APPROVED	dev	true	npm:node_modules/vitest	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	void-elements	3.1.0	MIT	APPROVED	runtime	false	npm:node_modules/void-elements	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	w3c-xmlserializer	5.0.0	MIT	APPROVED	dev	false	npm:node_modules/w3c-xmlserializer	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	webidl-conversions	8.0.1	BSD-2-Clause	APPROVED	dev	false	npm:node_modules/webidl-conversions	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	whatwg-mimetype	5.0.0	MIT	APPROVED	dev	false	npm:node_modules/whatwg-mimetype	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	whatwg-url	16.0.1	MIT	APPROVED	dev	false	npm:node_modules/whatwg-url	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	why-is-node-running	2.3.0	MIT	APPROVED	dev	false	npm:node_modules/why-is-node-running	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	xml-name-validator	5.0.0	Apache-2.0	APPROVED	dev	false	npm:node_modules/xml-name-validator	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+npm	xmlchars	2.2.0	MIT	APPROVED	dev	false	npm:node_modules/xmlchars	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	adler2	2.0.1	0BSD OR MIT OR Apache-2.0	APPROVED	runtime	false	cargo:adler2@2.0.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	aho-corasick	1.1.4	Unlicense OR MIT	APPROVED	runtime	false	cargo:aho-corasick@1.1.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	async-compression	0.4.42	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:async-compression@0.4.42:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	atomic-waker	1.1.2	Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:atomic-waker@1.1.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	autocfg	1.5.1	Apache-2.0 OR MIT	APPROVED	dev	false	cargo:autocfg@1.5.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	aws-lc-rs	1.17.1	ISC AND (Apache-2.0 OR ISC)	APPROVED	runtime	false	cargo:aws-lc-rs@1.17.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	aws-lc-sys	0.42.0	ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)	APPROVED	runtime	false	cargo:aws-lc-sys@0.42.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	axum	0.8.9	MIT	APPROVED	runtime	true	cargo:axum@0.8.9:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	axum-core	0.5.6	MIT	APPROVED	runtime	false	cargo:axum-core@0.5.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	base64	0.22.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:base64@0.22.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	bit-set	0.8.0	Apache-2.0 OR MIT	APPROVED	dev	false	cargo:bit-set@0.8.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	bit-vec	0.8.0	Apache-2.0 OR MIT	APPROVED	dev	false	cargo:bit-vec@0.8.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	bitflags	1.3.2	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:bitflags@1.3.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	bitflags	2.13.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:bitflags@2.13.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	block-buffer	0.10.4	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:block-buffer@0.10.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	bumpalo	3.20.3	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:bumpalo@3.20.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	bytes	1.12.1	MIT	APPROVED	runtime	false	cargo:bytes@1.12.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	cc	1.2.67	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:cc@1.2.67:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	cfg-if	1.0.4	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:cfg-if@1.0.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	cfg_aliases	0.2.1	MIT	APPROVED	runtime	false	cargo:cfg_aliases@0.2.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	chacha20	0.10.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:chacha20@0.10.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	cmake	0.1.58	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:cmake@0.1.58:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	combine	4.6.7	MIT	APPROVED	runtime	false	cargo:combine@4.6.7:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	compression-codecs	0.4.38	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:compression-codecs@0.4.38:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	compression-core	0.4.32	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:compression-core@0.4.32:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	core-foundation	0.10.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:core-foundation@0.10.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	core-foundation-sys	0.8.7	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:core-foundation-sys@0.8.7:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	cpufeatures	0.2.17	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:cpufeatures@0.2.17:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	cpufeatures	0.3.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:cpufeatures@0.3.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	crc32fast	1.5.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:crc32fast@1.5.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	crypto-common	0.1.7	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:crypto-common@0.1.7:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	data-encoding	2.11.0	MIT	APPROVED	runtime	false	cargo:data-encoding@2.11.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	defmt	1.1.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:defmt@1.1.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	defmt-macros	1.1.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:defmt-macros@1.1.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	defmt-parser	1.0.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:defmt-parser@1.0.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	deranged	0.5.8	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:deranged@0.5.8:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	digest	0.10.7	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:digest@0.10.7:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	displaydoc	0.2.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:displaydoc@0.2.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	dunce	1.0.5	CC0-1.0 OR MIT-0 OR Apache-2.0	APPROVED	runtime	false	cargo:dunce@1.0.5:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	errno	0.3.14	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:errno@0.3.14:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	fallible-iterator	0.3.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:fallible-iterator@0.3.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	fallible-streaming-iterator	0.1.9	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:fallible-streaming-iterator@0.1.9:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	fastrand	2.4.1	Apache-2.0 OR MIT	APPROVED	dev	false	cargo:fastrand@2.4.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	find-msvc-tools	0.1.9	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:find-msvc-tools@0.1.9:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	flate2	1.1.9	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:flate2@1.1.9:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	form_urlencoded	1.2.2	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:form_urlencoded@1.2.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	fs_extra	1.3.0	MIT	APPROVED	runtime	false	cargo:fs_extra@1.3.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	futures-channel	0.3.32	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:futures-channel@0.3.32:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	futures-core	0.3.32	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:futures-core@0.3.32:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	futures-sink	0.3.32	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:futures-sink@0.3.32:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	futures-task	0.3.32	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:futures-task@0.3.32:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	futures-util	0.3.32	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:futures-util@0.3.32:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	generic-array	0.14.7	MIT	APPROVED	runtime	false	cargo:generic-array@0.14.7:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	getrandom	0.2.17	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:getrandom@0.2.17:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	getrandom	0.3.4	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:getrandom@0.3.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	getrandom	0.4.3	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:getrandom@0.4.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	http	1.4.2	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:http@1.4.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	http-body	1.0.1	MIT	APPROVED	runtime	false	cargo:http-body@1.0.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	http-body-util	0.1.3	MIT	APPROVED	runtime	false	cargo:http-body-util@0.1.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	http-range-header	0.4.2	MIT	APPROVED	runtime	false	cargo:http-range-header@0.4.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	httparse	1.10.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:httparse@1.10.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	httpdate	1.0.3	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:httpdate@1.0.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	hyper	1.10.1	MIT	APPROVED	runtime	false	cargo:hyper@1.10.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	hyper-rustls	0.27.9	Apache-2.0 OR ISC OR MIT	APPROVED	runtime	false	cargo:hyper-rustls@0.27.9:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	hyper-util	0.1.20	MIT	APPROVED	runtime	false	cargo:hyper-util@0.1.20:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	icu_collections	2.2.0	Unicode-3.0	APPROVED	runtime	false	cargo:icu_collections@2.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	icu_locale_core	2.2.0	Unicode-3.0	APPROVED	runtime	false	cargo:icu_locale_core@2.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	icu_normalizer	2.2.0	Unicode-3.0	APPROVED	runtime	false	cargo:icu_normalizer@2.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	icu_normalizer_data	2.2.0	Unicode-3.0	APPROVED	runtime	false	cargo:icu_normalizer_data@2.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	icu_properties	2.2.0	Unicode-3.0	APPROVED	runtime	false	cargo:icu_properties@2.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	icu_properties_data	2.2.0	Unicode-3.0	APPROVED	runtime	false	cargo:icu_properties_data@2.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	icu_provider	2.2.0	Unicode-3.0	APPROVED	runtime	false	cargo:icu_provider@2.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	idna	1.1.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:idna@1.1.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	idna_adapter	1.2.2	Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:idna_adapter@1.2.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	include_dir	0.7.4	MIT	APPROVED	runtime	true	cargo:include_dir@0.7.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	include_dir_macros	0.7.4	MIT	APPROVED	runtime	false	cargo:include_dir_macros@0.7.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	ipnet	2.12.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:ipnet@2.12.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	is-docker	0.2.0	MIT	APPROVED	runtime	false	cargo:is-docker@0.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	is-wsl	0.4.0	MIT	APPROVED	runtime	false	cargo:is-wsl@0.4.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	itoa	1.0.18	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:itoa@1.0.18:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	jiff	0.2.32	Unlicense OR MIT	APPROVED	runtime	true	cargo:jiff@0.2.32:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	jiff-static	0.2.32	Unlicense OR MIT	APPROVED	runtime	false	cargo:jiff-static@0.2.32:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	jiff-tzdb	0.1.8	Unlicense OR MIT	APPROVED	runtime	false	cargo:jiff-tzdb@0.1.8:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	jni	0.22.4	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:jni@0.22.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	jni-macros	0.22.4	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:jni-macros@0.22.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	jni-sys	0.4.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:jni-sys@0.4.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	jni-sys-macros	0.4.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:jni-sys-macros@0.4.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	jobserver	0.1.35	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:jobserver@0.1.35:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	js-sys	0.3.103	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:js-sys@0.3.103:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	lazy_static	1.5.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:lazy_static@1.5.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	libc	0.2.186	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:libc@0.2.186:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	libsqlite3-sys	0.38.1	MIT	APPROVED	runtime	false	cargo:libsqlite3-sys@0.38.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	linux-raw-sys	0.12.1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	APPROVED	dev	false	cargo:linux-raw-sys@0.12.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	litemap	0.8.2	Unicode-3.0	APPROVED	runtime	false	cargo:litemap@0.8.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	log	0.4.33	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:log@0.4.33:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	lru-slab	0.1.2	MIT OR Apache-2.0 OR Zlib	APPROVED	runtime	false	cargo:lru-slab@0.1.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	matchers	0.2.0	MIT	APPROVED	runtime	false	cargo:matchers@0.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	matchit	0.8.4	MIT AND BSD-3-Clause	APPROVED	runtime	false	cargo:matchit@0.8.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	memchr	2.8.3	Unlicense OR MIT	APPROVED	runtime	false	cargo:memchr@2.8.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	mime	0.3.17	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:mime@0.3.17:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	mime_guess	2.0.5	MIT	APPROVED	runtime	false	cargo:mime_guess@2.0.5:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	miniz_oxide	0.8.9	MIT OR Zlib OR Apache-2.0	APPROVED	runtime	false	cargo:miniz_oxide@0.8.9:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	mio	1.2.1	MIT	APPROVED	runtime	false	cargo:mio@1.2.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	num-conv	0.2.2	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:num-conv@0.2.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	num-traits	0.2.19	MIT OR Apache-2.0	APPROVED	dev	false	cargo:num-traits@0.2.19:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	once_cell	1.21.4	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:once_cell@1.21.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	open	5.4.0	MIT	APPROVED	runtime	true	cargo:open@5.4.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	openssl-probe	0.2.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:openssl-probe@0.2.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	percent-encoding	2.3.2	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:percent-encoding@2.3.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	pin-project-lite	0.2.17	Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:pin-project-lite@0.2.17:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	pkg-config	0.3.33	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:pkg-config@0.3.33:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	portable-atomic	1.13.1	Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:portable-atomic@1.13.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	portable-atomic-util	0.2.7	Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:portable-atomic-util@0.2.7:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	potential_utf	0.1.5	Unicode-3.0	APPROVED	runtime	false	cargo:potential_utf@0.1.5:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	powerfmt	0.2.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:powerfmt@0.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	ppv-lite86	0.2.21	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:ppv-lite86@0.2.21:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	proc-macro2	1.0.106	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:proc-macro2@1.0.106:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	proptest	1.11.0	MIT OR Apache-2.0	APPROVED	dev	true	cargo:proptest@1.11.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	quinn	0.11.11	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:quinn@0.11.11:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	quinn-proto	0.11.16	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:quinn-proto@0.11.16:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	quinn-udp	0.5.15	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:quinn-udp@0.5.15:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	quote	1.0.46	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:quote@1.0.46:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	r-efi	5.3.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later	APPROVED	runtime	false	cargo:r-efi@5.3.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	r-efi	6.0.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later	APPROVED	runtime	false	cargo:r-efi@6.0.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rand	0.10.2	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rand@0.10.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rand	0.9.5	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rand@0.9.5:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rand_chacha	0.9.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rand_chacha@0.9.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rand_core	0.10.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rand_core@0.10.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rand_core	0.9.5	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rand_core@0.9.5:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rand_pcg	0.10.2	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rand_pcg@0.10.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rand_xorshift	0.4.0	MIT OR Apache-2.0	APPROVED	dev	false	cargo:rand_xorshift@0.4.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rbcsp-dependency-baseline	0.0.0	ISC	APPROVED	runtime	true	cargo:rbcsp-dependency-baseline@0.0.0:local	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	regex-automata	0.4.15	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:regex-automata@0.4.15:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	regex-syntax	0.8.11	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:regex-syntax@0.8.11:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	reqwest	0.13.4	MIT OR Apache-2.0	APPROVED	runtime	true	cargo:reqwest@0.13.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	ring	0.17.14	Apache-2.0 AND ISC	APPROVED	runtime	false	cargo:ring@0.17.14:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rusqlite	0.40.1	MIT	APPROVED	runtime	true	cargo:rusqlite@0.40.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustc-hash	2.1.3	Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:rustc-hash@2.1.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustc_version	0.4.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rustc_version@0.4.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustix	1.1.4	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	APPROVED	dev	false	cargo:rustix@1.1.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustls	0.23.41	Apache-2.0 OR ISC OR MIT	APPROVED	runtime	false	cargo:rustls@0.23.41:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustls-native-certs	0.8.4	Apache-2.0 OR ISC OR MIT	APPROVED	runtime	false	cargo:rustls-native-certs@0.8.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustls-pki-types	1.15.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rustls-pki-types@1.15.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustls-platform-verifier	0.7.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rustls-platform-verifier@0.7.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustls-platform-verifier-android	0.1.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rustls-platform-verifier-android@0.1.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustls-webpki	0.103.13	ISC	APPROVED	runtime	false	cargo:rustls-webpki@0.103.13:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	rustversion	1.0.23	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:rustversion@1.0.23:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	ryu	1.0.23	Apache-2.0 OR BSL-1.0	APPROVED	runtime	false	cargo:ryu@1.0.23:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	same-file	1.0.6	Unlicense OR MIT	APPROVED	runtime	false	cargo:same-file@1.0.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	schannel	0.1.29	MIT	APPROVED	runtime	false	cargo:schannel@0.1.29:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	security-framework	3.7.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:security-framework@3.7.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	security-framework-sys	2.17.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:security-framework-sys@2.17.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	semver	1.0.28	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:semver@1.0.28:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	serde	1.0.228	MIT OR Apache-2.0	APPROVED	runtime	true	cargo:serde@1.0.228:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	serde_core	1.0.228	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:serde_core@1.0.228:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	serde_derive	1.0.228	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:serde_derive@1.0.228:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	serde_json	1.0.150	MIT OR Apache-2.0	APPROVED	runtime	true	cargo:serde_json@1.0.150:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	serde_path_to_error	0.1.20	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:serde_path_to_error@0.1.20:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	serde_urlencoded	0.7.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:serde_urlencoded@0.7.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	sha1	0.10.7	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:sha1@0.10.7:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	sha2	0.10.9	MIT OR Apache-2.0	APPROVED	runtime	true	cargo:sha2@0.10.9:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	sharded-slab	0.1.7	MIT	APPROVED	runtime	false	cargo:sharded-slab@0.1.7:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	shlex	2.0.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:shlex@2.0.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	signal-hook-registry	1.4.8	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:signal-hook-registry@1.4.8:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	simd-adler32	0.3.9	MIT	APPROVED	runtime	false	cargo:simd-adler32@0.3.9:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	simd_cesu8	1.1.1	Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:simd_cesu8@1.1.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	simdutf8	0.1.5	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:simdutf8@0.1.5:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	slab	0.4.12	MIT	APPROVED	runtime	false	cargo:slab@0.4.12:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	smallvec	1.15.2	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:smallvec@1.15.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	socket2	0.6.4	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:socket2@0.6.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	stable_deref_trait	1.2.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:stable_deref_trait@1.2.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	subtle	2.6.1	BSD-3-Clause	APPROVED	runtime	false	cargo:subtle@2.6.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	syn	2.0.118	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:syn@2.0.118:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	sync_wrapper	1.0.2	Apache-2.0	APPROVED	runtime	false	cargo:sync_wrapper@1.0.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	synstructure	0.13.2	MIT	APPROVED	runtime	false	cargo:synstructure@0.13.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tempfile	3.27.0	MIT OR Apache-2.0	APPROVED	dev	true	cargo:tempfile@3.27.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	thiserror	2.0.18	MIT OR Apache-2.0	APPROVED	runtime	true	cargo:thiserror@2.0.18:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	thiserror-impl	2.0.18	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:thiserror-impl@2.0.18:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	thread_local	1.1.10	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:thread_local@1.1.10:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	time	0.3.53	MIT OR Apache-2.0	APPROVED	runtime	true	cargo:time@0.3.53:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	time-core	0.1.9	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:time-core@0.1.9:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	time-macros	0.2.31	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:time-macros@0.2.31:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tinystr	0.8.3	Unicode-3.0	APPROVED	runtime	false	cargo:tinystr@0.8.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tinyvec	1.12.0	Zlib OR Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:tinyvec@1.12.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tinyvec_macros	0.1.1	MIT OR Apache-2.0 OR Zlib	APPROVED	runtime	false	cargo:tinyvec_macros@0.1.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tokio	1.52.3	MIT	APPROVED	runtime	true	cargo:tokio@1.52.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tokio-macros	2.7.0	MIT	APPROVED	runtime	false	cargo:tokio-macros@2.7.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tokio-rustls	0.26.4	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:tokio-rustls@0.26.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tokio-tungstenite	0.29.0	MIT	APPROVED	runtime	false	cargo:tokio-tungstenite@0.29.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tokio-util	0.7.18	MIT	APPROVED	runtime	false	cargo:tokio-util@0.7.18:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tower	0.5.3	MIT	APPROVED	runtime	true	cargo:tower@0.5.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tower-http	0.6.11	MIT	APPROVED	runtime	true	cargo:tower-http@0.6.11:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tower-layer	0.3.3	MIT	APPROVED	runtime	false	cargo:tower-layer@0.3.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tower-service	0.3.3	MIT	APPROVED	runtime	false	cargo:tower-service@0.3.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tracing	0.1.44	MIT	APPROVED	runtime	true	cargo:tracing@0.1.44:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tracing-attributes	0.1.31	MIT	APPROVED	runtime	false	cargo:tracing-attributes@0.1.31:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tracing-core	0.1.36	MIT	APPROVED	runtime	false	cargo:tracing-core@0.1.36:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tracing-serde	0.2.0	MIT	APPROVED	runtime	false	cargo:tracing-serde@0.2.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tracing-subscriber	0.3.23	MIT	APPROVED	runtime	true	cargo:tracing-subscriber@0.3.23:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	try-lock	0.2.5	MIT	APPROVED	runtime	false	cargo:try-lock@0.2.5:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	tungstenite	0.29.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:tungstenite@0.29.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	typenum	1.20.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:typenum@1.20.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	unarray	0.1.4	MIT OR Apache-2.0	APPROVED	dev	false	cargo:unarray@0.1.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	unicase	2.9.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:unicase@2.9.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	unicode-ident	1.0.24	(MIT OR Apache-2.0) AND Unicode-3.0	APPROVED	runtime	false	cargo:unicode-ident@1.0.24:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	untrusted	0.9.0	ISC	APPROVED	runtime	false	cargo:untrusted@0.9.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	url	2.5.8	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:url@2.5.8:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	utf8_iter	1.0.4	Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:utf8_iter@1.0.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	uuid	1.23.5	Apache-2.0 OR MIT	APPROVED	runtime	true	cargo:uuid@1.23.5:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	valuable	0.1.1	MIT	APPROVED	runtime	false	cargo:valuable@0.1.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	vcpkg	0.2.15	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:vcpkg@0.2.15:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	version_check	0.9.5	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:version_check@0.9.5:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	walkdir	2.5.0	Unlicense OR MIT	APPROVED	runtime	false	cargo:walkdir@2.5.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	want	0.3.1	MIT	APPROVED	runtime	false	cargo:want@0.3.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	wasi	0.11.1+wasi-snapshot-preview1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:wasi@0.11.1+wasi-snapshot-preview1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	wasip2	1.0.4+wasi-0.2.12	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:wasip2@1.0.4+wasi-0.2.12:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	wasm-bindgen	0.2.126	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:wasm-bindgen@0.2.126:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	wasm-bindgen-futures	0.4.76	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:wasm-bindgen-futures@0.4.76:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	wasm-bindgen-macro	0.2.126	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:wasm-bindgen-macro@0.2.126:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	wasm-bindgen-macro-support	0.2.126	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:wasm-bindgen-macro-support@0.2.126:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	wasm-bindgen-shared	0.2.126	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:wasm-bindgen-shared@0.2.126:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	web-sys	0.3.103	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:web-sys@0.3.103:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	web-time	1.1.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:web-time@1.1.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	webpki-root-certs	1.0.8	CDLA-Permissive-2.0	PLATFORM_EXCLUDED	runtime	false	cargo:webpki-root-certs@1.0.8:crates.io	UNREACHABLE_FROM_X86_64_PC_WINDOWS_MSVC_AND_X86_64_UNKNOWN_LINUX_GNU_ACTIVE_TARGET_GRAPHS	ABSENT_CARGO_ID_FROM_CARGO_METADATA_FILTER_PLATFORM:x86_64-pc-windows-msvc,x86_64-unknown-linux-gnu
+rust	winapi-util	0.1.11	Unlicense OR MIT	APPROVED	runtime	false	cargo:winapi-util@0.1.11:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows-link	0.2.1	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows-link@0.2.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows-sys	0.52.0	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows-sys@0.52.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows-sys	0.61.2	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows-sys@0.61.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows-targets	0.52.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows-targets@0.52.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows_aarch64_gnullvm	0.52.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows_aarch64_gnullvm@0.52.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows_aarch64_msvc	0.52.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows_aarch64_msvc@0.52.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows_i686_gnu	0.52.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows_i686_gnu@0.52.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows_i686_gnullvm	0.52.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows_i686_gnullvm@0.52.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows_i686_msvc	0.52.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows_i686_msvc@0.52.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows_x86_64_gnu	0.52.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows_x86_64_gnu@0.52.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows_x86_64_gnullvm	0.52.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows_x86_64_gnullvm@0.52.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	windows_x86_64_msvc	0.52.6	MIT OR Apache-2.0	APPROVED	runtime	false	cargo:windows_x86_64_msvc@0.52.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	wit-bindgen	0.57.1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:wit-bindgen@0.57.1:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	writeable	0.6.3	Unicode-3.0	APPROVED	runtime	false	cargo:writeable@0.6.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	yoke	0.8.3	Unicode-3.0	APPROVED	runtime	false	cargo:yoke@0.8.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	yoke-derive	0.8.2	Unicode-3.0	APPROVED	runtime	false	cargo:yoke-derive@0.8.2:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	zerocopy	0.8.54	BSD-2-Clause OR Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:zerocopy@0.8.54:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	zerocopy-derive	0.8.54	BSD-2-Clause OR Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:zerocopy-derive@0.8.54:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	zerofrom	0.1.8	Unicode-3.0	APPROVED	runtime	false	cargo:zerofrom@0.1.8:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	zerofrom-derive	0.1.7	Unicode-3.0	APPROVED	runtime	false	cargo:zerofrom-derive@0.1.7:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	zeroize	1.9.0	Apache-2.0 OR MIT	APPROVED	runtime	false	cargo:zeroize@1.9.0:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	zerotrie	0.2.4	Unicode-3.0	APPROVED	runtime	false	cargo:zerotrie@0.2.4:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	zerovec	0.11.6	Unicode-3.0	APPROVED	runtime	false	cargo:zerovec@0.11.6:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	zerovec-derive	0.11.3	Unicode-3.0	APPROVED	runtime	false	cargo:zerovec-derive@0.11.3:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE
+rust	zmij	1.0.22	MIT	APPROVED	runtime	false	cargo:zmij@1.0.22:crates.io	SPDX_POLICY_SATISFIED	NOT_APPLICABLE

@@ -1,0 +1,31 @@
+{
+  "task": "P7.3-003",
+  "title": "Post-polish real UI revalidation",
+  "status": "PRECOMMIT_LOCAL_VERIFIED",
+  "parent": "1cd754d24bbac652485c7b693baa433c4d229ffc",
+  "branch": "codex/p7-implementation",
+  "verifiedAtUtc": "2026-07-14T22:45:26.3394325Z",
+  "skill": "emil-design-eng",
+  "p7_3_002PostPush": {
+    "runId": 29373506862,
+    "conclusion": "SUCCESS",
+    "headSha": "1cd754d24bbac652485c7b693baa433c4d229ffc"
+  },
+  "checks": {
+    "frontendGuard": "PASS_82_OF_82",
+    "productAndComponentTests": "PASS_100_OF_100",
+    "typecheckAndDualBuild": "PASS",
+    "publicBoundary": "PASS_72_OF_72",
+    "browserMatrix": "PASS_10_OF_10",
+    "keyboardScreenReaderSemanticsContrastOverflow": "PASS",
+    "manualVisualReview": "ACCEPTED",
+    "localEntryBytes": 480480,
+    "localEntryGzipBytes": 134600,
+    "publicEntryBytes": 447050,
+    "publicEntryGzipBytes": 125270
+  },
+  "productSourceChanged": false,
+  "evidenceDirectory": "project-governance/current/p7/evidence/p7-3-003",
+  "gate": "P7_3_REVALIDATED_VISUAL_PASS",
+  "nextTask": "P7.4-001"
+}

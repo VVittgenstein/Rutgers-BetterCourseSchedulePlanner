@@ -1,0 +1,127 @@
+{
+    "schemaVersion":  1,
+    "taskId":  "P7.1-004",
+    "state":  "PASS",
+    "scope":  "SHARED_DOMAIN_IDENTITY_AND_TYPED_API_SCHEMA",
+    "packageImpact":  "BOTH_TARGETS_SHARED_CORE",
+    "identity":  {
+                     "sectionKey":  {
+                                        "parts":  [
+                                                      "term",
+                                                      "campus",
+                                                      "index"
+                                                  ],
+                                        "sectionIndexWidth":  5,
+                                        "leadingZeroesSignificant":  true
+                                    },
+                     "courseGroupKey":  {
+                                            "parts":  [
+                                                          "term",
+                                                          "campus",
+                                                          "courseString"
+                                                      ],
+                                            "opaqueCourseString":  true
+                                        },
+                     "courseVariantKey":  {
+                                              "parts":  [
+                                                            "group",
+                                                            "fingerprint"
+                                                        ],
+                                              "fingerprintFormat":  "v1:\u003c64-lowercase-hex\u003e",
+                                              "algorithmVersion":  1
+                                          },
+                     "collisionFixture":  "SYNTHETIC_NO_REAL_COURSE_DATA"
+                 },
+    "matching":  {
+                     "outcomes":  [
+                                      "MATCH",
+                                      "UNCERTAIN",
+                                      "NO_MATCH"
+                                  ],
+                     "reasonCodeCount":  7,
+                     "algebra":  "THREE_VALUE_AND_OR_WITH_EMPTY_ACTIVE_DIMENSION_MATCH",
+                     "explanationInvariantChecked":  true
+                 },
+    "errors":  {
+                   "sharedErrorCodeCount":  11,
+                   "concreteBodyAlias":  "ApiErrorBody=TypedApiErrorBody\u003cApiErrorCode\u003e",
+                   "concreteEnvelopeAlias":  "ApiErrorEnvelope=TypedApiErrorEnvelope\u003cApiErrorCode\u003e",
+                   "versionDecoder":  "decode_versioned_envelope_json",
+                   "traceIdPolicy":  "RFC4122_RANDOM_UUID_V4_CANONICAL_LOWERCASE_INJECTED_SOURCE"
+               },
+    "schemaManifest":  {
+                           "schemaVersion":  1,
+                           "apiProtocolVersion":  1,
+                           "wsProtocolVersion":  1,
+                           "scalarConstraintCount":  10,
+                           "schemaCount":  16,
+                           "schemaIds":  [
+                                             "bcsp.identity.term-campus-key.v1",
+                                             "bcsp.identity.section-key.v1",
+                                             "bcsp.identity.course-group-key.v1",
+                                             "bcsp.identity.course-variant-key.v1",
+                                             "bcsp.match.outcome.v1",
+                                             "bcsp.match.reason-code.v1",
+                                             "bcsp.match.reason.v1",
+                                             "bcsp.match.explanation.v1",
+                                             "bcsp.error.shared-code.v1",
+                                             "bcsp.http.request-envelope.v1",
+                                             "bcsp.http.success-envelope.v1",
+                                             "bcsp.http.error-body.v1",
+                                             "bcsp.http.error-detail.v1",
+                                             "bcsp.http.error-envelope.v1",
+                                             "bcsp.ws.client-envelope.v1",
+                                             "bcsp.ws.server-envelope.v1"
+                                         ]
+                       },
+    "aggregateWireBoundary":  {
+                                  "courseGroupSerdeBinding":  false,
+                                  "courseVariantSerdeBinding":  false,
+                                  "invariantAggregateOwner":  "bcsp-domain",
+                                  "transportProjectionOwner":  "P7.1-005"
+                              },
+    "canonicalTextSha256":  {
+                                "crates/bcsp-contracts/src/envelope.rs":  "122BF1A6DB0F0BF7125E7CD875A1CBEFF9474B30F162B1294694BE291AF950E5",
+                                "crates/bcsp-contracts/src/error.rs":  "5FA388B996709EA0A99C04BD8982D673DCE6A7380100F9D08D5C6996529D67ED",
+                                "crates/bcsp-contracts/src/identity.rs":  "701F8D70A5B7D4490D8FA8C785C1345CA9DDC054DB0902F39911B4FE2E6E445E",
+                                "crates/bcsp-contracts/src/lib.rs":  "23D634ACA1E158EAD5925029D5AFE512F10B47415DA79CA697E17DB1C2E12644",
+                                "crates/bcsp-contracts/src/match_contract.rs":  "B4D7480BF5441B5C63C179534868761D1181C26712F86BA5CF7793FE70ACBE65",
+                                "crates/bcsp-contracts/src/protocol.rs":  "2D8663D0E46A8FB0FA01CDF3DAC486604BF6123BE1CB0EE4295097E785AE0162",
+                                "crates/bcsp-contracts/src/schema.rs":  "8C4A1AB4B4C697F48176E07B690D444F57D94FCD792724E47001CE3C6449CD6A",
+                                "crates/bcsp-contracts/tests/compatibility.rs":  "276DF2E80EA74ACCA6637B720B740278DFB5FE55566BC34B90A1D9ED7ACEF21E",
+                                "crates/bcsp-contracts/tests/golden/contract-manifest-v1.json":  "E88812B6FD48D5FB4044274A2DA3307A3C026820F0B6B852F0D8C65A7666C11B",
+                                "crates/bcsp-contracts/tests/golden/http-error-v1.json":  "31F02753F720AC7BCD49CFEB988C47388F1ECF2A99263BFA012417F43BAF29D4",
+                                "crates/bcsp-contracts/tests/golden/http-request-v1.json":  "256902A25E752F795617AE721A3EC0AD425382E43E4CDD565E2741511A5C8D29",
+                                "crates/bcsp-contracts/tests/golden/http-success-v1.json":  "29CCFED3D4799E9CE38B9E6C3A63CEF0FD85A47CF46B48D3D5FD8B7BA57901A1",
+                                "crates/bcsp-contracts/tests/golden/identity-payload-v1.json":  "F910049B6E563ABB23711243C5FD7AAAB050120B2B4FFB80544455714D398643",
+                                "crates/bcsp-contracts/tests/golden/match-explanation-v1.json":  "3754443DD128227D8E5A5AF47974278BED35E1F11F11D4550A712D998AFACE56",
+                                "crates/bcsp-contracts/tests/golden/section-key-v1.json":  "5C8901D16DA765456B77F1999F7836B97E3A1E8CFF18B35A02AB7D41C26D5A3B",
+                                "crates/bcsp-contracts/tests/golden/ws-client-envelope-v1.json":  "B1A35FB6222E8D1C3CB59E57698FEA8D1C5712A907F03E821F6DE33373BB2B5F",
+                                "crates/bcsp-contracts/tests/golden/ws-server-envelope-v1.json":  "B1A35FB6222E8D1C3CB59E57698FEA8D1C5712A907F03E821F6DE33373BB2B5F",
+                                "crates/bcsp-contracts/tests/malformed_wire.rs":  "0A79D530F0CFFF923AE0EA429B6DF2583059BAC034BD68873AF3575664AF4F61",
+                                "crates/bcsp-contracts/tests/schema_binding.rs":  "113D134CFAC78C72A8C4F549495558B68BBA6F8C225FC808F952BC1FA81EF61A",
+                                "crates/bcsp-contracts/tests/wire_golden.rs":  "B2B87D106AFA2D10BC7234C51AAE3A3857D63C19621CE25CE1E36A33129EFCE1",
+                                "crates/bcsp-domain/src/course.rs":  "B0D88DD6ECB4AE9DD05F09F7CDDBF758F13561EFA486125A46A86137AF2D3DAC",
+                                "crates/bcsp-domain/src/lib.rs":  "9DEF2F1D37A3733D17BFB7D4FF3F79BBCEAB1789FA9A147BC2658E0E18AD45F4",
+                                "crates/bcsp-domain/src/match_result.rs":  "8FEFAD462689948B699CE76D908213C3AF727E748481678B5D49D710C8599DEF",
+                                "crates/bcsp-domain/tests/course_model.rs":  "AB665302725322BF3834716DF5A1015DE6D167AC5DFD745FB233F1CDFECA9E18",
+                                "crates/bcsp-domain/tests/fixtures/synthetic-identity-collisions-v1.tsv":  "0A6A89EA4C15CA9EFABB4F47F03B1AAAE2B608092A48A3F8017FAD8E904AAC5E",
+                                "crates/bcsp-domain/tests/identity_collisions.rs":  "B5AF53B3D517B07241795FC6A3DE7927F65A4D74B7597256DE5B10705D47B7B4",
+                                "crates/bcsp-domain/tests/three_value_tables.rs":  "9A76C9C884C41BBDEDE5A208BAAFDEE059867D632C79F53983B37500E9598C2C",
+                                "tools/architecture/verify-rust-graph.mjs":  "F2024523458075722A5AF5740CDC41C2BC6FCDBD371407164B341A94295626D3",
+                                "tools/architecture/verify-rust-graph.test.mjs":  "418301E25E95131A1D0B900CA30BA7BC2361E910D84202626849F0F1DA484FC0"
+                            },
+    "goldenCanonicalTextSha256":  {
+                                      "crates/bcsp-contracts/tests/golden/contract-manifest-v1.json":  "E88812B6FD48D5FB4044274A2DA3307A3C026820F0B6B852F0D8C65A7666C11B",
+                                      "crates/bcsp-contracts/tests/golden/http-error-v1.json":  "31F02753F720AC7BCD49CFEB988C47388F1ECF2A99263BFA012417F43BAF29D4",
+                                      "crates/bcsp-contracts/tests/golden/http-request-v1.json":  "256902A25E752F795617AE721A3EC0AD425382E43E4CDD565E2741511A5C8D29",
+                                      "crates/bcsp-contracts/tests/golden/http-success-v1.json":  "29CCFED3D4799E9CE38B9E6C3A63CEF0FD85A47CF46B48D3D5FD8B7BA57901A1",
+                                      "crates/bcsp-contracts/tests/golden/identity-payload-v1.json":  "F910049B6E563ABB23711243C5FD7AAAB050120B2B4FFB80544455714D398643",
+                                      "crates/bcsp-contracts/tests/golden/match-explanation-v1.json":  "3754443DD128227D8E5A5AF47974278BED35E1F11F11D4550A712D998AFACE56",
+                                      "crates/bcsp-contracts/tests/golden/section-key-v1.json":  "5C8901D16DA765456B77F1999F7836B97E3A1E8CFF18B35A02AB7D41C26D5A3B",
+                                      "crates/bcsp-contracts/tests/golden/ws-client-envelope-v1.json":  "B1A35FB6222E8D1C3CB59E57698FEA8D1C5712A907F03E821F6DE33373BB2B5F",
+                                      "crates/bcsp-contracts/tests/golden/ws-server-envelope-v1.json":  "B1A35FB6222E8D1C3CB59E57698FEA8D1C5712A907F03E821F6DE33373BB2B5F"
+                                  },
+    "rawFixtureOrSourceBodyPublished":  false,
+    "realCourseDataPublished":  false
+}

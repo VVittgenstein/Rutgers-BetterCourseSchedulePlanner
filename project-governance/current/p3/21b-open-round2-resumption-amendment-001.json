@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "amendmentId": "P3-OPEN-20260713-A001",
+  "status": "FROZEN_ROUND_2_RESUMPTION_AFTER_USER_REVIEW",
+  "frozenAt": "2026-07-13T12:18:04+08:00",
+  "authorization": "RESUME_ONLY_ORIGINAL_MANIFEST_ROUND_2",
+  "hashChain": {
+    "manifestSha256": "707705756EEA4D269EDD1822F8529453B1E8C7838E23B1FC843789379B947703",
+    "historicalStopSha256": "141C76D6B20E4CFB31CD556B19AC3E14239BEDF5810B36E2C1F6A1B279316D4B",
+    "ledgerSha256AtAmendmentFreeze": "A6FEF873ABFC511A0BADB71463B772194204015955323D8BB5007AEE28DED9CC",
+    "reviewDecisionSha256": "73975287BDD4409909EA4C030CA1B63A597CB50A67B074556059AB326CCCFB00",
+    "latencyContractSha256": "17DAC064F3AD0AC426E7C72D75F8080F16EBE1E5E5647EC13FA358048E86E66E"
+  },
+  "approvedContracts": {
+    "join": "RUTGERS_OFFICIAL_MERGED_SET_INTERSECTION",
+    "generalRefresh": "PUBLIC_FIXED_30_LOCAL_DEFAULT_30_RANGE_3_3600",
+    "activeWatchTargetSeconds": 10,
+    "effectiveIntervalFormula": "min(general_interval_seconds,10)",
+    "hardSourceChangeToNotificationGuarantee": false
+  },
+  "authorizedRequestIds": [
+    "OPEN-R2-001",
+    "OPEN-R2-002",
+    "OPEN-R2-003",
+    "OPEN-R2-004",
+    "OPEN-R2-005",
+    "OPEN-R2-006",
+    "OPEN-R2-007",
+    "OPEN-R2-008",
+    "OPEN-R2-009",
+    "OPEN-R2-010",
+    "OPEN-R2-011",
+    "OPEN-R2-012",
+    "OPEN-R2-013",
+    "OPEN-R2-014",
+    "OPEN-R2-015",
+    "OPEN-R2-016",
+    "OPEN-R2-017",
+    "OPEN-R2-018",
+    "OPEN-R2-019",
+    "OPEN-R2-020",
+    "OPEN-R2-021"
+  ],
+  "budget": {
+    "completedBeforeAmendment": 21,
+    "remainingAuthorizedAttempts": 21,
+    "effectiveHardAttemptLimit": 42,
+    "catalogRequestsPermitted": 0,
+    "additionalOpenRequestIdsPermitted": 0
+  },
+  "executionPolicy": {
+    "concurrency": 1,
+    "minimumAttemptStartIntervalMs": 5000,
+    "timeoutMs": 30000,
+    "automaticRetries": 0,
+    "maxResponseBytes": 10485760,
+    "cacheBustingPermitted": false,
+    "conditionalRequestExperimentPermitted": false
+  },
+  "terminalStopOn": [
+    "HTTP_403",
+    "HTTP_429",
+    "ANY_NON_2XX",
+    "OFF_ORIGIN_REDIRECT",
+    "NON_JSON_CONTENT_TYPE",
+    "JSON_PARSE_FAILURE",
+    "ROOT_NOT_ARRAY",
+    "NON_FIVE_DIGIT_STRING_VALUE",
+    "RESPONSE_TOO_LARGE",
+    "TIMEOUT_OR_NETWORK_FAILURE",
+    "LEDGER_RAW_INCONSISTENCY"
+  ],
+  "emptyArrayPolicy": "OBSERVE_BUT_NEVER_INDEPENDENTLY_MASS_CLOSE",
+  "duplicatePolicy": "AUDIT_AND_DEDUPLICATE_AS_SET",
+  "nextStageEligibility": {
+    "P4": false,
+    "P5": false,
+    "P6": false
+  }
+}

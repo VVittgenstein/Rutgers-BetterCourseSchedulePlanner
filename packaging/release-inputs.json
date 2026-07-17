@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "releaseVersion": "0.1.0",
+  "packageCount": 2,
+  "versionSources": {
+    "rustWorkspace": "Cargo.toml#workspace.package.version",
+    "frontend": "frontend/package.json#version"
+  },
+  "lockedToolchain": {
+    "rust": "1.97.0",
+    "node": "24.18.0",
+    "npm": "11.16.0"
+  },
+  "build": {
+    "cargoLocked": true,
+    "cargoProfile": "release",
+    "frontendInstall": "npm ci --no-audit --no-fund",
+    "sourceDateEpoch": "SOURCE_COMMIT_TIMESTAMP",
+    "embeddedWebUi": true
+  },
+  "packages": [
+    {
+      "id": "WINDOWS_LOCAL_RELEASE_ARCHIVE",
+      "archiveName": "rbcsp-windows-x86_64-0.1.0.zip",
+      "target": "x86_64-pc-windows-msvc",
+      "binary": "apps/bcsp-local",
+      "frontendTarget": "local",
+      "runtimeDataPath": "data/rbcsp.sqlite",
+      "allowlist": [
+        "BUILD-PROVENANCE.json",
+        "FRONTEND-CAPABILITIES.json",
+        "LICENSE",
+        "MANIFEST.json",
+        "QUICKSTART.md",
+        "RBCSP.exe",
+        "README.md",
+        "SBOM.cdx.json",
+        "SHA256SUMS",
+        "Start-RBCSP.bat",
+        "THIRD-PARTY-NOTICES.txt",
+        "VERSION"
+      ],
+      "forbiddenSurfaces": [
+        "caddy/**",
+        "config/**",
+        "ops/**",
+        "systemd/**"
+      ]
+    },
+    {
+      "id": "LINUX_PUBLIC_DEPLOYMENT_PACKAGE",
+      "archiveName": "rbcsp-linux-x86_64-0.1.0.tar.gz",
+      "target": "x86_64-unknown-linux-gnu",
+      "binary": "apps/bcsp-server",
+      "frontendTarget": "public",
+      "runtimeDataPath": "/var/lib/bcsp/rbcsp.sqlite",
+      "allowlist": [
+        "BUILD-PROVENANCE.json",
+        "FRONTEND-CAPABILITIES.json",
+        "LICENSE",
+        "MANIFEST.json",
+        "SBOM.cdx.json",
+        "SHA256SUMS",
+        "THIRD-PARTY-NOTICES.txt",
+        "VERSION",
+        "bin/bcsp-server",
+        "caddy/Caddyfile.example",
+        "config/bcsp.env.example",
+        "config/bcsp.env.schema.json",
+        "docs/operator-runbook.md",
+        "ops/backup.sh",
+        "ops/install.sh",
+        "ops/lib.sh",
+        "ops/restore.sh",
+        "ops/rollback.sh",
+        "ops/upgrade.sh",
+        "ops/verify.sh",
+        "systemd/bcsp.service"
+      ],
+      "forbiddenSurfaces": [
+        "data/**",
+        "share/**",
+        "Start-RBCSP.bat",
+        "tests/**"
+      ]
+    }
+  ],
+  "globalDenylist": [
+    "**/*.db",
+    "**/*.sqlite",
+    "**/*.sqlite3",
+    "**/*-journal",
+    "**/*-shm",
+    "**/*-wal",
+    "**/*.map",
+    "**/.secrets/**",
+    "**/node_modules/**",
+    "**/target/**",
+    "**/frontend/dist/**",
+    "**/project-governance/**",
+    "**/evidence/**",
+    "**/chat-log-*.md",
+    "**/tests/**",
+    "**/*credential*",
+    "**/*private-key*",
+    "**/*secret*",
+    "RAW_REAL_CATALOG_OR_OPEN_DATA",
+    "PREINSTALLED_CATALOG_OR_OPEN_ROWS",
+    "PRECREATED_RUNTIME_DATABASE"
+  ]
+}

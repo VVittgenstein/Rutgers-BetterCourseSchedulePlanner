@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "recordId": "P7-1-004-R1-WINDOWS-GOLDEN-PORTABILITY-2026-07-13-001",
+  "taskId": "P7.1-004-R1",
+  "state": "REPAIR_CONTRACT",
+  "branch": "codex/p7-implementation",
+  "expectedParent": "008de8c53da39af5562cd8a4022f839100a8a11d",
+  "expectedRemoteBaseline": "008de8c53da39af5562cd8a4022f839100a8a11d",
+  "primaryTask": {
+    "taskId": "P7.1-004",
+    "expectedParent": "870a45496a4ad37f8e9a8f0b1f9b208bec0c5c38",
+    "primaryCommit": "008de8c53da39af5562cd8a4022f839100a8a11d",
+    "expectedCommitPaths": 41,
+    "contract": "project-governance/current/p7/04a-p7-1-004-shared-domain-identity-and-typed-api-schema.json",
+    "allowlistEvidence": "project-governance/current/p7/evidence/p7-1-004/commit-allowlist.txt",
+    "completion": "project-governance/current/p7/records/p7-1-004-completion.json"
+  },
+  "scope": {
+    "kind": "WINDOWS_GOLDEN_TEST_LINE_ENDING_PORTABILITY_ONLY",
+    "repairedPath": "crates/bcsp-contracts/tests/wire_golden.rs",
+    "goldenFixtureChangeAllowed": false,
+    "productionContractChangeAllowed": false,
+    "dependencyOrLockChangeAllowed": false,
+    "repositoryWideGitattributesAllowed": false,
+    "runtimeBehaviorAllowed": false,
+    "formalUiImplementationAllowed": false,
+    "packageBuildAllowed": false,
+    "realRutgersRequestsAllowed": false,
+    "databaseMutationAllowed": false,
+    "vultrMutationAllowed": false,
+    "releaseOrProductionAllowed": false
+  },
+  "repairContract": {
+    "canonicalization": "CRLF_TO_LF_ONLY",
+    "loneCarriageReturnRejected": true,
+    "allGoldenComparisonsRoutedThroughHelper": true,
+    "explicitCrlfRegressionTestRequired": true,
+    "serializerOutputChanged": false,
+    "goldenPayloadSemanticsChanged": false
+  },
+  "textHashPolicy": {
+    "kind": "STRICT_UTF8_CANONICAL_LF_SHA256",
+    "utf8Required": true,
+    "bomAllowed": false,
+    "nulAllowed": false,
+    "loneCrAllowed": false,
+    "crlfNormalizedToLf": true,
+    "finalNewlineRequired": true,
+    "protectedBaselineStillRawBytes": true
+  },
+  "terminalCleanReplay": {
+    "switch": "RemoteCleanReplay",
+    "mode": "PostPush",
+    "requiredProfile": "CLEAN_CHECKOUT_0",
+    "requiredCoreAutocrlf": "true",
+    "requiredNormalStatusRows": 0,
+    "requiredObservedCrlfFilesMinimum": 1,
+    "requiredRawBlobMismatchFilesMinimum": 1,
+    "requiredFreshCloneHeadReflogEntries": 1,
+    "requiredRemoteUrl": "https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner",
+    "requiredState": "P7_1_004_R1_PASS_POST_PUSH_CLEAN_REPLAY"
+  },
+  "protectedWorktreeValidation": {
+    "manifest": "project-governance/current/p7/01-preserved-worktree-manifest.tsv",
+    "baselineRows": 167,
+    "profiles": ["EXACT_PRESERVED_167", "CLEAN_CHECKOUT_0"],
+    "partialProtectedProfileAllowed": false,
+    "opaqueRowsMustNotBeRead": true,
+    "privateRoot": ".secrets/",
+    "privateRootPolicy": "OPAQUE_PRIVATE_DENY_NO_ENUMERATION"
+  },
+  "qualityGates": [
+    "immutable-primary-boundary",
+    "repair-commit-boundary",
+    "repair-source-contract",
+    "rust-graph-guard",
+    "rust-graph-guard-self-test",
+    "cargo-metadata-windows-locked-offline",
+    "cargo-metadata-linux-locked-offline",
+    "cargo-metadata-complete-closure-locked-offline",
+    "cargo-check-workspace-all-targets-locked-offline",
+    "cargo-test-workspace-all-targets-locked-offline",
+    "cargo-clippy-workspace-all-targets-locked-offline",
+    "cargo-fmt-check",
+    "cargo-deny-policy-locked-offline",
+    "cargo-test-wire-golden-locked-offline",
+    "cargo-test-bcsp-contracts-locked-offline",
+    "cargo-test-bcsp-domain-locked-offline",
+    "dependency-lock-unchanged",
+    "dependency-closure-delta",
+    "autocrlf-true-isolated-clone-self-test",
+    "protected-worktree-profile",
+    "publication-safety",
+    "zero-side-effects",
+    "evidence-builder-verify",
+    "evidence-builder-write",
+    "fast-forward-remote-boundary",
+    "terminal-clean-clone-replay"
+  ],
+  "evidence": {
+    "commitAllowlist": "project-governance/current/p7/evidence/p7-1-004-r1/commit-allowlist.txt",
+    "repairQuality": "project-governance/current/p7/evidence/p7-1-004-r1/repair-quality.json"
+  },
+  "completion": {
+    "markdown": "project-governance/current/p7/records/p7-1-004-r1-completion.md",
+    "json": "project-governance/current/p7/records/p7-1-004-r1-completion.json",
+    "commitEligibleState": "P7_1_004_R1_PASS_COMMIT_ELIGIBLE",
+    "postPushState": "P7_1_004_R1_PASS_POST_PUSH",
+    "cleanReplayState": "P7_1_004_R1_PASS_POST_PUSH_CLEAN_REPLAY"
+  },
+  "commitBoundary": {
+    "finalized": true,
+    "topology": "DIRECT_SINGLE_PARENT_FAST_FORWARD_CHILD",
+    "expectedTaskPathCount": 9,
+    "taskCommitAllowlist": [
+      "crates/bcsp-contracts/tests/wire_golden.rs",
+      "project-governance/current/p7/04r1-p7-1-004-r1-windows-golden-line-ending-repair.md",
+      "project-governance/current/p7/04r1a-p7-1-004-r1-windows-golden-line-ending-repair.json",
+      "project-governance/current/p7/evidence/p7-1-004-r1/commit-allowlist.txt",
+      "project-governance/current/p7/evidence/p7-1-004-r1/repair-quality.json",
+      "project-governance/current/p7/records/p7-1-004-r1-completion.json",
+      "project-governance/current/p7/records/p7-1-004-r1-completion.md",
+      "project-governance/current/p7/tools/build-p7-1-004-r1-evidence.ps1",
+      "project-governance/current/p7/tools/validate-p7-1-004-r1.ps1"
+    ],
+    "requiredGovernancePaths": [
+      "project-governance/current/p7/04r1-p7-1-004-r1-windows-golden-line-ending-repair.md",
+      "project-governance/current/p7/04r1a-p7-1-004-r1-windows-golden-line-ending-repair.json",
+      "project-governance/current/p7/evidence/p7-1-004-r1/commit-allowlist.txt",
+      "project-governance/current/p7/evidence/p7-1-004-r1/repair-quality.json",
+      "project-governance/current/p7/records/p7-1-004-r1-completion.json",
+      "project-governance/current/p7/records/p7-1-004-r1-completion.md",
+      "project-governance/current/p7/tools/build-p7-1-004-r1-evidence.ps1",
+      "project-governance/current/p7/tools/validate-p7-1-004-r1.ps1"
+    ]
+  },
+  "lockArtifacts": {
+    "cargoLockChangeExpected": false,
+    "frontendNpmLockChangeExpected": false,
+    "thirdPartyClosureDeltaExpected": 0
+  },
+  "git": {
+    "normalPublicRepositoryWorkflow": true,
+    "independentRepairCommit": true,
+    "automaticPushAfterPass": true,
+    "perPushHumanApprovalRequired": false,
+    "forcePush": false,
+    "requiredValidationModes": ["PreCommit", "PostCommit", "PostPush"]
+  },
+  "negativeSideEffects": {
+    "rutgersRequests": 0,
+    "databaseMutations": 0,
+    "packageBuilds": 0,
+    "vultrMutations": 0,
+    "releasePublications": 0,
+    "productionMutations": 0
+  },
+  "nextTask": "P7.1-005",
+  "nextTaskBlockedUntil": "P7_1_004_R1_PASS_POST_PUSH_CLEAN_REPLAY"
+}

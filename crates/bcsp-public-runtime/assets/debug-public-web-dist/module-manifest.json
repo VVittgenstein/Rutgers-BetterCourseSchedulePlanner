@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "target": "public",
+  "modules": ["src/entry.public.tsx"]
+}

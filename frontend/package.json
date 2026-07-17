@@ -1,26 +1,55 @@
 {
   "name": "better-course-schedule-planner-frontend",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "license": "ISC",
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": "24.18.0",
+    "npm": "11.16.0"
+  },
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "guard": "npm run guard:imports && npm run test:guard",
+    "guard:imports": "node ./tools/verify-import-graph.mjs",
+    "test:guard": "node --test ./tools/verify-import-graph.test.mjs ./tools/verify-target-build.test.mjs",
+    "test:i18n": "vitest run --config vitest.config.ts",
+    "test:visual:shell": "node ./tools/capture-ui-shell.mjs",
+    "test:visual:search": "node ./tools/capture-course-section-flow.mjs",
+    "test:visual:watch": "node ./tools/capture-watch-flow.mjs",
+    "typecheck": "tsc --build tsconfig.json --pretty false",
+    "typecheck:shared": "tsc --build tsconfig.shared.json --pretty false",
+    "typecheck:local": "tsc --build tsconfig.local.json --pretty false",
+    "typecheck:public": "tsc --build tsconfig.public.json --pretty false",
+    "typecheck:build": "tsc --build tsconfig.node.json --pretty false",
+    "build": "npm run build:local && npm run build:public",
+    "build:local": "npm run guard:imports && vite build --config vite.local.config.ts && node ./tools/verify-target-build.mjs local",
+    "build:public": "npm run guard:imports && vite build --config vite.public.config.ts && node ./tools/verify-target-build.mjs public",
+    "dev:local": "vite --config vite.local.config.ts --open /local.html",
+    "dev:public": "vite --config vite.public.config.ts --open /public.html",
+    "verify": "npm run guard && npm run test:i18n && npm run typecheck && npm run build",
+    "preview:local": "vite preview --config vite.local.config.ts",
+    "preview:public": "vite preview --config vite.public.config.ts"
   },
   "dependencies": {
-    "i18next": "^25.6.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-i18next": "^16.3.3",
-    "react-window": "^1.8.10"
+    "i18next": "26.3.6",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-i18next": "17.0.9"
   },
   "devDependencies": {
-    "@types/react": "^18.3.11",
-    "@types/react-dom": "^18.3.5",
-    "@types/react-window": "^1.8.5",
-    "@vitejs/plugin-react": "^4.3.1",
-    "typescript": "^5.6.3",
-    "vite": "^5.4.1"
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.2",
+    "@types/jsdom": "28.0.3",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "axe-core": "4.12.1",
+    "jsdom": "29.1.1",
+    "playwright": "1.61.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
   }
 }

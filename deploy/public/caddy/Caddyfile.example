@@ -1,0 +1,19 @@
+# Copy this site block into an operator-managed Caddy configuration only after
+# replacing the invalid hostname. The package never installs or reloads Caddy.
+planner.invalid {
+	@metrics path /metrics /metrics/*
+	respond @metrics 404
+
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	@dynamic not path /assets/*
+	header @dynamic Cache-Control "no-store"
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	reverse_proxy 127.0.0.1:8080
+}

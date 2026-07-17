@@ -1,0 +1,48 @@
+{
+  "contractVersion": 1,
+  "observationId": "00000000-0000-4000-8000-000000000001",
+  "batch": {
+    "term": "T2026F",
+    "campus": "CAMPUS_A"
+  },
+  "attemptSequence": 7,
+  "observationSequence": 7,
+  "catalogContentVersion": 3,
+  "startedAt": "1970-01-01T00:00:00Z",
+  "completedAt": "1970-01-01T00:00:01Z",
+  "observedAt": "1970-01-01T00:00:01Z",
+  "classification": "VALID_APPLIED",
+  "http": {
+    "statusCode": 200,
+    "decodedBytes": 42,
+    "decodedBodySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "contentType": "application/json;charset=UTF-8",
+    "etag": "\"open-v7\"",
+    "cacheControl": "max-age=0, no-cache",
+    "date": "Tue, 14 Jul 2026 00:00:01 GMT",
+    "ageSeconds": 12,
+    "lastModified": "Mon, 13 Jul 2026 23:59:00 GMT",
+    "retryAfter": null
+  },
+  "canonicalSetHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "stateHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "counts": {
+    "canonicalOpenIndexes": 3,
+    "duplicateIndexes": 1,
+    "catalogSections": 10,
+    "matchedOpenSections": 2,
+    "closedSections": 8,
+    "orphanIndexes": 1
+  },
+  "schedule": {
+    "lane": "ACTIVE_WATCH",
+    "requestedGeneralIntervalSeconds": 30,
+    "requestedEffectiveIntervalSeconds": 10,
+    "dueAt": "1970-01-01T00:00:00Z",
+    "schedulerLagMilliseconds": 250,
+    "actualStartToStartIntervalMilliseconds": 10250
+  },
+  "bodyChanged": true,
+  "stateChanged": false,
+  "lastKnownGoodAgeSeconds": 0
+}

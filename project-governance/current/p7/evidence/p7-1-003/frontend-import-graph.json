@@ -1,0 +1,102 @@
+{
+    "schemaVersion":  1,
+    "taskId":  "P7.1-003",
+    "state":  "PASS",
+    "activeUniverse":  {
+                           "fileCount":  5,
+                           "files":  [
+                                         "src/entry.local.tsx",
+                                         "src/entry.public.tsx",
+                                         "src/ui/local/LocalCompositionRoot.tsx",
+                                         "src/ui/public/PublicCompositionRoot.tsx",
+                                         "src/ui/shared/SharedApplication.tsx"
+                                     ],
+                           "filesByRole":  {
+                                               "shared":  [
+                                                              "src/ui/shared/SharedApplication.tsx"
+                                                          ],
+                                               "local":  [
+                                                             "src/ui/local/LocalCompositionRoot.tsx"
+                                                         ],
+                                               "public":  [
+                                                              "src/ui/public/PublicCompositionRoot.tsx"
+                                                          ],
+                                               "local-entry":  [
+                                                                   "src/entry.local.tsx"
+                                                               ],
+                                               "public-entry":  [
+                                                                    "src/entry.public.tsx"
+                                                                ]
+                                           }
+                       },
+    "edges":  [
+                  {
+                      "from":  "src/entry.local.tsx",
+                      "kind":  "static import",
+                      "to":  "src/ui/local/LocalCompositionRoot.tsx"
+                  },
+                  {
+                      "from":  "src/entry.public.tsx",
+                      "kind":  "static import",
+                      "to":  "src/ui/public/PublicCompositionRoot.tsx"
+                  },
+                  {
+                      "from":  "src/ui/local/LocalCompositionRoot.tsx",
+                      "kind":  "static import",
+                      "to":  "src/ui/shared/SharedApplication.tsx"
+                  },
+                  {
+                      "from":  "src/ui/public/PublicCompositionRoot.tsx",
+                      "kind":  "static import",
+                      "to":  "src/ui/shared/SharedApplication.tsx"
+                  }
+              ],
+    "closures":  {
+                     "local":  [
+                                   "src/entry.local.tsx",
+                                   "src/ui/local/LocalCompositionRoot.tsx",
+                                   "src/ui/shared/SharedApplication.tsx"
+                               ],
+                     "public":  [
+                                    "src/entry.public.tsx",
+                                    "src/ui/public/PublicCompositionRoot.tsx",
+                                    "src/ui/shared/SharedApplication.tsx"
+                                ]
+                 },
+    "publicSourceDeny":  {
+                             "expectedCount":  18,
+                             "expectedMarkerCount":  212,
+                             "checkedCount":  18,
+                             "checkedMarkerCount":  212,
+                             "rowsSha256":  "521CFF222462CC06D015A2954B5D317B5B1CBE7047E27945E0374F3122E74593",
+                             "violationCount":  0,
+                             "violations":  [
+
+                                            ]
+                         },
+    "prohibitedConstructs":  {
+                                 "count":  0,
+                                 "importMetaGlobCount":  0,
+                                 "nonLiteralDynamicImportCount":  0,
+                                 "occurrences":  [
+
+                                                 ]
+                             },
+    "assertions":  {
+                       "allActiveFilesReachable":  true,
+                       "edgeRulesPass":  true,
+                       "legacySourceReachable":  false,
+                       "prohibitedConstructsAbsent":  true,
+                       "publicSourceDenyPass":  true,
+                       "publicToLocalEdges":  0,
+                       "sharedToTargetEdges":  0
+                   },
+    "errors":  [
+
+               ],
+    "repositoryContract":  {
+                               "staticFileCount":  6,
+                               "metadataErrorCount":  0,
+                               "pass":  true
+                           }
+}

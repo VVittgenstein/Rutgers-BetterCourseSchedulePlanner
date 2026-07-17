@@ -1,0 +1,67 @@
+{
+    "schemaVersion":  2,
+    "check":  "P7.1-003_RUST_GRAPH",
+    "ok":  true,
+    "cargoResolver":  "3",
+    "rootManifestSections":  [
+                                 "workspace",
+                                 "workspace.package",
+                                 "workspace.dependencies",
+                                 "workspace.metadata.p7.tooling"
+                             ],
+    "workspaceMembers":  15,
+    "workspaceDefaultMembers":  15,
+    "binaryTargets":  [
+                          "bcsp-local",
+                          "bcsp-server"
+                      ],
+    "publicSourceDeny":  {
+                             "checkedCount":  18,
+                             "denyInput":  "tools/architecture/p4-public-source-deny.json",
+                             "errors":  [
+
+                                        ],
+                             "expectedCount":  18,
+                             "markerCount":  212,
+                             "publicClosurePackages":  [
+                                                           "bcsp-contracts",
+                                                           "bcsp-domain",
+                                                           "bcsp-query",
+                                                           "bcsp-rutgers-client",
+                                                           "bcsp-operational-storage",
+                                                           "bcsp-catalog",
+                                                           "bcsp-open",
+                                                           "bcsp-watch",
+                                                           "bcsp-application",
+                                                           "bcsp-public-operations",
+                                                           "bcsp-public-runtime",
+                                                           "bcsp-server"
+                                                       ],
+                             "scannedFileCount":  12,
+                             "scannedFiles":  [
+                                                  "apps/bcsp-server/src/main.rs",
+                                                  "crates/bcsp-application/src/lib.rs",
+                                                  "crates/bcsp-catalog/src/lib.rs",
+                                                  "crates/bcsp-contracts/src/lib.rs",
+                                                  "crates/bcsp-domain/src/lib.rs",
+                                                  "crates/bcsp-open/src/lib.rs",
+                                                  "crates/bcsp-operational-storage/src/lib.rs",
+                                                  "crates/bcsp-public-operations/src/lib.rs",
+                                                  "crates/bcsp-public-runtime/src/lib.rs",
+                                                  "crates/bcsp-query/src/lib.rs",
+                                                  "crates/bcsp-rutgers-client/src/lib.rs",
+                                                  "crates/bcsp-watch/src/lib.rs"
+                                              ],
+                             "sourceEscapeCount":  0,
+                             "sourceEscapes":  [
+
+                                               ],
+                             "violationCount":  0,
+                             "violations":  [
+
+                                            ]
+                         },
+    "errors":  [
+
+               ]
+}

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "kind": "TARGET_BUILD_ALLOWLIST",
+  "target": "local",
+  "readiness": "UI_INTEGRATION_COMPLETE",
+  "allowedCapabilities": [
+    "configurable-refresh-intervals",
+    "course-search",
+    "course-section-details",
+    "current-page-audio",
+    "current-page-selection",
+    "current-page-toast",
+    "current-page-watch",
+    "durable-episode-action-history",
+    "en-us-zh-cn",
+    "filter-schema",
+    "local-run-counters",
+    "manual-term-pull",
+    "open-status",
+    "persistent-current-filters",
+    "persistent-selected-sections",
+    "persistent-settings",
+    "refresh-diagnostics",
+    "reset-local-user-data",
+    "saved-views",
+    "section-search",
+    "windows-launcher-lifecycle"
+  ],
+  "allowedRoutes": [
+    "/",
+    "/history",
+    "/saved-views",
+    "/sections",
+    "/sections/:term/:campus/:index",
+    "/settings",
+    "/watch"
+  ],
+  "allowedI18nCatalogs": [
+    "shared",
+    "local"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "digest_recipe_version": 1,
+  "last_updated": "2026-05-12",
+  "latest_phase": 1,
+  "sessions": [
+    {
+      "date": "2026-05-11",
+      "name": "pm-init-setup",
+      "path": "docs/sessions/2026-05-11-pm-init-setup.md",
+      "status": "success"
+    },
+    {
+      "date": "2026-05-12",
+      "name": "public-remote-closeout-savepoint",
+      "path": "docs/sessions/2026-05-12-public-remote-closeout-savepoint.md",
+      "status": "success"
+    }
+  ],
+  "chat_logs": []
+}

@@ -1,0 +1,9 @@
+{
+  "outcome": "UNCERTAIN",
+  "reasons": [
+    {
+      "code": "MISSING_RELIABLE_DATA",
+      "field": "meeting.location"
+    }
+  ]
+}

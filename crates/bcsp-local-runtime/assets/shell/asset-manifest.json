@@ -1,0 +1,8 @@
+{
+  "local.html": {
+    "file": "assets/local-fallback.js",
+    "name": "local-fallback",
+    "src": "local.html",
+    "isEntry": true
+  }
+}

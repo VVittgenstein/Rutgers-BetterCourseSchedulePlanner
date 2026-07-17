@@ -1,0 +1,19 @@
+[package]
+name = "bcsp-public-operations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+bcsp-operational-storage = { version = "=0.1.0", path = "../bcsp-operational-storage" }
+rusqlite.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

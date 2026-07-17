@@ -1,0 +1,69 @@
+{
+  "task": "P7.1-013",
+  "title": "Public zero-surface and dual-target build enforcement",
+  "status": "PRECOMMIT_VERIFIED",
+  "parent": "559b400ee2a48c8c11bb5616b73f56d0b106ecbb",
+  "branch": "codex/p7-implementation",
+  "verifiedAtUtc": "2026-07-14T16:03:33.1114701Z",
+  "product": {
+    "frontendTargetManifests": "PRE_UI_INTEGRATION_ALLOWLISTS",
+    "sourceGuardRunsBeforeTreeShaking": true,
+    "actualModuleManifestEmitted": true,
+    "publicRouteInventoryDrivesRegistration": true,
+    "undeclaredExtensionRoutesRejected": true,
+    "sharedLocalResetReasonRemoved": true,
+    "finalArchiveInspectionOwner": "P7.4"
+  },
+  "zeroSurface": {
+    "capabilityRows": 18,
+    "surfaces": [
+      "SOURCE",
+      "API",
+      "STORAGE",
+      "PACKAGE",
+      "DOM",
+      "ROUTE",
+      "I18N",
+      "BUNDLE"
+    ],
+    "rustAssertions": 72,
+    "frontendAssertions": 72,
+    "totalAssertions": 144,
+    "duplicateValidationIds": 0,
+    "packageScope": "PRE_PACKAGE_INPUTS"
+  },
+  "verification": {
+    "format": "PASS",
+    "workspaceTestsLockedOffline": "PASS",
+    "workspaceClippyDenyWarnings": "PASS",
+    "rustArchitectureAndZeroSurface": "PASS",
+    "frontendVerify": "PASS",
+    "cargoDeny": "PASS",
+    "exactAssertionUnion": "PASS"
+  },
+  "commitPaths": [
+    "crates/bcsp-application/src/host.rs",
+    "crates/bcsp-application/src/lib.rs",
+    "crates/bcsp-contracts/src/watch.rs",
+    "crates/bcsp-contracts/tests/golden/contract-manifest-v1.json",
+    "crates/bcsp-public-runtime/src/host.rs",
+    "crates/bcsp-public-runtime/src/lib.rs",
+    "frontend/build/capabilities.local.json",
+    "frontend/build/capabilities.public.json",
+    "frontend/package.json",
+    "frontend/tests/public-zero-surface-dom.test.tsx",
+    "frontend/tools/verify-import-graph.mjs",
+    "frontend/tools/verify-import-graph.test.mjs",
+    "frontend/tools/verify-target-build.mjs",
+    "frontend/tools/verify-target-build.test.mjs",
+    "frontend/vite.config.ts",
+    "tools/architecture/verify-public-rust-zero-surface.mjs",
+    "tools/architecture/verify-public-rust-zero-surface.test.mjs",
+    "tools/architecture/verify-rust-graph.mjs",
+    "project-governance/current/p7/13-p7-1-013-public-zero-surface-dual-target-build-enforcement.md",
+    "project-governance/current/p7/13a-p7-1-013-public-zero-surface-dual-target-build-enforcement.json",
+    "project-governance/current/p7/records/p7-1-013-completion.json",
+    "project-governance/current/p7/records/p7-1-013-completion.md"
+  ],
+  "nextTask": "P7.1-014"
+}

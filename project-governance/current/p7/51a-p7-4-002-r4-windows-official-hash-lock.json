@@ -1,0 +1,12 @@
+{
+  "task": "P7.4-002-R4",
+  "status": "WINDOWS_ACTIONS_HASH_LOCKED_FINAL_ACCEPTANCE_QUEUED",
+  "sourceCommit": "7d5debef005277e4d8f2ed2b9fb2f72c495e62f1",
+  "discoveryRunId": 29407487411,
+  "discoveryJobId": 87326379450,
+  "windowsSha256": "eabdc3b5f4a705d8c22e6941831f55e0bb5b5c2a1c33e648e545f86007cab577",
+  "windowsFileCount": 11,
+  "packageBuilder": "PASS_BEFORE_EXPECTED_HASH_STOP",
+  "discoveryRunCountsAsAcceptance": false,
+  "nextTask": "P7.4-005-R2"
+}

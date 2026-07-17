@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "recordId": "P7-1-003-R1-WINDOWS-CHECKOUT-PORTABILITY-2026-07-13-001",
+  "taskId": "P7.1-003-R1",
+  "state": "REPAIR_CONTRACT",
+  "branch": "codex/p7-implementation",
+  "expectedParent": "c2af7184aeec06704997f266530535003358c278",
+  "primaryTask": {
+    "taskId": "P7.1-003",
+    "expectedParent": "1d997f6d3cca70ef54ec5b7adb2124f0b5905fa3",
+    "primaryCommit": "c2af7184aeec06704997f266530535003358c278",
+    "expectedCommitPaths": 73,
+    "contract": "project-governance/current/p7/03a-p7-1-003-workspace-module-graph-and-capability-build-guards.json",
+    "allowlistEvidence": "project-governance/current/p7/evidence/p7-1-003/commit-allowlist.txt",
+    "completion": "project-governance/current/p7/records/p7-1-003-completion.json",
+    "builder": "project-governance/current/p7/tools/build-p7-1-003-evidence.ps1"
+  },
+  "cause": {
+    "kind": "WINDOWS_CHECKOUT_LINE_ENDING_CONFIGURATION_MISMATCH",
+    "remoteCloneCoreAutocrlf": "true",
+    "normalStatusWasCleanBeforeReplay": true,
+    "forcedFalseDirtyRowsObserved": 133,
+    "deniedContentRead": false
+  },
+  "scope": {
+    "kind": "VALIDATION_PORTABILITY_ONLY",
+    "repositoryWideGitattributesAllowed": false,
+    "productBusinessLogicAllowed": false,
+    "typedDomainOrApiAllowed": false,
+    "runtimeBehaviorAllowed": false,
+    "formalUiImplementationAllowed": false,
+    "dependencyChangeAllowed": false,
+    "packageBuildAllowed": false,
+    "realRutgersRequestsAllowed": false,
+    "vultrMutationAllowed": false,
+    "releaseOrProductionAllowed": false
+  },
+  "textHashPolicy": {
+    "kind": "STRICT_UTF8_CANONICAL_LF_SHA256",
+    "utf8Required": true,
+    "bomAllowed": false,
+    "nulAllowed": false,
+    "loneCrAllowed": false,
+    "crlfNormalizedToLf": true,
+    "finalNewlineRequired": true,
+    "protectedBaselineStillRawBytes": true
+  },
+  "checkoutPolicy": {
+    "gitStatusUsesEffectiveConfiguration": true,
+    "forcedCoreAutocrlfOverrideAllowed": false,
+    "requiredCleanReplayCoreAutocrlf": "true",
+    "requiredCleanReplayProfile": "CLEAN_CHECKOUT_0",
+    "requiredObservedCrlfFilesMinimum": 1,
+    "requiredRawBlobMismatchFilesMinimum": 1,
+    "requiredRemoteUrl": "https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner",
+    "freshCloneHeadReflogEntries": 1
+  },
+  "qualityGates": [
+    "immutable-primary-boundary",
+    "repair-commit-boundary",
+    "effective-checkout-status",
+    "canonical-text-hash-policy",
+    "autocrlf-true-isolated-clone-self-test",
+    "primary-p7-builder-verify",
+    "protected-worktree-profile",
+    "publication-safety",
+    "repair-evidence-builder-verify",
+    "fast-forward-remote-boundary"
+  ],
+  "evidence": {
+    "commitAllowlist": "project-governance/current/p7/evidence/p7-1-003-r1/commit-allowlist.txt",
+    "checkoutPortability": "project-governance/current/p7/evidence/p7-1-003-r1/checkout-portability.json"
+  },
+  "completion": {
+    "markdown": "project-governance/current/p7/records/p7-1-003-r1-completion.md",
+    "json": "project-governance/current/p7/records/p7-1-003-r1-completion.json",
+    "commitEligibleState": "P7_1_003_R1_PASS_COMMIT_ELIGIBLE",
+    "postPushState": "P7_1_003_R1_PASS_POST_PUSH",
+    "cleanReplayState": "P7_1_003_R1_PASS_POST_PUSH_CLEAN_REPLAY"
+  },
+  "commitBoundary": {
+    "finalized": true,
+    "topology": "DIRECT_SINGLE_PARENT_FAST_FORWARD_CHILD",
+    "taskCommitAllowlist": [
+      "project-governance/current/p7/03r1-p7-1-003-r1-windows-checkout-portability-repair.md",
+      "project-governance/current/p7/03r1a-p7-1-003-r1-windows-checkout-portability-repair.json",
+      "project-governance/current/p7/evidence/p7-1-003-r1/checkout-portability.json",
+      "project-governance/current/p7/evidence/p7-1-003-r1/commit-allowlist.txt",
+      "project-governance/current/p7/records/p7-1-003-r1-completion.json",
+      "project-governance/current/p7/records/p7-1-003-r1-completion.md",
+      "project-governance/current/p7/tools/build-p7-1-003-evidence.ps1",
+      "project-governance/current/p7/tools/build-p7-1-003-r1-evidence.ps1",
+      "project-governance/current/p7/tools/validate-p7-1-003-r1.ps1",
+      "project-governance/current/p7/tools/validate-p7-1-003.ps1"
+    ],
+    "requiredGovernancePaths": [
+      "project-governance/current/p7/03r1-p7-1-003-r1-windows-checkout-portability-repair.md",
+      "project-governance/current/p7/03r1a-p7-1-003-r1-windows-checkout-portability-repair.json",
+      "project-governance/current/p7/evidence/p7-1-003-r1/checkout-portability.json",
+      "project-governance/current/p7/evidence/p7-1-003-r1/commit-allowlist.txt",
+      "project-governance/current/p7/records/p7-1-003-r1-completion.json",
+      "project-governance/current/p7/records/p7-1-003-r1-completion.md",
+      "project-governance/current/p7/tools/build-p7-1-003-r1-evidence.ps1",
+      "project-governance/current/p7/tools/validate-p7-1-003-r1.ps1"
+    ]
+  },
+  "protectedBaseline": {
+    "manifest": "project-governance/current/p7/01-preserved-worktree-manifest.tsv",
+    "expectedRows": 167,
+    "opaqueRowsMustNotBeRead": true,
+    "privateRoot": ".secrets/",
+    "privateRootPolicy": "OPAQUE_PRIVATE_DENY_NO_ENUMERATION"
+  },
+  "git": {
+    "normalPublicRepositoryWorkflow": true,
+    "independentRepairCommit": true,
+    "automaticPushAfterPass": true,
+    "perPushHumanApprovalRequired": false,
+    "forcePush": false,
+    "requiredValidationModes": ["PreCommit", "PostCommit", "PostPush"]
+  },
+  "negativeSideEffects": {
+    "rutgersRequests": 0,
+    "databaseMutations": 0,
+    "packageBuilds": 0,
+    "vultrMutations": 0,
+    "releasePublications": 0,
+    "productionMutations": 0
+  },
+  "nextTask": "P7.1-004",
+  "nextTaskBlockedUntil": "P7_1_003_R1_PASS_POST_PUSH_CLEAN_REPLAY"
+}

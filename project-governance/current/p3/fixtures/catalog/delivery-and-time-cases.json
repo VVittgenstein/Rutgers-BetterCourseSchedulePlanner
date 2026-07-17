@@ -1,0 +1,37 @@
+{
+  "fixture_origin": "CONSTRUCTED_FROM_OBSERVED_SHAPES",
+  "not_raw_evidence": true,
+  "cases": [
+    {
+      "case_id": "DELIVERY-T-FACE_TO_FACE",
+      "sectionCourseType": "T",
+      "meetingTimes": [{"meetingModeCode": "02", "meetingModeDesc": "LEC", "meetingDay": "H", "startTimeMilitary": "1300", "endTimeMilitary": "1420"}]
+    },
+    {
+      "case_id": "DELIVERY-H-HYBRID",
+      "sectionCourseType": "H",
+      "meetingTimes": [{"meetingModeCode": "91", "meetingModeDesc": "HYBRID SECTION", "meetingDay": "M", "startTimeMilitary": "1000", "endTimeMilitary": "1120"}]
+    },
+    {
+      "case_id": "DELIVERY-O-GENERIC-UNKNOWN-SYNCHRONICITY",
+      "sectionCourseType": "O",
+      "meetingTimes": [{"meetingModeCode": "90", "meetingModeDesc": "ONLINE INSTRUCTION(INTERNET)", "meetingDay": null, "startTimeMilitary": null, "endTimeMilitary": null}]
+    },
+    {
+      "case_id": "DELIVERY-O-REMOTE-SYNCH",
+      "sectionCourseType": "O",
+      "meetingTimes": [{"meetingModeCode": "92", "meetingModeDesc": "REMOTE-SYNCH", "meetingDay": "W", "startTimeMilitary": "1800", "endTimeMilitary": "2120"}]
+    },
+    {
+      "case_id": "DELIVERY-O-REMOTE-ASYNCH",
+      "sectionCourseType": "O",
+      "meetingTimes": [{"meetingModeCode": "93", "meetingModeDesc": "REMOTE-ASYNCH", "meetingDay": null, "startTimeMilitary": null, "endTimeMilitary": null}]
+    },
+    {
+      "case_id": "DELIVERY-UNKNOWN-PRESERVE",
+      "sectionCourseType": "X",
+      "meetingTimes": [{"meetingModeCode": "ZZ", "meetingModeDesc": "FUTURE VALUE", "meetingDay": "TH", "startTimeMilitary": "0900", "endTimeMilitary": "1020"}],
+      "observation_status": "NOT_OBSERVED_CONSTRUCTED_GUARD"
+    }
+  ]
+}

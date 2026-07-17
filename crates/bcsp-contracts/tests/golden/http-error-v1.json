@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "error": {
+    "code": "SELECTION_LIMIT_EXCEEDED",
+    "messageKey": "error.selection_limit_exceeded",
+    "traceId": "00000000-0000-4000-8000-000000000001",
+    "details": [
+      {
+        "kind": "LIMIT",
+        "name": "selected_sections",
+        "maximum": 9
+      }
+    ]
+  }
+}

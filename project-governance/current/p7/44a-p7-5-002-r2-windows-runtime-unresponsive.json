@@ -1,0 +1,16 @@
+{
+  "task": "P7.5-002-R2",
+  "status": "FAIL_PRODUCT_RUNTIME_UNRESPONSIVE",
+  "candidateSha256": "2c807e475779f9d3f7e8549921655dad87c4dff3b06286d05ac2a985fa2907d2",
+  "sameCandidateExceptionRetryAuthorized": true,
+  "chromeNavigationCompleted": false,
+  "independentLocalBootstrapTimedOut": true,
+  "catalogAttemptsObserved": 13,
+  "openAttemptsObserved": 0,
+  "http403Or429": 0,
+  "sqliteIntegrity": "ok",
+  "disposableStateRemoved": true,
+  "rawRutgersEvidenceRetained": false,
+  "candidateRetired": true,
+  "gate": "P7_5_WINDOWS_NEW_CANDIDATE_REQUIRED"
+}

@@ -1,0 +1,23 @@
+{
+  "task": "P7.2-002",
+  "title": "Course-centered search filters and Section flows",
+  "status": "PRECOMMIT_LOCAL_VERIFIED",
+  "parent": "7100851a6549cc25b671f673081afcd1f262cbfd",
+  "branch": "codex/p7-implementation",
+  "verifiedAtUtc": "2026-07-14T19:33:18.1882350Z",
+  "skills": [
+    "industrial-brutalist-ui",
+    "design-taste-frontend"
+  ],
+  "checks": {
+    "frontendGuard": "PASS_80_OF_80",
+    "productAndComponentTests": "PASS_56_OF_56",
+    "typecheckAndDualBuild": "PASS",
+    "publicBoundary": "PASS_72_OF_72",
+    "localRuntime": "PASS_8_UNIT_12_INTEGRATION_3_SINGLE_INSTANCE",
+    "chromeSnapshots": "PASS_5_OF_5",
+    "horizontalOverflow": "PASS_NONE"
+  },
+  "p7_3Started": false,
+  "nextTask": "P7.2-003"
+}

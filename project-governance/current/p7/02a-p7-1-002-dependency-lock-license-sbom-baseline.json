@@ -1,0 +1,285 @@
+{
+  "schemaVersion": 1,
+  "recordId": "P7-1-002-DEPENDENCY-BASELINE-2026-07-13-001",
+  "taskId": "P7.1-002",
+  "state": "IMPLEMENTATION_CONTRACT",
+  "branch": "codex/p7-implementation",
+  "expectedParent": "f39b033b491b7f22429348df11e3fd6191ef1615",
+  "expectedRemoteBaseline": "f39b033b491b7f22429348df11e3fd6191ef1615",
+  "dependency": {
+    "taskId": "P7.1-001",
+    "requiredState": "P7_1_001_PASS_COMMIT_ELIGIBLE",
+    "requiredCommit": "f39b033b491b7f22429348df11e3fd6191ef1615"
+  },
+  "license": {
+    "spdx": "ISC",
+    "copyright": "Copyright (c) 2026 VVittgenstein",
+    "file": "LICENSE"
+  },
+  "scope": {
+    "kind": "DEPENDENCY_RESOLUTION_SCAFFOLD_ONLY",
+    "productBusinessLogicAllowed": false,
+    "finalWorkspaceModuleGraphOwnedBy": "P7.1-003",
+    "zeroConsumerScope": "ACTIVE_P7_TARGET_GRAPH_ONLY",
+    "legacyGraphDisposition": "FROZEN_EXCLUDED_PENDING_OWNER_TASK",
+    "repositoryWideZeroConsumerClaim": false,
+    "realRutgersRequestsAllowed": false,
+    "p75ExecutionAuthorized": false,
+    "vultrMutationAllowed": false,
+    "releaseOrProductionAllowed": false
+  },
+  "toolchainPins": {
+    "rust": "1.97.0",
+    "node": "24.18.0",
+    "npm": "11.16.0"
+  },
+  "dependencyPins": {
+    "time": "0.3.53",
+    "jiff": "0.2.32",
+    "jiffRole": "ENCAPSULATED_AMERICA_NEW_YORK_IANA_DST_ADAPTER",
+    "jiffTypesMayEnterDomainOrApi": false
+  },
+  "buildToolPins": {
+    "cargo-deny": "0.20.2",
+    "cargo-about": "0.9.1",
+    "cargo-cyclonedx": "0.5.9",
+    "distribution": "BUILD_AND_CI_ONLY_NOT_IN_FINAL_PACKAGES"
+  },
+  "licensePolicy": {
+    "rustAllowSource": "deny.toml",
+    "rustPlatformExcluded": [
+      {
+        "name": "webpki-root-certs",
+        "version": "1.0.8",
+        "license": "CDLA-Permissive-2.0",
+        "decision": "PLATFORM_EXCLUDED",
+        "basis": "UNREACHABLE_FROM_X86_64_PC_WINDOWS_MSVC_AND_X86_64_UNKNOWN_LINUX_GNU_ACTIVE_TARGET_GRAPHS"
+      }
+    ],
+    "npmAllowed": [
+      "0BSD",
+      "Apache-2.0",
+      "BlueOak-1.0.0",
+      "BSD-2-Clause",
+      "BSD-3-Clause",
+      "CC0-1.0",
+      "ISC",
+      "MIT",
+      "MIT-0",
+      "MPL-2.0"
+    ],
+    "npmConditional": {
+      "MPL-2.0": "DEV_ONLY_UNMODIFIED_EXCLUDED_FROM_FINAL_RUNTIME_BUNDLES",
+      "CC-BY-4.0": "BUILD_ONLY_ATTRIBUTION_REQUIRED_IF_ENCOUNTERED"
+    },
+    "unknownOrUnresolvedDecision": "STOP"
+  },
+  "activeGraph": {
+    "manifests": [
+      "Cargo.toml",
+      "crates/dependency-baseline/Cargo.toml",
+      "frontend/package.json"
+    ],
+    "locks": [
+      "Cargo.lock",
+      "frontend/package-lock.json"
+    ],
+    "legacyExcludedManifests": [
+      "package.json",
+      "package-lock.json"
+    ],
+    "embedCandidatePolicy": "EXACTLY_ONE_OF_INCLUDE_DIR_OR_RUST_EMBED_AFTER_MECHANICAL_COMPARISON"
+  },
+  "evidence": {
+    "graphScope": "project-governance/current/p7/evidence/p7-1-002/dependency-graph-scope.json",
+    "rejectedConsumers": "project-governance/current/p7/evidence/p7-1-002/rejected-dependency-consumers.tsv",
+    "lockedComponents": "project-governance/current/p7/evidence/p7-1-002/locked-components.tsv",
+    "officialMetadataSources": "project-governance/current/p7/evidence/p7-1-002/official-metadata-sources.tsv",
+    "licenseAllowlist": "project-governance/current/p7/evidence/p7-1-002/license-allowlist.tsv",
+    "licenseFileHashes": "project-governance/current/p7/evidence/p7-1-002/license-file-hashes.tsv",
+    "initialSbom": "project-governance/current/p7/evidence/p7-1-002/initial-sbom.cdx.json",
+    "advisoryScan": "project-governance/current/p7/evidence/p7-1-002/advisory-scan.json",
+    "toolchainFingerprint": "project-governance/current/p7/evidence/p7-1-002/toolchain-fingerprint.json"
+  },
+  "componentClosurePolicy": {
+    "identity": "ORDINAL_ECOSYSTEM_AND_CANONICAL_LOCK_KEY",
+    "includeCargoWorkspaceMember": true,
+    "includeFrontendRootPackage": true,
+    "requiredExactSets": [
+      "LOCKED_COMPONENTS",
+      "OFFICIAL_METADATA",
+      "LICENSE_DECISIONS",
+      "LICENSE_HASH_COVERAGE",
+      "CYCLONEDX_COMPONENTS"
+    ],
+    "licenseFileAbsence": {
+      "licenseFile": "NO_PACKAGED_LICENSE_FILE",
+      "sha256": "NOT_APPLICABLE",
+      "evidenceStatus": "ABSENT_WITH_EXPLICIT_DECISION",
+      "reason": "NO_LICENSE_FILE_IN_VERIFIED_PACKAGE_ARCHIVE"
+    },
+    "cycloneDx": {
+      "specVersion": "1.6",
+      "schemaValidation": "EMBEDDED_STRICT_CYCLONEDX_1_6_STRUCTURAL_SCHEMA_AND_TOOL_CROSS_CHECK",
+      "bomRefUnique": true
+    }
+  },
+  "advisoryPolicy": {
+    "networkRequiredAtCapture": true,
+    "rawOutputMayBePublished": false,
+    "requiredCommands": [
+      "cargo-deny-check",
+      "npm-audit-package-lock"
+    ],
+    "cargoDenyArguments": [
+      "--all-features",
+      "check",
+      "advisories",
+      "bans",
+      "licenses",
+      "sources"
+    ],
+    "npmAuditArguments": [
+      "audit",
+      "--prefix",
+      "frontend",
+      "--package-lock-only",
+      "--json"
+    ],
+    "requiredExitCode": 0,
+    "requiredVulnerabilities": 0
+  },
+  "fingerprintPolicy": {
+    "pathsAreRepositoryRelative": true,
+    "rawCommandOutputMayBePublished": false,
+    "nodeDistributionSha256": "0AE68406B42D7725661DA979B1403EC9926DA205C6770827F33AAC9D8F26E821",
+    "requiredBinaries": [
+      {
+        "id": "rustc",
+        "path": ".cache/p7-1-002/rustup/toolchains/1.97.0-x86_64-pc-windows-msvc/bin/rustc.exe",
+        "version": "1.97.0",
+        "sha256": "6D1C5543ED3A45CFBC1C1332D42D6550D883C14D3C2E323427E631C331CEBEEB"
+      },
+      {
+        "id": "cargo",
+        "path": ".cache/p7-1-002/rustup/toolchains/1.97.0-x86_64-pc-windows-msvc/bin/cargo.exe",
+        "version": "1.97.0",
+        "sha256": "3CD119FE81DFEDB9DCE4573696BF65058F16B57C9E5BABE415B71624315CBB7D"
+      },
+      {
+        "id": "node",
+        "path": ".cache/p7-1-002-node-24.18.0-win-x64/runtime/node-v24.18.0-win-x64/node.exe",
+        "version": "24.18.0",
+        "sha256": "9A4EB5F1C29C6A2E93852EAD46B999E284A6A5CA8BAB4D4E241D587D025A52DE"
+      },
+      {
+        "id": "npm",
+        "path": ".cache/p7-1-002-node-24.18.0-win-x64/runtime/node-v24.18.0-win-x64/npm.cmd",
+        "version": "11.16.0",
+        "sha256": "21B46C69AD6E2F231F02A9E120F4BA6C8E75FEF5A45637103002EAB99F888AB8"
+      },
+      {
+        "id": "cargo-deny",
+        "path": ".cache/p7-1-002/tools/cargo-deny/bin/cargo-deny.exe",
+        "version": "0.20.2",
+        "sha256": "1777463F5ECCCA98AD164D07C3B256B8F882BF0F9A83C5D2AD9852A1E0EDAABD"
+      },
+      {
+        "id": "cargo-about",
+        "path": ".cache/p7-1-002/tools/cargo-about/bin/cargo-about.exe",
+        "version": "0.9.1",
+        "sha256": "732559B990D44E53FAE83DFA1B3DBC1FFDFC59F64E328517DBB41B035A53C33B"
+      },
+      {
+        "id": "cargo-cyclonedx",
+        "path": ".cache/p7-1-002/tools/cargo-cyclonedx/bin/cargo-cyclonedx.exe",
+        "version": "0.5.9",
+        "sha256": "13976AF171C18FD567D0233361D90D967C8C12565990F7E7462C2FA8ABEC67E6"
+      }
+    ],
+    "requiredCommandIds": [
+      "rustc-version",
+      "cargo-version",
+      "node-version",
+      "npm-version",
+      "cargo-deny-version",
+      "cargo-about-version",
+      "cargo-cyclonedx-help"
+    ]
+  },
+  "completionPolicy": {
+    "requiredQualityGateIds": [
+      "cargo-check-locked-offline",
+      "cargo-test-locked-offline",
+      "cargo-clippy-locked-offline",
+      "cargo-fmt-check",
+      "cargo-deny-check",
+      "npm-ci-isolated",
+      "npm-ls-isolated",
+      "npm-dedupe-dry-run-isolated",
+      "evidence-builder-verify",
+      "evidence-builder-write"
+    ],
+    "actualCommitExcludedToAvoidSelfReference": true,
+    "postPushState": "P7_1_002_PASS_POST_PUSH"
+  },
+  "taskCommitAllowlist": [
+    ".gitignore",
+    ".node-version",
+    "LICENSE",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "deny.toml",
+    "crates/dependency-baseline/Cargo.toml",
+    "crates/dependency-baseline/src/lib.rs",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "project-governance/current/p7/02-p7-1-002-dependency-lock-license-sbom-baseline.md",
+    "project-governance/current/p7/02a-p7-1-002-dependency-lock-license-sbom-baseline.json",
+    "project-governance/current/p7/evidence/p7-1-002/dependency-graph-scope.json",
+    "project-governance/current/p7/evidence/p7-1-002/rejected-dependency-consumers.tsv",
+    "project-governance/current/p7/evidence/p7-1-002/locked-components.tsv",
+    "project-governance/current/p7/evidence/p7-1-002/official-metadata-sources.tsv",
+    "project-governance/current/p7/evidence/p7-1-002/license-allowlist.tsv",
+    "project-governance/current/p7/evidence/p7-1-002/license-file-hashes.tsv",
+    "project-governance/current/p7/evidence/p7-1-002/initial-sbom.cdx.json",
+    "project-governance/current/p7/evidence/p7-1-002/advisory-scan.json",
+    "project-governance/current/p7/evidence/p7-1-002/toolchain-fingerprint.json",
+    "project-governance/current/p7/records/p7-1-002-completion.md",
+    "project-governance/current/p7/records/p7-1-002-completion.json",
+    "project-governance/current/p7/tools/build-p7-1-002-evidence.ps1",
+    "project-governance/current/p7/tools/validate-p7-1-002.ps1"
+  ],
+  "protectedBaseline": {
+    "manifest": "project-governance/current/p7/01-preserved-worktree-manifest.tsv",
+    "expectedRows": 167,
+    "opaqueRowsMustNotBeRead": true,
+    "privateRoot": ".secrets/",
+    "privateRootPolicy": "OPAQUE_PRIVATE_DENY_NO_ENUMERATION"
+  },
+  "publicationBoundary": {
+    "preauthorizedMetadata": [
+      "REPOSITORY_RELATIVE_PATH",
+      "GIT_STATUS",
+      "FILE_SIZE",
+      "NON_SENSITIVE_HASH"
+    ],
+    "forbidden": [
+      "FILE_CONTENT_DUMP",
+      "SECRETS_OR_CREDENTIALS",
+      "PERSONAL_INFORMATION",
+      "ABSOLUTE_USER_PATH",
+      "RAW_REAL_CATALOG_OR_OPEN_PAYLOAD",
+      "PRIVATE_INFRASTRUCTURE_INVENTORY"
+    ],
+    "expandedPublicScopeRequiresFreshConfirmation": true
+  },
+  "requiredValidationModes": [
+    "PreCommit",
+    "PostCommit",
+    "PostPush"
+  ],
+  "nextTask": "P7.1-003",
+  "nextTaskBlockedUntil": "P7_1_002_PASS_POST_PUSH"
+}

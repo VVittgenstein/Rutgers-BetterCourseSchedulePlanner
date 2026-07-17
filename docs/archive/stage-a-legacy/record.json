@@ -1,0 +1,2391 @@
+{
+  "project_context": {
+    "brief": "构建一个基于 Rutgers SOC 公开数据的选课查询与空位提醒网站，在“浏览/筛选课程 + 订阅空位提醒”场景下替代 CSP 和 WebReg 的日常使用体验，同时保持低运营成本与开源可一键部署能力。",
+    "mvp_goal": "在每个部署环境内运行本地 SQLite 数据库 + 轻量 API 服务 + 前端 UI，实现针对多学期与多校区课程的浏览、多维筛选与邮箱/Discord 空位提醒闭环，并保持低运营成本与可在个人电脑/服务器一键部署。",
+    "non_goals": [
+      "不接入 WebReg 或任何需要登录的系统页面，不在本项目中执行自动选课/退课操作。",
+      "不实现完整的学位规划、毕业审核或复杂先修关系校验，仅在 UI 展示先修与核心课程标签。",
+      "不处理除邮箱地址与 Discord 标识之外的用户敏感信息，也不构建账号/登录体系。",
+      "不承担对 Rutgers 官方课程与容量信息的权威解释责任，数据以官方 SOC 为准。",
+      "MVP 不支持短信等额外通知渠道，仅聚焦邮箱和 Discord。",
+      "MVP 不强求覆盖全部校区与研究生课程，具体范围后续确认。"
+    ]
+  },
+  "md_source": "2025-11-11-dr.md",
+  "generated_at": "2025-11-13T00:00:00Z",
+  "tasks": {
+    "T-20251113-soc-api-validation": {
+      "seed_id": null,
+      "title": "验证 Rutgers SOC API 参数、限流与字段行为",
+      "type": "research",
+      "summary": "围绕 C2、R-20251113-soc-api-change 与开放问题 Q-01，对 Rutgers SOC API 的参数组合、拉取全校课程的策略、速率限制与返回字段进行实测，产出可复用的调用指南，降低后续抓取脚本与通知轮询的风险。",
+      "acceptance_draft": [
+        "整理出在多学期、多校区场景下获取全部课程的推荐调用策略（例如按 term + campus / subject 分批），并估算完整抓取一次全量以及常规增量更新所需时间。",
+        "记录 SOC API 的关键参数与典型响应样例，确认字段覆盖 FR-01/FR-02 所需信息，并标记可能缺失或不稳定的字段。",
+        "通过高频调用实验观察速率限制与错误码，给出可接受的最大抓取与轮询频率建议，并形成一份内部说明文档。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "done",
+      "dependencies": [],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "在测试环境以较低频率尝试多种参数组合，逐步提高频率观察限流行为，将结果记录到 docs/soc_api_notes 中并同步到抓取脚本与通知配置。",
+      "estimate_h": 4,
+      "risk": "high",
+      "confidence": 0.65,
+      "interfaces_touched": [
+        "data-source",
+        "observability"
+      ],
+      "artifacts": [
+        "docs/soc_api_notes.md",
+        "docs/soc_field_matrix.csv",
+        "docs/soc_rate_limit.md",
+        "docs/soc_rate_limit.latest.json"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "R-20251113-soc-api-change",
+        "Q-01"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-17T01:56:11Z",
+      "owner": "tbd",
+      "tags": [
+        "research",
+        "soc-api"
+      ],
+      "subtasks": {
+        "ST-20251113-soc-api-validation-01-probe": {
+          "seed_id": null,
+          "title": "SOC 探针脚本与最小调用验证",
+          "type": "coding",
+          "summary": "编写一个最小 CLI 探针脚本，统一封装 Rutgers SOC courses.json 与 openSections 调用，方便快速验证不同参数与响应行为。",
+          "acceptance_draft": [
+            "提供 term/campus/subject 参数与 endpoint 选择，CLI 能打印状态码、响应大小与关键字段示例，异常时输出诊断。",
+            "覆盖至少 3 个 term/campus 组合，记录响应示例至 docs/soc_api_notes.md，留档脚本使用方法。",
+            "捕获 HTTP/JSON 错误并以结构化日志写出 request id/重试建议，便于后续任务复现。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先用最小速率调 courses.json/openSections，确认不会被封禁，再逐步增加参数覆盖面。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.65,
+          "interfaces_touched": [
+            "data-source",
+            "local-dev"
+          ],
+          "artifacts": [
+            "scripts/soc_probe.ts",
+            "docs/soc_api_notes.md",
+            "Compact/Compact-ST-20251113-soc-api-validation-01-probe-2025-11-16-T133825Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-16T13:38:25Z",
+          "owner": "tbd",
+          "tags": [
+            "soc-api",
+            "research"
+          ]
+        },
+        "ST-20251113-soc-api-validation-02-field-matrix": {
+          "seed_id": null,
+          "title": "SOC 字段跑批与字段矩阵",
+          "type": "research",
+          "summary": "系统遍历 term/campus/subject/level 参数组合，记录 courses.json 与 openSections 返回字段及其稳定性，对照产品需求整理字段矩阵。",
+          "acceptance_draft": [
+            "脚本化跑批至少 2 个 term * 3 个 campus * 5 个 subject，采集字段 presence/可选值，输出 CSV/markdown 字段矩阵。",
+            "对 FR-01/FR-02 关键字段标记“直接提供/需推导/缺失”，并在 docs/soc_api_notes.md 中记录结论。",
+            "对 openSections 返回字段补充说明（Index、capacity、notes），若缺失则记录可接受替代方案。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-soc-api-validation-01-probe"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "复用探针脚本批量跑参数组合，将响应样本缓存到本地，避免重复触发限流。",
+          "estimate_h": 3,
+          "risk": "high",
+          "confidence": 0.6,
+          "interfaces_touched": [
+            "data-source",
+            "docs"
+          ],
+          "artifacts": [
+            "docs/soc_api_notes.md",
+            "docs/soc_field_matrix.csv",
+            "scripts/soc_field_matrix.py",
+            "Compact/Compact-ST-20251113-soc-api-validation-02-field-matrix-2025-11-17-T011405Z.md",
+            "Compact/Compact-ST-20251113-soc-api-validation-02-field-matrix-2025-11-17-T013508Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-17T01:35:08Z",
+          "owner": "tbd",
+          "tags": [
+            "soc-api",
+            "research"
+          ]
+        },
+        "ST-20251113-soc-api-validation-03-limit-profile": {
+          "seed_id": null,
+          "title": "限流与错误码画像",
+          "type": "research",
+          "summary": "摸清 courses.json 与 openSections 的限流阈值、典型错误码与建议调用频率，为后续抓取/轮询提供上限与恢复策略。",
+          "acceptance_draft": [
+            "在不同并发/间隔下压测两个接口，记录 2xx/4xx/5xx 响应比例及重试后表现，生成表格。",
+            "总结推荐的单进程请求频率、批处理大小与重试/backoff 策略，写入 docs/soc_rate_limit.md。",
+            "列出常见错误码与建议动作（降频、终止、替换参数），供 data pipeline 循环引用。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-soc-api-validation-01-probe",
+            "ST-20251113-soc-api-validation-02-field-matrix"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "在低峰时段逐步提升调用频率，同时监控 HTTP header/响应时间，观察限流信号后记录。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.55,
+          "interfaces_touched": [
+            "data-source",
+            "observability"
+          ],
+          "artifacts": [
+            "docs/soc_rate_limit.md",
+            "docs/soc_api_notes.md",
+            "scripts/soc_api_client.ts",
+            "scripts/soc_rate_limit.ts",
+            "docs/soc_rate_limit.latest.json",
+            "docs/soc_rate_limit.courses_stress.json",
+            "docs/soc_rate_limit.courses_stress2.json",
+            "docs/soc_rate_limit.openSections_blitz.json",
+            "Compact/Compact-ST-20251113-soc-api-validation-03-limit-profile-2025-11-17-T015611Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-17T01:56:11Z",
+          "owner": "tbd",
+          "tags": [
+            "soc-api",
+            "research"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-007-local-db-schema": {
+      "seed_id": "ACT-007",
+      "title": "设计本地数据库模式与增量更新机制",
+      "type": "coding",
+      "summary": "定义 SQLite 等嵌入式数据库中的课程、Section、会议信息与订阅表结构，设计索引与约束，并实现初始化/迁移与增量更新策略，使数据成为筛选与通知的单一可信源。",
+      "acceptance_draft": [
+        "提供 schema 定义（课程、Section、meeting_times、订阅等表）与必要索引/约束，字段覆盖 FR-01/FR-02/FR-04 所需信息，并附带 ER/说明文档。",
+        "实现 scripts/migrate_db.* 可初始化或升级数据库，重复运行不会破坏已有数据；随机抽样记录验证字段与 SOC 返回一致。",
+        "定义增量更新策略（例如基于 upsert、事务或临时表交换），在模拟部分课程状态变化的场景下，仅更新发生变化的数据且不中断前端/API 查询。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "done",
+      "dependencies": [
+        "T-20251113-soc-api-validation"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "Rutgers SOC 字段矩阵与限流结果已就绪，迁移 CLI 落地后通过新增 SQL 脚本即可演进 schema。",
+      "estimate_h": 8,
+      "risk": "mid",
+      "confidence": 0.65,
+      "interfaces_touched": [
+        "database",
+        "data-pipeline"
+      ],
+      "artifacts": [
+        "data/schema.sql",
+        "scripts/migrate_db.ts",
+        "data/migrations/001_init_schema.sql",
+        "data/migrations/002_relax_section_index_scope.sql",
+        "docs/db_schema.md"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "EVID-006",
+        "R-20251113-frontend-perf"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-17T08:40:34Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-007",
+        "backend",
+        "database",
+        "data-pipeline"
+      ],
+      "subtasks": {
+        "ST-20251113-act-007-01-entity-design": {
+          "seed_id": null,
+          "title": "本地课程实体模型设计",
+          "type": "docs",
+          "summary": "结合 SOC 字段矩阵与产品需求，设计 courses/sections/meetings/instructors/subscriptions 等实体结构与索引策略。",
+          "acceptance_draft": [
+            "完成包含主键、外键、字段类型、索引的 ER 图/文档，覆盖课程、Section、Meeting、订阅及辅助表。",
+            "列出 SOC 字段到本地字段的映射及转换规则，标注需要推导的字段。",
+            "描述关键索引（term+campus+subject、section index）与存储约束，给出 rationale。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-soc-api-validation-02-field-matrix"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "同步 SOC 字段矩阵结论，快速迭代文档草稿，邀评后定稿。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.7,
+          "interfaces_touched": [
+            "database",
+            "docs"
+          ],
+          "artifacts": [
+            "docs/local_data_model.md",
+            "Compact/Compact-ST-20251113-act-007-01-entity-design-2025-11-17-T040925Z.md",
+            "Compact/Compact-ST-20251113-act-007-01-entity-design-2025-11-17-T044754Z.md",
+            "Compact/Compact-ST-20251113-act-007-01-entity-design-2025-11-17-T050547Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-17T05:05:47Z",
+          "owner": "tbd",
+          "tags": [
+            "database",
+            "docs"
+          ]
+        },
+        "ST-20251113-act-007-02-migration-tooling": {
+          "seed_id": null,
+          "title": "SQLite 迁移与初始化机制",
+          "type": "coding",
+          "summary": "实现可重复执行的建库/迁移脚本，为首次初始化与未来升级提供统一入口。",
+          "acceptance_draft": [
+            "提供 scripts/migrate_db.ts（或等效工具）以版本化 SQL，首次运行能创建 schema，重复执行只应用新迁移。",
+            "脚本支持指定数据库路径、dry-run/verbose 模式，并输出 data/migrations.log。",
+            "在空目录与已有数据库上各跑一次，确认无 destructive 写入且日志清晰。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-007-01-entity-design"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "迁移 CLI 已完成，后续 schema 变更通过新增 SQL 版本脚本演进。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.68,
+          "interfaces_touched": [
+            "database",
+            "build-script"
+          ],
+          "artifacts": [
+            "scripts/migrate_db.ts",
+            "data/schema.sql",
+            "data/migrations/001_init_schema.sql",
+            "data/migrations/002_relax_section_index_scope.sql",
+            "README.md",
+            "Compact/Compact-ST-20251113-act-007-02-migration-tooling-2025-11-17-T053943Z.md",
+            "Compact/Compact-ST-20251113-act-007-02-migration-tooling-2025-11-17-T055927Z.md",
+            "Compact/Compact-ST-20251113-act-007-02-migration-tooling-2025-11-17-T062555Z.md",
+            "Compact/Compact-ST-20251113-act-007-02-migration-tooling-2025-11-17-T063625Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-17T06:36:25Z",
+          "owner": "tbd",
+          "tags": [
+            "database",
+            "backend"
+          ]
+        },
+        "ST-20251113-act-007-03-incremental-strategy": {
+          "seed_id": null,
+          "title": "增量更新策略验证",
+          "type": "coding",
+          "summary": "设计增量更新方案（diff 检测、重复运行策略），并使用小样本验证可重复/可回滚。",
+          "acceptance_draft": [
+            "明确增量判断逻辑（哈希对比、updated_at 字段等）并写进 docs/data_refresh_strategy.md。",
+            "对 ≥3 个 subject 做一次增量试跑，输出新增/更新/删除统计及执行耗时。",
+            "记录需要强制全量重建的触发条件与 runbook。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-007-02-migration-tooling",
+            "ST-20251113-soc-api-validation-03-limit-profile"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "复用迁移脚本与限流结论，先跑单校区 diff，确认流程后扩展到多校区。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.62,
+          "interfaces_touched": [
+            "database",
+            "data-pipeline"
+          ],
+          "artifacts": [
+            "docs/data_refresh_strategy.md",
+            "notebooks/incremental_trial.md",
+            "scripts/incremental_trial.ts",
+            "Compact/Compact-ST-20251113-act-007-03-incremental-strategy-2025-11-17-T082525Z.md",
+            "Compact/Compact-ST-20251113-act-007-03-incremental-strategy-2025-11-17-T083615Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-17T08:40:34Z",
+          "owner": "tbd",
+          "tags": [
+            "database",
+            "data-pipeline"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-001-soc-json-scraper": {
+      "seed_id": "ACT-001",
+      "title": "封装 Rutgers SOC 数据抓取与本地数据库初始化脚本",
+      "type": "coding",
+      "summary": "基于 D-20251113-data-source-soc，从 Rutgers SOC 接口按学期与校区批量抓取课程与 Section，使用事务将结果写入本地 SQLite 数据库，为查询 API 与通知进程提供统一数据源，并验证字段覆盖 FR-01/FR-02。",
+      "acceptance_draft": [
+        "脚本支持以 term + campus 为输入，或接收 term/campus 列表批量处理，针对每个组合调用 SOC API 并将课程/Section 写入 SQLite 数据库（事务 + 幂等 upsert），失败时提供重试与清晰错误日志。",
+        "数据库中的 courses/sections 等表字段覆盖 FR-01/FR-02 中列出的关键字段（课程标题、代码、学分、院系、Index、Section、时间地点、核心代码、先修、授课模式等），随机抽样 ≥10 门课与官方 SOC 页面比对值一致。",
+        "脚本输出更新摘要（新增/更新/删除条数、学期/校区范围），支持“全量初始化”和“增量更新”两种模式，增量模式仅替换状态发生变化的记录。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "done",
+      "dependencies": [
+        "T-20251113-act-007-local-db-schema"
+      ],
+      "blocked": false,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "接口无正式公开文档，速率限制与长期稳定性未知；结构或访问策略变更将直接影响数据抓取与通知准确性。"
+        }
+      ],
+      "unblock_plan": "先完成 T-20251113-soc-api-validation 与 T-20251113-act-007-local-db-schema，锁定字段/索引定义后再实现写入与增量更新逻辑，并在 CI 中加入数据库一致性校验。",
+      "estimate_h": 6,
+      "risk": "high",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "data-source",
+        "database",
+        "build-script"
+      ],
+      "artifacts": [
+        "scripts/fetch_soc_data.ts",
+        "data/courses.sqlite"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "R-20251113-soc-api-change",
+        "#md-4-1-fr-01"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-17T10:52:56Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-001",
+        "backend",
+        "soc-api",
+        "data-pipeline"
+      ],
+      "subtasks": {
+        "ST-20251113-act-001-01-pipeline-config": {
+          "seed_id": null,
+          "title": "抓取流程接口与配置确定",
+          "type": "docs",
+          "summary": "定义数据抓取脚本/服务的 CLI 形态、配置文件结构与并发控制参数，确保全量与增量模式清晰。",
+          "acceptance_draft": [
+            "确定 CLI 参数（term/campus list、并发度、模式选择）与 configs/fetch_pipeline.example.json 样例。",
+            "在文档中描述拉取批次、重试/回退策略以及与 rate-limit 结论的对应关系。",
+            "区分“全量初始化”和“增量”步骤，包含依赖的迁移/数据校验动作。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-007-02-migration-tooling"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "参考迁移脚本接口设计配置模板，与数据团队同步默认 term/campus 列表后定稿。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.7,
+          "interfaces_touched": [
+            "build-script",
+            "data-pipeline"
+          ],
+          "artifacts": [
+            "docs/fetch_pipeline.md",
+            "configs/fetch_pipeline.example.json",
+            "Compact/Compact-ST-20251113-act-001-01-pipeline-config-2025-11-17-T084726Z.md",
+            "Compact/Compact-ST-20251113-act-001-01-pipeline-config-2025-11-17-T091916Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-17T09:19:16Z",
+          "owner": "tbd",
+          "tags": [
+            "data-pipeline",
+            "docs"
+          ]
+        },
+        "ST-20251113-act-001-02-ingest-impl": {
+          "seed_id": null,
+          "title": "SOC 拉取与写入实现",
+          "type": "coding",
+          "summary": "根据配置实现数据抓取流程，完成 courses.json/openSections 的数据落地与事务写入。",
+          "acceptance_draft": [
+            "实现支持并发的抓取器，按 term/campus 分批访问 courses.json/openSections，输出结构化记录。",
+            "写入 SQLite 采用事务 + 幂等 upsert，捕获异常后按 term/campus 重试并记录日志。",
+            "执行一次全量抓取，生成 run summary（时间、条数、错误）供后续参考。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-001-01-pipeline-config",
+            "ST-20251113-soc-api-validation-03-limit-profile"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先跑单 term 流程验证，再扩展到全量抓取；落地日志与 summary 格式。",
+          "estimate_h": 4,
+          "risk": "high",
+          "confidence": 0.65,
+          "interfaces_touched": [
+            "data-source",
+            "data-pipeline",
+            "database"
+          ],
+          "artifacts": [
+            "scripts/fetch_soc_data.ts",
+            "scripts/soc_normalizer.ts",
+            "logs/fetch_runs/*.log",
+            "Compact/Compact-ST-20251113-act-001-02-ingest-impl-2025-11-17-T101012Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-17T10:22:57Z",
+          "owner": "tbd",
+          "tags": [
+            "data-pipeline",
+            "backend"
+          ]
+        },
+        "ST-20251113-act-001-03-data-verification": {
+          "seed_id": null,
+          "title": "字段覆盖验证与初始化 runbook",
+          "type": "docs",
+          "summary": "抽样校验本地库与 SOC 数据一致性，并写出首次初始化/后续更新的执行说明。",
+          "acceptance_draft": [
+            "随机抽样 ≥10 门课，生成 SOC vs SQLite 的字段对比报告，输出到 reports/field_validation.md。",
+            "编写 docs/data_load_runbook.md，覆盖依赖环境、脚本顺序与常见错误。",
+            "给出“首次 init 需要的步骤 + 之后例行更新”两个 checklist，附预期耗时/输出。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-001-02-ingest-impl"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "抓取完成后立刻生成抽样列表，手动核对并写成文档，最后同步给 API/通知团队。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.72,
+          "interfaces_touched": [
+            "docs",
+            "database"
+          ],
+          "artifacts": [
+            "docs/data_load_runbook.md",
+            "reports/field_validation.md",
+            "Compact/Compact-ST-20251113-act-001-03-data-verification-2025-11-17-T104201Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-17T10:52:56Z",
+          "owner": "tbd",
+          "tags": [
+            "docs",
+            "data-pipeline"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-008-local-query-api": {
+      "seed_id": "ACT-008",
+      "title": "实现本地课程查询 API 服务",
+      "type": "coding",
+      "summary": "基于 SQLite 数据库实现 RESTful API（如 /api/courses、/api/sections、/api/filters），支持多字段过滤、分页与排序，为前端筛选与订阅面板提供一致的数据访问层。",
+      "acceptance_draft": [
+        "实现至少 /api/courses 与 /api/sections 两个端点，接受 term/campus/subject/关键字/时间/core_code/level 等查询参数，返回 JSON 包含分页信息，任意组合筛选均能得到与数据库一致的结果。",
+        "在 4500+ 课程数据规模下，常见查询（含 3~5 个过滤条件）响应时间 < 300 ms，提供必要索引与缓存并通过压测记录指标。",
+        "API 提供错误处理与健康检查端点（例如 /api/health），当前端无法连接时能返回明确错误码与原因，便于 UI 友好提示。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "done",
+      "dependencies": [
+        "T-20251113-act-007-local-db-schema",
+        "T-20251113-act-001-soc-json-scraper"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "复用抓取脚本产出的 SQLite 数据，挑选轻量框架（Express/Fastify/FastAPI 等）实现端点，并通过自动化测试覆盖主要组合筛选。",
+      "estimate_h": 8,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "backend",
+        "api",
+        "database"
+      ],
+      "artifacts": [
+        "services/api/server.ts",
+        "services/api/routes/courses.ts",
+        "tests/api/courses.test.ts"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-006",
+        "R-20251113-frontend-perf"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-18T04:49:21Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-008",
+        "backend",
+        "api",
+        "database"
+      ],
+      "subtasks": {
+        "ST-20251113-act-008-01-contract": {
+          "seed_id": null,
+          "title": "课程查询接口契约与服务骨架",
+          "type": "coding",
+          "summary": "定义课程查询 API 的输入/输出契约，搭建基础服务骨架并做好请求校验。",
+          "acceptance_draft": [
+            "在 docs/query_api_contract.md 中描述支持的过滤项、排序、分页与返回字段结构。",
+            "创建服务骨架（例如 Fastify/Express），包含 routing、DI、配置加载。",
+            "添加请求体验证与基础日志中间件，便于后续扩展。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-001-03-data-verification"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "基于数据 runbook 的字段定义编写契约，再 scaffolding 服务。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.7,
+          "interfaces_touched": [
+            "api",
+            "database"
+          ],
+          "artifacts": [
+            "docs/query_api_contract.md",
+            "api/src/config.ts",
+            "api/src/container.ts",
+            "api/src/plugins/requestLogging.ts",
+            "api/src/routes/sharedSchemas.ts",
+            "api/src/routes/courses.ts",
+            "api/src/routes/sections.ts",
+            "api/src/routes/filters.ts",
+            "api/src/routes/health.ts",
+            "api/src/types/fastify.d.ts",
+            "api/src/server.ts",
+            "package.json",
+            "tsconfig.json",
+            "Compact/Compact-ST-20251113-act-008-01-contract-2025-11-18-T023627Z.md",
+            "Compact/Compact-ST-20251113-act-008-01-contract-2025-11-18-T030058Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T03:06:52Z",
+          "owner": "tbd",
+          "tags": [
+            "api",
+            "backend"
+          ]
+        },
+        "ST-20251113-act-008-02-filter-engine": {
+          "seed_id": null,
+          "title": "本地查询与筛选实现",
+          "type": "coding",
+          "summary": "实现依赖 SQLite 的查询层，覆盖多维过滤、分页与高级筛选。",
+          "acceptance_draft": [
+            "实现查询 builder/DAO，支持 term、campus、subject、核心要求、时间段等组合过滤。",
+            "覆盖高级条件（可空位、授课模式、Instructor 关键字），结果支持分页且稳定排序。",
+            "添加单元/集成测试验证常见过滤组合。"
+          ],
+          "lane": "now",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-008-01-contract"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先实现基础查询，再迭代增加高级过滤与测试用例。",
+          "estimate_h": 3,
+          "risk": "high",
+          "confidence": 0.63,
+          "interfaces_touched": [
+            "api",
+            "filter-logic"
+          ],
+          "artifacts": [
+            "api/src/queries/course_search.ts",
+            "api/tests/course_search.test.ts",
+            "Compact/Compact-ST-20251113-act-008-02-filter-engine-2025-11-18-T035146Z.md",
+            "Compact/Compact-ST-20251113-act-008-02-filter-engine-2025-11-18-T040307Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T04:08:52Z",
+          "owner": "tbd",
+          "tags": [
+            "api",
+            "filter"
+          ]
+        },
+        "ST-20251113-act-008-03-api-hardening": {
+          "seed_id": null,
+          "title": "错误处理、健康检查与日志",
+          "type": "coding",
+          "summary": "补齐查询服务的健康探针、错误处理与可观测性，保证前端/worker 能稳定依赖。",
+          "acceptance_draft": [
+            "实现 /health 与 /ready 探针，检查数据库连通性与必要表存在。",
+            "统一错误处理返回结构，附 trace id，配置结构化日志输出查询指标。",
+            "记录运维注意事项（端口、环境变量、限流）到 docs/query_api_contract.md 或附录。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-008-02-filter-engine"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "在已有服务基础上加入健康探针与日志，并更新文档提醒使用方式。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.74,
+          "interfaces_touched": [
+            "api",
+            "observability"
+          ],
+          "artifacts": [
+            "api/src/server.ts",
+            "api/src/routes/health.ts",
+            "api/src/routes/courses.ts",
+            "api/src/routes/sections.ts",
+            "api/tests/health.test.ts",
+            "docs/query_api_contract.md",
+            "Compact/Compact-ST-20251113-act-008-03-api-hardening-2025-11-18-T042735Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T04:49:21Z",
+          "owner": "tbd",
+          "tags": [
+            "api",
+            "backend"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-002-frontend-filter-mvp": {
+      "seed_id": "ACT-002",
+      "title": "实现基于本地查询 API 的课程列表与多维筛选（MVP）",
+      "type": "coding",
+      "summary": "前端 SPA 不再一次性加载全部课程 JSON，而是通过本地查询 API 按需请求课程/Section 数据，提供与 FR-01/FR-02/FR-03 对齐的多维筛选、周视图及分页体验，确保 UI 与数据库保持一致。",
+      "acceptance_draft": [
+        "用户选择 term + campus 后，前端调用本地 API 拉取分页课程/Section 数据并展示完整字段，随机抽样 ≥10 门课核对与 SOC 数据库存储一致。",
+        "筛选 UI 支持标题/代码关键字、学分、院系、课程层次、先修、核心代码、Index/Section、教师、状态、星期/时间区间、校区/教学楼/教室、授课模式等字段的单条件与多条件组合，前端会将条件映射为 API 查询参数并保证结果一致。",
+        "在约 4500 门课程（含 1 万+ Section）的数据量下，常见筛选、分页与视图切换的“API 往返 + 前端渲染”整体响应 < 0.5 秒；当本地 API 不可用时给出明确的错误提示。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-001-soc-json-scraper",
+        "T-20251113-act-008-local-query-api"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 8,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "frontend",
+        "api-client",
+        "filter-logic",
+        "calendar-view"
+      ],
+      "artifacts": [
+        "src/pages/courses.tsx",
+        "src/components/filters/*",
+        "src/components/calendar-view/*",
+        "src/api/hooks/useCourses.ts",
+        "Compact/Compact-T-20251113-act-002-frontend-filter-mvp-2025-11-20-T023714Z.md",
+        "Compact/Compact-T-20251113-act-002-frontend-filter-mvp-2025-11-20-T030356Z.md"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-002",
+        "EVID-006",
+        "R-20251113-frontend-perf",
+        "D-20251113-arch-static-frontend-b"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-20T03:57:22Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-002",
+        "frontend",
+        "filter",
+        "mvp"
+      ],
+      "subtasks": {
+        "ST-20251113-act-002-01-ui-architecture": {
+          "seed_id": null,
+          "title": "课程列表信息架构与状态规划",
+          "type": "docs",
+          "summary": "规划课程浏览/筛选页面布局、状态管理形态与导航路径，确定 UI 模块切分。",
+          "acceptance_draft": [
+            "在 docs/ui_flow_course_list.md 中绘制页面结构、状态流与交互草图。",
+            "定义全局过滤状态 shape（term、campus、tags、schedule）以及 URL 同步策略。",
+            "列出核心组件清单与依赖关系，拆出后续实现任务。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-008-01-contract"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "基于 API 契约配置页面信息架构草图，先跑线框评审再输出文档。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.72,
+          "interfaces_touched": [
+            "frontend",
+            "calendar-view"
+          ],
+          "artifacts": [
+            "docs/ui_flow_course_list.md",
+            "frontend/src/state/courseFilters.ts",
+            "Compact/Compact-ST-20251113-act-002-01-ui-architecture-2025-11-18-T123742Z.md",
+            "Compact/Compact-ST-20251113-act-002-01-ui-architecture-2025-11-18-T124836Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T12:53:03Z",
+          "owner": "tbd",
+          "tags": [
+            "frontend",
+            "ux"
+          ]
+        },
+        "ST-20251113-act-002-02-filter-components": {
+          "seed_id": null,
+          "title": "筛选组件与日历视图 MVP",
+          "type": "coding",
+          "summary": "基于信息架构实现过滤面板、标签/芯片组件与日历/时间视图，使用 mock 数据验证交互。",
+          "acceptance_draft": [
+            "构建 FilterPanel、TagChip、SchedulePreview 等组件，支持多选/清空状态。",
+            "实现周视图/时间表可视化，展示 mock 课程安排并保持响应式布局。",
+            "提供 Storybook/开发页以 mock 数据驱动组件，覆盖主要状态。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-002-01-ui-architecture"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先以静态数据实现组件，确认 UX 后再准备 API 接入。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.78,
+          "interfaces_touched": [
+            "frontend",
+            "calendar-view"
+          ],
+          "artifacts": [
+            "frontend/src/components/FilterPanel.tsx",
+            "frontend/src/components/FilterPanel.css",
+            "frontend/src/components/TagChip.tsx",
+            "frontend/src/components/TagChip.css",
+            "frontend/src/components/SchedulePreview.tsx",
+            "frontend/src/components/SchedulePreview.css",
+            "frontend/src/dev/ComponentPlayground.tsx",
+            "frontend/src/dev/mockData.ts",
+            "Compact/Compact-ST-20251113-act-002-02-filter-components-2025-11-18-T130603Z.md",
+            "Compact/Compact-ST-20251113-act-002-02-filter-components-2025-11-18-T131627Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T14:00:05Z",
+          "owner": "tbd",
+          "tags": [
+            "frontend",
+            "ux"
+          ]
+        },
+        "ST-20251113-act-002-03-api-integration": {
+          "seed_id": null,
+          "title": "接入查询接口并优化交互",
+          "type": "coding",
+          "summary": "将前端筛选 UI 与真实课程查询 API 打通，处理加载/错误与性能问题。",
+          "acceptance_draft": [
+            "实现 useCourseQuery Hook，整合分页、缓存与取消请求逻辑，支撑筛选组件。",
+            "为请求错误与空数据提供可视化反馈（Toast/提示语），并支持重试。",
+            "优化列表渲染（虚拟列表/去抖）确保常见筛选组合的交互不卡顿。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-002-02-filter-components",
+            "ST-20251113-act-008-03-api-hardening"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "连通 API 后对慢查询场景进行 profiling，必要时回写后端需求。",
+          "estimate_h": 3,
+          "risk": "high",
+          "confidence": 0.6,
+          "interfaces_touched": [
+            "frontend",
+            "api"
+          ],
+          "artifacts": [
+            "frontend/src/hooks/useCourseQuery.ts",
+            "frontend/src/components/CourseList.tsx",
+            "Compact/Compact-ST-20251113-act-002-03-api-integration-2025-11-18-T142029Z.md",
+            "Compact/Compact-ST-20251113-act-002-03-api-integration-2025-11-18-T143124Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T15:51:47Z",
+          "owner": "tbd",
+          "tags": [
+            "frontend",
+            "mvp"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-005-frontend-i18n-setup": {
+      "seed_id": "ACT-005",
+      "title": "搭建前端 i18n 架构并完成中英文界面",
+      "type": "coding",
+      "summary": "依据决策 D-20251113-multi-lang-day1，在前端引入标准 i18n 库，将所有静态文案（包括错误提示与表单标签）集中到多语言资源文件中，至少完成中英文版本，并为后续小语种支持预留扩展空间。",
+      "acceptance_draft": [
+        "所有界面文案均通过 i18n 资源文件管理，不再直接硬编码在组件中。",
+        "用户可在 UI 中切换中/英文，切换后界面无混合语言或乱码，课程数据本身保留英文但核心代码/字段标签可本地化说明。",
+        "构建或 CI 阶段能检测到新增 key 未提供翻译的情况，并给出告警或失败。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-002-frontend-filter-mvp"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.75,
+      "interfaces_touched": [
+        "frontend",
+        "i18n"
+      ],
+      "artifacts": [
+        "src/i18n/index.ts",
+        "locales/en/*.json",
+        "locales/zh/*.json"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-008",
+        "R-20251113-i18n-maintenance"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-005",
+        "frontend",
+        "i18n",
+        "ux"
+      ],
+      "subtasks": {
+        "ST-20251113-act-005-01-copy-audit": {
+          "seed_id": null,
+          "title": "文案盘点与 i18n key 规划",
+          "type": "docs",
+          "summary": "盘点现有前端文案，设计 i18n key 命名规则与翻译文件结构。",
+          "acceptance_draft": [
+            "列出主要页面的所有文案，并在 docs/i18n_key_map.md 定义 key 命名规则。",
+            "生成基础 en/zh 翻译文件骨架（含 placeholders），放入 frontend/i18n/messages.json。",
+            "记录贡献流程：新增 key、检查缺失、同步翻译。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P2",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-002-03-api-integration"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "等课程 UI 接入完成后梳理文案，输出 key map 与规则。",
+          "estimate_h": 2,
+          "risk": "low",
+          "confidence": 0.78,
+          "interfaces_touched": [
+            "frontend",
+            "i18n"
+          ],
+          "artifacts": [
+            "docs/i18n_key_map.md",
+            "frontend/i18n/messages.json",
+            "Compact/Compact-ST-20251113-act-005-01-copy-audit-2025-11-18-T173204Z.md",
+            "Compact/Compact-ST-20251113-act-005-01-copy-audit-2025-11-18-T180657Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T18:12:47Z",
+          "owner": "tbd",
+          "tags": [
+            "frontend",
+            "i18n"
+          ]
+        },
+        "ST-20251113-act-005-02-i18n-integration": {
+          "seed_id": null,
+          "title": "i18n 库接入与页面改造",
+          "type": "coding",
+          "summary": "接入 i18n 库，重构核心页面文案走 i18n 管理。",
+          "acceptance_draft": [
+            "集成首选 i18n 库（react-intl、i18next 或等效实现），配置语言资源加载。",
+            "将课程列表/详情等关键页面文案替换为 i18n key，并通过 lint/test 防止裸文案。",
+            "确保默认语言 fallback 正常，缺失 key 有日志提醒。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P2",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-005-01-copy-audit"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "按 key map 分批替换文案，同时添加缺失 key 检查脚本。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.7,
+          "interfaces_touched": [
+            "frontend",
+            "i18n"
+          ],
+          "artifacts": [
+            "frontend/src/i18n/index.ts",
+            "frontend/src/i18n/types.d.ts",
+            "frontend/src/main.tsx",
+            "frontend/src/App.tsx",
+            "frontend/src/components/FilterPanel.tsx",
+            "frontend/src/components/CourseList.tsx",
+            "frontend/src/components/SchedulePreview.tsx",
+            "frontend/src/components/TagChip.tsx",
+            "frontend/i18n/messages.json",
+            "Compact/Compact-ST-20251113-act-005-02-i18n-integration-2025-11-18-T185009Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T19:12:35Z",
+          "owner": "tbd",
+          "tags": [
+            "frontend",
+            "i18n"
+          ]
+        },
+        "ST-20251113-act-005-03-language-toggle": {
+          "seed_id": null,
+          "title": "语言切换 UI 与缺失检测",
+          "type": "coding",
+          "summary": "实现语言切换控件与自动检测缺失翻译的机制，保证中英切换体验良好。",
+          "acceptance_draft": [
+            "提供全局语言切换组件，支持即时切换与本地存储用户偏好。",
+            "编写脚本检测 messages 中缺失的 key，并集成到 CI。",
+            "实测在关键页面切换语言，无需刷新即可更新 UI，缺失 key 有明显 fallback。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P2",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-005-02-i18n-integration"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "实现切换组件及存储，再写缺失 key 检查脚本并接入 CI。",
+          "estimate_h": 2,
+          "risk": "low",
+          "confidence": 0.76,
+          "interfaces_touched": [
+            "frontend",
+            "i18n"
+          ],
+          "artifacts": [
+            "frontend/src/components/LanguageSwitcher.tsx",
+            "scripts/i18n_missing_check.ts",
+            "Compact/Compact-ST-20251113-act-005-03-language-toggle-2025-11-18-T192254Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T20:47:47Z",
+          "owner": "tbd",
+          "tags": [
+            "frontend",
+            "i18n"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-009-subscription-management": {
+      "seed_id": "ACT-009",
+      "title": "实现订阅管理接口与本地存储",
+      "type": "coding",
+      "summary": "为课程/Section 提供订阅与退订 UI，以及与数据库衔接的 /api/subscribe、/api/unsubscribe 等接口，将用户邮箱/Discord 标识与目标课程索引安全写入本地订阅表。",
+      "acceptance_draft": [
+        "在课程列表或详情中提供“订阅空位”入口，点击后调用 /api/subscribe 写入数据库，并支持校验输入（邮箱或 Discord 标识）以及重复订阅提示。",
+        "实现 /api/unsubscribe（含带签名的退订链接）与订阅列表查询接口，用户可从邮件/Discord 链接或 UI 中退订，数据库记录同步更新。",
+        "在本地运行环境中执行一次完整流程（订阅→模拟开放→退订），确认数据库记录、API 响应与通知任务读取到的数据一致。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-002-frontend-filter-mvp",
+        "T-20251113-act-007-local-db-schema",
+        "T-20251113-act-008-local-query-api"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "在完成课程列表与 API 基础后，扩展 UI 和接口，编写端到端测试验证订阅/退订流程与数据库同步。",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "frontend",
+        "api",
+        "database",
+        "notification-service"
+      ],
+      "artifacts": [
+        "src/components/subscription/*",
+        "services/api/routes/subscriptions.ts",
+        "db/subscriptions.sql"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-005",
+        "R-20251113-notify-delay"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-13T00:00:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-009",
+        "frontend",
+        "backend",
+        "notification"
+      ],
+      "subtasks": {
+        "ST-20251113-act-009-01-subscription-model": {
+          "seed_id": null,
+          "title": "订阅数据结构与接口契约",
+          "type": "docs",
+          "summary": "决定订阅记录的表结构、字段与 API 行为，为后续写入逻辑和前端交互奠定契约。",
+          "acceptance_draft": [
+            "定义 subscriptions 表字段（user contact、term、section index、偏好、状态），含唯一约束与状态机。",
+            "描述 subscribe/unsubscribe API payload、响应与幂等语义，附示例。",
+            "列出安全策略（速率限制、邮箱格式校验、重复订阅处理）。"
+          ],
+          "lane": "done",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-007-01-entity-design"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "与数据建模输出同步，白板确定状态机后写入文档。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.72,
+          "interfaces_touched": [
+            "database",
+            "docs"
+          ],
+          "artifacts": [
+            "docs/subscription_model.md",
+            "Compact/Compact-ST-20251113-act-009-01-subscription-model-2025-11-18-T214047Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-18T22:42:58Z",
+          "owner": "tbd",
+          "tags": [
+            "database",
+            "docs"
+          ]
+        },
+        "ST-20251113-act-009-02-subscribe-endpoints": {
+          "seed_id": null,
+          "title": "订阅/退订接口与写入逻辑实现",
+          "type": "coding",
+          "summary": "实现后端订阅/退订接口，处理幂等、重复订阅与安全校验，并落库。",
+          "acceptance_draft": [
+            "提供 REST/GraphQL endpoint，校验请求，写入数据库并返回最新状态。",
+            "对重复订阅、退订后重订等场景做幂等处理并记录审计日志。",
+            "补充测试覆盖非法输入、频繁点击、超限等场景。"
+          ],
+          "lane": "done",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-009-01-subscription-model",
+            "ST-20251113-act-001-02-ingest-impl"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先落 DB 接口，再写业务校验与审计日志，最后补测试。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.65,
+          "interfaces_touched": [
+            "api",
+            "database"
+          ],
+          "artifacts": [
+            "api/src/routes/subscriptions.ts",
+            "api/tests/subscriptions.test.ts"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-19T12:26:04Z",
+          "owner": "tbd",
+          "tags": [
+            "backend",
+            "notification"
+          ]
+        },
+        "ST-20251113-act-009-03-frontend-flow": {
+          "seed_id": null,
+          "title": "前端订阅流与端到端验证",
+          "type": "coding",
+          "summary": "在前端课程列表/详情中提供订阅入口，连通后端接口并验证端到端流程。",
+          "acceptance_draft": [
+            "在课程列表/详情中添加订阅/退订入口，结合登录-free 模式设计用户输入。",
+            "集成后端 API，提供加载与错误状态提示，支持重复点击防抖。",
+            "跑一次端到端流程验证数据库记录变化，并记录操作说明。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-009-02-subscribe-endpoints",
+            "ST-20251113-act-002-03-api-integration"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "先以假数据实现 UI，再切换真实 API 并手测完整链路。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.64,
+          "interfaces_touched": [
+            "frontend",
+            "api"
+          ],
+          "artifacts": [
+            "frontend/src/components/SubscribeButton.tsx",
+            "frontend/src/components/SubscribeButton.css",
+            "frontend/src/components/CourseList.tsx",
+            "frontend/src/api/subscriptions.ts",
+            "Compact/Compact-ST-20251113-act-009-03-frontend-flow-2025-11-20-T060040Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-20T06:54:25Z",
+          "owner": "tbd",
+          "tags": [
+            "frontend",
+            "notification"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-010-local-polling-notify": {
+      "seed_id": "ACT-010",
+      "title": "本地空位轮询与通知调度服务",
+      "type": "coding",
+      "summary": "实现常驻后台任务或定时器，每 30–60 秒轮询 Rutgers openSections 接口，结合本地订阅数据判断课程状态变化，触发事件管道供邮箱/Discord 等通道消费，并处理幂等与错误恢复。",
+      "acceptance_draft": [
+        "可配置轮询频率与 term/campus 范围，模拟 Section 状态从 Closed→Open 的过程，确认在一个轮询周期内生成事件并写入去重缓存。",
+        "同一开放事件最多触发一次通知，短时间内频繁开关的 Section 不会造成重复推送；提供幂等键或状态表来记录已通知事件。",
+        "轮询任务具备日志、指标与错误恢复能力（例如网络失败自动重试、进程重启后继续），并可将事件推送到邮箱/Discord 等通道的队列。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-007-local-db-schema",
+        "T-20251113-act-009-subscription-management"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "需要确认 openSections 的速率限制与字段稳定性后才能设定本地轮询与节流策略。"
+        }
+      ],
+      "unblock_plan": "基于 T-20251113-soc-api-validation 成果，选定轮询频率与批量参数，先在小范围 term/campus 上验证事件生成、幂等与日志，再扩展到完整数据集。",
+      "estimate_h": 8,
+      "risk": "high",
+      "confidence": 0.6,
+      "interfaces_touched": [
+        "local-service",
+        "notification-service",
+        "scheduler"
+      ],
+      "artifacts": [
+        "services/notifier/poller.ts",
+        "services/notifier/event_store.ts",
+        "tests/notifier/poller.test.ts"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "R-20251113-notify-delay"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-20T09:37:05Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-010",
+        "backend",
+        "notification",
+        "scheduler"
+      ],
+      "subtasks": {
+        "ST-20251113-act-010-01-event-spec": {
+          "seed_id": null,
+          "title": "开放事件模型与轮询策略设计",
+          "type": "docs",
+          "summary": "设计 openSections 轮询输出的“开放事件”结构、状态转移与轮询节奏，确保与订阅数据契合。",
+          "acceptance_draft": [
+            "定义 open_event 表/结构：subscription_id、section_id、seat_delta、event_at、来源等字段。",
+            "规划轮询节奏（term/campus 频率、顺序、并发）及退避策略，对应限流结论。",
+            "记录事件生命周期（发现→通知→归档）与反复 oscillation 处理。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-009-01-subscription-model",
+            "ST-20251113-act-001-03-data-verification"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "整合订阅表结构与数据 runbook，快速列出事件字段与轮询节奏图。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.71,
+          "interfaces_touched": [
+            "scheduler",
+            "data-pipeline"
+          ],
+          "artifacts": [
+            "docs/open_event_spec.md",
+            "Compact/Compact-ST-20251113-act-010-01-event-spec-2025-11-20-T070509Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-20T07:55:58Z",
+          "owner": "tbd",
+          "tags": [
+            "scheduler",
+            "notification"
+          ]
+        },
+        "ST-20251113-act-010-02-polling-worker": {
+          "seed_id": null,
+          "title": "openSections 轮询 worker 实现",
+          "type": "coding",
+          "summary": "实现周期性调用 openSections、对比状态变化并记录开放事件的 worker。",
+          "acceptance_draft": [
+            "Worker 根据配置定时调用 openSections，对比上次记录生成事件，写入数据库/队列。",
+            "处理订阅列表分片与并发，避免大批量订阅导致阻塞。",
+            "输出运行日志与 Prometheus 友好指标（请求数、事件数、错误率）。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-010-01-event-spec",
+            "ST-20251113-act-001-02-ingest-impl"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "以单校园订阅集试跑 worker，调通后扩展配置与指标。",
+          "estimate_h": 3,
+          "risk": "high",
+          "confidence": 0.62,
+          "interfaces_touched": [
+            "scheduler",
+            "data-pipeline"
+          ],
+          "artifacts": [
+            "workers/open_sections_poller.ts",
+            "data/migrations/003_open_events.sql",
+            "logs/poller/*.log",
+            "Compact/Compact-ST-20251113-act-010-02-polling-worker-2025-11-20-T090911Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-20T09:24:03Z",
+          "owner": "tbd",
+          "tags": [
+            "scheduler",
+            "notification"
+          ]
+        },
+        "ST-20251113-act-010-03-resume-tests": {
+          "seed_id": null,
+          "title": "长运行与重启恢复验证",
+          "type": "coding",
+          "summary": "验证轮询 worker 在长时间运行与重启后的行为，确保事件不重复/不丢失。",
+          "acceptance_draft": [
+            "模拟 ≥2 小时运行并插入重启，确认事件流水无缺口，重复触发被去重。",
+            "实现状态检查点（最近轮询时间/哈希）并在 worker 重启后自动恢复。",
+            "撰写 reports/poller_durability.md，总结可观测指标与常见异常恢复流程。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-010-02-polling-worker"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "在 staging 运行 worker，频繁重启/断网测试并记录行为。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.67,
+          "interfaces_touched": [
+            "scheduler",
+            "observability"
+          ],
+          "artifacts": [
+            "reports/poller_durability.md",
+            "scripts/poller_checkpoint.json",
+            "Compact/Compact-ST-20251113-act-010-03-resume-tests-2025-11-20-T102410Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-20T12:52:28Z",
+          "owner": "tbd",
+          "tags": [
+            "scheduler",
+            "notification"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-011-mail-sender-module": {
+      "seed_id": "ACT-011",
+      "title": "邮件发送模块多平台支持",
+      "type": "coding",
+      "summary": "抽象邮件发送接口并提供至少 SendGrid API 与 SMTP 两种实现，允许通过配置切换，同时支持多语言模板、速率限制与失败重试，以方便不同部署者使用自有邮件服务。",
+      "acceptance_draft": [
+        "提供统一的 MailSender 接口与配置（API key、SMTP host、发件人等），可在不改代码的情况下切换 SendGrid 与 SMTP，实现都能发送测试邮件。",
+        "邮件内容模板支持中英文版本，可注入课程名、Index、订阅者信息等变量；模板缺少翻译或字段时能在构建/测试阶段捕获。",
+        "在模拟配额用尽或网络错误时，模块能降级重试或记录清晰错误日志，不会导致主进程崩溃。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-009-subscription-management"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "在完成订阅存储后，先实现 SendGrid 版本，再扩展 SMTP/本地邮件发送，并接入邮件模板与单元测试。",
+      "estimate_h": 5,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "notification-service",
+        "email-provider",
+        "i18n"
+      ],
+      "artifacts": [
+        "services/notify/mail_sender.ts",
+        "config/email.example.json",
+        "templates/email/*"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-005",
+        "R-20251113-spam"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-20T13:52:23Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-011",
+        "backend",
+        "email",
+        "notification"
+      ],
+      "subtasks": {
+        "ST-20251113-act-011-01-mail-interface": {
+          "seed_id": null,
+          "title": "邮件发送接口与配置基线",
+          "type": "docs",
+          "summary": "定义统一的邮件发送接口、配置方式与 secrets 需求，为 worker 提供稳定抽象。",
+          "acceptance_draft": [
+            "在 docs/mail_sender_contract.md 描述 MailSender 接口方法、payload 字段与返回值。",
+            "梳理配置项（provider、速率限制、重试、模板路径）并提供 sample config。",
+            "列出安全要求（API key 存储、超时设置），附测试计划。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-010-01-event-spec"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "调研现有 provider/SDK，先输出接口草案，再确认配置字段。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.71,
+          "interfaces_touched": [
+            "notification-service",
+            "docs"
+          ],
+          "artifacts": [
+            "docs/mail_sender_contract.md",
+            "configs/mail_sender.example.json",
+            "Compact/Compact-ST-20251113-act-011-01-mail-interface-2025-11-20-T134509Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-20T13:52:23Z",
+          "owner": "tbd",
+          "tags": [
+            "email",
+            "notification"
+          ]
+        },
+        "ST-20251113-act-011-02-provider-adapter": {
+          "seed_id": null,
+          "title": "首个邮件 Provider 适配层",
+          "type": "coding",
+          "summary": "基于 MailSender 抽象实现至少一种 provider（SMTP 或 API）的适配层，并附带测试。",
+          "acceptance_draft": [
+            "实现 notifications/mail/providers/smtp.ts（或其他）并通过接口测试，处理连接池/超时。",
+            "提供模板渲染/变量替换支持，便于 worker 生成内容。",
+            "写集成测试使用 mock server 验证调用参数与错误处理。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-011-01-mail-interface"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "选定 provider SDK，先写 mock + adapter，再完善日志与 metrics。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.68,
+          "interfaces_touched": [
+            "notification-service",
+            "email-provider"
+          ],
+          "artifacts": [
+            "notifications/mail/types.ts",
+            "notifications/mail/config.ts",
+            "notifications/mail/template_loader.ts",
+            "notifications/mail/providers/sendgrid.ts",
+            "notifications/mail/tests/provider.test.ts",
+            "Compact/Compact-ST-20251113-act-011-02-provider-adapter-2025-11-20-T143624Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-20T14:48:23Z",
+          "owner": "tbd",
+          "tags": [
+            "email",
+            "backend"
+          ]
+        },
+        "ST-20251113-act-011-03-retry-tuning": {
+          "seed_id": null,
+          "title": "失败重试与速率限制策略",
+          "type": "coding",
+          "summary": "为邮件模块加入重试、速率限制与可观测性，形成推荐使用指南。",
+          "acceptance_draft": [
+            "实现重试队列/退避策略（最多 N 次）并对幂等 key 做保护。",
+            "加入速率限制器，支持 provider 配额/速率配置，超出时排队。",
+            "在 docs/mail_sender_usage.md 记录推荐配置与故障排查方法。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-011-02-provider-adapter"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "复用 provider adapter，增加重试环节并结合 metrics，最后写 runbook。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.69,
+          "interfaces_touched": [
+            "notification-service",
+            "observability"
+          ],
+          "artifacts": [
+            "notifications/mail/retry_policy.ts",
+            "notifications/mail/tests/retry_policy.test.ts",
+            "docs/mail_sender_usage.md",
+            "Compact/Compact-ST-20251113-act-011-03-retry-tuning-2025-11-20-T152057Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-20T15:35:47Z",
+          "owner": "tbd",
+          "tags": [
+            "email",
+            "notification"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-003-mail-notify-function": {
+      "seed_id": "ACT-003",
+      "title": "实现课程空位邮件通知功能（本地定时任务）",
+      "type": "coding",
+      "summary": "依据 D-20251113-notify-channels-email-discord，在每个部署环境中运行本地后台进程定期轮询 SOC openSections，结合本地数据库中的订阅记录判断 Closed→Open 事件，并通过可配置的邮件发送模块通知用户，满足 FR-04/FR-05/FR-06 与 NFR-02 的延迟与可靠性要求。",
+      "acceptance_draft": [
+        "在本地测试环境模拟 Closed→Open 场景时，记录从状态变化到邮件发送的时间，平均延迟 < 30 秒、最大延迟 < 60 秒，且同一开放事件同一邮箱只收到 1 封邮件。",
+        "邮件正文包含课程名称、Index、Section、上课时间地点与订阅人信息，并提供安全的本地退订/管理链接；退订后同一订阅不再收到后续通知。",
+        "本地通知进程支持自定义轮询频率、日志与错误重试，能够在网络异常/进程重启后恢复状态，不会静默丢失事件。"
+      ],
+      "lane": "now",
+      "priority_suggested": "P0",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-009-subscription-management",
+        "T-20251113-act-010-local-polling-notify",
+        "T-20251113-act-011-mail-sender-module"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "接口无正式公开文档，速率限制与长期稳定性未知；若访问策略收紧，将影响通知准确性。"
+        },
+        {
+          "dep_id": "DEP-002",
+          "name": "SendGrid 或同类邮件发送服务",
+          "type": "api",
+          "status": "approved",
+          "doc_url": "",
+          "note": "免费额度有限且需要正确配置发件域名与内容策略，以降低被判为垃圾邮件的风险。"
+        }
+      ],
+      "unblock_plan": "基于 T-20251113-act-010-local-polling-notify 提供的轮询结果与 T-20251113-act-011-mail-sender-module 中的发送适配器，设计本地 cron/worker，验证多次重试与恢复逻辑后再开放配置。",
+      "estimate_h": 8,
+      "risk": "high",
+      "confidence": 0.65,
+      "interfaces_touched": [
+        "local-service",
+        "notification-service",
+        "email-provider",
+        "scheduler"
+      ],
+      "artifacts": [
+        "services/notifier/email_worker.ts",
+        "templates/email/*",
+        "config/email.json"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "EVID-005",
+        "R-20251113-notify-delay",
+        "R-20251113-spam"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-21T08:50:24Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-003",
+        "backend",
+        "email",
+        "notification"
+      ],
+      "subtasks": {
+        "ST-20251113-act-003-01-worker-contract": {
+          "seed_id": null,
+          "title": "邮件通知 worker 契约",
+          "type": "docs",
+          "summary": "定义开放事件到邮件 worker 的 payload/队列契约，确定幂等与重试语义。",
+          "acceptance_draft": [
+            "描述 queue payload 字段（event_id、subscription_id、template_id、locale），附 JSON Schema。",
+            "定义 ack/nack、重试/死信策略，以及 MailSender 调用期望。",
+            "记录版本控制策略，确保未来扩展兼容旧 worker。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-010-02-polling-worker",
+            "ST-20251113-act-011-01-mail-interface"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "梳理事件字段与邮件接口需要的信息，写出 schema 与重试语义。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.7,
+          "interfaces_touched": [
+            "notification-service",
+            "docs"
+          ],
+          "artifacts": [
+            "docs/mail_worker_contract.md",
+            "Compact/Compact-ST-20251113-act-003-01-worker-contract-2025-11-20-T171316Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-20T17:13:16Z",
+          "owner": "tbd",
+          "tags": [
+            "notification",
+            "docs"
+          ]
+        },
+        "ST-20251113-act-003-02-worker-implementation": {
+          "seed_id": null,
+          "title": "邮件 worker 实现",
+          "type": "coding",
+          "summary": "实现消费开放事件、拼装邮件内容并调用 MailSender 的 worker 进程。",
+          "acceptance_draft": [
+            "实现 workers/mail_dispatcher.ts，拉取事件+订阅信息，按模板拼装多语言邮件。",
+            "集成 MailSender 适配层，记录发送成功/失败与重试情况。",
+            "添加集成测试，验证示例事件能发送预期内容。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-003-01-worker-contract",
+            "ST-20251113-act-011-02-provider-adapter"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "基于契约实现 worker，优先跑单个事件端到端，再补上线控制。",
+          "estimate_h": 3,
+          "risk": "high",
+          "confidence": 0.63,
+          "interfaces_touched": [
+            "notification-service",
+            "database"
+          ],
+          "artifacts": [
+            "workers/mail_dispatcher.ts",
+            "workers/tests/mail_dispatcher.test.ts",
+            "Compact/Compact-ST-20251113-act-003-02-worker-implementation-2025-11-21-T061303Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T06:25:48Z",
+          "owner": "tbd",
+          "tags": [
+            "notification",
+            "email"
+          ]
+        },
+        "ST-20251113-act-003-03-end-to-end-validation": {
+          "seed_id": null,
+          "title": "端到端延迟与幂等验证",
+          "type": "research",
+          "summary": "验证事件→队列→邮件的整体延迟、失败重试与幂等行为，形成监控指标。",
+          "acceptance_draft": [
+            "模拟真实事件流，测量从 open event 到邮件送达的延迟并记录统计。",
+            "重复投递同一事件，确认 dedupe key 起效，不会对同一用户轰炸邮件。",
+            "在 docs/notify_runbook.md 记录 SLO、报警阈值与排障步骤。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-003-02-worker-implementation",
+            "ST-20251113-act-010-03-resume-tests",
+            "ST-20251113-act-011-03-retry-tuning"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "搭建 staging 事件流，跑多轮压测并收集指标，再整理成文档。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.61,
+          "interfaces_touched": [
+            "notification-service",
+            "observability"
+          ],
+          "artifacts": [
+            "scripts/mail_e2e_sim.ts",
+            "reports/mail_worker_latency.md",
+            "docs/notify_runbook.md",
+            "Compact/Compact-ST-20251113-act-003-03-end-to-end-validation-2025-11-21-T073814Z.md",
+            "Compact/Compact-ST-20251113-act-003-03-end-to-end-validation-2025-11-21-T082428Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T08:50:24Z",
+          "owner": "tbd",
+          "tags": [
+            "notification",
+            "email"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-004-discord-notify-channel": {
+      "seed_id": "ACT-004",
+      "title": "实现 Discord 通知通道并评估私信与频道策略",
+      "type": "coding",
+      "summary": "在本地通知管道中新增 Discord Bot 通道，运行本地 Bot 客户端将课程开放提醒发送给用户或频道，并结合 Q-04 评估“私信 vs 频道广播”的可行性、噪音与速率限制表现，为默认策略提供依据。",
+      "acceptance_draft": [
+        "在本地或测试服务器中，Bot 能根据数据库内的订阅记录成功向指定用户或频道发送包含课程名、Index 与时间地点的提醒消息。",
+        "实现对 Discord API 速率限制的节流与重试逻辑，本地轮询高频触发时仍保持稳定，不出现长期封禁或严重错误。",
+        "文档中记录不同通知模式（私信/频道）的优缺点与推荐默认值，并与产品负责人达成一致。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P2",
+      "status": "todo",
+      "dependencies": [
+        "T-20251113-act-009-subscription-management",
+        "T-20251113-act-010-local-polling-notify",
+        "T-20251113-act-003-mail-notify-function"
+      ],
+      "blocked": true,
+      "blocked_by": [
+        {
+          "dep_id": "DEP-001",
+          "name": "Rutgers SOC API（courses.json / openSections）",
+          "type": "api",
+          "status": "unknown",
+          "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+          "note": "接口结构与速率限制的不确定性会影响 Discord 通知的触发准确性。"
+        },
+        {
+          "dep_id": "DEP-003",
+          "name": "Discord Bot API",
+          "type": "api",
+          "status": "approved",
+          "doc_url": "",
+          "note": "受速率限制和内容政策约束，过于频繁或模板化的消息可能被限流或封禁。"
+        }
+      ],
+      "unblock_plan": "在本地环境运行 Bot，复用 T-20251113-act-010-local-polling-notify 的事件推送，结合 Discord Sandbox 逐步提升频率以摸清速率限制，再决定默认通知模式。",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.6,
+      "interfaces_touched": [
+        "local-service",
+        "notification-service",
+        "discord-bot"
+      ],
+      "artifacts": [
+        "services/notifier/discord_bot.ts",
+        "config/discord.json"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-004",
+        "R-20251113-notify-delay",
+        "R-20251113-spam"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-21T09:15:00Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-004",
+        "backend",
+        "discord",
+        "notification"
+      ],
+      "subtasks": {
+        "ST-20251113-act-004-01-strategy": {
+          "seed_id": null,
+          "title": "Discord 通知策略与配置",
+          "type": "docs",
+          "summary": "确定 Discord 通知形式（私信/频道）、权限配置与默认使用策略，输出 runbook。",
+          "acceptance_draft": [
+            "评估 DM vs 频道通知优缺点，确认 MVP 方案与 fallback。",
+            "整理 Bot 权限、Bot Token/频道 ID 配置方式，写 configs/discord_bot.example.json。",
+            "提供消息格式与速率限制建议，记录到 docs/discord_strategy.md。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P2",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-010-01-event-spec"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "调研 Discord API 限制，快速拉出策略对比表并定 MVP 默认。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.7,
+          "interfaces_touched": [
+            "discord-bot",
+            "docs"
+          ],
+          "artifacts": [
+            "docs/discord_strategy.md",
+            "configs/discord_bot.example.json"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T09:15:00Z",
+          "owner": "tbd",
+          "tags": [
+            "discord",
+            "notification"
+          ]
+        },
+        "ST-20251113-act-004-02-bot-sending": {
+          "seed_id": null,
+          "title": "Discord Bot 发送能力",
+          "type": "coding",
+          "summary": "实现最小可用的 Discord Bot/ webhook 发送模块，支持私信或频道推送并记录日志。",
+          "acceptance_draft": [
+            "实现 notifications/discord/bot.ts，可向指定频道/用户发送消息并处理异常。",
+            "加入 CLI/脚本可发送测试消息，用于部署验证。",
+            "记录成功/失败日志与速率限制触发情况。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P2",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-004-01-strategy"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "基于策略选定 SDK，快速实现发送函数并补测试脚本。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.68,
+          "interfaces_touched": [
+            "discord-bot",
+            "notification-service"
+          ],
+          "artifacts": [
+            "notifications/discord/bot.ts",
+            "notifications/discord/tests/bot.test.ts",
+            "scripts/discord_send_test.ts",
+            "Compact/Compact-ST-20251113-act-004-02-bot-sending-2025-11-21-T105707Z.md",
+            "Compact/Compact-ST-20251113-act-004-02-bot-sending-2025-11-21-T110000Z.md",
+            "Compact/Compact-ST-20251113-act-004-02-bot-sending-2025-11-21-T112050Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T11:37:53Z",
+          "owner": "tbd",
+          "tags": [
+            "discord",
+            "notification"
+          ]
+        },
+        "ST-20251113-act-004-03-event-integration": {
+          "seed_id": null,
+          "title": "事件流接入与推荐策略",
+          "type": "coding",
+          "summary": "将 Discord 发送模块接入开放事件流，验证实测效果并记录默认策略。",
+          "acceptance_draft": [
+            "实现将开放事件转换为 Discord 消息的 adapter，支持频道过滤/模版。",
+            "在测试服务器实测多条通知，确保速率限制在可控范围并去重。",
+            "在 docs/discord_runbook.md 记录默认频道配置与如何禁用/切换策略。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P2",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-004-02-bot-sending",
+            "ST-20251113-act-010-02-polling-worker"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "接入事件流后跑一轮通知，收集反馈并落文档。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.65,
+          "interfaces_touched": [
+            "discord-bot",
+            "notification-service"
+          ],
+          "artifacts": [
+            "notifications/discord/adapter.ts",
+            "workers/discord_dispatcher.ts",
+            "workers/tests/discord_dispatcher.test.ts",
+            "docs/discord_runbook.md",
+            "reports/discord_channel_validation.md",
+            "Compact/Compact-ST-20251113-act-004-03-event-integration-2025-11-21-T115350Z.md",
+            "Compact/Compact-ST-20251113-act-004-03-event-integration-2025-11-21-T130957Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T13:27:05Z",
+          "owner": "tbd",
+          "tags": [
+            "discord",
+            "notification"
+          ]
+        }
+      }
+    },
+    "T-20251113-act-006-deploy-docs-cicd": {
+      "seed_id": "ACT-006",
+      "title": "编写并验证本地一键部署文档与辅助脚本",
+      "type": "docs",
+      "summary": "围绕“本地数据库 + 轻量 API 服务 + 前端 UI + 后台通知进程”的架构，整理本地部署步骤与环境要求，编写 README 与辅助脚本，使普通用户在个人电脑或服务器上无需修改代码即可初始化数据库、运行 API/前端/通知服务并完成配置。",
+      "acceptance_draft": [
+        "README 提供针对至少两种主流桌面操作系统（例如 Windows 与 macOS 或 Linux）的本地部署步骤，包含：安装 Node.js/bun、SQLite 或嵌入式数据库依赖、项目初始化、环境变量与密钥配置、如何执行数据库初始化/增量更新脚本，以及如何同时启动前端、API 服务与本地通知进程。",
+        "仓库包含可直接使用的本地辅助脚本（例如 scripts/setup_local_env.sh 和 scripts/run_stack.sh），在一台全新环境的个人电脑上，用户 clone 仓库后运行脚本即可完成依赖安装校验、数据库初始化、服务启动与通知模块验证。"
+      ],
+      "lane": "next",
+      "priority_suggested": "P1",
+      "status": "done",
+      "dependencies": [
+        "T-20251113-act-001-soc-json-scraper",
+        "T-20251113-act-002-frontend-filter-mvp",
+        "T-20251113-act-003-mail-notify-function",
+        "T-20251113-act-008-local-query-api",
+        "T-20251113-act-009-subscription-management",
+        "T-20251113-act-010-local-polling-notify"
+      ],
+      "blocked": false,
+      "blocked_by": [],
+      "unblock_plan": "以本地单机运行与容器部署为一等公民目标设计流程：在至少两种主流桌面环境验证脚本可初始化 SQLite、启动 API/前端/通知服务，再整理成 README。",
+      "estimate_h": 6,
+      "risk": "mid",
+      "confidence": 0.7,
+      "interfaces_touched": [
+        "docs",
+        "local-dev",
+        "deployment"
+      ],
+      "artifacts": [
+        "README.md",
+        ".env.example",
+        "scripts/setup_local_env.sh",
+        "scripts/run_stack.sh"
+      ],
+      "citations": [
+        "EVID-001",
+        "EVID-006",
+        "EVID-007",
+        "R-20251113-oss-governance"
+      ],
+      "created_at": "2025-11-13T00:00:00Z",
+      "updated_at": "2025-11-21T19:48:20Z",
+      "owner": "tbd",
+      "tags": [
+        "seed:ACT-006",
+        "docs",
+        "deployment",
+        "local-deploy"
+      ],
+      "subtasks": {
+        "ST-20251113-act-006-01-deploy-playbook": {
+          "seed_id": null,
+          "title": "从零部署步骤梳理",
+          "type": "docs",
+          "summary": "整理从空机器到运行浏览/UI/订阅/通知全链路的步骤，形成部署清单。",
+          "acceptance_draft": [
+            "输出 docs/deployment_playbook.md，列出依赖安装、环境变量、脚本顺序和预期输出。",
+            "包含验证步骤：抓取数据、跑查询、成功订阅并收到邮件/Discord 通知。",
+            "附常见问题与排障提示，覆盖数据抓取失败、通知模块失败等情况。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P0",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-003-03-end-to-end-validation",
+            "ST-20251113-act-004-03-event-integration",
+            "ST-20251113-act-005-03-language-toggle"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "在功能闭环后复盘通路，梳理完整步骤并记录在 playbook。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.69,
+          "interfaces_touched": [
+            "docs",
+            "deployment"
+          ],
+          "artifacts": [
+            "docs/deployment_playbook.md",
+            "Compact/Compact-ST-20251113-act-006-01-deploy-playbook-2025-11-21-T134648Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T14:33:51Z",
+          "owner": "tbd",
+          "tags": [
+            "deployment",
+            "docs",
+            "local-deploy"
+          ]
+        },
+        "ST-20251113-act-006-02-automation-scripts": {
+          "seed_id": null,
+          "title": "部署流程脚本化",
+          "type": "coding",
+          "summary": "将部署步骤脚本化（安装、迁移、抓取、启动服务），支撑本地/一键部署体验。",
+          "acceptance_draft": [
+            "提供 setup_local_env.sh or make/just 任务，自动安装依赖、执行迁移与抓取。",
+            "实现 run_stack.sh 等脚本一键启动 API、前端、worker，附日志输出。",
+            "脚本容错并返回非零状态供 CI 使用。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-006-01-deploy-playbook",
+            "ST-20251113-act-001-03-data-verification"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "依据 playbook 编写 shell/Justfile，逐一脚本化抓取、迁移与启动动作。",
+          "estimate_h": 3,
+          "risk": "medium",
+          "confidence": 0.7,
+          "interfaces_touched": [
+            "deployment",
+            "build-script"
+          ],
+          "artifacts": [
+            "scripts/setup_local_env.sh",
+            "scripts/run_stack.sh",
+            "Compact/Compact-ST-20251113-act-006-02-automation-scripts-2025-11-21-T144200Z.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T16:17:13Z",
+          "owner": "tbd",
+          "tags": [
+            "deployment",
+            "local-deploy"
+          ]
+        },
+        "ST-20251113-act-006-03-fresh-run": {
+          "seed_id": null,
+          "title": "新手视角试跑与 README 迭代",
+          "type": "docs",
+          "summary": "以新手视角完整跑一遍脚本，记录过程并迭代 README/Quick Start。",
+          "acceptance_draft": [
+            "使用全新环境执行部署脚本，记录每一步耗时与遇到的问题。",
+            "根据反馈更新 README/Quickstart，加入截图或终端输出示例。",
+            "整理 reports/fresh_install_log.md，列出剩余风险与 TODO。"
+          ],
+          "lane": "next",
+          "priority_suggested": "P1",
+          "status": "done",
+          "dependencies": [
+            "ST-20251113-act-006-02-automation-scripts"
+          ],
+          "blocked": false,
+          "blocked_by": [],
+          "unblock_plan": "找非项目成员试跑或自建干净容器记录过程，实时更新文档。",
+          "estimate_h": 2,
+          "risk": "medium",
+          "confidence": 0.73,
+          "interfaces_touched": [
+            "docs",
+            "deployment"
+          ],
+          "artifacts": [
+            "README.md",
+            "docs/quickstart.md",
+            "reports/fresh_install_log.md"
+          ],
+          "citations": [],
+          "created_at": "2025-11-13T00:00:00Z",
+          "updated_at": "2025-11-21T19:48:20Z",
+          "owner": "tbd",
+          "tags": [
+            "deployment",
+            "docs",
+            "local-deploy"
+          ]
+        }
+      }
+    }
+  },
+  "questions_for_human": [
+    "Q-01：SOC 抓取范围——是否存在官方推荐的一次性抓取全校课程的参数组合（如 subject=ALL），还是必须按院系/subject 逐个请求？如果只能逐个请求，你能接受的完整抓取时长和抓取频率上限是什么？",
+    "Q-02：课程基础信息的更新频率——静态课程信息（标题、描述、学分等）每日一次更新是否足够，还是需要在选课高峰期临时提高到每小时/每数小时一次？",
+    "Q-03：空位订阅策略——当课程在满员/有空位之间频繁切换时，是只在首次开放时发送一次通知并自动删除订阅，还是每次开放都发送，或允许用户在界面中自定义策略？",
+    "Q-04：Discord 通知形态——更偏向 Bot 私信（更即时但可能更易触发限流）还是频道广播（噪音更大但更稳），以及是否已有规划好的服务器/频道用于测试与正式使用？",
+    "Q-05：周历“框选时间找课”的语义——你更希望框选的是“上课时间完全落在选中时间段内的课程”，还是“与该时间段不冲突的所有可选课程”？该功能期望在 MVP、v1.1 还是 v2.0 交付？",
+    "Q-06：具体覆盖范围——在“需要同时支持多个学期、多校区以及本科/研究生课程”的前提下，MVP 期望最少覆盖哪些 term（例如当前学期 + 下一学期）以及哪些校区组合，以便规划数据抓取批量任务和前端筛选维度？"
+  ],
+  "assumptions": [
+    "假设 Rutgers SOC 公开接口在 2025–2026 学年仍保持可匿名访问，且字段结构与调研时基本一致。",
+    "假设 MVP 阶段需要同时覆盖多个学期、多个校区以及本科和研究生课程，主要用户群体为 Rutgers 各校区的在读学生（含本科与研究生）。",
+    "假设目标用户可以接受通过邮箱或 Discord 接收课程空位通知，不强依赖短信等其他通知渠道。",
+    "假设无需用户登录即可通过带签名的退订链接完成订阅管理，用户能够理解并接受这种轻量级身份验证方式。"
+  ],
+  "risks": [
+    {
+      "id": "R-20251113-soc-api-change",
+      "summary": "Rutgers SOC API 结构或访问策略变更、速率限制收紧，导致课程数据抓取失败或不完整。",
+      "severity": "high",
+      "mitigation": "封装独立的数据访问层，增加结构版本检测与失败重试；对调用错误设置监控与告警；预备基于 HTML 页面解析的备选抓取方式，并控制抓取频率以避免触发限流。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ]
+    },
+    {
+      "id": "R-20251113-notify-delay",
+      "summary": "课程状态变化与用户收到通知之间的延迟过长，或出现漏报/重复通知，削弱“狙击空位”的价值。",
+      "severity": "high",
+      "mitigation": "合理设置轮询周期（例如 30–60 秒），优先使用 openSections 等批量接口；在通知管道中实现幂等处理；为关键任务配置心跳与告警，并通过长期测试收集延迟分布与失败率。",
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "EVID-005"
+      ]
+    },
+    {
+      "id": "R-20251113-frontend-perf",
+      "summary": "在低端设备或数据量增大时，前端渲染与筛选性能不足，导致明显卡顿或响应超时。",
+      "severity": "mid",
+      "mitigation": "使用虚拟列表、分页与延迟渲染减少 DOM 压力；优化筛选算法（尽量 O(n) 扫描、必要时排序）；必要时引入 Web Worker 或 WASM，并通过性能脚本持续监控。",
+      "citations": [
+        "EVID-001",
+        "EVID-006"
+      ]
+    },
+    {
+      "id": "R-20251113-spam",
+      "summary": "邮件或 Discord 消息被用户或平台判定为垃圾信息，导致送达率下降甚至账号/应用被封禁。",
+      "severity": "mid",
+      "mitigation": "使用成熟邮件服务并正确配置发件域名；控制通知频率与内容个性化；在邮件中提供清晰退订入口与订阅说明；为 Discord Bot 设置速率限制与重试策略，必要时采用频道摘要替代大量私信。",
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "EVID-004",
+        "EVID-005"
+      ]
+    },
+    {
+      "id": "R-20251113-i18n-maintenance",
+      "summary": "多语言内容维护滞后，新功能上线时部分语言缺失翻译或内容不一致，影响非英文用户体验。",
+      "severity": "mid",
+      "mitigation": "所有界面文案统一走 i18n 资源文件；在 CI 中加入缺失翻译检查；对未翻译 key 统一回退英文并标记 TODO，定期清理。",
+      "citations": [
+        "EVID-001",
+        "EVID-008"
+      ]
+    },
+    {
+      "id": "R-20251113-oss-governance",
+      "summary": "开源仓库缺乏持续维护，Issue/PR 堆积或依赖安全漏洞得不到修复，削弱社区信任。",
+      "severity": "mid",
+      "mitigation": "制定贡献指南与代码规范；配置依赖安全扫描与自动升级工具；鼓励社区维护者参与协作，并在 README 中明确官方维护范围与责任边界。",
+      "citations": [
+        "EVID-001"
+      ]
+    }
+  ],
+  "external_dependencies": [
+    {
+      "dep_id": "DEP-001",
+      "name": "Rutgers SOC API（courses.json / openSections）",
+      "type": "api",
+      "status": "unknown",
+      "doc_url": "https://github.com/anxious-engineer/Rutgers-Course-API",
+      "note": "接口无正式公开文档，速率限制与长期稳定性未知；任何结构或访问策略变更都会影响数据抓取与通知准确性。"
+    },
+    {
+      "dep_id": "DEP-002",
+      "name": "SendGrid 或同类邮件发送服务",
+      "type": "api",
+      "status": "approved",
+      "doc_url": "",
+      "note": "免费额度有限，若用户规模增长可能超限；需要正确配置发件域名与发送策略以降低被判为垃圾邮件的风险。"
+    },
+    {
+      "dep_id": "DEP-003",
+      "name": "Discord Bot API",
+      "type": "api",
+      "status": "approved",
+      "doc_url": "",
+      "note": "受速率限制和内容政策约束，过于频繁或模板化的消息可能被限流或封禁。"
+    },
+    {
+      "dep_id": "DEP-004",
+      "name": "本地运行环境/容器（Node.js + SQLite + 定时任务）",
+      "type": "tool",
+      "status": "approved",
+      "doc_url": "",
+      "note": "每个部署实例需要具备运行 Node.js 服务、SQLite 数据库与后台定时任务的能力，可通过本地运行或容器化实现；不再依赖纯静态托管平台。"
+    }
+  ],
+  "facts": [
+    "本 JSON 基于 2025-11-11-dr 研究结论整理，数据源为 Rutgers SOC 与相关开源/社区资料。:contentReference[oaicite:0]{index=0}",
+    "项目目标是在“浏览筛选课程 + 订阅空位提醒”场景下替代 CSP 和 WebReg 的日常使用体验，而不是替代官方 WebReg 的选课注册流程。",
+    "系统统一使用 Rutgers SOC 公开接口（courses.json、openSections 等）作为课程与容量数据来源，不抓取需要登录的 WebReg 页面。",
+    "架构采用“本地 SQLite 数据库 + 轻量 API 服务 + 前端 SPA + 本地后台通知”的组合，各部署实例独立运行数据库与通知进程，避免浏览器一次性加载几十 MB JSON。",
+    "通知渠道 MVP 聚焦邮箱和 Discord，并通过显式退订/管理入口满足隐私与反垃圾邮件规范。",
+    "项目从 day-1 起按多语言架构设计，至少支持中英文 UI，并通过 i18n 资源文件管理文案以方便后续扩展其他语言。",
+    "新增 `npm run soc:probe` CLI（scripts/soc_probe.ts 复用 scripts/soc_api_client.ts），统一封装 courses.json/openSections 请求，解析 term/campus/subject 参数并输出状态码、延迟、示例数据与结构化错误日志，运行方法与样例记录在 docs/soc_api_notes.md。",
+    "`scripts/soc_field_matrix.py` 在 2 个 term x 3 个 campus x 5 个 subject 覆盖的 42 组合上缓存 payload（共 13,322 门课程、32,249 个 section、45,884 条 meeting、23,863 条 open section index），生成 docs/soc_field_matrix.csv 并标注 FR-01/FR-02 字段覆盖，也确认 openSections 仅提供 index 字符串而缺失 capacity/waitlist/notes。",
+    "`npm run soc:rate-limit`（scripts/soc_rate_limit.ts）针对 NB 12024 term 跑通 baseline 场景（1x1200ms、3x600ms、6x300ms）和最高 32 worker/50ms gap 及 openSections 50 worker 无间隔的压力测试，所有调用返回 2xx；实测数据写入 docs/soc_rate_limit.md 与 docs/soc_rate_limit*.json，并给出抓取/轮询推荐频率及错误码动作。"
+  ],
+  "decisions": [
+    {
+      "id": "D-20251113-arch-static-frontend-b",
+      "summary": "v1.x 阶段采用“本地 SQLite 数据库 + 轻量 API 服务 + 前端 SPA”的一体化架构，而不是继续依赖纯静态前端加载大 JSON 与云函数通知。",
+      "rationale": "courses.json 体积已达 20–40 MB，纯前端加载造成性能、带宽与更新成本过高；将数据落地到本地 SQLite，并由轻量 API/后台任务统一负责筛选与通知，可以增量更新、降低前端负担，并保持每个部署实例独立运行。",
+      "citations": [
+        "EVID-001",
+        "EVID-006",
+        "R-20251113-frontend-perf",
+        "R-20251113-notify-delay"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-data-source-soc",
+      "summary": "课程与空位数据统一使用 Rutgers SOC 公开接口（courses.json / openSections 等），禁止抓取 WebReg 或需要登录的页面。",
+      "rationale": "SOC 提供官方公开的课程与容量数据，是合法且稳定的主要来源；避免抓取需要登录的 WebReg 页面，可以减少合规和技术风险。",
+      "citations": [
+        "EVID-001",
+        "EVID-002"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-client-side-filter",
+      "summary": "课程筛选与排序主要由嵌入式数据库与本地查询 API 承担，前端仅负责构建条件并展示结果，不再预加载全量数据。",
+      "rationale": "在多学期/多校区场景下数据量动辄数千课程，浏览器内存筛选难以兼顾性能与增量更新；利用 SQLite 索引与 API 分页可以维持 <0.5 秒响应并复用同一份数据给通知管道。",
+      "citations": [
+        "EVID-001",
+        "EVID-006",
+        "R-20251113-frontend-perf"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-notify-channels-email-discord",
+      "summary": "通知渠道优先支持邮箱和 Discord，短信等其他渠道暂不在 MVP 范围内。",
+      "rationale": "邮件和 Discord 在 Rutgers 学生群体中使用广泛、成本可控且生态成熟；短信成本高且合规复杂，因此在满足 MVP 的前提下优先实现邮箱与 Discord。",
+      "citations": [
+        "EVID-001",
+        "EVID-003",
+        "EVID-004",
+        "EVID-005"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-multi-lang-day1",
+      "summary": "项目从 day-1 起按多语言架构设计，至少支持中英文 UI，通过标准 i18n 库管理所有文案。",
+      "rationale": "多语言需求在项目初期已被明确，及早引入 i18n 能避免后续大规模重构，同时方便支持小语种学生群体。",
+      "citations": [
+        "EVID-001",
+        "EVID-008"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    },
+    {
+      "id": "D-20251113-coverage-multi-term-campus",
+      "summary": "MVP 阶段即支持多学期、多校区以及本科/研究生课程的联合浏览与筛选，不以单一校区本科课程为起点。",
+      "rationale": "真实选课场景中，学生往往需要在不同学期与不同校区的本科/研究生课程之间做整体规划；从一开始按多维度覆盖设计数据抓取与前端筛选，可以避免后续为扩展范围进行架构级重构。",
+      "citations": [
+        "EVID-001",
+        "Q-06"
+      ],
+      "date": "2025-11-13T00:00:00Z"
+    }
+  ]
+}

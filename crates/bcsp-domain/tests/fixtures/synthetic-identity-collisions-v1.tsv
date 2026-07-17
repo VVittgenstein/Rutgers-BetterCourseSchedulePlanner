@@ -1,0 +1,24 @@
+classification	SYNTHETIC_NO_REAL_COURSE_DATA
+section	T2026F	CAMPUS_A	00001
+section	T2026F	CAMPUS_B	00001
+section	T2026S	CAMPUS_A	00001
+equivalent	T2026F	CAMPUS_A	00001	semantic-01	semantic-01
+equivalent	T2026F	CAMPUS_A	00002	semantic-02	semantic-02
+equivalent	T2026F	CAMPUS_A	00003	semantic-03	semantic-03
+equivalent	T2026F	CAMPUS_A	00004	semantic-04	semantic-04
+equivalent	T2026F	CAMPUS_A	00005	semantic-05	semantic-05
+equivalent	T2026F	CAMPUS_A	00006	semantic-06	semantic-06
+equivalent	T2026F	CAMPUS_A	00007	semantic-07	semantic-07
+equivalent	T2026F	CAMPUS_A	00008	semantic-08	semantic-08
+equivalent	T2026F	CAMPUS_A	00009	semantic-09	semantic-09
+equivalent	T2026F	CAMPUS_A	00010	semantic-10	semantic-10
+equivalent	T2026F	CAMPUS_A	00011	semantic-11	semantic-11
+equivalent	T2026F	CAMPUS_A	00012	semantic-12	semantic-12
+equivalent	T2026F	CAMPUS_A	00013	semantic-13	semantic-13
+equivalent	T2026F	CAMPUS_A	00014	semantic-14	semantic-14
+equivalent	T2026F	CAMPUS_A	00015	semantic-15	semantic-15
+equivalent	T2026F	CAMPUS_A	00016	semantic-16	semantic-16
+equivalent	T2026F	CAMPUS_A	00017	semantic-17	semantic-17
+equivalent	T2026F	CAMPUS_A	00018	semantic-18	semantic-18
+conflicting	T2026F	CAMPUS_A	00019	semantic-a	semantic-b
+mixed	T2026F	CAMPUS_A	CAMPUS_B	00020	semantic-same

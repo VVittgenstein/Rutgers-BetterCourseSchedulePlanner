@@ -6,7 +6,7 @@
 - Local sound pull channel uses the same queue: browser POSTs to `/api/notifications/local/claim` with `{ deviceId, limit?<=50 }` to claim `contact_type='local_sound'` rows. Claims flip `fanout_status` to `sent`, bump `fanout_attempts`, and update `subscriptions.last_notified_at`.
 
 ## SLO / targets
-- Closed→Open end-to-end target (event observed to email handed to provider): **avg <30s, worst <60s** when poll interval <=15-20s and mail send RTT <1s. Keep latency reports as local generated artifacts.
+- Closed→Open end-to-end (event observed to email handed to provider): **avg <30s, worst <60s** when poll interval ≤15–20s and mail send RTT <1s (validated in `reports/mail_worker_latency.md`).
 - No duplicate emails per `{term,campus,index,status,bucket_3m}` dedupe key; queue drain succeeds with retry budget (`maxAttempts=3` with `0/2/7s` backoff).
 - Error budget: ≤1% of notifications end in `fanout_status in ('failed','skipped')` over a 1h window.
 

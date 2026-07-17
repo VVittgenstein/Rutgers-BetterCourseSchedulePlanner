@@ -1,0 +1,107 @@
+{
+  "contractVersion": 2,
+  "observedAt": "1970-01-01T00:00:00Z",
+  "runtime": "LOCAL",
+  "level": "PARTIALLY_READY",
+  "discovery": {
+    "availability": "CURRENT",
+    "latestAttempt": null,
+    "lastSuccess": null,
+    "isStale": false,
+    "error": null
+  },
+  "termWindow": {
+    "currentTerm": "72026",
+    "nextTerm": "92026",
+    "visibleTerms": [
+      {
+        "term": "12026",
+        "relativeOffset": -1,
+        "discovered": true,
+        "autoManaged": false,
+        "manualPullAllowed": true,
+        "watchable": false
+      },
+      {
+        "term": "72026",
+        "relativeOffset": 0,
+        "discovered": true,
+        "autoManaged": true,
+        "manualPullAllowed": false,
+        "watchable": true
+      },
+      {
+        "term": "92026",
+        "relativeOffset": 1,
+        "discovered": true,
+        "autoManaged": true,
+        "manualPullAllowed": false,
+        "watchable": true
+      }
+    ]
+  },
+  "automaticTermSummaries": [
+    {
+      "term": "72026",
+      "readyTargetCount": 1,
+      "totalTargetCount": 12
+    },
+    {
+      "term": "92026",
+      "readyTargetCount": 0,
+      "totalTargetCount": 12
+    }
+  ],
+  "operations": [
+    {
+      "target": {
+        "term": "92026",
+        "campus": "NB"
+      },
+      "stage": "CATALOG_FETCH",
+      "startedAt": "1970-01-01T00:00:00Z"
+    }
+  ],
+  "targets": [
+    {
+      "target": {
+        "term": "72026",
+        "campus": "NB"
+      },
+      "primary": true,
+      "snapshotAvailability": "READY",
+      "workState": "RETRY_WAIT",
+      "stage": null,
+      "usable": true,
+      "catalogContentVersion": 1,
+      "lastCompleteAt": "1970-01-01T00:00:00Z",
+      "nextRetryAt": "1970-01-01T00:01:00Z",
+      "error": {
+        "code": "OPEN_UPSTREAM_TRANSPORT",
+        "httpStatus": 503,
+        "contentType": "application/json",
+        "contentEncoding": "gzip",
+        "decodedBytes": 128,
+        "errorClass": "TRANSPORT",
+        "errorChain": "request timed out",
+        "traceId": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "target": {
+        "term": "92026",
+        "campus": "NB"
+      },
+      "primary": true,
+      "snapshotAvailability": "NO_COMPLETE_SNAPSHOT",
+      "workState": "RUNNING",
+      "stage": "CATALOG_FETCH",
+      "usable": false,
+      "catalogContentVersion": null,
+      "lastCompleteAt": null,
+      "nextRetryAt": null,
+      "error": null
+    }
+  ],
+  "issues": []
+}

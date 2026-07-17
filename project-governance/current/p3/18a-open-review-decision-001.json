@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "decisionId": "P3-OPEN-REVIEW-DECISION-001",
+  "status": "FROZEN_JOIN_AND_RATE_CLOCK_MAPPING",
+  "approvedOn": "2026-07-13",
+  "joinDecision": {
+    "status": "APPROVED",
+    "contract": "RUTGERS_OFFICIAL_MERGED_SET_INTERSECTION",
+    "externalSectionKey": "term_campus_index",
+    "orphanHandling": "AUDIT_AND_IGNORE",
+    "absenceToClosedRequires": "COMPLETE_SAFE_BATCH"
+  },
+  "rateDecision": {
+    "publicGeneralIntervalSeconds": 30,
+    "publicUserConfigurable": false,
+    "localDefaultIntervalSeconds": 30,
+    "localMinimumIntervalSeconds": 3,
+    "localMaximumIntervalSeconds": 3600,
+    "activeWatchTenSecondMeaning": "APPROVED_RELATED_SHARED_BATCH_FAST_LANE",
+    "activeWatchScope": "RELATED_SHARED_TERM_CAMPUS_BATCH",
+    "desiredNotificationPrecisionSeconds": 30,
+    "hardSourceChangeToNotificationGuarantee": false
+  },
+  "proposedClockMapping": {
+    "status": "APPROVED_BY_USER",
+    "generalRefresh": "PUBLIC_FIXED_30_LOCAL_DEFAULT_30_RANGE_3_3600",
+    "activeWatchTargetSeconds": 10,
+    "effectiveIntervalFormula": "min(general_interval_seconds,10)",
+    "singleFlightPerBatch": true,
+    "watchCountAmplifiesUpstreamRequests": false,
+    "missedTickPolicy": "COALESCE_OR_SKIP_NO_CATCH_UP"
+  },
+  "networkEligibility": false,
+  "networkAuthorizationSource": "REQUIRES_SEPARATE_FROZEN_AMENDMENT",
+  "nextStageEligibility": {"P4": false, "P5": false, "P6": false}
+}

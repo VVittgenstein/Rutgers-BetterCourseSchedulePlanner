@@ -1,0 +1,210 @@
+name: RC iteration packaging
+
+on:
+  push:
+    paths:
+      - '.github/workflows/public-ops.yml'
+      - 'deploy/public/**'
+      - 'apps/bcsp-local/**'
+      - 'apps/bcsp-server/**'
+      - 'crates/**'
+      - 'frontend/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'LICENSE'
+      - 'packaging/**'
+      - 'rust-toolchain.toml'
+      - 'tools/architecture/**'
+  pull_request:
+    paths:
+      - '.github/workflows/public-ops.yml'
+      - 'deploy/public/**'
+      - 'apps/bcsp-local/**'
+      - 'apps/bcsp-server/**'
+      - 'crates/**'
+      - 'frontend/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'LICENSE'
+      - 'packaging/**'
+      - 'rust-toolchain.toml'
+      - 'tools/architecture/**'
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full source commit to package (40 or 64 lowercase hexadecimal characters)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rc-iteration-packaging-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  packaging-contracts:
+    if: github.event_name != 'workflow_dispatch'
+    name: Packaging contract checks (no candidate build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the event revision
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Select the metadata parser runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+          package-manager-cache: false
+
+      - name: Validate shell and metadata scripts
+        shell: bash
+        run: |
+          find deploy/public packaging/linux -type f -name '*.sh' -print0 |
+            xargs -0 -r -n1 bash -n
+          shellcheck --severity=error -x -P SCRIPTDIR packaging/linux/*.sh
+          node --check packaging/generate-release-metadata.mjs
+          node --check packaging/tests/final-candidate-browser.mjs
+          node --check packaging/tests/real-world-browser.mjs
+
+      - name: Parse PowerShell packaging scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'packaging/windows/build.ps1',
+            'packaging/windows/verify.ps1',
+            'packaging/verify-release-set.ps1'
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $file),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              throw "$file failed to parse: $($errors | Out-String)"
+            }
+          }
+
+  linux-iteration-package:
+    if: github.event_name == 'workflow_dispatch'
+    name: Linux-only iteration package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      REQUESTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+      RUSTUP_TOOLCHAIN: 1.97.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate the requested source identity
+        run: |
+          [[ "$REQUESTED_SOURCE_COMMIT" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || {
+            printf '%s\n' 'source_commit must be a full lowercase hexadecimal commit id' >&2
+            exit 2
+          }
+
+      - name: Check out the exact requested revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Confirm the detached, clean checkout and prepare the frozen source
+        id: source
+        run: |
+          actual_commit="$(git rev-parse --verify HEAD)"
+          test "$actual_commit" = "$REQUESTED_SOURCE_COMMIT"
+          if git symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+            printf '%s\n' 'the requested source checkout is not detached' >&2
+            exit 1
+          fi
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+          source_root="$RUNNER_TEMP/rbcsp-source"
+          test ! -e "$source_root"
+          git worktree add --detach "$source_root" "$actual_commit"
+          test "$(git -C "$source_root" rev-parse --verify HEAD)" = "$actual_commit"
+          if git -C "$source_root" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+            printf '%s\n' 'the frozen source worktree is not detached' >&2
+            exit 1
+          fi
+          test -z "$(git -C "$source_root" status --porcelain --untracked-files=all)"
+
+          source_date_epoch="$(git -C "$source_root" show -s --format=%ct "$actual_commit")"
+          [[ "$source_date_epoch" =~ ^[0-9]+$ ]]
+          printf 'source_root=%s\n' "$source_root" >> "$GITHUB_OUTPUT"
+          printf 'source_date_epoch=%s\n' "$source_date_epoch" >> "$GITHUB_OUTPUT"
+          printf 'short_commit=%s\n' "${actual_commit:0:12}" >> "$GITHUB_OUTPUT"
+
+      - name: Select the locked Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+          package-manager-cache: false
+
+      - name: Install the locked package build tools
+        run: |
+          npm install --global npm@11.16.0
+          rustup toolchain install 1.97.0 --profile minimal --target x86_64-unknown-linux-gnu
+          cargo install cargo-about --version 0.9.1 --locked --features cli
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          test "$(node --version)" = 'v24.18.0'
+          test "$(npm --version)" = '11.16.0'
+          test "$(rustc --version | awk '{print $2}')" = '1.97.0'
+          test "$(cargo --version | awk '{print $2}')" = '1.97.0'
+          test "$(cargo-about --version)" = 'cargo-about 0.9.1'
+          test "$(cargo-cyclonedx cyclonedx --version)" = \
+            'cargo-cyclonedx-cyclonedx 0.5.9'
+
+      - name: Validate the Linux packaging inputs
+        run: |
+          find packaging/linux -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+          shellcheck --severity=error -x -P SCRIPTDIR packaging/linux/*.sh
+          node --check packaging/generate-release-metadata.mjs
+          node tools/architecture/verify-public-rust-zero-surface.mjs
+
+      - name: Build and verify the exact Linux package once
+        id: candidate
+        run: |
+          output_root="$RUNNER_TEMP/rbcsp-release"
+          source_root='${{ steps.source.outputs.source_root }}'
+          build_root="$GITHUB_WORKSPACE/.cache/p7-4-build/linux"
+          cargo fetch --locked --manifest-path "$source_root/Cargo.toml"
+          bash packaging/linux/build.sh \
+            --source-root "$source_root" \
+            --source-commit "$REQUESTED_SOURCE_COMMIT" \
+            --output-root "$output_root" \
+            --build-root "$build_root"
+          archive="$output_root/rbcsp-linux-x86_64-0.1.0.tar.gz"
+          archive_hash="$(sha256sum "$archive" | awk '{print $1}')"
+          archive_bytes="$(stat -c '%s' "$archive")"
+          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+          printf 'sha256=%s\n' "$archive_hash" >> "$GITHUB_OUTPUT"
+          printf 'bytes=%s\n' "$archive_bytes" >> "$GITHUB_OUTPUT"
+          {
+            printf '### Linux iteration package\n\n'
+            printf -- '- Source commit: `%s`\n' "$REQUESTED_SOURCE_COMMIT"
+            printf -- '- Source date epoch: `%s`\n' '${{ steps.source.outputs.source_date_epoch }}'
+            printf -- '- SHA-256: `%s`\n' "$archive_hash"
+            printf -- '- Bytes: `%s`\n' "$archive_bytes"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the verified Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rbcsp-linux-x86_64-0.1.0-${{ steps.source.outputs.short_commit }}
+          path: ${{ steps.candidate.outputs.archive }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

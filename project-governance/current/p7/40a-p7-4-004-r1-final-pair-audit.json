@@ -1,0 +1,13 @@
+{
+  "task": "P7.4-004-R1",
+  "status": "PASS",
+  "sourceCommit": "476565cbe8e19075214cdc1427c86cf2dcf4e966",
+  "windows": { "sha256": "2c807e475779f9d3f7e8549921655dad87c4dff3b06286d05ac2a985fa2907d2", "bytes": 5564014, "files": 11 },
+  "linux": { "sha256": "67c4f5ac228dee7e4cc69378b12fbe294f3175f0bc453f5818e18704eba6cf04", "bytes": 6393468, "files": 20 },
+  "auditedRunIds": [29400462225, 29401683685],
+  "sharedComponents": 169,
+  "sharedFrontendComponents": 10,
+  "databaseOrPreloadedRutgersData": false,
+  "gate": "P7_4_CROSS_PACKAGE_AUDIT_R1_PASS",
+  "nextTask": "P7.4-005-R1"
+}

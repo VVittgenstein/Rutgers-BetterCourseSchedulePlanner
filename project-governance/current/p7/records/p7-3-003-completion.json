@@ -1,0 +1,17 @@
+{
+  "task": "P7.3-003",
+  "status": "PRECOMMIT_LOCAL_PASS",
+  "parent": "1cd754d24bbac652485c7b693baa433c4d229ffc",
+  "verifiedAtUtc": "2026-07-14T22:45:26.3394325Z",
+  "checks": {
+    "freshBrowserEvidence": "PASS_10_OF_10",
+    "accessibilityAndKeyboard": "PASS",
+    "functionalRegression": "PASS_100_OF_100",
+    "performanceAndDualBuild": "PASS",
+    "publicZeroSurface": "PASS_72_OF_72",
+    "remainingRegression": "NONE"
+  },
+  "gate": "P7_3_REVALIDATED_VISUAL_PASS",
+  "postPushMarker": "P7_3_003_PASS_POST_PUSH",
+  "nextTask": "P7.4-001"
+}

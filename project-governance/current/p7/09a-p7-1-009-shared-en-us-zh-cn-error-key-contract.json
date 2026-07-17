@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "task": "P7.1-009",
+  "parentCommit": "820a2b2d4fe0195271815f43f42e41dba8908362",
+  "branch": "codex/p7-implementation",
+  "verifiedAtUtc": "2026-07-14T12:25:32.4976888Z",
+  "productState": "COMPLETE",
+  "qualityState": "PASS",
+  "tests": {
+    "contracts": 87,
+    "frontendI18n": 9,
+    "frontendImportGuard": 72,
+    "workspace": "PASS"
+  },
+  "qualityGates": {
+    "format": "PASS",
+    "test": "PASS",
+    "clippyDenyWarnings": "PASS",
+    "frontendTypecheck": "PASS",
+    "frontendLocalBuild": "PASS",
+    "frontendPublicBuild": "PASS",
+    "architectureGraph": "PASS",
+    "cargoDeny": "PASS"
+  },
+  "scope": {
+    "taskPathCount": 22,
+    "protectedWorktreePathCount": 167,
+    "webStorageAccesses": 0,
+    "liveRutgersRequests": 0,
+    "packageBuilds": 0,
+    "productionMutations": 0
+  },
+  "postPushMarker": "P7_1_009_PASS_POST_PUSH"
+}

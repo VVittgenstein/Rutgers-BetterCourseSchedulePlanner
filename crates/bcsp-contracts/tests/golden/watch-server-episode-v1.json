@@ -1,0 +1,26 @@
+{
+  "type": "EPISODE_UPDATED",
+  "episode": {
+    "contractVersion": 1,
+    "episodeId": "00000000-0000-4000-8000-000000000003",
+    "activeWatchId": "00000000-0000-4000-8000-000000000002",
+    "sectionKey": {
+      "term": "T2026F",
+      "campus": "CAMPUS_A",
+      "index": "00001"
+    },
+    "state": "UNACKNOWLEDGED",
+    "notificationMode": "CONTINUOUS",
+    "continuousDuration": {
+      "kind": "UNLIMITED"
+    },
+    "maxAudible": 3,
+    "audibleCount": 0,
+    "firstObservedAt": "1970-01-01T00:00:01Z",
+    "lastObservedAt": "1970-01-01T00:00:01Z",
+    "observationCount": 1,
+    "latestObservationId": "00000000-0000-4000-8000-000000000001",
+    "stateChangedAt": "1970-01-01T00:00:01Z",
+    "closedAt": null
+  }
+}

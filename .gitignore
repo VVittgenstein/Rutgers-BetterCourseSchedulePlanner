@@ -1,3 +1,4 @@
+/target/
 # Logs
 logs
 *.log
@@ -156,6 +157,9 @@ scripts/poller_checkpoint.json
 configs/*.local.json
 configs/*.user.json
 
+# Project-local credentials and private infrastructure records
+/.secrets/
+
 # Release artifacts
 release/
 *.tar.gz
@@ -163,24 +167,20 @@ release/
 
 # Tasks/plans
 tasks_bugfix.json
-auto-refresh-tasks.json
-rEmail.json
-rRevision.json
-rSubscribe.json
-
-# Local project-management / agent artifacts
-Compact/
-review/
-Rutgers-dr/
-reports/
-notebooks/
-record.json
-read_only.md
 
 # Claude Code local settings
 .claude/
 
-# Local agent scaffolding and nested clones
-far/
-.git/ngagent/
+# Multi-agent worktrees
 .worktrees/
+
+# Multi-agent worktrees/runtime
+.ngagent/.worktrees/
+.ngagent/.orchestrator/
+.ngagent/state/
+.ngagent/archives/
+
+# Local RC iteration evidence inputs and runtime state
+/HumanTest/
+/chat-log-codex-*.md
+/.agents/

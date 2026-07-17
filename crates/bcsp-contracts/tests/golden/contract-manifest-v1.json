@@ -1,0 +1,5410 @@
+{
+  "schemaVersion": 1,
+  "apiProtocolVersion": 1,
+  "wsProtocolVersion": 1,
+  "scalarConstraints": [
+    {
+      "id": "term-id",
+      "wireType": "string",
+      "maxBytes": 16,
+      "pattern": "^[A-Z0-9_-]+$",
+      "semantic": "dynamic selector identity; no trim or case rewrite"
+    },
+    {
+      "id": "campus-code",
+      "wireType": "string",
+      "maxBytes": 32,
+      "pattern": "^[A-Z0-9_]+$",
+      "semantic": "dynamic selector identity; no fixed campus allowlist"
+    },
+    {
+      "id": "section-index",
+      "wireType": "string",
+      "exactBytes": 5,
+      "pattern": "^[0-9]{5}$",
+      "semantic": "leading zeroes are identity-significant"
+    },
+    {
+      "id": "course-string",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^[A-Za-z0-9:._-]+$",
+      "semantic": "opaque source identifier; no parsing or case rewrite"
+    },
+    {
+      "id": "variant-fingerprint",
+      "wireType": "string",
+      "exactBytes": 67,
+      "pattern": "^v1:[0-9a-f]{64}$",
+      "semantic": "algorithm-versioned canonical course-field fingerprint"
+    },
+    {
+      "id": "reason-field",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "semantic": "stable filter or domain field identifier"
+    },
+    {
+      "id": "detail-name",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "semantic": "safe public error-detail field or limit identifier"
+    },
+    {
+      "id": "message-key",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^error\\.[a-z0-9._-]+$",
+      "semantic": "stable translation key derived from the typed error code"
+    },
+    {
+      "id": "trace-id",
+      "wireType": "string",
+      "exactBytes": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "semantic": "canonical lowercase RFC 4122 random UUID v4; injected source"
+    },
+    {
+      "id": "protocol-version",
+      "wireType": "u16",
+      "semantic": "integer 2 is the active query contract; integer 1 is accepted only for explicit legacy migration"
+    },
+    {
+      "id": "catalog-contract-version",
+      "wireType": "u16",
+      "semantic": "integer 2 is active; integer 1 is accepted only for explicit legacy migration"
+    },
+    {
+      "id": "catalog-content-version",
+      "wireType": "u64",
+      "semantic": "monotonic target-scoped published content version; zero is invalid"
+    },
+    {
+      "id": "catalog-payload-digest",
+      "wireType": "string",
+      "exactBytes": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "semantic": "lowercase SHA-256 of the observed upstream payload; raw body excluded"
+    },
+    {
+      "id": "catalog-subject-code",
+      "wireType": "string",
+      "maxBytes": 64,
+      "semantic": "opaque dynamic subject identity; nonempty, trim-stable, control-free UTF-8; no compiled allowlist or rewrite"
+    },
+    {
+      "id": "catalog-discovery-source-id",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^[A-Z0-9_.:-]+$",
+      "semantic": "stable public discovery source identity; not an upstream URL"
+    },
+    {
+      "id": "catalog-diagnostic-code",
+      "wireType": "string",
+      "maxBytes": 64,
+      "pattern": "^[A-Z0-9_]+$",
+      "semantic": "stable redacted diagnostic code; never parser or upstream detail"
+    },
+    {
+      "id": "query-contract-version",
+      "wireType": "u16",
+      "semantic": "only integer 1 is accepted"
+    },
+    {
+      "id": "open-contract-version",
+      "wireType": "u16",
+      "semantic": "only integer 1 is accepted"
+    },
+    {
+      "id": "watch-contract-version",
+      "wireType": "u16",
+      "semantic": "only integer 1 is accepted"
+    },
+    {
+      "id": "watch-positive-u64",
+      "wireType": "u64",
+      "semantic": "positive integer with no product upper limit"
+    },
+    {
+      "id": "open-sequence",
+      "wireType": "u64",
+      "semantic": "nonzero target-scoped attempt or observation sequence"
+    },
+    {
+      "id": "open-http-status-code",
+      "wireType": "u16",
+      "semantic": "valid HTTP status code in the inclusive range 100..=599"
+    },
+    {
+      "id": "open-http-header-value",
+      "wireType": "string",
+      "maxBytes": 4096,
+      "semantic": "nonempty trim-stable unfolded HTTP response-header value containing only visible ASCII or horizontal tabs"
+    },
+    {
+      "id": "open-decoded-body-sha256",
+      "wireType": "string",
+      "exactBytes": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "semantic": "lowercase SHA-256 of the decoded Open response body; raw body excluded"
+    },
+    {
+      "id": "open-canonical-set-hash",
+      "wireType": "string",
+      "exactBytes": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "semantic": "lowercase SHA-256 over the normalized Open index set; raw body excluded"
+    },
+    {
+      "id": "open-state-hash",
+      "wireType": "string",
+      "exactBytes": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "semantic": "lowercase SHA-256 over the batch Catalog intersection state"
+    },
+    {
+      "id": "rutgers-day",
+      "wireType": "string",
+      "exactBytes": 10,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "semantic": "valid calendar date at the America/New_York day boundary"
+    },
+    {
+      "id": "filter-token",
+      "wireType": "string",
+      "maxBytes": 256,
+      "semantic": "normalized nonempty trim-stable control-free UTF-8 filter token"
+    }
+  ],
+  "schemas": [
+    {
+      "id": "bcsp.identity.term-campus-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campus",
+          "typeRef": "$scalar:campus-code",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.identity.section-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campus",
+          "typeRef": "$scalar:campus-code",
+          "required": true
+        },
+        {
+          "name": "index",
+          "typeRef": "$scalar:section-index",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.identity.course-group-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campus",
+          "typeRef": "$scalar:campus-code",
+          "required": true
+        },
+        {
+          "name": "courseString",
+          "typeRef": "$scalar:course-string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.identity.course-variant-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "group",
+          "typeRef": "$schema:bcsp.identity.course-group-key.v1",
+          "required": true
+        },
+        {
+          "name": "fingerprint",
+          "typeRef": "$scalar:variant-fingerprint",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:catalog-contract-version",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.unknown-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "MISSING",
+        "EXPLICIT_NULL",
+        "MALFORMED",
+        "SPARSE_EVIDENCE",
+        "NOT_OBSERVED",
+        "SOURCE_UNAVAILABLE",
+        "CONFLICTING_EVIDENCE"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.field-presence.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "presence",
+      "variants": [
+        {
+          "tagValue": "PRESENT",
+          "fields": [
+            {
+              "name": "value",
+              "typeRef": "$generic:T",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "EXPLICIT_NULL",
+          "fields": []
+        },
+        {
+          "tagValue": "ABSENT",
+          "fields": []
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.field-knowledge.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "knowledge",
+      "variants": [
+        {
+          "tagValue": "KNOWN",
+          "fields": [
+            {
+              "name": "presence",
+              "typeRef": "$generic:CatalogFieldPresence<T>",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "UNKNOWN",
+          "fields": [
+            {
+              "name": "reason",
+              "typeRef": "$schema:bcsp.catalog.unknown-reason.v1",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.target.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "key",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "termLabel",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "campusLabel",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "provenance",
+          "typeRef": "$schema:bcsp.catalog.discovery-provenance.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:catalog-contract-version",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "status",
+          "typeRef": "$schema:bcsp.catalog.discovery-status.v1",
+          "required": true
+        },
+        {
+          "name": "sources",
+          "typeRef": "$array:$schema:bcsp.catalog.discovery-source.v1",
+          "required": true
+        },
+        {
+          "name": "targets",
+          "typeRef": "$array:$schema:bcsp.catalog.target.v1",
+          "required": true
+        },
+        {
+          "name": "subjects",
+          "typeRef": "$array:$schema:bcsp.catalog.subject.v1",
+          "required": true
+        },
+        {
+          "name": "coreCodeDictionaries",
+          "typeRef": "$array:$schema:bcsp.catalog.core-code-dictionary.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-source-kind.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "SELECTOR",
+        "BOOTSTRAP"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-source.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "sourceId",
+          "typeRef": "$scalar:catalog-discovery-source-id",
+          "required": true
+        },
+        {
+          "name": "sourceKind",
+          "typeRef": "$schema:bcsp.catalog.discovery-source-kind.v1",
+          "required": true
+        },
+        {
+          "name": "sourceVersion",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "payloadDigest",
+          "typeRef": "$scalar:catalog-payload-digest",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-availability.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "CURRENT",
+        "STALE_LAST_SUCCESS",
+        "UNAVAILABLE_NO_FIRST_SUCCESS"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-error-class.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "TRANSPORT",
+        "HTTP",
+        "DECODE",
+        "VALIDATE",
+        "PERSIST"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-error.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "class",
+          "typeRef": "$schema:bcsp.catalog.discovery-error-class.v1",
+          "required": true
+        },
+        {
+          "name": "code",
+          "typeRef": "$scalar:catalog-diagnostic-code",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-point.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "contentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "availability",
+          "typeRef": "$schema:bcsp.catalog.discovery-availability.v1",
+          "required": true
+        },
+        {
+          "name": "latestAttempt",
+          "typeRef": "$optional:$schema:bcsp.catalog.discovery-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastSuccess",
+          "typeRef": "$optional:$schema:bcsp.catalog.discovery-point.v1",
+          "required": true
+        },
+        {
+          "name": "isStale",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "error",
+          "typeRef": "$optional:$schema:bcsp.catalog.discovery-error.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.discovery-provenance.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sourceId",
+          "typeRef": "$scalar:catalog-discovery-source-id",
+          "required": true
+        },
+        {
+          "name": "sourceKind",
+          "typeRef": "$schema:bcsp.catalog.discovery-source-kind.v1",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "payloadDigest",
+          "typeRef": "$scalar:catalog-payload-digest",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.source-kind.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "RUTGERS_CATALOG"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.provenance.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "source",
+          "typeRef": "$schema:bcsp.catalog.source-kind.v1",
+          "required": true
+        },
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "payloadDigest",
+          "typeRef": "$scalar:catalog-payload-digest",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.subject-provenance.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "DISCOVERY",
+          "fields": [
+            {
+              "name": "discovery",
+              "typeRef": "$schema:bcsp.catalog.discovery-provenance.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CATALOG",
+          "fields": [
+            {
+              "name": "contentVersion",
+              "typeRef": "$scalar:catalog-content-version",
+              "required": true
+            },
+            {
+              "name": "catalog",
+              "typeRef": "$schema:bcsp.catalog.provenance.v1",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.subject.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "code",
+          "typeRef": "$scalar:catalog-subject-code",
+          "required": true
+        },
+        {
+          "name": "label",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "provenance",
+          "typeRef": "$schema:bcsp.catalog.subject-provenance.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.core-code-option.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "code",
+          "typeRef": "$primitive:string",
+          "required": true
+        },
+        {
+          "name": "description",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.core-code-dictionary.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "contentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "provenance",
+          "typeRef": "$schema:bcsp.catalog.provenance.v1",
+          "required": true
+        },
+        {
+          "name": "options",
+          "typeRef": "$array:$schema:bcsp.catalog.core-code-option.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.occurrence-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "section",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "ordinal",
+          "typeRef": "$primitive:u32",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.normalized-course-group.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "key",
+          "typeRef": "$schema:bcsp.identity.course-group-key.v1",
+          "required": true
+        },
+        {
+          "name": "variantKeys",
+          "typeRef": "$array:$schema:bcsp.identity.course-variant-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.prerequisite-state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "HAS",
+        "NONE_REPORTED",
+        "UNKNOWN"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.normalized-course-variant.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "key",
+          "typeRef": "$schema:bcsp.identity.course-variant-key.v1",
+          "required": true
+        },
+        {
+          "name": "title",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "expandedTitle",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "description",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "notes",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "subjectGroupNotes",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "subjectNotes",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "unitNotes",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "synopsisUrl",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "prerequisiteNotes",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "prerequisiteState",
+          "typeRef": "$schema:bcsp.catalog.prerequisite-state.v1",
+          "required": true
+        },
+        {
+          "name": "credits",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "level",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "subjectCode",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "subjectDescription",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "courseNumber",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "supplementCode",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "schoolCode",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "offeringUnit",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "offeringUnitTitle",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "coreCodes",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<string>>",
+          "required": true
+        },
+        {
+          "name": "campusLocations",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<string>>",
+          "required": true
+        },
+        {
+          "name": "sectionKeys",
+          "typeRef": "$array:$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.open-status-provenance.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "CATALOG_SNAPSHOT_ONLY"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.snapshot-open-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "value",
+          "typeRef": "$generic:CatalogFieldKnowledge<bool>",
+          "required": true
+        },
+        {
+          "name": "provenance",
+          "typeRef": "$schema:bcsp.catalog.open-status-provenance.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.instructor-reliability.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "NAME_ONLY"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.unit-major.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "unitCode",
+          "typeRef": "$primitive:string",
+          "required": true
+        },
+        {
+          "name": "majorCode",
+          "typeRef": "$primitive:string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.comment.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "code",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "description",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.normalized-section.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "key",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "variantKey",
+          "typeRef": "$schema:bcsp.identity.course-variant-key.v1",
+          "required": true
+        },
+        {
+          "name": "sectionNumber",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "subtitle",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "subtopic",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "sectionNotes",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "sessionDates",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "sessionDatePrintIndicator",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "comments",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<CatalogCommentV1>>",
+          "required": true
+        },
+        {
+          "name": "commentsText",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "crossListedSectionsText",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "crossListedSectionType",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "instructors",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<string>>",
+          "required": true
+        },
+        {
+          "name": "instructorReliability",
+          "typeRef": "$schema:bcsp.catalog.instructor-reliability.v1",
+          "required": true
+        },
+        {
+          "name": "rawSectionCourseType",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "deliveryModality",
+          "typeRef": "$schema:bcsp.catalog.modality.v1",
+          "required": true
+        },
+        {
+          "name": "synchronicity",
+          "typeRef": "$schema:bcsp.catalog.synchronicity.v1",
+          "required": true
+        },
+        {
+          "name": "examCode",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "examCodeText",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "specialPermissionAddCode",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "specialPermissionAddDescription",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "specialPermissionDropCode",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "specialPermissionDropDescription",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "majorCodes",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<string>>",
+          "required": true
+        },
+        {
+          "name": "unitCodes",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<string>>",
+          "required": true
+        },
+        {
+          "name": "minorCodes",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<string>>",
+          "required": true
+        },
+        {
+          "name": "honorProgramCodes",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<string>>",
+          "required": true
+        },
+        {
+          "name": "unitMajors",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<CatalogUnitMajorV1>>",
+          "required": true
+        },
+        {
+          "name": "eligibilityText",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "openToText",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "catalogOpenStatus",
+          "typeRef": "$schema:bcsp.catalog.snapshot-open-status.v1",
+          "required": true
+        },
+        {
+          "name": "occurrenceKeys",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<CatalogOccurrenceKeyV1>>",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.modality.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ON_CAMPUS_OR_IN_PERSON",
+        "HYBRID",
+        "ONLINE",
+        "OTHER",
+        "UNKNOWN",
+        "UNKNOWN_CONFLICT"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.synchronicity.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "SYNC",
+        "ASYNC",
+        "MIXED",
+        "UNSPECIFIED",
+        "UNKNOWN"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.occurrence-kind.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "SCHEDULED",
+        "BY_ARRANGEMENT",
+        "UNSPECIFIED"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.occurrence-evidence.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "NONE",
+        "PHYSICAL",
+        "REMOTE"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.requiredness.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "REQUIRED",
+        "OPTIONAL",
+        "UNKNOWN_REQUIREDNESS"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.time-knowledge.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "knowledge",
+      "variants": [
+        {
+          "tagValue": "MISSING",
+          "fields": []
+        },
+        {
+          "tagValue": "EXPLICIT_NULL",
+          "fields": []
+        },
+        {
+          "tagValue": "EMPTY",
+          "fields": []
+        },
+        {
+          "tagValue": "PARTIAL",
+          "fields": []
+        },
+        {
+          "tagValue": "INVALID",
+          "fields": []
+        },
+        {
+          "tagValue": "KNOWN",
+          "fields": [
+            {
+              "name": "startMinute",
+              "typeRef": "$primitive:u16",
+              "required": true
+            },
+            {
+              "name": "endMinute",
+              "typeRef": "$primitive:u16",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.normalized-occurrence.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "key",
+          "typeRef": "$schema:bcsp.catalog.occurrence-key.v1",
+          "required": true
+        },
+        {
+          "name": "rawCode",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "rawDescription",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "modality",
+          "typeRef": "$generic:CatalogFieldKnowledge<CatalogModality>",
+          "required": true
+        },
+        {
+          "name": "synchronicity",
+          "typeRef": "$generic:CatalogFieldKnowledge<CatalogSynchronicity>",
+          "required": true
+        },
+        {
+          "name": "rawDay",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "days",
+          "typeRef": "$generic:CatalogFieldKnowledge<array<string>>",
+          "required": true
+        },
+        {
+          "name": "rawStartTime",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "rawEndTime",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "time",
+          "typeRef": "$schema:bcsp.catalog.time-knowledge.v1",
+          "required": true
+        },
+        {
+          "name": "startDate",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "endDate",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "campus",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "campusName",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "building",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "room",
+          "typeRef": "$generic:CatalogFieldKnowledge<string>",
+          "required": true
+        },
+        {
+          "name": "requiredness",
+          "typeRef": "$schema:bcsp.catalog.requiredness.v1",
+          "required": true
+        },
+        {
+          "name": "kind",
+          "typeRef": "$schema:bcsp.catalog.occurrence-kind.v1",
+          "required": true
+        },
+        {
+          "name": "evidence",
+          "typeRef": "$schema:bcsp.catalog.occurrence-evidence.v1",
+          "required": true
+        },
+        {
+          "name": "normalizationReason",
+          "typeRef": "$scalar:catalog-diagnostic-code",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.normalized-catalog.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:catalog-contract-version",
+          "required": true
+        },
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "contentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "provenance",
+          "typeRef": "$schema:bcsp.catalog.provenance.v1",
+          "required": true
+        },
+        {
+          "name": "courseGroups",
+          "typeRef": "$array:$schema:bcsp.catalog.normalized-course-group.v1",
+          "required": true
+        },
+        {
+          "name": "courseVariants",
+          "typeRef": "$array:$schema:bcsp.catalog.normalized-course-variant.v1",
+          "required": true
+        },
+        {
+          "name": "sections",
+          "typeRef": "$array:$schema:bcsp.catalog.normalized-section.v1",
+          "required": true
+        },
+        {
+          "name": "occurrences",
+          "typeRef": "$array:$schema:bcsp.catalog.normalized-occurrence.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.refresh-classification.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "STARTED",
+        "STAGED",
+        "APPLIED_CHANGED",
+        "APPLIED_UNCHANGED",
+        "EMPTY_VALID_INITIAL",
+        "EMPTY_SUSPECT",
+        "PARTIAL",
+        "ERROR",
+        "INTERRUPTED"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.refresh-error-class.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "TRANSPORT",
+        "HTTP",
+        "DECODE",
+        "NORMALIZE",
+        "VALIDATE",
+        "PERSIST"
+      ]
+    },
+    {
+      "id": "bcsp.catalog.entity-counts.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "courseGroups",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "courseVariants",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "sections",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "occurrences",
+          "typeRef": "$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.refresh-observation.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:catalog-contract-version",
+          "required": true
+        },
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "startedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "finishedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "classification",
+          "typeRef": "$schema:bcsp.catalog.refresh-classification.v1",
+          "required": true
+        },
+        {
+          "name": "contentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "payloadDigest",
+          "typeRef": "$optional:$scalar:catalog-payload-digest",
+          "required": true
+        },
+        {
+          "name": "counts",
+          "typeRef": "$schema:bcsp.catalog.entity-counts.v1",
+          "required": true
+        },
+        {
+          "name": "errorClass",
+          "typeRef": "$optional:$schema:bcsp.catalog.refresh-error-class.v1",
+          "required": true
+        },
+        {
+          "name": "partialReasons",
+          "typeRef": "$array:$schema:bcsp.catalog.unknown-reason.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.refresh-point.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "classification",
+          "typeRef": "$schema:bcsp.catalog.refresh-classification.v1",
+          "required": true
+        },
+        {
+          "name": "contentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.refresh-checkpoint-point.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "classification",
+          "typeRef": "$schema:bcsp.catalog.refresh-classification.v1",
+          "required": true
+        },
+        {
+          "name": "contentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.refresh-checkpoint.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:catalog-contract-version",
+          "required": true
+        },
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "latestAttempt",
+          "typeRef": "$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastSuccess",
+          "typeRef": "$optional:$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastPublished",
+          "typeRef": "$optional:$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastNonempty",
+          "typeRef": "$optional:$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+          "required": true
+        },
+        {
+          "name": "pendingEmpty",
+          "typeRef": "$optional:$schema:bcsp.catalog.refresh-checkpoint-point.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.catalog.refresh-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:catalog-contract-version",
+          "required": true
+        },
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "latestAttempt",
+          "typeRef": "$schema:bcsp.catalog.refresh-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastSuccess",
+          "typeRef": "$optional:$schema:bcsp.catalog.refresh-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastPublished",
+          "typeRef": "$optional:$schema:bcsp.catalog.refresh-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastNonempty",
+          "typeRef": "$optional:$schema:bcsp.catalog.refresh-point.v1",
+          "required": true
+        },
+        {
+          "name": "pendingEmpty",
+          "typeRef": "$optional:$schema:bcsp.catalog.refresh-point.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.batch-key.v1",
+      "direction": "SHARED_IDENTITY",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campus",
+          "typeRef": "$scalar:campus-code",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.refresh-classification.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "IN_FLIGHT",
+        "VALID_APPLIED",
+        "VALID_EMPTY_NO_ROWS",
+        "UNSAFE_EMPTY",
+        "UNSAFE_ZERO_INTERSECTION",
+        "STALE_CATALOG_RACE",
+        "FAILED"
+      ]
+    },
+    {
+      "id": "bcsp.open.applied-classification.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "VALID_APPLIED",
+        "VALID_EMPTY_NO_ROWS"
+      ]
+    },
+    {
+      "id": "bcsp.open.failure-class.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "NETWORK",
+        "TIMEOUT",
+        "HTTP_408",
+        "HTTP_429",
+        "FORBIDDEN",
+        "OTHER_HTTP_4XX",
+        "HTTP_5XX",
+        "OFF_ORIGIN_REDIRECT",
+        "NON_JSON",
+        "OVERSIZE",
+        "SCHEMA_VIOLATION",
+        "INVALID_VALUE",
+        "PERSIST"
+      ]
+    },
+    {
+      "id": "bcsp.open.state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "OPEN",
+        "CLOSED",
+        "UNKNOWN"
+      ]
+    },
+    {
+      "id": "bcsp.open.freshness-state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "UNKNOWN",
+        "FRESH",
+        "STALE"
+      ]
+    },
+    {
+      "id": "bcsp.open.uncertainty-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "NEVER_OBSERVED",
+        "STALE_LAST_KNOWN_GOOD",
+        "LATEST_ATTEMPT_FAILED",
+        "LATEST_ATTEMPT_UNSAFE",
+        "STALE_CATALOG_RACE",
+        "CATALOG_VERSION_UNAVAILABLE"
+      ]
+    },
+    {
+      "id": "bcsp.open.scheduler-lane.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "GENERAL",
+        "ACTIVE_WATCH",
+        "FIRST_LOAD",
+        "MANUAL_REFRESH",
+        "CATALOG_RACE_RECHECK"
+      ]
+    },
+    {
+      "id": "bcsp.open.circuit-state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "CLOSED",
+        "RETRY_AFTER",
+        "FATAL_DIAGNOSTIC"
+      ]
+    },
+    {
+      "id": "bcsp.open.circuit-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "RATE_LIMITED",
+        "FORBIDDEN",
+        "OTHER_HTTP_4XX",
+        "OFF_ORIGIN_REDIRECT",
+        "SAME_ORIGIN_REDIRECT",
+        "INVALID_REDIRECT",
+        "NON_JSON",
+        "INVALID_CONTENT_TYPE",
+        "SCHEMA_VIOLATION",
+        "INVALID_VALUE",
+        "OVERSIZE"
+      ]
+    },
+    {
+      "id": "bcsp.open.rutgers-day-timezone.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "America/New_York"
+      ]
+    },
+    {
+      "id": "bcsp.open.pull-counts.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "attempted",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "succeeded",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "failed",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "empty",
+          "typeRef": "$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.counter-snapshot.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "todayCounts",
+          "typeRef": "$schema:bcsp.open.pull-counts.v1",
+          "required": true
+        },
+        {
+          "name": "rutgersDay",
+          "typeRef": "$scalar:rutgers-day",
+          "required": true
+        },
+        {
+          "name": "dayTimezone",
+          "typeRef": "$schema:bcsp.open.rutgers-day-timezone.v1",
+          "required": true
+        },
+        {
+          "name": "runCounts",
+          "typeRef": "$schema:bcsp.open.pull-counts.v1",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.freshness.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.open.freshness-state.v1",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "freshUntil",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "lastKnownGoodAgeSeconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "uncertainty",
+          "typeRef": "$optional:$schema:bcsp.open.uncertainty-reason.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.http-metadata.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "statusCode",
+          "typeRef": "$optional:$scalar:open-http-status-code",
+          "required": true
+        },
+        {
+          "name": "decodedBytes",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "decodedBodySha256",
+          "typeRef": "$optional:$scalar:open-decoded-body-sha256",
+          "required": true
+        },
+        {
+          "name": "contentType",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "etag",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "cacheControl",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "date",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "ageSeconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "lastModified",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        },
+        {
+          "name": "retryAfter",
+          "typeRef": "$optional:$scalar:open-http-header-value",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.reconcile-counts.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "canonicalOpenIndexes",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "duplicateIndexes",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "catalogSections",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "matchedOpenSections",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "closedSections",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "orphanIndexes",
+          "typeRef": "$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.attempt-schedule.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "lane",
+          "typeRef": "$schema:bcsp.open.scheduler-lane.v1",
+          "required": true
+        },
+        {
+          "name": "requestedGeneralIntervalSeconds",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "requestedEffectiveIntervalSeconds",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "dueAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "schedulerLagMilliseconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "actualStartToStartIntervalMilliseconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.pull-attempt.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "attemptId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        },
+        {
+          "name": "attemptSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "startedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "completedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "classification",
+          "typeRef": "$schema:bcsp.open.refresh-classification.v1",
+          "required": true
+        },
+        {
+          "name": "failureClass",
+          "typeRef": "$optional:$schema:bcsp.open.failure-class.v1",
+          "required": true
+        },
+        {
+          "name": "http",
+          "typeRef": "$schema:bcsp.open.http-metadata.v1",
+          "required": true
+        },
+        {
+          "name": "canonicalSetHash",
+          "typeRef": "$optional:$scalar:open-canonical-set-hash",
+          "required": true
+        },
+        {
+          "name": "stateHash",
+          "typeRef": "$optional:$scalar:open-state-hash",
+          "required": true
+        },
+        {
+          "name": "counts",
+          "typeRef": "$schema:bcsp.open.reconcile-counts.v1",
+          "required": true
+        },
+        {
+          "name": "schedule",
+          "typeRef": "$schema:bcsp.open.attempt-schedule.v1",
+          "required": true
+        },
+        {
+          "name": "lastKnownGoodAgeSeconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.refresh-observation.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        },
+        {
+          "name": "attemptSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "observationSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "startedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "completedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "classification",
+          "typeRef": "$schema:bcsp.open.applied-classification.v1",
+          "required": true
+        },
+        {
+          "name": "http",
+          "typeRef": "$schema:bcsp.open.http-metadata.v1",
+          "required": true
+        },
+        {
+          "name": "canonicalSetHash",
+          "typeRef": "$scalar:open-canonical-set-hash",
+          "required": true
+        },
+        {
+          "name": "stateHash",
+          "typeRef": "$scalar:open-state-hash",
+          "required": true
+        },
+        {
+          "name": "counts",
+          "typeRef": "$schema:bcsp.open.reconcile-counts.v1",
+          "required": true
+        },
+        {
+          "name": "schedule",
+          "typeRef": "$schema:bcsp.open.attempt-schedule.v1",
+          "required": true
+        },
+        {
+          "name": "bodyChanged",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "stateChanged",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "lastKnownGoodAgeSeconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.observation.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "refreshObservationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "pullSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.open.state.v1",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "freshUntil",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "schedulerLagMilliseconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "counterSnapshot",
+          "typeRef": "$schema:bcsp.open.counter-snapshot.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.attempt-point.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "attemptSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "startedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "completedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "classification",
+          "typeRef": "$schema:bcsp.open.refresh-classification.v1",
+          "required": true
+        },
+        {
+          "name": "failureClass",
+          "typeRef": "$optional:$schema:bcsp.open.failure-class.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.failure-point.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "attemptSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "failedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "failureClass",
+          "typeRef": "$schema:bcsp.open.failure-class.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.observation-point.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "observationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "observationSequence",
+          "typeRef": "$scalar:open-sequence",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "canonicalSetHash",
+          "typeRef": "$scalar:open-canonical-set-hash",
+          "required": true
+        },
+        {
+          "name": "stateHash",
+          "typeRef": "$scalar:open-state-hash",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.circuit-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.open.circuit-state.v1",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "typeRef": "$optional:$schema:bcsp.open.circuit-reason.v1",
+          "required": true
+        },
+        {
+          "name": "openedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "retryAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "diagnosticRecheckRequired",
+          "typeRef": "$primitive:bool",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.scheduler-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "lane",
+          "typeRef": "$schema:bcsp.open.scheduler-lane.v1",
+          "required": true
+        },
+        {
+          "name": "requestedGeneralIntervalSeconds",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "requestedEffectiveIntervalSeconds",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "activeWatchCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "nextDueAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "inFlight",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "schedulerLagMilliseconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "actualStartToStartIntervalMilliseconds",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "failureStreak",
+          "typeRef": "$primitive:u32",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.refresh-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "latestAttempt",
+          "typeRef": "$optional:$schema:bcsp.open.attempt-point.v1",
+          "required": true
+        },
+        {
+          "name": "latestFailure",
+          "typeRef": "$optional:$schema:bcsp.open.failure-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastValidObservation",
+          "typeRef": "$optional:$schema:bcsp.open.observation-point.v1",
+          "required": true
+        },
+        {
+          "name": "lastBodyChangeAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "lastStateChangeAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "freshness",
+          "typeRef": "$schema:bcsp.open.freshness.v1",
+          "required": true
+        },
+        {
+          "name": "scheduler",
+          "typeRef": "$schema:bcsp.open.scheduler-status.v1",
+          "required": true
+        },
+        {
+          "name": "circuit",
+          "typeRef": "$schema:bcsp.open.circuit-status.v1",
+          "required": true
+        },
+        {
+          "name": "counterSnapshot",
+          "typeRef": "$schema:bcsp.open.counter-snapshot.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.section-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.open.state.v1",
+          "required": true
+        },
+        {
+          "name": "lastObservationId",
+          "typeRef": "$optional:$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "freshness",
+          "typeRef": "$schema:bcsp.open.freshness.v1",
+          "required": true
+        },
+        {
+          "name": "schedulerLagMilliseconds",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "counterSnapshot",
+          "typeRef": "$schema:bcsp.open.counter-snapshot.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.status-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "batch",
+          "typeRef": "$schema:bcsp.open.batch-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.open.section-status-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:open-contract-version",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-field-id.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "FLT-C01",
+        "FLT-C02",
+        "FLT-C03",
+        "FLT-C04",
+        "FLT-C05",
+        "FLT-C06",
+        "FLT-C07",
+        "FLT-C08",
+        "FLT-C09",
+        "FLT-S01",
+        "FLT-S03",
+        "FLT-S04a",
+        "FLT-S04b",
+        "FLT-S05",
+        "FLT-S06",
+        "FLT-S07",
+        "FLT-S09",
+        "FLT-S10"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-scope.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "COURSE",
+        "SECTION"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-value-kind.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "TERM_ID",
+        "CAMPUS_CODE_SET",
+        "SUBJECT_CODE_SET",
+        "KEYWORD_SET",
+        "COURSE_NUMBER_SET",
+        "LEVEL_SET",
+        "CREDIT_RANGE",
+        "CORE_CODE_SET",
+        "PREREQUISITE_PRESENCE",
+        "SECTION_INDEX_SET",
+        "OPEN_STATUS_SET",
+        "MODALITY_SET",
+        "SYNCHRONICITY_SET",
+        "INSTRUCTOR_NAME_SET",
+        "AVAILABILITY_WINDOWS",
+        "MEETING_LOCATION_SET",
+        "EXAM_CODE_SET",
+        "PERMISSION_REQUIREMENT"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-schema-value.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "REQUIRED",
+        "EMPTY_SET",
+        "UNBOUNDED_RANGE",
+        "ANY",
+        "EMPTY_WINDOWS",
+        "EMPTY_COMPOSITE"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-normalization.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "CANONICAL_IDENTITY",
+        "TRIM",
+        "TRIM_AND_COLLAPSE_WHITESPACE",
+        "ASCII_UPPERCASE",
+        "SORT_DEDUPLICATE",
+        "CREDIT_HUNDREDTHS",
+        "MINUTE_OF_DAY",
+        "TOKEN_AND"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-validation.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "REQUIRED",
+        "DYNAMIC_DICTIONARY",
+        "NONEMPTY_WHEN_ACTIVE",
+        "ORDERED_INCLUSIVE_RANGE",
+        "ORDERED_MINUTE_INTERVAL",
+        "SECTION_INDEX_IDENTITY",
+        "STRUCTURED_ONLY",
+        "MAX32_TEXT_TOKENS",
+        "MAX128_TOKEN_BYTES",
+        "TOKEN_CONTAINS_ALPHANUMERIC"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-query-encoding.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "EXACT_ONE",
+        "EXACT_ANY",
+        "KEYWORD_TOKEN_AND_EXACT_IDENTIFIER_PRIORITY",
+        "INCLUSIVE_RANGE",
+        "EXPLICIT_ANY_ALL",
+        "TERNARY_PRESENCE",
+        "SAME_SECTION_EXACT_ANY",
+        "SAME_SECTION_AVAILABILITY_ALL",
+        "SAME_SECTION_STRUCTURED_DIMENSIONS"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-canonical-neutral.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "REQUIRED",
+          "fields": []
+        },
+        {
+          "tagValue": "JSON",
+          "fields": [
+            {
+              "name": "value",
+              "typeRef": "$primitive:json",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-field-schema.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "stableId",
+          "typeRef": "$schema:bcsp.query.filter-field-id.v1",
+          "required": true
+        },
+        {
+          "name": "requestField",
+          "typeRef": "$primitive:string",
+          "required": true
+        },
+        {
+          "name": "scope",
+          "typeRef": "$schema:bcsp.query.filter-scope.v1",
+          "required": true
+        },
+        {
+          "name": "valueKind",
+          "typeRef": "$schema:bcsp.query.filter-value-kind.v1",
+          "required": true
+        },
+        {
+          "name": "neutral",
+          "typeRef": "$schema:bcsp.query.filter-schema-value.v1",
+          "required": true
+        },
+        {
+          "name": "default",
+          "typeRef": "$schema:bcsp.query.filter-schema-value.v1",
+          "required": true
+        },
+        {
+          "name": "canonicalNeutral",
+          "typeRef": "$schema:bcsp.query.filter-canonical-neutral.v1",
+          "required": true
+        },
+        {
+          "name": "normalization",
+          "typeRef": "$array:$schema:bcsp.query.filter-normalization.v1",
+          "required": true
+        },
+        {
+          "name": "validation",
+          "typeRef": "$array:$schema:bcsp.query.filter-validation.v1",
+          "required": true
+        },
+        {
+          "name": "queryEncoding",
+          "typeRef": "$schema:bcsp.query.filter-query-encoding.v1",
+          "required": true
+        },
+        {
+          "name": "i18nKey",
+          "typeRef": "$primitive:string",
+          "required": true
+        },
+        {
+          "name": "chipOrder",
+          "typeRef": "$primitive:u8",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-schema.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "fields",
+          "typeRef": "$array:$schema:bcsp.query.filter-field-schema.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.set-mode.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ANY",
+        "ALL"
+      ]
+    },
+    {
+      "id": "bcsp.query.prerequisite-filter.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ANY",
+        "HAS",
+        "NONE_REPORTED"
+      ]
+    },
+    {
+      "id": "bcsp.query.live-open-state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "OPEN",
+        "CLOSED",
+        "UNKNOWN"
+      ]
+    },
+    {
+      "id": "bcsp.query.modality-filter.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ON_CAMPUS_OR_IN_PERSON",
+        "ONLINE",
+        "HYBRID",
+        "OTHER",
+        "UNKNOWN"
+      ]
+    },
+    {
+      "id": "bcsp.query.permission-filter.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ANY",
+        "REQUIRED",
+        "NOT_REQUIRED"
+      ]
+    },
+    {
+      "id": "bcsp.query.weekday.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "MONDAY",
+        "TUESDAY",
+        "WEDNESDAY",
+        "THURSDAY",
+        "FRIDAY",
+        "SATURDAY",
+        "SUNDAY"
+      ]
+    },
+    {
+      "id": "bcsp.query.credit-range.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "minimumHundredths",
+          "typeRef": "$optional:$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "maximumHundredths",
+          "typeRef": "$optional:$primitive:u32",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.availability-window.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "weekday",
+          "typeRef": "$schema:bcsp.query.weekday.v1",
+          "required": true
+        },
+        {
+          "name": "startMinute",
+          "typeRef": "$primitive:u16",
+          "required": true
+        },
+        {
+          "name": "endMinute",
+          "typeRef": "$primitive:u16",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.core-filter.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "codes",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "mode",
+          "typeRef": "$schema:bcsp.query.set-mode.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.meeting-location-match-mode.v2",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ANY_MEETING",
+        "ALL_REQUIRED_MEETINGS"
+      ]
+    },
+    {
+      "id": "bcsp.query.meeting-location-filter.v2",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "locations",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "mode",
+          "typeRef": "$schema:bcsp.query.meeting-location-match-mode.v2",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.normalized-filter-values.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campuses",
+          "typeRef": "$array:$scalar:campus-code",
+          "required": true
+        },
+        {
+          "name": "subjects",
+          "typeRef": "$array:$scalar:catalog-subject-code",
+          "required": true
+        },
+        {
+          "name": "keywords",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "courseNumbers",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "levels",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "credits",
+          "typeRef": "$optional:$schema:bcsp.query.credit-range.v1",
+          "required": true
+        },
+        {
+          "name": "core",
+          "typeRef": "$schema:bcsp.query.core-filter.v1",
+          "required": true
+        },
+        {
+          "name": "prerequisite",
+          "typeRef": "$schema:bcsp.query.prerequisite-filter.v1",
+          "required": true
+        },
+        {
+          "name": "sectionIndexes",
+          "typeRef": "$array:$scalar:section-index",
+          "required": true
+        },
+        {
+          "name": "openStatuses",
+          "typeRef": "$array:$schema:bcsp.query.live-open-state.v1",
+          "required": true
+        },
+        {
+          "name": "modalities",
+          "typeRef": "$array:$schema:bcsp.query.modality-filter.v1",
+          "required": true
+        },
+        {
+          "name": "synchronicities",
+          "typeRef": "$array:$schema:bcsp.catalog.synchronicity.v1",
+          "required": true
+        },
+        {
+          "name": "instructors",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "availability",
+          "typeRef": "$array:$schema:bcsp.query.availability-window.v1",
+          "required": true
+        },
+        {
+          "name": "meetingLocations",
+          "typeRef": "$schema:bcsp.query.meeting-location-filter.v2",
+          "required": true
+        },
+        {
+          "name": "examCodes",
+          "typeRef": "$array:$scalar:filter-token",
+          "required": true
+        },
+        {
+          "name": "permission",
+          "typeRef": "$schema:bcsp.query.permission-filter.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "values",
+          "typeRef": "$schema:bcsp.query.normalized-filter-values.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.page-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "page",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "pageSize",
+          "typeRef": "$primitive:u16",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.sort-direction.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ASCENDING",
+        "DESCENDING"
+      ]
+    },
+    {
+      "id": "bcsp.query.course-sort-field.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "RELEVANCE",
+        "COURSE_IDENTIFIER",
+        "TITLE"
+      ]
+    },
+    {
+      "id": "bcsp.query.course-sort.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "field",
+          "typeRef": "$schema:bcsp.query.course-sort-field.v1",
+          "required": true
+        },
+        {
+          "name": "direction",
+          "typeRef": "$schema:bcsp.query.sort-direction.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-sort-field.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "SECTION_INDEX",
+        "SECTION_NUMBER",
+        "COURSE_IDENTIFIER",
+        "OPEN_STATUS"
+      ]
+    },
+    {
+      "id": "bcsp.query.section-sort.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "field",
+          "typeRef": "$schema:bcsp.query.section-sort-field.v1",
+          "required": true
+        },
+        {
+          "name": "direction",
+          "typeRef": "$schema:bcsp.query.sort-direction.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-query-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "filters",
+          "typeRef": "$schema:bcsp.query.filter-request.v1",
+          "required": true
+        },
+        {
+          "name": "page",
+          "typeRef": "$schema:bcsp.query.page-request.v1",
+          "required": true
+        },
+        {
+          "name": "sort",
+          "typeRef": "$schema:bcsp.query.course-sort.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-query-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "filters",
+          "typeRef": "$schema:bcsp.query.filter-request.v1",
+          "required": true
+        },
+        {
+          "name": "page",
+          "typeRef": "$schema:bcsp.query.page-request.v1",
+          "required": true
+        },
+        {
+          "name": "sort",
+          "typeRef": "$schema:bcsp.query.section-sort.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-options-field.v2",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "KEYWORD",
+        "COURSE_LEVEL",
+        "INSTRUCTOR",
+        "MEETING_LOCATION",
+        "EXAM_CODE"
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-options-request.v2",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "campuses",
+          "typeRef": "$array:$scalar:campus-code",
+          "required": true
+        },
+        {
+          "name": "field",
+          "typeRef": "$schema:bcsp.query.filter-options-field.v2",
+          "required": true
+        },
+        {
+          "name": "query",
+          "typeRef": "$optional:$primitive:string",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "typeRef": "$optional:$primitive:u16",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-option-target-version.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "contentVersion",
+          "typeRef": "$scalar:catalog-content-version",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-option.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "value",
+          "typeRef": "$primitive:string",
+          "required": true
+        },
+        {
+          "name": "label",
+          "typeRef": "$primitive:string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-options-response.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "field",
+          "typeRef": "$schema:bcsp.query.filter-options-field.v2",
+          "required": true
+        },
+        {
+          "name": "targetVersions",
+          "typeRef": "$array:$schema:bcsp.query.filter-option-target-version.v2",
+          "required": true
+        },
+        {
+          "name": "options",
+          "typeRef": "$array:$schema:bcsp.query.filter-option.v2",
+          "required": true
+        },
+        {
+          "name": "truncated",
+          "typeRef": "$primitive:bool",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-detail-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "key",
+          "typeRef": "$schema:bcsp.identity.course-group-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-detail-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "key",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.live-open-evidence.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.query.live-open-state.v1",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "freshUntil",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "uncertainty",
+          "typeRef": "$optional:$schema:bcsp.match.reason-code.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.filter-match.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "fieldId",
+          "typeRef": "$schema:bcsp.query.filter-field-id.v1",
+          "required": true
+        },
+        {
+          "name": "explanation",
+          "typeRef": "$schema:bcsp.match.explanation.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.text-match-evidence.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "exactCourseIdentifier",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "matchedTokens",
+          "typeRef": "$array:$primitive:string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-query-item.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "section",
+          "typeRef": "$schema:bcsp.catalog.normalized-section.v1",
+          "required": true
+        },
+        {
+          "name": "occurrences",
+          "typeRef": "$array:$schema:bcsp.catalog.normalized-occurrence.v1",
+          "required": true
+        },
+        {
+          "name": "open",
+          "typeRef": "$schema:bcsp.query.live-open-evidence.v1",
+          "required": true
+        },
+        {
+          "name": "explanation",
+          "typeRef": "$schema:bcsp.match.explanation.v1",
+          "required": true
+        },
+        {
+          "name": "filterMatches",
+          "typeRef": "$array:$schema:bcsp.query.filter-match.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-search-item.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "variant",
+          "typeRef": "$schema:bcsp.catalog.normalized-course-variant.v1",
+          "required": true
+        },
+        {
+          "name": "section",
+          "typeRef": "$schema:bcsp.query.section-query-item.v1",
+          "required": true
+        },
+        {
+          "name": "courseFilterMatches",
+          "typeRef": "$array:$schema:bcsp.query.filter-match.v1",
+          "required": true
+        },
+        {
+          "name": "textMatch",
+          "typeRef": "$optional:$schema:bcsp.query.text-match-evidence.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-variant-query-item.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "variant",
+          "typeRef": "$schema:bcsp.catalog.normalized-course-variant.v1",
+          "required": true
+        },
+        {
+          "name": "explanation",
+          "typeRef": "$schema:bcsp.match.explanation.v1",
+          "required": true
+        },
+        {
+          "name": "filterMatches",
+          "typeRef": "$array:$schema:bcsp.query.filter-match.v1",
+          "required": true
+        },
+        {
+          "name": "textMatch",
+          "typeRef": "$optional:$schema:bcsp.query.text-match-evidence.v1",
+          "required": true
+        },
+        {
+          "name": "sections",
+          "typeRef": "$array:$schema:bcsp.query.section-query-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-query-item.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "group",
+          "typeRef": "$schema:bcsp.catalog.normalized-course-group.v1",
+          "required": true
+        },
+        {
+          "name": "explanation",
+          "typeRef": "$schema:bcsp.match.explanation.v1",
+          "required": true
+        },
+        {
+          "name": "variants",
+          "typeRef": "$array:$schema:bcsp.query.course-variant-query-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.page-info.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "page",
+          "typeRef": "$primitive:u32",
+          "required": true
+        },
+        {
+          "name": "pageSize",
+          "typeRef": "$primitive:u16",
+          "required": true
+        },
+        {
+          "name": "total",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "totalPages",
+          "typeRef": "$primitive:u32",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-query-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "page",
+          "typeRef": "$schema:bcsp.query.page-info.v1",
+          "required": true
+        },
+        {
+          "name": "items",
+          "typeRef": "$array:$schema:bcsp.query.course-query-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-query-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "page",
+          "typeRef": "$schema:bcsp.query.page-info.v1",
+          "required": true
+        },
+        {
+          "name": "items",
+          "typeRef": "$array:$schema:bcsp.query.section-search-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.course-detail-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "course",
+          "typeRef": "$schema:bcsp.query.course-query-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.section-detail-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "variant",
+          "typeRef": "$schema:bcsp.catalog.normalized-course-variant.v1",
+          "required": true
+        },
+        {
+          "name": "section",
+          "typeRef": "$schema:bcsp.query.section-query-item.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.notification-mode.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "ONE_SHOT",
+        "CONTINUOUS"
+      ]
+    },
+    {
+      "id": "bcsp.watch.continuous-duration.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "FINITE",
+          "fields": [
+            {
+              "name": "seconds",
+              "typeRef": "$scalar:watch-positive-u64",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "UNLIMITED",
+          "fields": []
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.policy.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "notificationMode",
+          "typeRef": "$schema:bcsp.watch.notification-mode.v1",
+          "required": true
+        },
+        {
+          "name": "maxAudible",
+          "typeRef": "$scalar:watch-positive-u64",
+          "required": true
+        },
+        {
+          "name": "continuousDuration",
+          "typeRef": "$schema:bcsp.watch.continuous-duration.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.start-item.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "policy",
+          "typeRef": "$schema:bcsp.watch.policy.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.active-target.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.episode-target.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "episodeId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.alert-target.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "episodeId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "alertId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.cue-outcome.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "STARTED",
+        "MUTED",
+        "AUTOPLAY_BLOCKED",
+        "FAILED"
+      ]
+    },
+    {
+      "id": "bcsp.watch.cue-outcome-report.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "cueId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "outcome",
+          "typeRef": "$schema:bcsp.watch.cue-outcome.v1",
+          "required": true
+        },
+        {
+          "name": "reportedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.client-command.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "discriminator": "type",
+      "variants": [
+        {
+          "tagValue": "START_WATCH",
+          "fields": [
+            {
+              "name": "items",
+              "typeRef": "$array:$schema:bcsp.watch.start-item.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "STOP_WATCH",
+          "fields": [
+            {
+              "name": "watch",
+              "typeRef": "$schema:bcsp.watch.active-target.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "UPDATE_POLICY",
+          "fields": [
+            {
+              "name": "watch",
+              "typeRef": "$schema:bcsp.watch.active-target.v1",
+              "required": true
+            },
+            {
+              "name": "policy",
+              "typeRef": "$schema:bcsp.watch.policy.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "ACKNOWLEDGE_EPISODE",
+          "fields": [
+            {
+              "name": "episode",
+              "typeRef": "$schema:bcsp.watch.episode-target.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "ACKNOWLEDGE_ALL_EPISODES",
+          "fields": []
+        },
+        {
+          "tagValue": "RESUME_TIMED_OUT_EPISODE",
+          "fields": [
+            {
+              "name": "episode",
+              "typeRef": "$schema:bcsp.watch.episode-target.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "RESET_AUDIBLE_COUNT",
+          "fields": [
+            {
+              "name": "watch",
+              "typeRef": "$schema:bcsp.watch.active-target.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "REPORT_CUE_OUTCOME",
+          "fields": [
+            {
+              "name": "report",
+              "typeRef": "$schema:bcsp.watch.cue-outcome-report.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "DISMISS_ALERT",
+          "fields": [
+            {
+              "name": "alert",
+              "typeRef": "$schema:bcsp.watch.alert-target.v1",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.start-rejection-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "MAX_ACTIVE_WATCHES",
+        "ALREADY_ACTIVE",
+        "SECTION_NOT_FOUND",
+        "TARGET_UNAVAILABLE",
+        "TERM_OUT_OF_RANGE",
+        "CONNECTION_CLOSING"
+      ]
+    },
+    {
+      "id": "bcsp.watch.start-item-result.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "status",
+      "variants": [
+        {
+          "tagValue": "ACTIVE",
+          "fields": [
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "activeWatchId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "startedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "REJECTED",
+          "fields": [
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "typeRef": "$schema:bcsp.watch.start-rejection-reason.v1",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.start-result.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "items",
+          "typeRef": "$array:$schema:bcsp.watch.start-item-result.v1",
+          "required": true
+        },
+        {
+          "name": "activeWatchCount",
+          "typeRef": "$primitive:u8",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.stop-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "USER_REQUESTED",
+        "CONNECTION_CLOSED",
+        "HEARTBEAT_TIMEOUT",
+        "SERVICE_STOPPING",
+        "TERM_OUT_OF_RANGE"
+      ]
+    },
+    {
+      "id": "bcsp.watch.stopped.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "typeRef": "$schema:bcsp.watch.stop-reason.v1",
+          "required": true
+        },
+        {
+          "name": "stoppedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.open-observation-fanout.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "observation",
+          "typeRef": "$schema:bcsp.open.observation.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.episode-state.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "UNACKNOWLEDGED",
+        "ACKNOWLEDGED",
+        "TIMED_OUT",
+        "CLOSED"
+      ]
+    },
+    {
+      "id": "bcsp.watch.open-episode.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "episodeId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "state",
+          "typeRef": "$schema:bcsp.watch.episode-state.v1",
+          "required": true
+        },
+        {
+          "name": "notificationMode",
+          "typeRef": "$schema:bcsp.watch.notification-mode.v1",
+          "required": true
+        },
+        {
+          "name": "continuousDuration",
+          "typeRef": "$schema:bcsp.watch.continuous-duration.v1",
+          "required": true
+        },
+        {
+          "name": "maxAudible",
+          "typeRef": "$scalar:watch-positive-u64",
+          "required": true
+        },
+        {
+          "name": "audibleCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "firstObservedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "lastObservedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "observationCount",
+          "typeRef": "$scalar:watch-positive-u64",
+          "required": true
+        },
+        {
+          "name": "latestObservationId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "stateChangedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "closedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.alert-disposition.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "OPENED",
+        "UPDATED",
+        "DISMISSED",
+        "CLOSED"
+      ]
+    },
+    {
+      "id": "bcsp.watch.alert.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "alertId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "disposition",
+          "typeRef": "$schema:bcsp.watch.alert-disposition.v1",
+          "required": true
+        },
+        {
+          "name": "visible",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "episode",
+          "typeRef": "$schema:bcsp.watch.open-episode.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.audio-trigger.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "ONE_SHOT_OBSERVATION",
+          "fields": [
+            {
+              "name": "observationId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CONTINUOUS_EPISODE",
+          "fields": [
+            {
+              "name": "episodeId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.audio-cue.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "cueId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "trigger",
+          "typeRef": "$schema:bcsp.watch.audio-trigger.v1",
+          "required": true
+        },
+        {
+          "name": "emittedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.continuous-mixer-stop-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "NO_UNACKNOWLEDGED_EPISODES",
+        "NOTIFICATION_MODE_CHANGED",
+        "CONNECTION_CLOSED",
+        "SERVICE_STOPPING"
+      ]
+    },
+    {
+      "id": "bcsp.watch.cue-cancellation-reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "WATCH_STOPPED",
+        "WATCH_RESTARTED",
+        "NOTIFICATION_MODE_CHANGED",
+        "CONNECTION_CLOSED"
+      ]
+    },
+    {
+      "id": "bcsp.watch.audio-disposition.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "disposition",
+      "variants": [
+        {
+          "tagValue": "CUE_REQUESTED",
+          "fields": [
+            {
+              "name": "cue",
+              "typeRef": "$schema:bcsp.watch.audio-cue.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CUE_QUEUED",
+          "fields": [
+            {
+              "name": "activeWatchId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "observationId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "queuedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CUE_CANCELLED",
+          "fields": [
+            {
+              "name": "activeWatchId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "observationId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "cueId",
+              "typeRef": "$optional:$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "typeRef": "$schema:bcsp.watch.cue-cancellation-reason.v1",
+              "required": true
+            },
+            {
+              "name": "cancelledAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "SILENT_MAX_AUDIBLE",
+          "fields": [
+            {
+              "name": "activeWatchId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "sectionKey",
+              "typeRef": "$schema:bcsp.identity.section-key.v1",
+              "required": true
+            },
+            {
+              "name": "observationId",
+              "typeRef": "$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "audibleCount",
+              "typeRef": "$primitive:u64",
+              "required": true
+            },
+            {
+              "name": "maxAudible",
+              "typeRef": "$scalar:watch-positive-u64",
+              "required": true
+            },
+            {
+              "name": "emittedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CONTINUOUS_MIXER_ACTIVE",
+          "fields": [
+            {
+              "name": "episodeIds",
+              "typeRef": "$array:$scalar:trace-id",
+              "required": true
+            },
+            {
+              "name": "emittedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CONTINUOUS_MIXER_STOPPED",
+          "fields": [
+            {
+              "name": "reason",
+              "typeRef": "$schema:bcsp.watch.continuous-mixer-stop-reason.v1",
+              "required": true
+            },
+            {
+              "name": "emittedAt",
+              "typeRef": "$primitive:rfc3339-timestamp",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.cue-outcome-receipt.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:watch-contract-version",
+          "required": true
+        },
+        {
+          "name": "cueId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "activeWatchId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "sectionKey",
+          "typeRef": "$schema:bcsp.identity.section-key.v1",
+          "required": true
+        },
+        {
+          "name": "outcome",
+          "typeRef": "$schema:bcsp.watch.cue-outcome.v1",
+          "required": true
+        },
+        {
+          "name": "audibleCountConsumed",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "audibleCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "recordedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.watch.server-event.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "type",
+      "variants": [
+        {
+          "tagValue": "START_RESULT",
+          "fields": [
+            {
+              "name": "result",
+              "typeRef": "$schema:bcsp.watch.start-result.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "WATCH_STOPPED",
+          "fields": [
+            {
+              "name": "stopped",
+              "typeRef": "$schema:bcsp.watch.stopped.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "OPEN_OBSERVATION",
+          "fields": [
+            {
+              "name": "fanout",
+              "typeRef": "$schema:bcsp.watch.open-observation-fanout.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "EPISODE_UPDATED",
+          "fields": [
+            {
+              "name": "episode",
+              "typeRef": "$schema:bcsp.watch.open-episode.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "ALERT_UPDATED",
+          "fields": [
+            {
+              "name": "alert",
+              "typeRef": "$schema:bcsp.watch.alert.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "AUDIO_DISPOSITION",
+          "fields": [
+            {
+              "name": "audio",
+              "typeRef": "$schema:bcsp.watch.audio-disposition.v1",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CUE_OUTCOME_RECORDED",
+          "fields": [
+            {
+              "name": "receipt",
+              "typeRef": "$schema:bcsp.watch.cue-outcome-receipt.v1",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.runtime.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "LOCAL",
+        "PUBLIC"
+      ]
+    },
+    {
+      "id": "bcsp.service.level.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "INITIALIZING",
+        "PARTIALLY_READY",
+        "READY",
+        "DEGRADED",
+        "ERROR"
+      ]
+    },
+    {
+      "id": "bcsp.service.operation-phase.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "STARTING",
+        "DISCOVERING",
+        "CATALOG_FETCH",
+        "CATALOG_PROCESS",
+        "CATALOG_PUBLISH",
+        "OPEN_FETCH",
+        "IDLE",
+        "RETRY_WAIT",
+        "STOPPED"
+      ]
+    },
+    {
+      "id": "bcsp.service.availability.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "UNAVAILABLE",
+        "CURRENT",
+        "STALE"
+      ]
+    },
+    {
+      "id": "bcsp.service.issue-component.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "DISCOVERY",
+        "CATALOG",
+        "OPEN",
+        "SCHEDULER",
+        "STORAGE"
+      ]
+    },
+    {
+      "id": "bcsp.service.issue-severity.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "DEGRADED",
+        "BLOCKING"
+      ]
+    },
+    {
+      "id": "bcsp.service.issue-recovery.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "AUTOMATIC_RETRY",
+        "USER_ACTION_REQUIRED"
+      ]
+    },
+    {
+      "id": "bcsp.service.operation.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "phase",
+          "typeRef": "$schema:bcsp.service.operation-phase.v1",
+          "required": true
+        },
+        {
+          "name": "target",
+          "typeRef": "$optional:$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "startedAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "nextRetryAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.availability-summary.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "totalTargetCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "currentTargetCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "staleTargetCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "unavailableTargetCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "availableTargetCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.target-status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "primary",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "catalogAvailability",
+          "typeRef": "$schema:bcsp.service.availability.v1",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "openAvailability",
+          "typeRef": "$schema:bcsp.service.availability.v1",
+          "required": true
+        },
+        {
+          "name": "searchAvailable",
+          "typeRef": "$primitive:bool",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.issue.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "component",
+          "typeRef": "$schema:bcsp.service.issue-component.v1",
+          "required": true
+        },
+        {
+          "name": "target",
+          "typeRef": "$optional:$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "code",
+          "typeRef": "$primitive:string",
+          "required": true
+        },
+        {
+          "name": "severity",
+          "typeRef": "$schema:bcsp.service.issue-severity.v1",
+          "required": true
+        },
+        {
+          "name": "recovery",
+          "typeRef": "$schema:bcsp.service.issue-recovery.v1",
+          "required": true
+        },
+        {
+          "name": "retryAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.status.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$primitive:u16",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "runtime",
+          "typeRef": "$schema:bcsp.service.runtime.v1",
+          "required": true
+        },
+        {
+          "name": "level",
+          "typeRef": "$schema:bcsp.service.level.v1",
+          "required": true
+        },
+        {
+          "name": "operation",
+          "typeRef": "$schema:bcsp.service.operation.v1",
+          "required": true
+        },
+        {
+          "name": "discovery",
+          "typeRef": "$schema:bcsp.catalog.discovery-status.v1",
+          "required": true
+        },
+        {
+          "name": "catalog",
+          "typeRef": "$schema:bcsp.service.availability-summary.v1",
+          "required": true
+        },
+        {
+          "name": "open",
+          "typeRef": "$schema:bcsp.service.availability-summary.v1",
+          "required": true
+        },
+        {
+          "name": "targets",
+          "typeRef": "$array:$schema:bcsp.service.target-status.v1",
+          "required": true
+        },
+        {
+          "name": "issues",
+          "typeRef": "$array:$schema:bcsp.service.issue.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.operation-stage.v2",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "CATALOG_FETCH",
+        "CATALOG_PROCESS",
+        "OPEN_FETCH",
+        "SNAPSHOT_PUBLISH"
+      ]
+    },
+    {
+      "id": "bcsp.service.snapshot-availability.v2",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "UNREQUESTED",
+        "NO_COMPLETE_SNAPSHOT",
+        "READY"
+      ]
+    },
+    {
+      "id": "bcsp.service.work-state.v2",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "IDLE",
+        "QUEUED",
+        "RUNNING",
+        "RETRY_WAIT"
+      ]
+    },
+    {
+      "id": "bcsp.service.visible-term.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "relativeOffset",
+          "typeRef": "$primitive:i8",
+          "required": true
+        },
+        {
+          "name": "discovered",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "autoManaged",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "manualPullAllowed",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "watchable",
+          "typeRef": "$primitive:bool",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.term-window.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "currentTerm",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "nextTerm",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "visibleTerms",
+          "typeRef": "$array:$schema:bcsp.service.visible-term.v2",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.automatic-term-summary.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "term",
+          "typeRef": "$scalar:term-id",
+          "required": true
+        },
+        {
+          "name": "readyTargetCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "totalTargetCount",
+          "typeRef": "$primitive:u64",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.operation.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "stage",
+          "typeRef": "$schema:bcsp.service.operation-stage.v2",
+          "required": true
+        },
+        {
+          "name": "startedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.target-error.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "code",
+          "typeRef": "$primitive:string",
+          "required": true
+        },
+        {
+          "name": "httpStatus",
+          "typeRef": "$optional:$primitive:u16",
+          "required": true
+        },
+        {
+          "name": "contentType",
+          "typeRef": "$optional:$primitive:string",
+          "required": true
+        },
+        {
+          "name": "contentEncoding",
+          "typeRef": "$optional:$primitive:string",
+          "required": true
+        },
+        {
+          "name": "decodedBytes",
+          "typeRef": "$optional:$primitive:u64",
+          "required": true
+        },
+        {
+          "name": "errorClass",
+          "typeRef": "$optional:$primitive:string",
+          "required": true
+        },
+        {
+          "name": "errorChain",
+          "typeRef": "$optional:$primitive:string",
+          "required": true
+        },
+        {
+          "name": "traceId",
+          "typeRef": "$optional:$scalar:trace-id",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.target-status.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "target",
+          "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+          "required": true
+        },
+        {
+          "name": "primary",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "snapshotAvailability",
+          "typeRef": "$schema:bcsp.service.snapshot-availability.v2",
+          "required": true
+        },
+        {
+          "name": "workState",
+          "typeRef": "$schema:bcsp.service.work-state.v2",
+          "required": true
+        },
+        {
+          "name": "stage",
+          "typeRef": "$optional:$schema:bcsp.service.operation-stage.v2",
+          "required": true
+        },
+        {
+          "name": "usable",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "catalogContentVersion",
+          "typeRef": "$optional:$scalar:catalog-content-version",
+          "required": true
+        },
+        {
+          "name": "lastCompleteAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "nextRetryAt",
+          "typeRef": "$optional:$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "error",
+          "typeRef": "$optional:$schema:bcsp.service.target-error.v2",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.service.status.v2",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$primitive:u16",
+          "required": true
+        },
+        {
+          "name": "observedAt",
+          "typeRef": "$primitive:rfc3339-timestamp",
+          "required": true
+        },
+        {
+          "name": "runtime",
+          "typeRef": "$schema:bcsp.service.runtime.v1",
+          "required": true
+        },
+        {
+          "name": "level",
+          "typeRef": "$schema:bcsp.service.level.v1",
+          "required": true
+        },
+        {
+          "name": "discovery",
+          "typeRef": "$schema:bcsp.catalog.discovery-status.v1",
+          "required": true
+        },
+        {
+          "name": "termWindow",
+          "typeRef": "$schema:bcsp.service.term-window.v2",
+          "required": true
+        },
+        {
+          "name": "automaticTermSummaries",
+          "typeRef": "$array:$schema:bcsp.service.automatic-term-summary.v2",
+          "required": true
+        },
+        {
+          "name": "operations",
+          "typeRef": "$array:$schema:bcsp.service.operation.v2",
+          "required": true
+        },
+        {
+          "name": "targets",
+          "typeRef": "$array:$schema:bcsp.service.target-status.v2",
+          "required": true
+        },
+        {
+          "name": "issues",
+          "typeRef": "$array:$schema:bcsp.service.issue.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.match.outcome.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "MATCH",
+        "UNCERTAIN",
+        "NO_MATCH"
+      ]
+    },
+    {
+      "id": "bcsp.match.reason-code.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "KNOWN_MISMATCH",
+        "MISSING_RELIABLE_DATA",
+        "UNKNOWN_VALUE",
+        "TBA",
+        "CONFLICTING_EVIDENCE",
+        "INVALID_VALUE",
+        "SOURCE_UNAVAILABLE"
+      ]
+    },
+    {
+      "id": "bcsp.match.reason.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "code",
+          "typeRef": "$schema:bcsp.match.reason-code.v1",
+          "required": true
+        },
+        {
+          "name": "field",
+          "typeRef": "$scalar:reason-field",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.match.explanation.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "outcome",
+          "typeRef": "$schema:bcsp.match.outcome.v1",
+          "required": true
+        },
+        {
+          "name": "reasons",
+          "typeRef": "$array:$schema:bcsp.match.reason.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.error.shared-code.v1",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "MALFORMED_REQUEST",
+        "UNSUPPORTED_PROTOCOL_VERSION",
+        "INVALID_SECTION_KEY",
+        "INVALID_COURSE_GROUP_KEY",
+        "INVALID_COURSE_VARIANT_KEY",
+        "INVALID_FILTER",
+        "INVALID_FILTER_OPTION",
+        "SECTION_NOT_FOUND",
+        "SELECTION_LIMIT_EXCEEDED",
+        "CATALOG_NOT_READY",
+        "SEARCH_DATA_NOT_READY",
+        "UPSTREAM_UNAVAILABLE",
+        "AUDIO_BLOCKED",
+        "INTERNAL_ERROR"
+      ]
+    },
+    {
+      "id": "bcsp.http.request-envelope.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "typeRef": "$generic:T",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.http.success-envelope.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "data",
+          "typeRef": "$generic:T",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.http.error-body.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "code",
+          "typeRef": "$schema:bcsp.error.shared-code.v1",
+          "required": true
+        },
+        {
+          "name": "messageKey",
+          "typeRef": "$scalar:message-key",
+          "required": true
+        },
+        {
+          "name": "traceId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "details",
+          "typeRef": "$array:$schema:bcsp.http.error-detail.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.http.error-detail.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [],
+      "discriminator": "kind",
+      "variants": [
+        {
+          "tagValue": "INVALID_FIELD",
+          "fields": [
+            {
+              "name": "field",
+              "typeRef": "$scalar:detail-name",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "LIMIT",
+          "fields": [
+            {
+              "name": "name",
+              "typeRef": "$scalar:detail-name",
+              "required": true
+            },
+            {
+              "name": "maximum",
+              "typeRef": "$primitive:u32",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "RETRY_AFTER_SECONDS",
+          "fields": [
+            {
+              "name": "seconds",
+              "typeRef": "$primitive:u32",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "CURRENT_REVISION",
+          "fields": [
+            {
+              "name": "revision",
+              "typeRef": "$primitive:u64",
+              "required": true
+            }
+          ]
+        },
+        {
+          "tagValue": "TARGET_NOT_READY",
+          "fields": [
+            {
+              "name": "target",
+              "typeRef": "$schema:bcsp.identity.term-campus-key.v1",
+              "required": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bcsp.http.error-envelope.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "error",
+          "typeRef": "$schema:bcsp.http.error-body.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.ws.client-envelope.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "messageId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "typeRef": "$generic:T",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.ws.server-envelope.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "protocolVersion",
+          "typeRef": "$scalar:protocol-version",
+          "required": true
+        },
+        {
+          "name": "messageId",
+          "typeRef": "$scalar:trace-id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "typeRef": "$generic:T",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

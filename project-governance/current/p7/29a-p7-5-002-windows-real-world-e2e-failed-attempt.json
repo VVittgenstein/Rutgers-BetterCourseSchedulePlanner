@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "task": "P7.5-002",
+  "title": "Windows real-world E2E failed attempt",
+  "status": "FAIL_RETURN_TO_EARLIEST_OWNER",
+  "parent": "2153e5b4f7819bfe82e7c75dfe4de07c7c425b25",
+  "recordedAtUtc": "2026-07-15T06:48:33.7155735Z",
+  "candidate": {
+    "archive": "rbcsp-windows-x86_64-0.1.0.zip",
+    "sha256": "eb85374bbf97215124b4f2b64be4c51c96bc2af0502fc79b5230024709590610",
+    "eligibleForP75Retry": false
+  },
+  "environment": {
+    "boundary": "FRESH_STANDARD_USER_PROFILE_ON_EXISTING_PHYSICAL_WINDOWS_11",
+    "cleanOsOrVmClaimed": false,
+    "standardUserProcessOwner": "PASS",
+    "preStartArchiveFiles": 11,
+    "preStartDataDirectory": false,
+    "preStartDatabaseCount": 0,
+    "packageRelativeDatabaseCreated": true,
+    "chromeRealUi": true,
+    "backgroundSubstitution": false
+  },
+  "window": {
+    "startedAtUtc": "2026-07-15T06:36:34.0939437Z",
+    "deadlineUtc": "2026-07-15T06:44:34.0939437Z",
+    "stoppedAtUtc": "2026-07-15T06:44:48.2588643Z",
+    "maximumSeconds": 480,
+    "secondsAfterDeadline": 14.165,
+    "result": "FAIL"
+  },
+  "requestBudget": {
+    "n": 15,
+    "discoveryMaximum": 2,
+    "catalogMaximum": 15,
+    "openMaximum": 18,
+    "totalMaximum": 35,
+    "discoveryObserved": 2,
+    "catalogObserved": 15,
+    "openObserved": 45,
+    "totalObserved": 62,
+    "openExcess": 27,
+    "totalExcess": 27,
+    "result": "FAIL"
+  },
+  "discovery": {
+    "status": "APPLIED_CHANGED",
+    "observations": 1,
+    "terms": 9,
+    "totalCampuses": 135,
+    "currentValidCampuses": 15,
+    "subjects": 0
+  },
+  "catalog": {
+    "attempts": 15,
+    "appliedChanged": 11,
+    "emptyValidInitial": 4,
+    "decodedBytes": 33222835,
+    "groups": 8037,
+    "variants": 8060,
+    "sections": 18272,
+    "occurrences": 25455,
+    "subjectDictionaryRows": 0
+  },
+  "open": {
+    "attempts": 45,
+    "validApplied": 42,
+    "validEmptyNoRows": 3,
+    "http200": 45,
+    "decodedBytes": 3362880,
+    "sourceValues": 420354,
+    "intersections": 40479,
+    "orphans": 379875,
+    "duplicates": 0
+  },
+  "browser": {
+    "embeddedTitleVerified": true,
+    "productReady": true,
+    "dynamicCampusCountObserved": 15,
+    "realCampusSelected": true,
+    "realSearchClicked": true,
+    "searchReturned": false,
+    "courseResults": 0,
+    "mandatoryFilters": "NOT_PASS",
+    "courseDetail": "NOT_PASS",
+    "sectionDetail": "NOT_PASS",
+    "webSocket": "NOT_PASS",
+    "watch": "NOT_PASS",
+    "toast": "NOT_PASS",
+    "audio": "NOT_PASS"
+  },
+  "shutdown": {
+    "bootstrapTimeoutSeconds": 10,
+    "gracefulExit": "FAIL_ENDPOINT_UNRESPONSIVE",
+    "forcedStopAfterOwnerVerification": true,
+    "sqliteIntegrityAfterStop": "ok"
+  },
+  "cleanup": {
+    "processRemoved": true,
+    "disposableUserRemoved": true,
+    "profileRemoved": true,
+    "packageRootRemoved": true,
+    "realCourseDatabaseRemoved": true
+  },
+  "rawRutgersEvidenceRetained": false,
+  "p7Completed": false,
+  "gate": "P7_5_RETURN_TO_EARLIEST_OWNER",
+  "nextTask": "P7-REPAIR-001"
+}

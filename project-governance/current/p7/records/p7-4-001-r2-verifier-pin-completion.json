@@ -1,0 +1,6 @@
+{
+  "task": "P7.4-001-R2-PIN",
+  "status": "PASS",
+  "windowsVerifier": "PINNED",
+  "linuxVerifier": "PINNED"
+}

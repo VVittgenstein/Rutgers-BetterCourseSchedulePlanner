@@ -1,0 +1,20 @@
+{
+  "task": "P7.1-013",
+  "status": "PRECOMMIT_PASS",
+  "parent": "559b400ee2a48c8c11bb5616b73f56d0b106ecbb",
+  "verifiedAtUtc": "2026-07-14T16:03:33.1114701Z",
+  "pathCount": 22,
+  "checks": {
+    "dualTargetBuildBoundary": "PASS",
+    "preTreeShakeSourceGuard": "PASS",
+    "publicRouteInventory": "PASS",
+    "publicZeroSurface144": "PASS",
+    "workspaceTests": "PASS",
+    "clippy": "PASS",
+    "frontendVerify": "PASS",
+    "architecture": "PASS",
+    "dependencyPolicy": "PASS"
+  },
+  "postPushMarker": "P7_1_013_PASS_POST_PUSH",
+  "nextTask": "P7.1-014"
+}

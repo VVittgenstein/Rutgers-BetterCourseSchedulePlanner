@@ -1,0 +1,426 @@
+ecosystem	name	version	metadata_url	license_expression	verification	lock_key
+npm	@asamuzakjp/css-color	5.1.11	https://registry.npmjs.org/%40asamuzakjp%2Fcss-color/5.1.11	MIT	PASS	npm:node_modules/@asamuzakjp/css-color
+npm	@asamuzakjp/dom-selector	7.1.1	https://registry.npmjs.org/%40asamuzakjp%2Fdom-selector/7.1.1	MIT	PASS	npm:node_modules/@asamuzakjp/dom-selector
+npm	@asamuzakjp/generational-cache	1.0.1	https://registry.npmjs.org/%40asamuzakjp%2Fgenerational-cache/1.0.1	MIT	PASS	npm:node_modules/@asamuzakjp/generational-cache
+npm	@asamuzakjp/nwsapi	2.3.9	https://registry.npmjs.org/%40asamuzakjp%2Fnwsapi/2.3.9	MIT	PASS	npm:node_modules/@asamuzakjp/nwsapi
+npm	@babel/code-frame	7.27.1	https://registry.npmjs.org/%40babel%2Fcode-frame/7.27.1	MIT	PASS	npm:node_modules/@babel/code-frame
+npm	@babel/helper-validator-identifier	7.28.5	https://registry.npmjs.org/%40babel%2Fhelper-validator-identifier/7.28.5	MIT	PASS	npm:node_modules/@babel/helper-validator-identifier
+npm	@babel/runtime	7.29.7	https://registry.npmjs.org/%40babel%2Fruntime/7.29.7	MIT	PASS	npm:node_modules/@babel/runtime
+npm	@bramus/specificity	2.4.2	https://registry.npmjs.org/%40bramus%2Fspecificity/2.4.2	MIT	PASS	npm:node_modules/@bramus/specificity
+npm	@csstools/color-helpers	6.1.0	https://registry.npmjs.org/%40csstools%2Fcolor-helpers/6.1.0	MIT-0	PASS	npm:node_modules/@csstools/color-helpers
+npm	@csstools/css-calc	3.2.1	https://registry.npmjs.org/%40csstools%2Fcss-calc/3.2.1	MIT	PASS	npm:node_modules/@csstools/css-calc
+npm	@csstools/css-color-parser	4.1.9	https://registry.npmjs.org/%40csstools%2Fcss-color-parser/4.1.9	MIT	PASS	npm:node_modules/@csstools/css-color-parser
+npm	@csstools/css-parser-algorithms	4.0.0	https://registry.npmjs.org/%40csstools%2Fcss-parser-algorithms/4.0.0	MIT	PASS	npm:node_modules/@csstools/css-parser-algorithms
+npm	@csstools/css-syntax-patches-for-csstree	1.1.6	https://registry.npmjs.org/%40csstools%2Fcss-syntax-patches-for-csstree/1.1.6	MIT-0	PASS	npm:node_modules/@csstools/css-syntax-patches-for-csstree
+npm	@csstools/css-tokenizer	4.0.0	https://registry.npmjs.org/%40csstools%2Fcss-tokenizer/4.0.0	MIT	PASS	npm:node_modules/@csstools/css-tokenizer
+npm	@emnapi/core	1.11.1	https://registry.npmjs.org/%40emnapi%2Fcore/1.11.1	MIT	PASS	npm:node_modules/@emnapi/core
+npm	@emnapi/runtime	1.11.1	https://registry.npmjs.org/%40emnapi%2Fruntime/1.11.1	MIT	PASS	npm:node_modules/@emnapi/runtime
+npm	@emnapi/wasi-threads	1.2.2	https://registry.npmjs.org/%40emnapi%2Fwasi-threads/1.2.2	MIT	PASS	npm:node_modules/@emnapi/wasi-threads
+npm	@exodus/bytes	1.15.1	https://registry.npmjs.org/%40exodus%2Fbytes/1.15.1	MIT	PASS	npm:node_modules/@exodus/bytes
+npm	@jridgewell/sourcemap-codec	1.5.5	https://registry.npmjs.org/%40jridgewell%2Fsourcemap-codec/1.5.5	MIT	PASS	npm:node_modules/@jridgewell/sourcemap-codec
+npm	@napi-rs/wasm-runtime	1.1.6	https://registry.npmjs.org/%40napi-rs%2Fwasm-runtime/1.1.6	MIT	PASS	npm:node_modules/@napi-rs/wasm-runtime
+npm	@oxc-project/types	0.139.0	https://registry.npmjs.org/%40oxc-project%2Ftypes/0.139.0	MIT	PASS	npm:node_modules/@oxc-project/types
+npm	@rolldown/binding-android-arm64	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-android-arm64/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-android-arm64
+npm	@rolldown/binding-darwin-arm64	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-darwin-arm64/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-darwin-arm64
+npm	@rolldown/binding-darwin-x64	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-darwin-x64/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-darwin-x64
+npm	@rolldown/binding-freebsd-x64	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-freebsd-x64/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-freebsd-x64
+npm	@rolldown/binding-linux-arm-gnueabihf	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-linux-arm-gnueabihf/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-linux-arm-gnueabihf
+npm	@rolldown/binding-linux-arm64-gnu	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-linux-arm64-gnu/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-linux-arm64-gnu
+npm	@rolldown/binding-linux-arm64-musl	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-linux-arm64-musl/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-linux-arm64-musl
+npm	@rolldown/binding-linux-ppc64-gnu	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-linux-ppc64-gnu/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-linux-ppc64-gnu
+npm	@rolldown/binding-linux-s390x-gnu	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-linux-s390x-gnu/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-linux-s390x-gnu
+npm	@rolldown/binding-linux-x64-gnu	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-linux-x64-gnu/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-linux-x64-gnu
+npm	@rolldown/binding-linux-x64-musl	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-linux-x64-musl/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-linux-x64-musl
+npm	@rolldown/binding-openharmony-arm64	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-openharmony-arm64/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-openharmony-arm64
+npm	@rolldown/binding-wasm32-wasi	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-wasm32-wasi/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-wasm32-wasi
+npm	@rolldown/binding-win32-arm64-msvc	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-win32-arm64-msvc/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-win32-arm64-msvc
+npm	@rolldown/binding-win32-x64-msvc	1.1.5	https://registry.npmjs.org/%40rolldown%2Fbinding-win32-x64-msvc/1.1.5	MIT	PASS	npm:node_modules/@rolldown/binding-win32-x64-msvc
+npm	@rolldown/pluginutils	1.0.1	https://registry.npmjs.org/%40rolldown%2Fpluginutils/1.0.1	MIT	PASS	npm:node_modules/@rolldown/pluginutils
+npm	@standard-schema/spec	1.1.0	https://registry.npmjs.org/%40standard-schema%2Fspec/1.1.0	MIT	PASS	npm:node_modules/@standard-schema/spec
+npm	@testing-library/dom	10.4.1	https://registry.npmjs.org/%40testing-library%2Fdom/10.4.1	MIT	PASS	npm:node_modules/@testing-library/dom
+npm	@testing-library/react	16.3.2	https://registry.npmjs.org/%40testing-library%2Freact/16.3.2	MIT	PASS	npm:node_modules/@testing-library/react
+npm	@tybys/wasm-util	0.10.3	https://registry.npmjs.org/%40tybys%2Fwasm-util/0.10.3	MIT	PASS	npm:node_modules/@tybys/wasm-util
+npm	@types/aria-query	5.0.4	https://registry.npmjs.org/%40types%2Faria-query/5.0.4	MIT	PASS	npm:node_modules/@types/aria-query
+npm	@types/chai	5.2.3	https://registry.npmjs.org/%40types%2Fchai/5.2.3	MIT	PASS	npm:node_modules/@types/chai
+npm	@types/deep-eql	4.0.2	https://registry.npmjs.org/%40types%2Fdeep-eql/4.0.2	MIT	PASS	npm:node_modules/@types/deep-eql
+npm	@types/estree	1.0.9	https://registry.npmjs.org/%40types%2Festree/1.0.9	MIT	PASS	npm:node_modules/@types/estree
+npm	@types/jsdom	28.0.3	https://registry.npmjs.org/%40types%2Fjsdom/28.0.3	MIT	PASS	npm:node_modules/@types/jsdom
+npm	@types/node	26.1.1	https://registry.npmjs.org/%40types%2Fnode/26.1.1	MIT	PASS	npm:node_modules/@types/node
+npm	@types/react	19.2.17	https://registry.npmjs.org/%40types%2Freact/19.2.17	MIT	PASS	npm:node_modules/@types/react
+npm	@types/react-dom	19.2.3	https://registry.npmjs.org/%40types%2Freact-dom/19.2.3	MIT	PASS	npm:node_modules/@types/react-dom
+npm	@types/tough-cookie	4.0.5	https://registry.npmjs.org/%40types%2Ftough-cookie/4.0.5	MIT	PASS	npm:node_modules/@types/tough-cookie
+npm	@typescript/typescript-aix-ppc64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-aix-ppc64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-aix-ppc64
+npm	@typescript/typescript-darwin-arm64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-darwin-arm64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-darwin-arm64
+npm	@typescript/typescript-darwin-x64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-darwin-x64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-darwin-x64
+npm	@typescript/typescript-freebsd-arm64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-freebsd-arm64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-freebsd-arm64
+npm	@typescript/typescript-freebsd-x64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-freebsd-x64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-freebsd-x64
+npm	@typescript/typescript-linux-arm	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-linux-arm/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-linux-arm
+npm	@typescript/typescript-linux-arm64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-linux-arm64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-linux-arm64
+npm	@typescript/typescript-linux-loong64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-linux-loong64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-linux-loong64
+npm	@typescript/typescript-linux-mips64el	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-linux-mips64el/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-linux-mips64el
+npm	@typescript/typescript-linux-ppc64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-linux-ppc64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-linux-ppc64
+npm	@typescript/typescript-linux-riscv64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-linux-riscv64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-linux-riscv64
+npm	@typescript/typescript-linux-s390x	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-linux-s390x/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-linux-s390x
+npm	@typescript/typescript-linux-x64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-linux-x64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-linux-x64
+npm	@typescript/typescript-netbsd-arm64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-netbsd-arm64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-netbsd-arm64
+npm	@typescript/typescript-netbsd-x64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-netbsd-x64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-netbsd-x64
+npm	@typescript/typescript-openbsd-arm64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-openbsd-arm64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-openbsd-arm64
+npm	@typescript/typescript-openbsd-x64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-openbsd-x64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-openbsd-x64
+npm	@typescript/typescript-sunos-x64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-sunos-x64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-sunos-x64
+npm	@typescript/typescript-win32-arm64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-win32-arm64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-win32-arm64
+npm	@typescript/typescript-win32-x64	7.0.2	https://registry.npmjs.org/%40typescript%2Ftypescript-win32-x64/7.0.2	Apache-2.0	PASS	npm:node_modules/@typescript/typescript-win32-x64
+npm	@vitejs/plugin-react	6.0.3	https://registry.npmjs.org/%40vitejs%2Fplugin-react/6.0.3	MIT	PASS	npm:node_modules/@vitejs/plugin-react
+npm	@vitest/expect	4.1.10	https://registry.npmjs.org/%40vitest%2Fexpect/4.1.10	MIT	PASS	npm:node_modules/@vitest/expect
+npm	@vitest/mocker	4.1.10	https://registry.npmjs.org/%40vitest%2Fmocker/4.1.10	MIT	PASS	npm:node_modules/@vitest/mocker
+npm	@vitest/pretty-format	4.1.10	https://registry.npmjs.org/%40vitest%2Fpretty-format/4.1.10	MIT	PASS	npm:node_modules/@vitest/pretty-format
+npm	@vitest/runner	4.1.10	https://registry.npmjs.org/%40vitest%2Frunner/4.1.10	MIT	PASS	npm:node_modules/@vitest/runner
+npm	@vitest/snapshot	4.1.10	https://registry.npmjs.org/%40vitest%2Fsnapshot/4.1.10	MIT	PASS	npm:node_modules/@vitest/snapshot
+npm	@vitest/spy	4.1.10	https://registry.npmjs.org/%40vitest%2Fspy/4.1.10	MIT	PASS	npm:node_modules/@vitest/spy
+npm	@vitest/utils	4.1.10	https://registry.npmjs.org/%40vitest%2Futils/4.1.10	MIT	PASS	npm:node_modules/@vitest/utils
+npm	ansi-regex	5.0.1	https://registry.npmjs.org/ansi-regex/5.0.1	MIT	PASS	npm:node_modules/ansi-regex
+npm	ansi-styles	5.2.0	https://registry.npmjs.org/ansi-styles/5.2.0	MIT	PASS	npm:node_modules/ansi-styles
+npm	aria-query	5.3.0	https://registry.npmjs.org/aria-query/5.3.0	Apache-2.0	PASS	npm:node_modules/aria-query
+npm	assertion-error	2.0.1	https://registry.npmjs.org/assertion-error/2.0.1	MIT	PASS	npm:node_modules/assertion-error
+npm	axe-core	4.12.1	https://registry.npmjs.org/axe-core/4.12.1	MPL-2.0	PASS	npm:node_modules/axe-core
+npm	better-course-schedule-planner-frontend	0.0.1	repository:frontend/package.json	ISC	PASS	npm:.
+npm	bidi-js	1.0.3	https://registry.npmjs.org/bidi-js/1.0.3	MIT	PASS	npm:node_modules/bidi-js
+npm	chai	6.2.2	https://registry.npmjs.org/chai/6.2.2	MIT	PASS	npm:node_modules/chai
+npm	convert-source-map	2.0.0	https://registry.npmjs.org/convert-source-map/2.0.0	MIT	PASS	npm:node_modules/convert-source-map
+npm	cookie	1.1.1	https://registry.npmjs.org/cookie/1.1.1	MIT	PASS	npm:node_modules/cookie
+npm	css-tree	3.2.1	https://registry.npmjs.org/css-tree/3.2.1	MIT	PASS	npm:node_modules/css-tree
+npm	csstype	3.2.3	https://registry.npmjs.org/csstype/3.2.3	MIT	PASS	npm:node_modules/csstype
+npm	data-urls	7.0.0	https://registry.npmjs.org/data-urls/7.0.0	MIT	PASS	npm:node_modules/data-urls
+npm	decimal.js	10.6.0	https://registry.npmjs.org/decimal.js/10.6.0	MIT	PASS	npm:node_modules/decimal.js
+npm	dequal	2.0.3	https://registry.npmjs.org/dequal/2.0.3	MIT	PASS	npm:node_modules/dequal
+npm	detect-libc	2.1.2	https://registry.npmjs.org/detect-libc/2.1.2	Apache-2.0	PASS	npm:node_modules/detect-libc
+npm	dom-accessibility-api	0.5.16	https://registry.npmjs.org/dom-accessibility-api/0.5.16	MIT	PASS	npm:node_modules/dom-accessibility-api
+npm	entities	8.0.0	https://registry.npmjs.org/entities/8.0.0	BSD-2-Clause	PASS	npm:node_modules/entities
+npm	es-module-lexer	2.3.1	https://registry.npmjs.org/es-module-lexer/2.3.1	MIT	PASS	npm:node_modules/es-module-lexer
+npm	estree-walker	3.0.3	https://registry.npmjs.org/estree-walker/3.0.3	MIT	PASS	npm:node_modules/estree-walker
+npm	expect-type	1.4.0	https://registry.npmjs.org/expect-type/1.4.0	Apache-2.0	PASS	npm:node_modules/expect-type
+npm	fdir	6.5.0	https://registry.npmjs.org/fdir/6.5.0	MIT	PASS	npm:node_modules/fdir
+npm	fsevents	2.3.2	https://registry.npmjs.org/fsevents/2.3.2	MIT	PASS	npm:node_modules/fsevents
+npm	fsevents	2.3.3	https://registry.npmjs.org/fsevents/2.3.3	MIT	PASS	npm:node_modules/vite/node_modules/fsevents
+npm	html-encoding-sniffer	6.0.0	https://registry.npmjs.org/html-encoding-sniffer/6.0.0	MIT	PASS	npm:node_modules/html-encoding-sniffer
+npm	html-parse-stringify	3.0.1	https://registry.npmjs.org/html-parse-stringify/3.0.1	MIT	PASS	npm:node_modules/html-parse-stringify
+npm	i18next	26.3.6	https://registry.npmjs.org/i18next/26.3.6	MIT	PASS	npm:node_modules/i18next
+npm	is-potential-custom-element-name	1.0.1	https://registry.npmjs.org/is-potential-custom-element-name/1.0.1	MIT	PASS	npm:node_modules/is-potential-custom-element-name
+npm	js-tokens	4.0.0	https://registry.npmjs.org/js-tokens/4.0.0	MIT	PASS	npm:node_modules/js-tokens
+npm	jsdom	29.1.1	https://registry.npmjs.org/jsdom/29.1.1	MIT	PASS	npm:node_modules/jsdom
+npm	lightningcss	1.32.0	https://registry.npmjs.org/lightningcss/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss
+npm	lightningcss-android-arm64	1.32.0	https://registry.npmjs.org/lightningcss-android-arm64/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-android-arm64
+npm	lightningcss-darwin-arm64	1.32.0	https://registry.npmjs.org/lightningcss-darwin-arm64/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-darwin-arm64
+npm	lightningcss-darwin-x64	1.32.0	https://registry.npmjs.org/lightningcss-darwin-x64/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-darwin-x64
+npm	lightningcss-freebsd-x64	1.32.0	https://registry.npmjs.org/lightningcss-freebsd-x64/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-freebsd-x64
+npm	lightningcss-linux-arm-gnueabihf	1.32.0	https://registry.npmjs.org/lightningcss-linux-arm-gnueabihf/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-linux-arm-gnueabihf
+npm	lightningcss-linux-arm64-gnu	1.32.0	https://registry.npmjs.org/lightningcss-linux-arm64-gnu/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-linux-arm64-gnu
+npm	lightningcss-linux-arm64-musl	1.32.0	https://registry.npmjs.org/lightningcss-linux-arm64-musl/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-linux-arm64-musl
+npm	lightningcss-linux-x64-gnu	1.32.0	https://registry.npmjs.org/lightningcss-linux-x64-gnu/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-linux-x64-gnu
+npm	lightningcss-linux-x64-musl	1.32.0	https://registry.npmjs.org/lightningcss-linux-x64-musl/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-linux-x64-musl
+npm	lightningcss-win32-arm64-msvc	1.32.0	https://registry.npmjs.org/lightningcss-win32-arm64-msvc/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-win32-arm64-msvc
+npm	lightningcss-win32-x64-msvc	1.32.0	https://registry.npmjs.org/lightningcss-win32-x64-msvc/1.32.0	MPL-2.0	PASS	npm:node_modules/lightningcss-win32-x64-msvc
+npm	lru-cache	11.5.2	https://registry.npmjs.org/lru-cache/11.5.2	BlueOak-1.0.0	PASS	npm:node_modules/lru-cache
+npm	lz-string	1.5.0	https://registry.npmjs.org/lz-string/1.5.0	MIT	PASS	npm:node_modules/lz-string
+npm	magic-string	0.30.21	https://registry.npmjs.org/magic-string/0.30.21	MIT	PASS	npm:node_modules/magic-string
+npm	mdn-data	2.27.1	https://registry.npmjs.org/mdn-data/2.27.1	CC0-1.0	PASS	npm:node_modules/mdn-data
+npm	nanoid	3.3.16	https://registry.npmjs.org/nanoid/3.3.16	MIT	PASS	npm:node_modules/nanoid
+npm	obug	2.1.3	https://registry.npmjs.org/obug/2.1.3	MIT	PASS	npm:node_modules/obug
+npm	parse5	8.0.1	https://registry.npmjs.org/parse5/8.0.1	MIT	PASS	npm:node_modules/parse5
+npm	pathe	2.0.3	https://registry.npmjs.org/pathe/2.0.3	MIT	PASS	npm:node_modules/pathe
+npm	picocolors	1.1.1	https://registry.npmjs.org/picocolors/1.1.1	ISC	PASS	npm:node_modules/picocolors
+npm	picomatch	4.0.5	https://registry.npmjs.org/picomatch/4.0.5	MIT	PASS	npm:node_modules/picomatch
+npm	playwright	1.61.1	https://registry.npmjs.org/playwright/1.61.1	Apache-2.0	PASS	npm:node_modules/playwright
+npm	playwright-core	1.61.1	https://registry.npmjs.org/playwright-core/1.61.1	Apache-2.0	PASS	npm:node_modules/playwright-core
+npm	postcss	8.5.19	https://registry.npmjs.org/postcss/8.5.19	MIT	PASS	npm:node_modules/postcss
+npm	pretty-format	27.5.1	https://registry.npmjs.org/pretty-format/27.5.1	MIT	PASS	npm:node_modules/pretty-format
+npm	punycode	2.3.1	https://registry.npmjs.org/punycode/2.3.1	MIT	PASS	npm:node_modules/punycode
+npm	react	19.2.7	https://registry.npmjs.org/react/19.2.7	MIT	PASS	npm:node_modules/react
+npm	react-dom	19.2.7	https://registry.npmjs.org/react-dom/19.2.7	MIT	PASS	npm:node_modules/react-dom
+npm	react-i18next	17.0.9	https://registry.npmjs.org/react-i18next/17.0.9	MIT	PASS	npm:node_modules/react-i18next
+npm	react-is	17.0.2	https://registry.npmjs.org/react-is/17.0.2	MIT	PASS	npm:node_modules/react-is
+npm	react-router	7.18.1	https://registry.npmjs.org/react-router/7.18.1	MIT	PASS	npm:node_modules/react-router
+npm	react-router-dom	7.18.1	https://registry.npmjs.org/react-router-dom/7.18.1	MIT	PASS	npm:node_modules/react-router-dom
+npm	require-from-string	2.0.2	https://registry.npmjs.org/require-from-string/2.0.2	MIT	PASS	npm:node_modules/require-from-string
+npm	rolldown	1.1.5	https://registry.npmjs.org/rolldown/1.1.5	MIT	PASS	npm:node_modules/rolldown
+npm	saxes	6.0.0	https://registry.npmjs.org/saxes/6.0.0	ISC	PASS	npm:node_modules/saxes
+npm	scheduler	0.27.0	https://registry.npmjs.org/scheduler/0.27.0	MIT	PASS	npm:node_modules/scheduler
+npm	set-cookie-parser	2.7.2	https://registry.npmjs.org/set-cookie-parser/2.7.2	MIT	PASS	npm:node_modules/set-cookie-parser
+npm	siginfo	2.0.0	https://registry.npmjs.org/siginfo/2.0.0	ISC	PASS	npm:node_modules/siginfo
+npm	source-map-js	1.2.1	https://registry.npmjs.org/source-map-js/1.2.1	BSD-3-Clause	PASS	npm:node_modules/source-map-js
+npm	stackback	0.0.2	https://registry.npmjs.org/stackback/0.0.2	MIT	PASS	npm:node_modules/stackback
+npm	std-env	4.2.0	https://registry.npmjs.org/std-env/4.2.0	MIT	PASS	npm:node_modules/std-env
+npm	symbol-tree	3.2.4	https://registry.npmjs.org/symbol-tree/3.2.4	MIT	PASS	npm:node_modules/symbol-tree
+npm	tinybench	2.9.0	https://registry.npmjs.org/tinybench/2.9.0	MIT	PASS	npm:node_modules/tinybench
+npm	tinyexec	1.2.4	https://registry.npmjs.org/tinyexec/1.2.4	MIT	PASS	npm:node_modules/tinyexec
+npm	tinyglobby	0.2.17	https://registry.npmjs.org/tinyglobby/0.2.17	MIT	PASS	npm:node_modules/tinyglobby
+npm	tinyrainbow	3.1.0	https://registry.npmjs.org/tinyrainbow/3.1.0	MIT	PASS	npm:node_modules/tinyrainbow
+npm	tldts	7.4.8	https://registry.npmjs.org/tldts/7.4.8	MIT	PASS	npm:node_modules/tldts
+npm	tldts-core	7.4.8	https://registry.npmjs.org/tldts-core/7.4.8	MIT	PASS	npm:node_modules/tldts-core
+npm	tough-cookie	6.0.2	https://registry.npmjs.org/tough-cookie/6.0.2	BSD-3-Clause	PASS	npm:node_modules/tough-cookie
+npm	tr46	6.0.0	https://registry.npmjs.org/tr46/6.0.0	MIT	PASS	npm:node_modules/tr46
+npm	tslib	2.8.1	https://registry.npmjs.org/tslib/2.8.1	0BSD	PASS	npm:node_modules/tslib
+npm	typescript	7.0.2	https://registry.npmjs.org/typescript/7.0.2	Apache-2.0	PASS	npm:node_modules/typescript
+npm	undici	7.28.0	https://registry.npmjs.org/undici/7.28.0	MIT	PASS	npm:node_modules/undici
+npm	undici-types	7.28.0	https://registry.npmjs.org/undici-types/7.28.0	MIT	PASS	npm:node_modules/undici-types
+npm	undici-types	8.3.0	https://registry.npmjs.org/undici-types/8.3.0	MIT	PASS	npm:node_modules/@types/node/node_modules/undici-types
+npm	use-sync-external-store	1.6.0	https://registry.npmjs.org/use-sync-external-store/1.6.0	MIT	PASS	npm:node_modules/use-sync-external-store
+npm	vite	8.1.4	https://registry.npmjs.org/vite/8.1.4	MIT	PASS	npm:node_modules/vite
+npm	vitest	4.1.10	https://registry.npmjs.org/vitest/4.1.10	MIT	PASS	npm:node_modules/vitest
+npm	void-elements	3.1.0	https://registry.npmjs.org/void-elements/3.1.0	MIT	PASS	npm:node_modules/void-elements
+npm	w3c-xmlserializer	5.0.0	https://registry.npmjs.org/w3c-xmlserializer/5.0.0	MIT	PASS	npm:node_modules/w3c-xmlserializer
+npm	webidl-conversions	8.0.1	https://registry.npmjs.org/webidl-conversions/8.0.1	BSD-2-Clause	PASS	npm:node_modules/webidl-conversions
+npm	whatwg-mimetype	5.0.0	https://registry.npmjs.org/whatwg-mimetype/5.0.0	MIT	PASS	npm:node_modules/whatwg-mimetype
+npm	whatwg-url	16.0.1	https://registry.npmjs.org/whatwg-url/16.0.1	MIT	PASS	npm:node_modules/whatwg-url
+npm	why-is-node-running	2.3.0	https://registry.npmjs.org/why-is-node-running/2.3.0	MIT	PASS	npm:node_modules/why-is-node-running
+npm	xml-name-validator	5.0.0	https://registry.npmjs.org/xml-name-validator/5.0.0	Apache-2.0	PASS	npm:node_modules/xml-name-validator
+npm	xmlchars	2.2.0	https://registry.npmjs.org/xmlchars/2.2.0	MIT	PASS	npm:node_modules/xmlchars
+rust	adler2	2.0.1	https://crates.io/api/v1/crates/adler2/2.0.1	0BSD OR MIT OR Apache-2.0	PASS	cargo:adler2@2.0.1:crates.io
+rust	aho-corasick	1.1.4	https://crates.io/api/v1/crates/aho-corasick/1.1.4	Unlicense OR MIT	PASS	cargo:aho-corasick@1.1.4:crates.io
+rust	async-compression	0.4.42	https://crates.io/api/v1/crates/async-compression/0.4.42	MIT OR Apache-2.0	PASS	cargo:async-compression@0.4.42:crates.io
+rust	atomic-waker	1.1.2	https://crates.io/api/v1/crates/atomic-waker/1.1.2	Apache-2.0 OR MIT	PASS	cargo:atomic-waker@1.1.2:crates.io
+rust	autocfg	1.5.1	https://crates.io/api/v1/crates/autocfg/1.5.1	Apache-2.0 OR MIT	PASS	cargo:autocfg@1.5.1:crates.io
+rust	aws-lc-rs	1.17.1	https://crates.io/api/v1/crates/aws-lc-rs/1.17.1	ISC AND (Apache-2.0 OR ISC)	PASS	cargo:aws-lc-rs@1.17.1:crates.io
+rust	aws-lc-sys	0.42.0	https://crates.io/api/v1/crates/aws-lc-sys/0.42.0	ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)	PASS	cargo:aws-lc-sys@0.42.0:crates.io
+rust	axum	0.8.9	https://crates.io/api/v1/crates/axum/0.8.9	MIT	PASS	cargo:axum@0.8.9:crates.io
+rust	axum-core	0.5.6	https://crates.io/api/v1/crates/axum-core/0.5.6	MIT	PASS	cargo:axum-core@0.5.6:crates.io
+rust	base64	0.22.1	https://crates.io/api/v1/crates/base64/0.22.1	MIT OR Apache-2.0	PASS	cargo:base64@0.22.1:crates.io
+rust	bit-set	0.8.0	https://crates.io/api/v1/crates/bit-set/0.8.0	Apache-2.0 OR MIT	PASS	cargo:bit-set@0.8.0:crates.io
+rust	bit-vec	0.8.0	https://crates.io/api/v1/crates/bit-vec/0.8.0	Apache-2.0 OR MIT	PASS	cargo:bit-vec@0.8.0:crates.io
+rust	bitflags	1.3.2	https://crates.io/api/v1/crates/bitflags/1.3.2	MIT OR Apache-2.0	PASS	cargo:bitflags@1.3.2:crates.io
+rust	bitflags	2.13.0	https://crates.io/api/v1/crates/bitflags/2.13.0	MIT OR Apache-2.0	PASS	cargo:bitflags@2.13.0:crates.io
+rust	block-buffer	0.10.4	https://crates.io/api/v1/crates/block-buffer/0.10.4	MIT OR Apache-2.0	PASS	cargo:block-buffer@0.10.4:crates.io
+rust	bumpalo	3.20.3	https://crates.io/api/v1/crates/bumpalo/3.20.3	MIT OR Apache-2.0	PASS	cargo:bumpalo@3.20.3:crates.io
+rust	bytes	1.12.1	https://crates.io/api/v1/crates/bytes/1.12.1	MIT	PASS	cargo:bytes@1.12.1:crates.io
+rust	cc	1.2.67	https://crates.io/api/v1/crates/cc/1.2.67	MIT OR Apache-2.0	PASS	cargo:cc@1.2.67:crates.io
+rust	cfg-if	1.0.4	https://crates.io/api/v1/crates/cfg-if/1.0.4	MIT OR Apache-2.0	PASS	cargo:cfg-if@1.0.4:crates.io
+rust	cfg_aliases	0.2.1	https://crates.io/api/v1/crates/cfg_aliases/0.2.1	MIT	PASS	cargo:cfg_aliases@0.2.1:crates.io
+rust	chacha20	0.10.1	https://crates.io/api/v1/crates/chacha20/0.10.1	MIT OR Apache-2.0	PASS	cargo:chacha20@0.10.1:crates.io
+rust	cmake	0.1.58	https://crates.io/api/v1/crates/cmake/0.1.58	MIT OR Apache-2.0	PASS	cargo:cmake@0.1.58:crates.io
+rust	combine	4.6.7	https://crates.io/api/v1/crates/combine/4.6.7	MIT	PASS	cargo:combine@4.6.7:crates.io
+rust	compression-codecs	0.4.38	https://crates.io/api/v1/crates/compression-codecs/0.4.38	MIT OR Apache-2.0	PASS	cargo:compression-codecs@0.4.38:crates.io
+rust	compression-core	0.4.32	https://crates.io/api/v1/crates/compression-core/0.4.32	MIT OR Apache-2.0	PASS	cargo:compression-core@0.4.32:crates.io
+rust	core-foundation	0.10.1	https://crates.io/api/v1/crates/core-foundation/0.10.1	MIT OR Apache-2.0	PASS	cargo:core-foundation@0.10.1:crates.io
+rust	core-foundation-sys	0.8.7	https://crates.io/api/v1/crates/core-foundation-sys/0.8.7	MIT OR Apache-2.0	PASS	cargo:core-foundation-sys@0.8.7:crates.io
+rust	cpufeatures	0.2.17	https://crates.io/api/v1/crates/cpufeatures/0.2.17	MIT OR Apache-2.0	PASS	cargo:cpufeatures@0.2.17:crates.io
+rust	cpufeatures	0.3.0	https://crates.io/api/v1/crates/cpufeatures/0.3.0	MIT OR Apache-2.0	PASS	cargo:cpufeatures@0.3.0:crates.io
+rust	crc32fast	1.5.0	https://crates.io/api/v1/crates/crc32fast/1.5.0	MIT OR Apache-2.0	PASS	cargo:crc32fast@1.5.0:crates.io
+rust	crypto-common	0.1.7	https://crates.io/api/v1/crates/crypto-common/0.1.7	MIT OR Apache-2.0	PASS	cargo:crypto-common@0.1.7:crates.io
+rust	data-encoding	2.11.0	https://crates.io/api/v1/crates/data-encoding/2.11.0	MIT	PASS	cargo:data-encoding@2.11.0:crates.io
+rust	defmt	1.1.1	https://crates.io/api/v1/crates/defmt/1.1.1	MIT OR Apache-2.0	PASS	cargo:defmt@1.1.1:crates.io
+rust	defmt-macros	1.1.1	https://crates.io/api/v1/crates/defmt-macros/1.1.1	MIT OR Apache-2.0	PASS	cargo:defmt-macros@1.1.1:crates.io
+rust	defmt-parser	1.0.0	https://crates.io/api/v1/crates/defmt-parser/1.0.0	MIT OR Apache-2.0	PASS	cargo:defmt-parser@1.0.0:crates.io
+rust	deranged	0.5.8	https://crates.io/api/v1/crates/deranged/0.5.8	MIT OR Apache-2.0	PASS	cargo:deranged@0.5.8:crates.io
+rust	digest	0.10.7	https://crates.io/api/v1/crates/digest/0.10.7	MIT OR Apache-2.0	PASS	cargo:digest@0.10.7:crates.io
+rust	displaydoc	0.2.6	https://crates.io/api/v1/crates/displaydoc/0.2.6	MIT OR Apache-2.0	PASS	cargo:displaydoc@0.2.6:crates.io
+rust	dunce	1.0.5	https://crates.io/api/v1/crates/dunce/1.0.5	CC0-1.0 OR MIT-0 OR Apache-2.0	PASS	cargo:dunce@1.0.5:crates.io
+rust	errno	0.3.14	https://crates.io/api/v1/crates/errno/0.3.14	MIT OR Apache-2.0	PASS	cargo:errno@0.3.14:crates.io
+rust	fallible-iterator	0.3.0	https://crates.io/api/v1/crates/fallible-iterator/0.3.0	MIT OR Apache-2.0	PASS	cargo:fallible-iterator@0.3.0:crates.io
+rust	fallible-streaming-iterator	0.1.9	https://crates.io/api/v1/crates/fallible-streaming-iterator/0.1.9	MIT OR Apache-2.0	PASS	cargo:fallible-streaming-iterator@0.1.9:crates.io
+rust	fastrand	2.4.1	https://crates.io/api/v1/crates/fastrand/2.4.1	Apache-2.0 OR MIT	PASS	cargo:fastrand@2.4.1:crates.io
+rust	find-msvc-tools	0.1.9	https://crates.io/api/v1/crates/find-msvc-tools/0.1.9	MIT OR Apache-2.0	PASS	cargo:find-msvc-tools@0.1.9:crates.io
+rust	flate2	1.1.9	https://crates.io/api/v1/crates/flate2/1.1.9	MIT OR Apache-2.0	PASS	cargo:flate2@1.1.9:crates.io
+rust	form_urlencoded	1.2.2	https://crates.io/api/v1/crates/form_urlencoded/1.2.2	MIT OR Apache-2.0	PASS	cargo:form_urlencoded@1.2.2:crates.io
+rust	fs_extra	1.3.0	https://crates.io/api/v1/crates/fs_extra/1.3.0	MIT	PASS	cargo:fs_extra@1.3.0:crates.io
+rust	futures-channel	0.3.32	https://crates.io/api/v1/crates/futures-channel/0.3.32	MIT OR Apache-2.0	PASS	cargo:futures-channel@0.3.32:crates.io
+rust	futures-core	0.3.32	https://crates.io/api/v1/crates/futures-core/0.3.32	MIT OR Apache-2.0	PASS	cargo:futures-core@0.3.32:crates.io
+rust	futures-sink	0.3.32	https://crates.io/api/v1/crates/futures-sink/0.3.32	MIT OR Apache-2.0	PASS	cargo:futures-sink@0.3.32:crates.io
+rust	futures-task	0.3.32	https://crates.io/api/v1/crates/futures-task/0.3.32	MIT OR Apache-2.0	PASS	cargo:futures-task@0.3.32:crates.io
+rust	futures-util	0.3.32	https://crates.io/api/v1/crates/futures-util/0.3.32	MIT OR Apache-2.0	PASS	cargo:futures-util@0.3.32:crates.io
+rust	generic-array	0.14.7	https://crates.io/api/v1/crates/generic-array/0.14.7	MIT	PASS	cargo:generic-array@0.14.7:crates.io
+rust	getrandom	0.2.17	https://crates.io/api/v1/crates/getrandom/0.2.17	MIT OR Apache-2.0	PASS	cargo:getrandom@0.2.17:crates.io
+rust	getrandom	0.3.4	https://crates.io/api/v1/crates/getrandom/0.3.4	MIT OR Apache-2.0	PASS	cargo:getrandom@0.3.4:crates.io
+rust	getrandom	0.4.3	https://crates.io/api/v1/crates/getrandom/0.4.3	MIT OR Apache-2.0	PASS	cargo:getrandom@0.4.3:crates.io
+rust	http	1.4.2	https://crates.io/api/v1/crates/http/1.4.2	MIT OR Apache-2.0	PASS	cargo:http@1.4.2:crates.io
+rust	http-body	1.0.1	https://crates.io/api/v1/crates/http-body/1.0.1	MIT	PASS	cargo:http-body@1.0.1:crates.io
+rust	http-body-util	0.1.3	https://crates.io/api/v1/crates/http-body-util/0.1.3	MIT	PASS	cargo:http-body-util@0.1.3:crates.io
+rust	http-range-header	0.4.2	https://crates.io/api/v1/crates/http-range-header/0.4.2	MIT	PASS	cargo:http-range-header@0.4.2:crates.io
+rust	httparse	1.10.1	https://crates.io/api/v1/crates/httparse/1.10.1	MIT OR Apache-2.0	PASS	cargo:httparse@1.10.1:crates.io
+rust	httpdate	1.0.3	https://crates.io/api/v1/crates/httpdate/1.0.3	MIT OR Apache-2.0	PASS	cargo:httpdate@1.0.3:crates.io
+rust	hyper	1.10.1	https://crates.io/api/v1/crates/hyper/1.10.1	MIT	PASS	cargo:hyper@1.10.1:crates.io
+rust	hyper-rustls	0.27.9	https://crates.io/api/v1/crates/hyper-rustls/0.27.9	Apache-2.0 OR ISC OR MIT	PASS	cargo:hyper-rustls@0.27.9:crates.io
+rust	hyper-util	0.1.20	https://crates.io/api/v1/crates/hyper-util/0.1.20	MIT	PASS	cargo:hyper-util@0.1.20:crates.io
+rust	icu_collections	2.2.0	https://crates.io/api/v1/crates/icu_collections/2.2.0	Unicode-3.0	PASS	cargo:icu_collections@2.2.0:crates.io
+rust	icu_locale_core	2.2.0	https://crates.io/api/v1/crates/icu_locale_core/2.2.0	Unicode-3.0	PASS	cargo:icu_locale_core@2.2.0:crates.io
+rust	icu_normalizer	2.2.0	https://crates.io/api/v1/crates/icu_normalizer/2.2.0	Unicode-3.0	PASS	cargo:icu_normalizer@2.2.0:crates.io
+rust	icu_normalizer_data	2.2.0	https://crates.io/api/v1/crates/icu_normalizer_data/2.2.0	Unicode-3.0	PASS	cargo:icu_normalizer_data@2.2.0:crates.io
+rust	icu_properties	2.2.0	https://crates.io/api/v1/crates/icu_properties/2.2.0	Unicode-3.0	PASS	cargo:icu_properties@2.2.0:crates.io
+rust	icu_properties_data	2.2.0	https://crates.io/api/v1/crates/icu_properties_data/2.2.0	Unicode-3.0	PASS	cargo:icu_properties_data@2.2.0:crates.io
+rust	icu_provider	2.2.0	https://crates.io/api/v1/crates/icu_provider/2.2.0	Unicode-3.0	PASS	cargo:icu_provider@2.2.0:crates.io
+rust	idna	1.1.0	https://crates.io/api/v1/crates/idna/1.1.0	MIT OR Apache-2.0	PASS	cargo:idna@1.1.0:crates.io
+rust	idna_adapter	1.2.2	https://crates.io/api/v1/crates/idna_adapter/1.2.2	Apache-2.0 OR MIT	PASS	cargo:idna_adapter@1.2.2:crates.io
+rust	include_dir	0.7.4	https://crates.io/api/v1/crates/include_dir/0.7.4	MIT	PASS	cargo:include_dir@0.7.4:crates.io
+rust	include_dir_macros	0.7.4	https://crates.io/api/v1/crates/include_dir_macros/0.7.4	MIT	PASS	cargo:include_dir_macros@0.7.4:crates.io
+rust	ipnet	2.12.0	https://crates.io/api/v1/crates/ipnet/2.12.0	MIT OR Apache-2.0	PASS	cargo:ipnet@2.12.0:crates.io
+rust	is-docker	0.2.0	https://crates.io/api/v1/crates/is-docker/0.2.0	MIT	PASS	cargo:is-docker@0.2.0:crates.io
+rust	is-wsl	0.4.0	https://crates.io/api/v1/crates/is-wsl/0.4.0	MIT	PASS	cargo:is-wsl@0.4.0:crates.io
+rust	itoa	1.0.18	https://crates.io/api/v1/crates/itoa/1.0.18	MIT OR Apache-2.0	PASS	cargo:itoa@1.0.18:crates.io
+rust	jiff	0.2.32	https://crates.io/api/v1/crates/jiff/0.2.32	Unlicense OR MIT	PASS	cargo:jiff@0.2.32:crates.io
+rust	jiff-static	0.2.32	https://crates.io/api/v1/crates/jiff-static/0.2.32	Unlicense OR MIT	PASS	cargo:jiff-static@0.2.32:crates.io
+rust	jiff-tzdb	0.1.8	https://crates.io/api/v1/crates/jiff-tzdb/0.1.8	Unlicense OR MIT	PASS	cargo:jiff-tzdb@0.1.8:crates.io
+rust	jni	0.22.4	https://crates.io/api/v1/crates/jni/0.22.4	MIT OR Apache-2.0	PASS	cargo:jni@0.22.4:crates.io
+rust	jni-macros	0.22.4	https://crates.io/api/v1/crates/jni-macros/0.22.4	MIT OR Apache-2.0	PASS	cargo:jni-macros@0.22.4:crates.io
+rust	jni-sys	0.4.1	https://crates.io/api/v1/crates/jni-sys/0.4.1	MIT OR Apache-2.0	PASS	cargo:jni-sys@0.4.1:crates.io
+rust	jni-sys-macros	0.4.1	https://crates.io/api/v1/crates/jni-sys-macros/0.4.1	MIT OR Apache-2.0	PASS	cargo:jni-sys-macros@0.4.1:crates.io
+rust	jobserver	0.1.35	https://crates.io/api/v1/crates/jobserver/0.1.35	MIT OR Apache-2.0	PASS	cargo:jobserver@0.1.35:crates.io
+rust	js-sys	0.3.103	https://crates.io/api/v1/crates/js-sys/0.3.103	MIT OR Apache-2.0	PASS	cargo:js-sys@0.3.103:crates.io
+rust	lazy_static	1.5.0	https://crates.io/api/v1/crates/lazy_static/1.5.0	MIT OR Apache-2.0	PASS	cargo:lazy_static@1.5.0:crates.io
+rust	libc	0.2.186	https://crates.io/api/v1/crates/libc/0.2.186	MIT OR Apache-2.0	PASS	cargo:libc@0.2.186:crates.io
+rust	libsqlite3-sys	0.38.1	https://crates.io/api/v1/crates/libsqlite3-sys/0.38.1	MIT	PASS	cargo:libsqlite3-sys@0.38.1:crates.io
+rust	linux-raw-sys	0.12.1	https://crates.io/api/v1/crates/linux-raw-sys/0.12.1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	PASS	cargo:linux-raw-sys@0.12.1:crates.io
+rust	litemap	0.8.2	https://crates.io/api/v1/crates/litemap/0.8.2	Unicode-3.0	PASS	cargo:litemap@0.8.2:crates.io
+rust	log	0.4.33	https://crates.io/api/v1/crates/log/0.4.33	MIT OR Apache-2.0	PASS	cargo:log@0.4.33:crates.io
+rust	lru-slab	0.1.2	https://crates.io/api/v1/crates/lru-slab/0.1.2	MIT OR Apache-2.0 OR Zlib	PASS	cargo:lru-slab@0.1.2:crates.io
+rust	matchers	0.2.0	https://crates.io/api/v1/crates/matchers/0.2.0	MIT	PASS	cargo:matchers@0.2.0:crates.io
+rust	matchit	0.8.4	https://crates.io/api/v1/crates/matchit/0.8.4	MIT AND BSD-3-Clause	PASS	cargo:matchit@0.8.4:crates.io
+rust	memchr	2.8.3	https://crates.io/api/v1/crates/memchr/2.8.3	Unlicense OR MIT	PASS	cargo:memchr@2.8.3:crates.io
+rust	mime	0.3.17	https://crates.io/api/v1/crates/mime/0.3.17	MIT OR Apache-2.0	PASS	cargo:mime@0.3.17:crates.io
+rust	mime_guess	2.0.5	https://crates.io/api/v1/crates/mime_guess/2.0.5	MIT	PASS	cargo:mime_guess@2.0.5:crates.io
+rust	miniz_oxide	0.8.9	https://crates.io/api/v1/crates/miniz_oxide/0.8.9	MIT OR Zlib OR Apache-2.0	PASS	cargo:miniz_oxide@0.8.9:crates.io
+rust	mio	1.2.1	https://crates.io/api/v1/crates/mio/1.2.1	MIT	PASS	cargo:mio@1.2.1:crates.io
+rust	num-conv	0.2.2	https://crates.io/api/v1/crates/num-conv/0.2.2	MIT OR Apache-2.0	PASS	cargo:num-conv@0.2.2:crates.io
+rust	num-traits	0.2.19	https://crates.io/api/v1/crates/num-traits/0.2.19	MIT OR Apache-2.0	PASS	cargo:num-traits@0.2.19:crates.io
+rust	once_cell	1.21.4	https://crates.io/api/v1/crates/once_cell/1.21.4	MIT OR Apache-2.0	PASS	cargo:once_cell@1.21.4:crates.io
+rust	open	5.4.0	https://crates.io/api/v1/crates/open/5.4.0	MIT	PASS	cargo:open@5.4.0:crates.io
+rust	openssl-probe	0.2.1	https://crates.io/api/v1/crates/openssl-probe/0.2.1	MIT OR Apache-2.0	PASS	cargo:openssl-probe@0.2.1:crates.io
+rust	percent-encoding	2.3.2	https://crates.io/api/v1/crates/percent-encoding/2.3.2	MIT OR Apache-2.0	PASS	cargo:percent-encoding@2.3.2:crates.io
+rust	pin-project-lite	0.2.17	https://crates.io/api/v1/crates/pin-project-lite/0.2.17	Apache-2.0 OR MIT	PASS	cargo:pin-project-lite@0.2.17:crates.io
+rust	pkg-config	0.3.33	https://crates.io/api/v1/crates/pkg-config/0.3.33	MIT OR Apache-2.0	PASS	cargo:pkg-config@0.3.33:crates.io
+rust	portable-atomic	1.13.1	https://crates.io/api/v1/crates/portable-atomic/1.13.1	Apache-2.0 OR MIT	PASS	cargo:portable-atomic@1.13.1:crates.io
+rust	portable-atomic-util	0.2.7	https://crates.io/api/v1/crates/portable-atomic-util/0.2.7	Apache-2.0 OR MIT	PASS	cargo:portable-atomic-util@0.2.7:crates.io
+rust	potential_utf	0.1.5	https://crates.io/api/v1/crates/potential_utf/0.1.5	Unicode-3.0	PASS	cargo:potential_utf@0.1.5:crates.io
+rust	powerfmt	0.2.0	https://crates.io/api/v1/crates/powerfmt/0.2.0	MIT OR Apache-2.0	PASS	cargo:powerfmt@0.2.0:crates.io
+rust	ppv-lite86	0.2.21	https://crates.io/api/v1/crates/ppv-lite86/0.2.21	MIT OR Apache-2.0	PASS	cargo:ppv-lite86@0.2.21:crates.io
+rust	proc-macro2	1.0.106	https://crates.io/api/v1/crates/proc-macro2/1.0.106	MIT OR Apache-2.0	PASS	cargo:proc-macro2@1.0.106:crates.io
+rust	proptest	1.11.0	https://crates.io/api/v1/crates/proptest/1.11.0	MIT OR Apache-2.0	PASS	cargo:proptest@1.11.0:crates.io
+rust	quinn	0.11.11	https://crates.io/api/v1/crates/quinn/0.11.11	MIT OR Apache-2.0	PASS	cargo:quinn@0.11.11:crates.io
+rust	quinn-proto	0.11.16	https://crates.io/api/v1/crates/quinn-proto/0.11.16	MIT OR Apache-2.0	PASS	cargo:quinn-proto@0.11.16:crates.io
+rust	quinn-udp	0.5.15	https://crates.io/api/v1/crates/quinn-udp/0.5.15	MIT OR Apache-2.0	PASS	cargo:quinn-udp@0.5.15:crates.io
+rust	quote	1.0.46	https://crates.io/api/v1/crates/quote/1.0.46	MIT OR Apache-2.0	PASS	cargo:quote@1.0.46:crates.io
+rust	r-efi	5.3.0	https://crates.io/api/v1/crates/r-efi/5.3.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later	PASS	cargo:r-efi@5.3.0:crates.io
+rust	r-efi	6.0.0	https://crates.io/api/v1/crates/r-efi/6.0.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later	PASS	cargo:r-efi@6.0.0:crates.io
+rust	rand	0.10.2	https://crates.io/api/v1/crates/rand/0.10.2	MIT OR Apache-2.0	PASS	cargo:rand@0.10.2:crates.io
+rust	rand	0.9.5	https://crates.io/api/v1/crates/rand/0.9.5	MIT OR Apache-2.0	PASS	cargo:rand@0.9.5:crates.io
+rust	rand_chacha	0.9.0	https://crates.io/api/v1/crates/rand_chacha/0.9.0	MIT OR Apache-2.0	PASS	cargo:rand_chacha@0.9.0:crates.io
+rust	rand_core	0.10.1	https://crates.io/api/v1/crates/rand_core/0.10.1	MIT OR Apache-2.0	PASS	cargo:rand_core@0.10.1:crates.io
+rust	rand_core	0.9.5	https://crates.io/api/v1/crates/rand_core/0.9.5	MIT OR Apache-2.0	PASS	cargo:rand_core@0.9.5:crates.io
+rust	rand_pcg	0.10.2	https://crates.io/api/v1/crates/rand_pcg/0.10.2	MIT OR Apache-2.0	PASS	cargo:rand_pcg@0.10.2:crates.io
+rust	rand_xorshift	0.4.0	https://crates.io/api/v1/crates/rand_xorshift/0.4.0	MIT OR Apache-2.0	PASS	cargo:rand_xorshift@0.4.0:crates.io
+rust	rbcsp-dependency-baseline	0.0.0	repository:crates/dependency-baseline/Cargo.toml	ISC	PASS	cargo:rbcsp-dependency-baseline@0.0.0:local
+rust	regex-automata	0.4.15	https://crates.io/api/v1/crates/regex-automata/0.4.15	MIT OR Apache-2.0	PASS	cargo:regex-automata@0.4.15:crates.io
+rust	regex-syntax	0.8.11	https://crates.io/api/v1/crates/regex-syntax/0.8.11	MIT OR Apache-2.0	PASS	cargo:regex-syntax@0.8.11:crates.io
+rust	reqwest	0.13.4	https://crates.io/api/v1/crates/reqwest/0.13.4	MIT OR Apache-2.0	PASS	cargo:reqwest@0.13.4:crates.io
+rust	ring	0.17.14	https://crates.io/api/v1/crates/ring/0.17.14	Apache-2.0 AND ISC	PASS	cargo:ring@0.17.14:crates.io
+rust	rusqlite	0.40.1	https://crates.io/api/v1/crates/rusqlite/0.40.1	MIT	PASS	cargo:rusqlite@0.40.1:crates.io
+rust	rustc-hash	2.1.3	https://crates.io/api/v1/crates/rustc-hash/2.1.3	Apache-2.0 OR MIT	PASS	cargo:rustc-hash@2.1.3:crates.io
+rust	rustc_version	0.4.1	https://crates.io/api/v1/crates/rustc_version/0.4.1	MIT OR Apache-2.0	PASS	cargo:rustc_version@0.4.1:crates.io
+rust	rustix	1.1.4	https://crates.io/api/v1/crates/rustix/1.1.4	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	PASS	cargo:rustix@1.1.4:crates.io
+rust	rustls	0.23.41	https://crates.io/api/v1/crates/rustls/0.23.41	Apache-2.0 OR ISC OR MIT	PASS	cargo:rustls@0.23.41:crates.io
+rust	rustls-native-certs	0.8.4	https://crates.io/api/v1/crates/rustls-native-certs/0.8.4	Apache-2.0 OR ISC OR MIT	PASS	cargo:rustls-native-certs@0.8.4:crates.io
+rust	rustls-pki-types	1.15.0	https://crates.io/api/v1/crates/rustls-pki-types/1.15.0	MIT OR Apache-2.0	PASS	cargo:rustls-pki-types@1.15.0:crates.io
+rust	rustls-platform-verifier	0.7.0	https://crates.io/api/v1/crates/rustls-platform-verifier/0.7.0	MIT OR Apache-2.0	PASS	cargo:rustls-platform-verifier@0.7.0:crates.io
+rust	rustls-platform-verifier-android	0.1.1	https://crates.io/api/v1/crates/rustls-platform-verifier-android/0.1.1	MIT OR Apache-2.0	PASS	cargo:rustls-platform-verifier-android@0.1.1:crates.io
+rust	rustls-webpki	0.103.13	https://crates.io/api/v1/crates/rustls-webpki/0.103.13	ISC	PASS	cargo:rustls-webpki@0.103.13:crates.io
+rust	rustversion	1.0.23	https://crates.io/api/v1/crates/rustversion/1.0.23	MIT OR Apache-2.0	PASS	cargo:rustversion@1.0.23:crates.io
+rust	ryu	1.0.23	https://crates.io/api/v1/crates/ryu/1.0.23	Apache-2.0 OR BSL-1.0	PASS	cargo:ryu@1.0.23:crates.io
+rust	same-file	1.0.6	https://crates.io/api/v1/crates/same-file/1.0.6	Unlicense OR MIT	PASS	cargo:same-file@1.0.6:crates.io
+rust	schannel	0.1.29	https://crates.io/api/v1/crates/schannel/0.1.29	MIT	PASS	cargo:schannel@0.1.29:crates.io
+rust	security-framework	3.7.0	https://crates.io/api/v1/crates/security-framework/3.7.0	MIT OR Apache-2.0	PASS	cargo:security-framework@3.7.0:crates.io
+rust	security-framework-sys	2.17.0	https://crates.io/api/v1/crates/security-framework-sys/2.17.0	MIT OR Apache-2.0	PASS	cargo:security-framework-sys@2.17.0:crates.io
+rust	semver	1.0.28	https://crates.io/api/v1/crates/semver/1.0.28	MIT OR Apache-2.0	PASS	cargo:semver@1.0.28:crates.io
+rust	serde	1.0.228	https://crates.io/api/v1/crates/serde/1.0.228	MIT OR Apache-2.0	PASS	cargo:serde@1.0.228:crates.io
+rust	serde_core	1.0.228	https://crates.io/api/v1/crates/serde_core/1.0.228	MIT OR Apache-2.0	PASS	cargo:serde_core@1.0.228:crates.io
+rust	serde_derive	1.0.228	https://crates.io/api/v1/crates/serde_derive/1.0.228	MIT OR Apache-2.0	PASS	cargo:serde_derive@1.0.228:crates.io
+rust	serde_json	1.0.150	https://crates.io/api/v1/crates/serde_json/1.0.150	MIT OR Apache-2.0	PASS	cargo:serde_json@1.0.150:crates.io
+rust	serde_path_to_error	0.1.20	https://crates.io/api/v1/crates/serde_path_to_error/0.1.20	MIT OR Apache-2.0	PASS	cargo:serde_path_to_error@0.1.20:crates.io
+rust	serde_urlencoded	0.7.1	https://crates.io/api/v1/crates/serde_urlencoded/0.7.1	MIT OR Apache-2.0	PASS	cargo:serde_urlencoded@0.7.1:crates.io
+rust	sha1	0.10.7	https://crates.io/api/v1/crates/sha1/0.10.7	MIT OR Apache-2.0	PASS	cargo:sha1@0.10.7:crates.io
+rust	sha2	0.10.9	https://crates.io/api/v1/crates/sha2/0.10.9	MIT OR Apache-2.0	PASS	cargo:sha2@0.10.9:crates.io
+rust	sharded-slab	0.1.7	https://crates.io/api/v1/crates/sharded-slab/0.1.7	MIT	PASS	cargo:sharded-slab@0.1.7:crates.io
+rust	shlex	2.0.1	https://crates.io/api/v1/crates/shlex/2.0.1	MIT OR Apache-2.0	PASS	cargo:shlex@2.0.1:crates.io
+rust	signal-hook-registry	1.4.8	https://crates.io/api/v1/crates/signal-hook-registry/1.4.8	MIT OR Apache-2.0	PASS	cargo:signal-hook-registry@1.4.8:crates.io
+rust	simd-adler32	0.3.9	https://crates.io/api/v1/crates/simd-adler32/0.3.9	MIT	PASS	cargo:simd-adler32@0.3.9:crates.io
+rust	simd_cesu8	1.1.1	https://crates.io/api/v1/crates/simd_cesu8/1.1.1	Apache-2.0 OR MIT	PASS	cargo:simd_cesu8@1.1.1:crates.io
+rust	simdutf8	0.1.5	https://crates.io/api/v1/crates/simdutf8/0.1.5	MIT OR Apache-2.0	PASS	cargo:simdutf8@0.1.5:crates.io
+rust	slab	0.4.12	https://crates.io/api/v1/crates/slab/0.4.12	MIT	PASS	cargo:slab@0.4.12:crates.io
+rust	smallvec	1.15.2	https://crates.io/api/v1/crates/smallvec/1.15.2	MIT OR Apache-2.0	PASS	cargo:smallvec@1.15.2:crates.io
+rust	socket2	0.6.4	https://crates.io/api/v1/crates/socket2/0.6.4	MIT OR Apache-2.0	PASS	cargo:socket2@0.6.4:crates.io
+rust	stable_deref_trait	1.2.1	https://crates.io/api/v1/crates/stable_deref_trait/1.2.1	MIT OR Apache-2.0	PASS	cargo:stable_deref_trait@1.2.1:crates.io
+rust	subtle	2.6.1	https://crates.io/api/v1/crates/subtle/2.6.1	BSD-3-Clause	PASS	cargo:subtle@2.6.1:crates.io
+rust	syn	2.0.118	https://crates.io/api/v1/crates/syn/2.0.118	MIT OR Apache-2.0	PASS	cargo:syn@2.0.118:crates.io
+rust	sync_wrapper	1.0.2	https://crates.io/api/v1/crates/sync_wrapper/1.0.2	Apache-2.0	PASS	cargo:sync_wrapper@1.0.2:crates.io
+rust	synstructure	0.13.2	https://crates.io/api/v1/crates/synstructure/0.13.2	MIT	PASS	cargo:synstructure@0.13.2:crates.io
+rust	tempfile	3.27.0	https://crates.io/api/v1/crates/tempfile/3.27.0	MIT OR Apache-2.0	PASS	cargo:tempfile@3.27.0:crates.io
+rust	thiserror	2.0.18	https://crates.io/api/v1/crates/thiserror/2.0.18	MIT OR Apache-2.0	PASS	cargo:thiserror@2.0.18:crates.io
+rust	thiserror-impl	2.0.18	https://crates.io/api/v1/crates/thiserror-impl/2.0.18	MIT OR Apache-2.0	PASS	cargo:thiserror-impl@2.0.18:crates.io
+rust	thread_local	1.1.10	https://crates.io/api/v1/crates/thread_local/1.1.10	MIT OR Apache-2.0	PASS	cargo:thread_local@1.1.10:crates.io
+rust	time	0.3.53	https://crates.io/api/v1/crates/time/0.3.53	MIT OR Apache-2.0	PASS	cargo:time@0.3.53:crates.io
+rust	time-core	0.1.9	https://crates.io/api/v1/crates/time-core/0.1.9	MIT OR Apache-2.0	PASS	cargo:time-core@0.1.9:crates.io
+rust	time-macros	0.2.31	https://crates.io/api/v1/crates/time-macros/0.2.31	MIT OR Apache-2.0	PASS	cargo:time-macros@0.2.31:crates.io
+rust	tinystr	0.8.3	https://crates.io/api/v1/crates/tinystr/0.8.3	Unicode-3.0	PASS	cargo:tinystr@0.8.3:crates.io
+rust	tinyvec	1.12.0	https://crates.io/api/v1/crates/tinyvec/1.12.0	Zlib OR Apache-2.0 OR MIT	PASS	cargo:tinyvec@1.12.0:crates.io
+rust	tinyvec_macros	0.1.1	https://crates.io/api/v1/crates/tinyvec_macros/0.1.1	MIT OR Apache-2.0 OR Zlib	PASS	cargo:tinyvec_macros@0.1.1:crates.io
+rust	tokio	1.52.3	https://crates.io/api/v1/crates/tokio/1.52.3	MIT	PASS	cargo:tokio@1.52.3:crates.io
+rust	tokio-macros	2.7.0	https://crates.io/api/v1/crates/tokio-macros/2.7.0	MIT	PASS	cargo:tokio-macros@2.7.0:crates.io
+rust	tokio-rustls	0.26.4	https://crates.io/api/v1/crates/tokio-rustls/0.26.4	MIT OR Apache-2.0	PASS	cargo:tokio-rustls@0.26.4:crates.io
+rust	tokio-tungstenite	0.29.0	https://crates.io/api/v1/crates/tokio-tungstenite/0.29.0	MIT	PASS	cargo:tokio-tungstenite@0.29.0:crates.io
+rust	tokio-util	0.7.18	https://crates.io/api/v1/crates/tokio-util/0.7.18	MIT	PASS	cargo:tokio-util@0.7.18:crates.io
+rust	tower	0.5.3	https://crates.io/api/v1/crates/tower/0.5.3	MIT	PASS	cargo:tower@0.5.3:crates.io
+rust	tower-http	0.6.11	https://crates.io/api/v1/crates/tower-http/0.6.11	MIT	PASS	cargo:tower-http@0.6.11:crates.io
+rust	tower-layer	0.3.3	https://crates.io/api/v1/crates/tower-layer/0.3.3	MIT	PASS	cargo:tower-layer@0.3.3:crates.io
+rust	tower-service	0.3.3	https://crates.io/api/v1/crates/tower-service/0.3.3	MIT	PASS	cargo:tower-service@0.3.3:crates.io
+rust	tracing	0.1.44	https://crates.io/api/v1/crates/tracing/0.1.44	MIT	PASS	cargo:tracing@0.1.44:crates.io
+rust	tracing-attributes	0.1.31	https://crates.io/api/v1/crates/tracing-attributes/0.1.31	MIT	PASS	cargo:tracing-attributes@0.1.31:crates.io
+rust	tracing-core	0.1.36	https://crates.io/api/v1/crates/tracing-core/0.1.36	MIT	PASS	cargo:tracing-core@0.1.36:crates.io
+rust	tracing-serde	0.2.0	https://crates.io/api/v1/crates/tracing-serde/0.2.0	MIT	PASS	cargo:tracing-serde@0.2.0:crates.io
+rust	tracing-subscriber	0.3.23	https://crates.io/api/v1/crates/tracing-subscriber/0.3.23	MIT	PASS	cargo:tracing-subscriber@0.3.23:crates.io
+rust	try-lock	0.2.5	https://crates.io/api/v1/crates/try-lock/0.2.5	MIT	PASS	cargo:try-lock@0.2.5:crates.io
+rust	tungstenite	0.29.0	https://crates.io/api/v1/crates/tungstenite/0.29.0	MIT OR Apache-2.0	PASS	cargo:tungstenite@0.29.0:crates.io
+rust	typenum	1.20.1	https://crates.io/api/v1/crates/typenum/1.20.1	MIT OR Apache-2.0	PASS	cargo:typenum@1.20.1:crates.io
+rust	unarray	0.1.4	https://crates.io/api/v1/crates/unarray/0.1.4	MIT OR Apache-2.0	PASS	cargo:unarray@0.1.4:crates.io
+rust	unicase	2.9.0	https://crates.io/api/v1/crates/unicase/2.9.0	MIT OR Apache-2.0	PASS	cargo:unicase@2.9.0:crates.io
+rust	unicode-ident	1.0.24	https://crates.io/api/v1/crates/unicode-ident/1.0.24	(MIT OR Apache-2.0) AND Unicode-3.0	PASS	cargo:unicode-ident@1.0.24:crates.io
+rust	untrusted	0.9.0	https://crates.io/api/v1/crates/untrusted/0.9.0	ISC	PASS	cargo:untrusted@0.9.0:crates.io
+rust	url	2.5.8	https://crates.io/api/v1/crates/url/2.5.8	MIT OR Apache-2.0	PASS	cargo:url@2.5.8:crates.io
+rust	utf8_iter	1.0.4	https://crates.io/api/v1/crates/utf8_iter/1.0.4	Apache-2.0 OR MIT	PASS	cargo:utf8_iter@1.0.4:crates.io
+rust	uuid	1.23.5	https://crates.io/api/v1/crates/uuid/1.23.5	Apache-2.0 OR MIT	PASS	cargo:uuid@1.23.5:crates.io
+rust	valuable	0.1.1	https://crates.io/api/v1/crates/valuable/0.1.1	MIT	PASS	cargo:valuable@0.1.1:crates.io
+rust	vcpkg	0.2.15	https://crates.io/api/v1/crates/vcpkg/0.2.15	MIT OR Apache-2.0	PASS	cargo:vcpkg@0.2.15:crates.io
+rust	version_check	0.9.5	https://crates.io/api/v1/crates/version_check/0.9.5	MIT OR Apache-2.0	PASS	cargo:version_check@0.9.5:crates.io
+rust	walkdir	2.5.0	https://crates.io/api/v1/crates/walkdir/2.5.0	Unlicense OR MIT	PASS	cargo:walkdir@2.5.0:crates.io
+rust	want	0.3.1	https://crates.io/api/v1/crates/want/0.3.1	MIT	PASS	cargo:want@0.3.1:crates.io
+rust	wasi	0.11.1+wasi-snapshot-preview1	https://crates.io/api/v1/crates/wasi/0.11.1%2Bwasi-snapshot-preview1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	PASS	cargo:wasi@0.11.1+wasi-snapshot-preview1:crates.io
+rust	wasip2	1.0.4+wasi-0.2.12	https://crates.io/api/v1/crates/wasip2/1.0.4%2Bwasi-0.2.12	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	PASS	cargo:wasip2@1.0.4+wasi-0.2.12:crates.io
+rust	wasm-bindgen	0.2.126	https://crates.io/api/v1/crates/wasm-bindgen/0.2.126	MIT OR Apache-2.0	PASS	cargo:wasm-bindgen@0.2.126:crates.io
+rust	wasm-bindgen-futures	0.4.76	https://crates.io/api/v1/crates/wasm-bindgen-futures/0.4.76	MIT OR Apache-2.0	PASS	cargo:wasm-bindgen-futures@0.4.76:crates.io
+rust	wasm-bindgen-macro	0.2.126	https://crates.io/api/v1/crates/wasm-bindgen-macro/0.2.126	MIT OR Apache-2.0	PASS	cargo:wasm-bindgen-macro@0.2.126:crates.io
+rust	wasm-bindgen-macro-support	0.2.126	https://crates.io/api/v1/crates/wasm-bindgen-macro-support/0.2.126	MIT OR Apache-2.0	PASS	cargo:wasm-bindgen-macro-support@0.2.126:crates.io
+rust	wasm-bindgen-shared	0.2.126	https://crates.io/api/v1/crates/wasm-bindgen-shared/0.2.126	MIT OR Apache-2.0	PASS	cargo:wasm-bindgen-shared@0.2.126:crates.io
+rust	web-sys	0.3.103	https://crates.io/api/v1/crates/web-sys/0.3.103	MIT OR Apache-2.0	PASS	cargo:web-sys@0.3.103:crates.io
+rust	web-time	1.1.0	https://crates.io/api/v1/crates/web-time/1.1.0	MIT OR Apache-2.0	PASS	cargo:web-time@1.1.0:crates.io
+rust	webpki-root-certs	1.0.8	https://crates.io/api/v1/crates/webpki-root-certs/1.0.8	CDLA-Permissive-2.0	PASS	cargo:webpki-root-certs@1.0.8:crates.io
+rust	winapi-util	0.1.11	https://crates.io/api/v1/crates/winapi-util/0.1.11	Unlicense OR MIT	PASS	cargo:winapi-util@0.1.11:crates.io
+rust	windows-link	0.2.1	https://crates.io/api/v1/crates/windows-link/0.2.1	MIT OR Apache-2.0	PASS	cargo:windows-link@0.2.1:crates.io
+rust	windows-sys	0.52.0	https://crates.io/api/v1/crates/windows-sys/0.52.0	MIT OR Apache-2.0	PASS	cargo:windows-sys@0.52.0:crates.io
+rust	windows-sys	0.61.2	https://crates.io/api/v1/crates/windows-sys/0.61.2	MIT OR Apache-2.0	PASS	cargo:windows-sys@0.61.2:crates.io
+rust	windows-targets	0.52.6	https://crates.io/api/v1/crates/windows-targets/0.52.6	MIT OR Apache-2.0	PASS	cargo:windows-targets@0.52.6:crates.io
+rust	windows_aarch64_gnullvm	0.52.6	https://crates.io/api/v1/crates/windows_aarch64_gnullvm/0.52.6	MIT OR Apache-2.0	PASS	cargo:windows_aarch64_gnullvm@0.52.6:crates.io
+rust	windows_aarch64_msvc	0.52.6	https://crates.io/api/v1/crates/windows_aarch64_msvc/0.52.6	MIT OR Apache-2.0	PASS	cargo:windows_aarch64_msvc@0.52.6:crates.io
+rust	windows_i686_gnu	0.52.6	https://crates.io/api/v1/crates/windows_i686_gnu/0.52.6	MIT OR Apache-2.0	PASS	cargo:windows_i686_gnu@0.52.6:crates.io
+rust	windows_i686_gnullvm	0.52.6	https://crates.io/api/v1/crates/windows_i686_gnullvm/0.52.6	MIT OR Apache-2.0	PASS	cargo:windows_i686_gnullvm@0.52.6:crates.io
+rust	windows_i686_msvc	0.52.6	https://crates.io/api/v1/crates/windows_i686_msvc/0.52.6	MIT OR Apache-2.0	PASS	cargo:windows_i686_msvc@0.52.6:crates.io
+rust	windows_x86_64_gnu	0.52.6	https://crates.io/api/v1/crates/windows_x86_64_gnu/0.52.6	MIT OR Apache-2.0	PASS	cargo:windows_x86_64_gnu@0.52.6:crates.io
+rust	windows_x86_64_gnullvm	0.52.6	https://crates.io/api/v1/crates/windows_x86_64_gnullvm/0.52.6	MIT OR Apache-2.0	PASS	cargo:windows_x86_64_gnullvm@0.52.6:crates.io
+rust	windows_x86_64_msvc	0.52.6	https://crates.io/api/v1/crates/windows_x86_64_msvc/0.52.6	MIT OR Apache-2.0	PASS	cargo:windows_x86_64_msvc@0.52.6:crates.io
+rust	wit-bindgen	0.57.1	https://crates.io/api/v1/crates/wit-bindgen/0.57.1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT	PASS	cargo:wit-bindgen@0.57.1:crates.io
+rust	writeable	0.6.3	https://crates.io/api/v1/crates/writeable/0.6.3	Unicode-3.0	PASS	cargo:writeable@0.6.3:crates.io
+rust	yoke	0.8.3	https://crates.io/api/v1/crates/yoke/0.8.3	Unicode-3.0	PASS	cargo:yoke@0.8.3:crates.io
+rust	yoke-derive	0.8.2	https://crates.io/api/v1/crates/yoke-derive/0.8.2	Unicode-3.0	PASS	cargo:yoke-derive@0.8.2:crates.io
+rust	zerocopy	0.8.54	https://crates.io/api/v1/crates/zerocopy/0.8.54	BSD-2-Clause OR Apache-2.0 OR MIT	PASS	cargo:zerocopy@0.8.54:crates.io
+rust	zerocopy-derive	0.8.54	https://crates.io/api/v1/crates/zerocopy-derive/0.8.54	BSD-2-Clause OR Apache-2.0 OR MIT	PASS	cargo:zerocopy-derive@0.8.54:crates.io
+rust	zerofrom	0.1.8	https://crates.io/api/v1/crates/zerofrom/0.1.8	Unicode-3.0	PASS	cargo:zerofrom@0.1.8:crates.io
+rust	zerofrom-derive	0.1.7	https://crates.io/api/v1/crates/zerofrom-derive/0.1.7	Unicode-3.0	PASS	cargo:zerofrom-derive@0.1.7:crates.io
+rust	zeroize	1.9.0	https://crates.io/api/v1/crates/zeroize/1.9.0	Apache-2.0 OR MIT	PASS	cargo:zeroize@1.9.0:crates.io
+rust	zerotrie	0.2.4	https://crates.io/api/v1/crates/zerotrie/0.2.4	Unicode-3.0	PASS	cargo:zerotrie@0.2.4:crates.io
+rust	zerovec	0.11.6	https://crates.io/api/v1/crates/zerovec/0.11.6	Unicode-3.0	PASS	cargo:zerovec@0.11.6:crates.io
+rust	zerovec-derive	0.11.3	https://crates.io/api/v1/crates/zerovec-derive/0.11.3	Unicode-3.0	PASS	cargo:zerovec-derive@0.11.3:crates.io
+rust	zmij	1.0.22	https://crates.io/api/v1/crates/zmij/1.0.22	MIT	PASS	cargo:zmij@1.0.22:crates.io

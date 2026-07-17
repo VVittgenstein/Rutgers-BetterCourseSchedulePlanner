@@ -1,0 +1,16 @@
+{
+    "schemaVersion":  1,
+    "task":  "P7.1-005",
+    "newThirdPartyPackages":  [
+
+                              ],
+    "ownerEdges":  [
+                       "bcsp-catalog -\u003e time (normal)",
+                       "bcsp-catalog -\u003e tempfile (dev)",
+                       "bcsp-operational-storage -\u003e sha2 (normal)"
+                   ],
+    "preExistingEdgesPreserved":  [
+                                      "bcsp-operational-storage -\u003e include_dir (normal)"
+                                  ],
+    "cargoDeny":  "PASS"
+}

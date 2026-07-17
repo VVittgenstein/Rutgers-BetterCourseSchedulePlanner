@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "completionId": "P3-OPEN-20260713-COMPLETE-001",
+  "status": "FROZEN_ROUND_2_COMPLETE",
+  "completedAtUtc": "2026-07-13T04:21:45.011085Z",
+  "attempts": {
+    "planned": 42,
+    "completed": 42,
+    "successful": 42,
+    "failed": 0,
+    "round1": 21,
+    "round2": 21
+  },
+  "terminalConflicts": 0,
+  "furtherP3EvidenceRequestsAuthorized": 0,
+  "findings": {
+    "officialJoinPassObservations": 42,
+    "unsafeEmptyObservations": 0,
+    "emptyOpenObservations": 2,
+    "changedRawScopePairs": 14,
+    "changedEffectiveScopePairs": 3,
+    "effectiveAddedSummedNonDistinct": 3,
+    "effectiveRemovedSummedNonDistinct": 8,
+    "cacheMaxAge30Observations": 42,
+    "dateHeaderObservations": 42,
+    "etagHeaderObservations": 42,
+    "ageHeaderObservations": 0,
+    "lastModifiedHeaderObservations": 0,
+    "requestDurationMedianMs": 1195.597,
+    "requestDurationP95NearestRankMs": 1501.02,
+    "requestDurationMaxMs": 1537.168
+  },
+  "hashes": {
+    "round2AmendmentSha256": "4C3B9FA7FD1F7DE4DF35570A55D0479DE15B82F1D510CDBC7D34B9EA2F332E2B",
+    "finalLedgerSha256": "DC7A44570C727AA3561A2468A361AB27191807E87A781E41EF81EFF730B7977E",
+    "evidenceRegisterSha256": "6941261F92638FD9E108F0A169CBCA57103F51F1A4B8CD9D6B21A1DF5B718B9B",
+    "openProfileSha256": "C35F8CEA09D3D29BD5781E3721B882E0A6A58989E8D929782E0D8956ADB8522C",
+    "scopeJoinSummarySha256": "0D12286FDF2317F1822DCA7382204BB5C8E57B1B398F74D95E740366C2F916D9",
+    "bodyClustersSha256": "31FBA85B6C46DD9012A22614DA8391D11B92D48993FA6ACEEFCD01B85DBF5AA8",
+    "transitionSummarySha256": "6354CDC97A9CE6501110DD08A20A6E33F70BAA7A97EF62D1B7A445C6B70B3BB8",
+    "valueShapeSha256": "3E4D9371E8DE8F074162D3459CBCA0643C028264D9C11BBFC7FF7CA1A27C908F"
+  },
+  "evidenceLimits": {
+    "rutgersUpdateSlaProven": false,
+    "hardThirtySecondEndToEndGuaranteeProven": false,
+    "sustainedProductionCapacityProven": false
+  },
+  "nextStageEligibility": {
+    "P3PlanFreeze": true,
+    "P4": false,
+    "P5": false,
+    "P6": false
+  }
+}

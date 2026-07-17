@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "amendmentId": "P3-CATALOG-20260713-A002",
+  "status": "FROZEN_SCOPE_CORRECTION",
+  "frozenAt": "2026-07-13T10:55:57+08:00",
+  "baseManifestSha256": "6F6A71F5F8E2D492882FD364DB1B8510A46E2895AA484F0EDA9A19E37D353D90",
+  "priorAmendmentSha256": "95E1D2C1EE875EBB45907E00C1B6AF21A4E1C21AE2EE7F1D1A698E2285479FA6",
+  "reason": "MISSING_CURRENT_OFFICIAL_CAMPUS_D",
+  "officialSelector": {
+    "url": "https://classes.rutgers.edu/soc/js/soc_utils.js?v=2026-04-07",
+    "sha256": "35CB04BD2D8AB83B1609B5AC0979EF3EA8FDDBA306980BB566E4B341DD02605E",
+    "campusCode": "D",
+    "campusName": "Mercer County Community College",
+    "campusType": 3
+  },
+  "scopePolicy": "FALL_CURRENT_ALL_15_PLUS_SUMMER_MAIN_ONLINE_6",
+  "effectiveHardAttemptLimit": 22,
+  "additionalRequests": [
+    {"id":"CAT-C021","termId":"92026","year":2026,"term":9,"campus":"D"}
+  ]
+}

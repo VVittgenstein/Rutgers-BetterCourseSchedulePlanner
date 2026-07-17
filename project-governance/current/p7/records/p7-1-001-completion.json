@@ -1,0 +1,75 @@
+{
+  "recordId": "P7-1-001-COMPLETION-2026-07-13-001",
+  "taskId": "P7.1-001",
+  "state": "P7_1_001_PASS_COMMIT_ELIGIBLE",
+  "authorityRecordId": "P7-AUTH-2026-07-13-001",
+  "branch": "codex/p7-implementation",
+  "expectedParent": "a4b035a586a4b14fc3a75698caf99badce869fd5",
+  "manifestRows": 167,
+  "manifestEntrySetSha256": "C7A4FEB33F4F9198678AFA5C38D8CBD4D54378BD18DFA9D22CDA85FA1290089D",
+  "baseline": {
+    "trackedDeleted": 24,
+    "trackedModified": 1,
+    "untracked": 142,
+    "preexistingStaged": 0,
+    "opaqueProtectedRows": 23,
+    "ownership": "USER_EXISTING",
+    "requiredAction": "PRESERVE"
+  },
+  "commitAllowlist": [
+    "project-governance/current/p7/00-p7-authority-and-scope.md",
+    "project-governance/current/p7/00a-p7-authority-and-scope.json",
+    "project-governance/current/p7/01-preserved-worktree-manifest.tsv",
+    "project-governance/current/p7/records/p7-1-001-completion.md",
+    "project-governance/current/p7/records/p7-1-001-completion.json",
+    "project-governance/current/p7/tools/validate-p7-1-001.ps1"
+  ],
+  "upstreamGates": {
+    "p3": "P3_PASS",
+    "p4": "P4_PASS",
+    "p5": "P5_PASS",
+    "p6": "P6_REVIEW_READY",
+    "integrityFailures": 0
+  },
+  "upstreamValidatorSha256": {
+    "p3": "475F9F3E2254A7E546B754E58B017368D61FC5F1BC2E71AF8237FCFEEDED4E19",
+    "p4": "763171E70CDB2A9F8F7E3C1BB7CCA300DDB35EE97BB155368A0FE7E6841D9A5B",
+    "p5": "EB7BACE38758DF28621F17A4759E79C6F11DBE5423DD1061B6139B8B068983CE",
+    "p6": "974D442BB76B2D9533CE7C03E6EE2EBE86DB4BCEA4DAF315CEE03CE15886D75E"
+  },
+  "upstreamPinCount": 20,
+  "upstreamPinsetSha256": "CAC5FA3FBE3573901A9F9E125A9F4BCF1AA82401033645050BA41025069D0DAF",
+  "upstreamInputsMode": "LOCAL_PRESERVED_UNTRACKED_SHA256_PINNED",
+  "cleanCloneReproducible": false,
+  "protectedContentPolicy": "OPAQUE_PROTECTED_NO_READ",
+  "sideEffects": {
+    "gitBranchCreations": 1,
+    "p7GovernanceFiles": 6,
+    "preexistingWorktreeMutations": 0,
+    "rutgersRequests": 0,
+    "productSourceMutations": 0,
+    "dependencyMutations": 0,
+    "productBuilds": 0,
+    "packageBuilds": 0,
+    "vultrMutations": 0,
+    "releasePublications": 0,
+    "productionMutations": 0
+  },
+  "authorizationBoundaries": {
+    "p71ThroughP74ImplementationAuthorized": true,
+    "p75RealWorldExecutionAuthorized": false,
+    "realWorldNetworkTestAuthorized": false,
+    "vultrStagingMutationAuthorized": false,
+    "githubReleaseAuthorized": false,
+    "productionAuthorized": false
+  },
+  "commitEligible": true,
+  "actualCommitExcludedToAvoidSelfReference": true,
+  "nextTask": "P7.1-002",
+  "nextTaskStartRequires": [
+    "P7.1-001 pre-commit validation pass",
+    "dedicated allowlisted commit",
+    "P7.1-001 post-commit validation pass",
+    "successful push of codex/p7-implementation"
+  ]
+}

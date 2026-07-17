@@ -1,0 +1,120 @@
+{
+  "contractVersion": 1,
+  "observedAt": "1970-01-01T00:00:00Z",
+  "status": {
+    "availability": "CURRENT",
+    "latestAttempt": {
+      "observationId": "00000000-0000-4000-8000-000000000001",
+      "observedAt": "1970-01-01T00:00:00Z",
+      "contentVersion": 1
+    },
+    "lastSuccess": {
+      "observationId": "00000000-0000-4000-8000-000000000001",
+      "observedAt": "1970-01-01T00:00:00Z",
+      "contentVersion": 1
+    },
+    "isStale": false,
+    "error": null
+  },
+  "sources": [
+    {
+      "sourceId": "SYNTHETIC_SELECTOR",
+      "sourceKind": "SELECTOR",
+      "sourceVersion": {
+        "knowledge": "KNOWN",
+        "presence": {
+          "presence": "PRESENT",
+          "value": "v1"
+        }
+      },
+      "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "observedAt": "1970-01-01T00:00:00Z"
+    }
+  ],
+  "targets": [
+    {
+      "key": {
+        "term": "T2026F",
+        "campus": "CAMPUS_A"
+      },
+      "termLabel": {
+        "knowledge": "KNOWN",
+        "presence": {
+          "presence": "PRESENT",
+          "value": "Synthetic term"
+        }
+      },
+      "campusLabel": {
+        "knowledge": "KNOWN",
+        "presence": {
+          "presence": "PRESENT",
+          "value": "Synthetic campus"
+        }
+      },
+      "provenance": {
+        "observationId": "00000000-0000-4000-8000-000000000001",
+        "sourceId": "SYNTHETIC_SELECTOR",
+        "sourceKind": "SELECTOR",
+        "observedAt": "1970-01-01T00:00:00Z",
+        "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ],
+  "subjects": [
+    {
+      "target": {
+        "term": "T2026F",
+        "campus": "CAMPUS_A"
+      },
+      "code": "SYN:SUBJECT",
+      "label": {
+        "knowledge": "KNOWN",
+        "presence": {
+          "presence": "PRESENT",
+          "value": "Synthetic subject"
+        }
+      },
+      "provenance": {
+        "kind": "DISCOVERY",
+        "discovery": {
+          "observationId": "00000000-0000-4000-8000-000000000001",
+          "sourceId": "SYNTHETIC_SELECTOR",
+          "sourceKind": "SELECTOR",
+          "observedAt": "1970-01-01T00:00:00Z",
+          "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    }
+  ],
+  "coreCodeDictionaries": [
+    {
+      "target": {
+        "term": "T2026F",
+        "campus": "CAMPUS_A"
+      },
+      "contentVersion": 1,
+      "provenance": {
+        "observationId": "00000000-0000-4000-8000-000000000001",
+        "source": "RUTGERS_CATALOG",
+        "target": {
+          "term": "T2026F",
+          "campus": "CAMPUS_A"
+        },
+        "observedAt": "1970-01-01T00:00:00Z",
+        "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "options": [
+        {
+          "code": "CC",
+          "description": {
+            "knowledge": "KNOWN",
+            "presence": {
+              "presence": "PRESENT",
+              "value": "Contemporary Challenges"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

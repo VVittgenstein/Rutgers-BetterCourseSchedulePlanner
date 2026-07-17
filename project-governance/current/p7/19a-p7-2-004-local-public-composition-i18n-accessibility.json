@@ -1,0 +1,26 @@
+{
+  "task": "P7.2-004",
+  "title": "Local/public composition, i18n, and accessibility",
+  "status": "PRECOMMIT_LOCAL_VERIFIED",
+  "parent": "692db05bcc2e560352206bb1f13ac9b6e088eb83",
+  "branch": "codex/p7-implementation",
+  "verifiedAtUtc": "2026-07-14T21:47:37.2496696Z",
+  "skills": [
+    "industrial-brutalist-ui",
+    "design-taste-frontend"
+  ],
+  "checks": {
+    "frontendGuard": "PASS_82_OF_82",
+    "productAndComponentTests": "PASS_89_OF_89",
+    "liveSettingsVolumeSync": "PASS_WITHOUT_PROVIDER_REMOUNT_OR_WRITEBACK",
+    "typecheckAndDualBuild": "PASS",
+    "publicBoundary": "PASS_72_OF_72",
+    "focusedRustBoundary": "PASS",
+    "browserMatrix": "PASS_8_OF_8",
+    "accessibilityKeyboardContrastOverflow": "PASS",
+    "publicReloadDefaults": "PASS"
+  },
+  "gate": "P7_2_INTEGRATED_VISUAL_PASS",
+  "p7_3Started": false,
+  "nextTask": "P7.3-001"
+}

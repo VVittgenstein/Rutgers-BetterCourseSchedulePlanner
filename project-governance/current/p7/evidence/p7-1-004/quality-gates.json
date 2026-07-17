@@ -1,0 +1,307 @@
+{
+    "schemaVersion":  1,
+    "taskId":  "P7.1-004",
+    "state":  "PASS",
+    "gates":  [
+                  {
+                      "id":  "predecessor-entry-capture",
+                      "binaryId":  "powershell-helper",
+                      "arguments":  [
+                                        "-Purpose",
+                                        "EntryCapture"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "predecessor-precommit-replay",
+                      "binaryId":  "powershell-helper",
+                      "arguments":  [
+                                        "-Purpose",
+                                        "PreCommitReplay"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "predecessor-structured-equivalence",
+                      "binaryId":  "builder",
+                      "arguments":  [
+
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "rust-graph-guard",
+                      "binaryId":  "node",
+                      "arguments":  [
+                                        "tools/architecture/verify-rust-graph.mjs",
+                                        "--json"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "rust-graph-guard-self-test",
+                      "binaryId":  "node",
+                      "arguments":  [
+                                        "tools/architecture/verify-rust-graph.test.mjs"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-metadata-windows-locked-offline",
+                      "binaryId":  "cargo",
+                      "arguments":  [
+                                        "metadata",
+                                        "--locked",
+                                        "--offline",
+                                        "--format-version",
+                                        "1",
+                                        "--filter-platform",
+                                        "x86_64-pc-windows-msvc"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-metadata-linux-locked-offline",
+                      "binaryId":  "cargo",
+                      "arguments":  [
+                                        "metadata",
+                                        "--locked",
+                                        "--offline",
+                                        "--format-version",
+                                        "1",
+                                        "--filter-platform",
+                                        "x86_64-unknown-linux-gnu"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-metadata-complete-closure-locked-offline",
+                      "binaryId":  "cargo",
+                      "arguments":  [
+                                        "metadata",
+                                        "--locked",
+                                        "--offline",
+                                        "--format-version",
+                                        "1"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-check-workspace-all-targets-locked-offline",
+                      "binaryId":  "cargo",
+                      "arguments":  [
+                                        "check",
+                                        "--workspace",
+                                        "--all-targets",
+                                        "--locked",
+                                        "--offline"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-test-workspace-all-targets-locked-offline",
+                      "binaryId":  "cargo",
+                      "arguments":  [
+                                        "test",
+                                        "--workspace",
+                                        "--all-targets",
+                                        "--locked",
+                                        "--offline"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-clippy-workspace-all-targets-locked-offline",
+                      "binaryId":  "cargo",
+                      "arguments":  [
+                                        "clippy",
+                                        "--workspace",
+                                        "--all-targets",
+                                        "--locked",
+                                        "--offline",
+                                        "--",
+                                        "-D",
+                                        "warnings"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-fmt-check",
+                      "binaryId":  "cargo",
+                      "arguments":  [
+                                        "fmt",
+                                        "--all",
+                                        "--",
+                                        "--check"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-deny-policy-locked-offline",
+                      "binaryId":  "cargo-deny",
+                      "arguments":  [
+                                        "--all-features",
+                                        "--locked",
+                                        "--offline",
+                                        "check",
+                                        "advisories",
+                                        "bans",
+                                        "licenses",
+                                        "sources"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-test-bcsp-contracts-locked-offline",
+                      "binaryId":  "cargo",
+                      "arguments":  [
+                                        "test",
+                                        "--locked",
+                                        "--offline",
+                                        "-p",
+                                        "bcsp-contracts"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "cargo-test-bcsp-domain-locked-offline",
+                      "binaryId":  "cargo",
+                      "arguments":  [
+                                        "test",
+                                        "--locked",
+                                        "--offline",
+                                        "-p",
+                                        "bcsp-domain"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "dependency-lock-unchanged",
+                      "binaryId":  "builder",
+                      "arguments":  [
+
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "dependency-closure-delta",
+                      "binaryId":  "builder",
+                      "arguments":  [
+
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "schema-golden-hash-lock",
+                      "binaryId":  "builder",
+                      "arguments":  [
+
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "synthetic-only-fixture-publication-scan",
+                      "binaryId":  "builder",
+                      "arguments":  [
+
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "exact-task-allowlist",
+                      "binaryId":  "builder",
+                      "arguments":  [
+
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "protected-worktree-profile",
+                      "binaryId":  "builder",
+                      "arguments":  [
+                                        "EXACT_PRESERVED_167",
+                                        "CLEAN_CHECKOUT_0"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "publication-safety",
+                      "binaryId":  "builder",
+                      "arguments":  [
+
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "zero-side-effects",
+                      "binaryId":  "builder",
+                      "arguments":  [
+
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "evidence-builder-verify",
+                      "binaryId":  "builder",
+                      "arguments":  [
+                                        "-VerifyOnly"
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  },
+                  {
+                      "id":  "evidence-builder-write",
+                      "binaryId":  "builder",
+                      "arguments":  [
+
+                                    ],
+                      "exitCode":  0,
+                      "normalizedResult":  "PASS"
+                  }
+              ],
+    "rawCommandOutputPublished":  false,
+    "absoluteLocalPathsPublished":  false,
+    "sensitiveMaterialPublished":  false,
+    "protectedWorktree":  {
+                              "acceptedProfiles":  [
+                                                       "EXACT_PRESERVED_167",
+                                                       "CLEAN_CHECKOUT_0"
+                                                   ],
+                              "currentProfileValidated":  true,
+                              "observedProfilePublished":  false,
+                              "manifestRows":  167,
+                              "manifestEntrySetSha256":  "C7A4FEB33F4F9198678AFA5C38D8CBD4D54378BD18DFA9D22CDA85FA1290089D",
+                              "partialProfileAccepted":  false,
+                              "opaqueContentRead":  false
+                          },
+    "networkUse":  {
+                       "writeModePredecessorReplayOnly":  true,
+                       "verifyOnly":  "NONE",
+                       "cargo":  "LOCKED_OFFLINE",
+                       "postCommitPredecessorReplay":  "FORBIDDEN",
+                       "postPushPredecessorReplay":  "FORBIDDEN"
+                   }
+}

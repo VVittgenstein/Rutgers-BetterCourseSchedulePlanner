@@ -1,0 +1,48 @@
+{
+    "schemaVersion":  1,
+    "recordId":  "P7-1-003-R1-COMPLETION-2026-07-13-001",
+    "taskId":  "P7.1-003-R1",
+    "state":  "P7_1_003_R1_PASS_COMMIT_ELIGIBLE",
+    "branch":  "codex/p7-implementation",
+    "expectedParent":  "c2af7184aeec06704997f266530535003358c278",
+    "primaryParent":  "1d997f6d3cca70ef54ec5b7adb2124f0b5905fa3",
+    "commitAllowlist":  [
+                            "project-governance/current/p7/03r1-p7-1-003-r1-windows-checkout-portability-repair.md",
+                            "project-governance/current/p7/03r1a-p7-1-003-r1-windows-checkout-portability-repair.json",
+                            "project-governance/current/p7/evidence/p7-1-003-r1/checkout-portability.json",
+                            "project-governance/current/p7/evidence/p7-1-003-r1/commit-allowlist.txt",
+                            "project-governance/current/p7/records/p7-1-003-r1-completion.json",
+                            "project-governance/current/p7/records/p7-1-003-r1-completion.md",
+                            "project-governance/current/p7/tools/build-p7-1-003-evidence.ps1",
+                            "project-governance/current/p7/tools/build-p7-1-003-r1-evidence.ps1",
+                            "project-governance/current/p7/tools/validate-p7-1-003-r1.ps1",
+                            "project-governance/current/p7/tools/validate-p7-1-003.ps1"
+                        ],
+    "repairAllowlistPaths":  10,
+    "primaryCommitPaths":  73,
+    "topology":  "DIRECT_SINGLE_PARENT_FAST_FORWARD_CHILD",
+    "effectiveCheckoutGitStatus":  true,
+    "canonicalTextHashPolicy":  "STRICT_UTF8_CANONICAL_LF_SHA256",
+    "isolatedAutocrlfCloneState":  "PASS",
+    "protectedWorktreeValidationProfiles":  [
+                                                "EXACT_PRESERVED_167",
+                                                "CLEAN_CHECKOUT_0"
+                                            ],
+    "evidenceSha256":  {
+                           "commit-allowlist.txt":  "A54C06A5ACE0D5894528565A60FFB89605F848B85869DCF6010747289AAA6E59",
+                           "checkout-portability.json":  "506994DC207FF418B137645DE161568C9BD744CC82D938AFBE193845FBC006F0"
+                       },
+    "completionMarkdownSha256":  "AAD94F9A8F55F98D86BA4186F239158D294ABEEF8D933B3048457F537D11EE7D",
+    "negativeSideEffects":  {
+                                "rutgersRequests":  0,
+                                "databaseMutations":  0,
+                                "packageBuilds":  0,
+                                "vultrMutations":  0,
+                                "releasePublications":  0,
+                                "productionMutations":  0
+                            },
+    "actualCommitExcludedToAvoidSelfReference":  true,
+    "commitEligible":  true,
+    "nextTask":  "P7.1-004",
+    "nextTaskBlockedUntil":  "P7_1_003_R1_PASS_POST_PUSH_CLEAN_REPLAY"
+}

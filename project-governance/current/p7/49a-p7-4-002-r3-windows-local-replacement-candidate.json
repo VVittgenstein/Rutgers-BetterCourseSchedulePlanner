@@ -1,0 +1,15 @@
+{
+  "task": "P7.4-002-R3",
+  "status": "P7_4_WINDOWS_LOCAL_REPRODUCIBLE_PASS",
+  "sourceCommit": "7d5debef005277e4d8f2ed2b9fb2f72c495e62f1",
+  "archive": "rbcsp-windows-x86_64-0.1.0.zip",
+  "bytes": 5574298,
+  "localSha256": "02ec41a869b3c53f8682dd69b8e7f2a53fb1a26703eb1f147ecbc11dac1f174a",
+  "fileCount": 11,
+  "reproducibleBuilds": 2,
+  "browserScenariosPerBuild": 2,
+  "precreatedDatabase": false,
+  "realRutgersData": false,
+  "canonicalCandidate": false,
+  "nextTask": "P7.4-OFFICIAL-HASH-DISCOVERY-R2"
+}
