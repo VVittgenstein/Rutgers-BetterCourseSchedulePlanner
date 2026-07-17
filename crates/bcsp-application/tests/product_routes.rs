@@ -4,28 +4,29 @@ use std::time::Duration;
 use bcsp_application::{
     ApplicationClock, CoordinatorStatusSink, ExtensionRequest, FixedRefreshPolicyProvider,
     OpenRuntimeSnapshot, OpenRuntimeSnapshotRegistry, PRODUCT_CATALOG_DISCOVERY_PATH,
-    PRODUCT_COURSE_DETAIL_PATH, PRODUCT_COURSE_SEARCH_PATH, PRODUCT_FILTER_OPTIONS_PATH,
-    PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH, PRODUCT_OPEN_STATUS_PATH,
-    PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH, PRODUCT_SERVICE_STATUS_PATH,
-    REFRESH_MAX_CONCURRENCY, RefreshPolicy, RefreshPolicyProvider, RefreshPolicyReadError,
-    RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY, ServiceStatusRegistry,
-    SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand, TargetWorkActivity,
-    TargetWorkflowKind, WorkflowOperationActivity, WorkflowOperationId,
+    PRODUCT_COURSE_DETAIL_PATH, PRODUCT_COURSE_SEARCH_PATH, PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH,
+    PRODUCT_FILTER_OPTIONS_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
+    PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
+    PRODUCT_SERVICE_STATUS_PATH, REFRESH_MAX_CONCURRENCY, RefreshPolicy, RefreshPolicyProvider,
+    RefreshPolicyReadError, RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY,
+    ServiceStatusRegistry, SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand,
+    TargetWorkActivity, TargetWorkflowKind, WorkflowOperationActivity, WorkflowOperationId,
 };
 use bcsp_catalog::{normalize_target, to_catalog_refresh_command, to_discovery_refresh_command};
 use bcsp_contracts::{
     ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope, CampusCode, CatalogDiscoveryRequestV1,
     CatalogDiscoveryResponseV1, CatalogFieldKnowledge, CatalogSubjectProvenanceV1,
     CourseDetailRequestV1, CourseDetailResponseV1, CourseQueryRequestV1, CourseQueryResponseV1,
-    CourseSortV1, FilterOptionsFieldV2, FilterOptionsRequestV2, FilterOptionsResponseV2,
+    CourseSortV1, DynamicFilterValidationRequestV3, DynamicFilterValidationResponseV3,
+    FilterFieldId, FilterOptionsFieldV2, FilterOptionsRequestV2, FilterOptionsResponseV2,
     FilterRequestV1, FilterSchemaV1, FilterSearchTextV1, FilterTokenV1, FilterValuesInputV1,
     HttpRequestEnvelope, HttpSuccessEnvelope, LiveOpenStateV1, OpenBatchKey, OpenRefreshStatusV1,
     OpenSchedulerLane, OpenSectionStatusRequestV1, OpenSectionStatusV1, OpenState,
     OpenStatusRequestV1, PageRequestV1, QUERY_CONTRACT_VERSION, SectionDetailRequestV1,
     SectionDetailResponseV1, SectionKey, SectionQueryRequestV1, SectionQueryResponseV1,
     SectionSortV1, ServiceLevelV1, ServiceOperationStageV2, ServiceRuntimeV1,
-    ServiceSnapshotAvailabilityV2, ServiceStatusV2, ServiceTargetErrorV2, ServiceWorkStateV2,
-    TermCampusKey, TermId, TraceId,
+    ServiceSnapshotAvailabilityV2, ServiceStatusV2, ServiceTargetErrorV2, ServiceTermPublicationV2,
+    ServiceWorkStateV2, TermCampusKey, TermId, TraceId,
 };
 use bcsp_open::{GeneralOpenInterval, OpenCounterAudience};
 use bcsp_operational_storage::{
@@ -44,7 +45,7 @@ use time::OffsetDateTime;
 const STARTED: &str = "2026-07-17T12:00:00Z";
 const COMPLETED: &str = "2026-07-17T12:00:01Z";
 const BODY_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const WINDOW_NOW_UNIX: i64 = 1_784_289_600;
+const WINDOW_NOW_UNIX: i64 = 1_784_289_602;
 
 #[derive(Clone, Copy)]
 struct FixedClock(OffsetDateTime);
@@ -374,7 +375,7 @@ fn search_filters() -> FilterRequestV1 {
 #[test]
 fn shared_inventory_serves_real_sqlite_catalog_query_detail_and_open_projections() {
     let fixture = fixture();
-    assert_eq!(SHARED_PRODUCT_ROUTE_INVENTORY.len(), 10);
+    assert_eq!(SHARED_PRODUCT_ROUTE_INVENTORY.len(), 11);
     assert!(SHARED_PRODUCT_ROUTE_INVENTORY.iter().all(|route| {
         route.path().starts_with("/api/v1/")
             && matches!(route.method(), RequestMethod::Get | RequestMethod::Post)
@@ -415,6 +416,56 @@ fn shared_inventory_serves_real_sqlite_catalog_query_detail_and_open_projections
     );
     assert_eq!(options.options.len(), 1);
     assert_eq!(options.options[0].value, "Pat Smith");
+
+    let mut validation_input =
+        FilterValuesInputV1::for_term(TermId::try_from("72026").expect("synthetic term"));
+    validation_input.campuses = vec![CampusCode::try_from("NB").unwrap()];
+    validation_input.subjects = ["997", "999"]
+        .into_iter()
+        .map(|value| value.try_into().unwrap())
+        .collect();
+    validation_input.text = Some(FilterSearchTextV1::try_from("retired missing").unwrap());
+    validation_input.course_number_bands = vec![900];
+    validation_input.levels = vec![FilterTokenV1::try_from("G").unwrap()];
+    validation_input.core.codes = ["AAA", "ZZZ"]
+        .into_iter()
+        .map(|value| FilterTokenV1::try_from(value).unwrap())
+        .collect();
+    validation_input.instructors = vec![FilterTokenV1::try_from("Removed Instructor").unwrap()];
+    validation_input.meeting_locations.locations = vec![FilterTokenV1::try_from("BUSCH").unwrap()];
+    validation_input.exam_codes = vec![FilterTokenV1::try_from("X").unwrap()];
+    let validation: DynamicFilterValidationResponseV3 = post(
+        &fixture.routes,
+        PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH,
+        DynamicFilterValidationRequestV3::new(FilterRequestV1::new(
+            bcsp_contracts::NormalizedFilterValuesV1::try_new(validation_input)
+                .expect("validation filters"),
+        )),
+    );
+    assert_eq!(validation.contract_version, QUERY_CONTRACT_VERSION);
+    assert_eq!(validation.target_versions.len(), 1);
+    assert_eq!(validation.target_versions[0].target, fixture.target);
+    assert_eq!(validation.target_versions[0].content_version.get(), 1);
+    assert_eq!(
+        validation
+            .invalid_values
+            .iter()
+            .map(|invalid| (invalid.field, invalid.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (FilterFieldId::CourseSubject, "997"),
+            (FilterFieldId::CourseSubject, "999"),
+            (FilterFieldId::CourseText, "missing"),
+            (FilterFieldId::CourseText, "retired"),
+            (FilterFieldId::CourseNumberBand, "900"),
+            (FilterFieldId::CourseLevel, "G"),
+            (FilterFieldId::CourseCoreCode, "AAA"),
+            (FilterFieldId::CourseCoreCode, "ZZZ"),
+            (FilterFieldId::SectionInstructor, "Removed Instructor"),
+            (FilterFieldId::SectionMeetingLocation, "BUSCH"),
+            (FilterFieldId::SectionExam, "X"),
+        ]
+    );
 
     let filters = search_filters();
     let courses: CourseQueryResponseV1 = post(
@@ -491,7 +542,27 @@ fn service_status_v2_reports_the_window_and_complete_target_readiness() {
     assert_eq!(status.term_window.current_term.as_str(), "72026");
     assert_eq!(status.term_window.next_term.as_str(), "92026");
     assert_eq!(status.term_window.visible_terms.len(), 2);
-    assert_eq!(status.level, ServiceLevelV1::Ready);
+    assert_eq!(
+        status.term_window.visible_terms[0].publication,
+        ServiceTermPublicationV2::Published,
+    );
+    assert_eq!(
+        status.term_window.visible_terms[1].publication,
+        ServiceTermPublicationV2::Unpublished,
+    );
+    assert_eq!(status.targets.len(), 6);
+    assert_eq!(status.level, ServiceLevelV1::PartiallyReady);
+    assert!(status.automatic_term_summaries.iter().all(|summary| {
+        summary.total_target_count == 3
+            && summary.ready_target_count
+                == u64::from(summary.term.as_str() == fixture.target.term().as_str())
+    }));
+    assert!(
+        status
+            .targets
+            .iter()
+            .all(|target| { matches!(target.target.campus().as_str(), "NB" | "NK" | "CM") })
+    );
     let ready = status
         .targets
         .iter()
@@ -503,6 +574,88 @@ fn service_status_v2_reports_the_window_and_complete_target_readiness() {
     );
     assert!(ready.usable);
     assert!(demand.snapshot().expect("demand snapshot").is_empty());
+}
+
+#[test]
+fn stale_publication_evidence_does_not_remove_ready_target_usability() {
+    let fixture = fixture();
+    let stale_now = OffsetDateTime::from_unix_timestamp(WINDOW_NOW_UNIX + 6 * 60 * 60 + 1)
+        .expect("stale discovery timestamp");
+    let policy = RefreshPolicy::try_new(Duration::from_secs(600), GeneralOpenInterval::public())
+        .expect("fixed public refresh policy");
+    let runtime = SharedRuntimeContext::new(
+        OpenCounterAudience::Public,
+        FixedClock(stale_now),
+        FixedRefreshPolicyProvider::new(policy),
+    );
+    let routes = SharedProductRoutes::new(
+        fixture.storage.clone(),
+        runtime,
+        Arc::new(OpenRuntimeSnapshotRegistry::default()),
+    )
+    .with_service_status(Arc::new(ServiceStatusRegistry::new(
+        ServiceRuntimeV1::Public,
+    )));
+
+    let status: ServiceStatusV2 = get(&routes, PRODUCT_SERVICE_STATUS_PATH);
+    let current = status
+        .term_window
+        .visible_terms
+        .iter()
+        .find(|term| &term.term == fixture.target.term())
+        .expect("current visible term");
+    assert_eq!(current.publication, ServiceTermPublicationV2::Unknown);
+    let ready = status
+        .targets
+        .iter()
+        .find(|target| target.target == fixture.target)
+        .expect("retained ready target");
+    assert_eq!(
+        ready.snapshot_availability,
+        ServiceSnapshotAvailabilityV2::Ready,
+    );
+    assert!(ready.usable);
+}
+
+#[test]
+fn local_service_status_v2_is_a_five_term_by_three_campus_matrix() {
+    let fixture = fixture();
+    let routes = fixture
+        .routes
+        .with_service_status(Arc::new(ServiceStatusRegistry::new(
+            ServiceRuntimeV1::Local,
+        )));
+
+    let status: ServiceStatusV2 = get(&routes, PRODUCT_SERVICE_STATUS_PATH);
+
+    assert_eq!(status.term_window.visible_terms.len(), 5);
+    assert_eq!(
+        status
+            .term_window
+            .visible_terms
+            .iter()
+            .map(|term| (term.term.as_str(), term.relative_offset))
+            .collect::<Vec<_>>(),
+        vec![
+            ("02026", -2),
+            ("12026", -1),
+            ("72026", 0),
+            ("92026", 1),
+            ("02027", 2),
+        ]
+    );
+    assert_eq!(status.targets.len(), 15);
+    for term in &status.term_window.visible_terms {
+        assert_eq!(
+            status
+                .targets
+                .iter()
+                .filter(|target| target.target.term() == &term.term)
+                .map(|target| target.target.campus().as_str())
+                .collect::<Vec<_>>(),
+            vec!["CM", "NB", "NK"],
+        );
+    }
 }
 
 #[test]
@@ -680,6 +833,10 @@ fn discovery_subject_dictionary_follows_the_current_catalog_publication() {
         8,
         9,
     );
+    fixture
+        .routes
+        .rebuild_prepared_serving_snapshot()
+        .expect("publish replacement prepared generation");
 
     let replacement: CatalogDiscoveryResponseV1 = post(
         &fixture.routes,
@@ -715,11 +872,11 @@ fn discovery_exposes_dictionaries_for_each_ready_target_without_a_global_term_ga
     let directory = TempDir::new().expect("temporary directory");
     let database = directory.path().join("subject-hydration.sqlite");
     let mut storage = OperationalStorage::open(database).expect("operational SQLite");
-    publish_discovery_campuses(&mut storage, &[("NB", "New Brunswick"), ("NWK", "Newark")]);
+    publish_discovery_campuses(&mut storage, &[("NB", "New Brunswick"), ("NK", "Newark")]);
     let first_target = TermCampusKey::try_new("72026", "NB").expect("first target");
-    let second_target = TermCampusKey::try_new("72026", "NWK").expect("second target");
+    let second_target = TermCampusKey::try_new("72026", "NK").expect("second target");
     let first_section = SectionKey::try_new("72026", "NB", "10001").expect("first section");
-    let second_section = SectionKey::try_new("72026", "NWK", "10001").expect("second section");
+    let second_section = SectionKey::try_new("72026", "NK", "10001").expect("second section");
     let first_version = publish_catalog_subject(
         &mut storage,
         &first_target,
@@ -784,6 +941,9 @@ fn discovery_exposes_dictionaries_for_each_ready_target_without_a_global_term_ga
         10,
         11,
     );
+    routes
+        .rebuild_prepared_serving_snapshot()
+        .expect("publish second-target prepared generation");
     let complete: CatalogDiscoveryResponseV1 = post(
         &routes,
         PRODUCT_CATALOG_DISCOVERY_PATH,
@@ -836,12 +996,16 @@ fn selected_discovered_target_without_a_complete_snapshot_returns_target_details
     let fixture = fixture();
     publish_discovery_campuses_with_suffix(
         &mut fixture.storage.lock().expect("storage lock"),
-        &[("NB", "New Brunswick"), ("NWK", "Newark")],
+        &[("NB", "New Brunswick"), ("NK", "Newark")],
         9,
     );
+    fixture
+        .routes
+        .rebuild_prepared_serving_snapshot()
+        .expect("publish discovery-only prepared generation");
     let mut input =
         FilterValuesInputV1::for_term(TermId::try_from("72026").expect("synthetic term"));
-    input.campuses = vec![CampusCode::try_from("NWK").expect("synthetic campus")];
+    input.campuses = vec![CampusCode::try_from("NK").expect("synthetic campus")];
     let request = CourseQueryRequestV1 {
         filters: FilterRequestV1::new(
             bcsp_contracts::NormalizedFilterValuesV1::try_new(input).expect("filters"),
@@ -865,7 +1029,7 @@ fn selected_discovered_target_without_a_complete_snapshot_returns_target_details
     assert_eq!(
         error.error().details(),
         &[ApiErrorDetail::TargetNotReady {
-            target: TermCampusKey::try_new("72026", "NWK").expect("unready target")
+            target: TermCampusKey::try_new("72026", "NK").expect("unready target")
         }]
     );
 }
@@ -877,7 +1041,7 @@ fn exact_selected_target_gate_ignores_unselected_unready_targets() {
         let mut storage = fixture.storage.lock().expect("storage lock");
         publish_discovery_campuses_with_suffix(
             &mut storage,
-            &[("NB", "New Brunswick"), ("NWK", "Newark")],
+            &[("NB", "New Brunswick"), ("NK", "Newark")],
             9,
         );
     }
@@ -918,7 +1082,7 @@ fn exact_selected_target_gate_ignores_unselected_unready_targets() {
 }
 
 #[test]
-fn unknown_target_scoped_core_code_returns_invalid_filter() {
+fn unknown_target_scoped_core_code_returns_the_existing_invalid_option_error() {
     let fixture = fixture();
     let mut input =
         FilterValuesInputV1::for_term(TermId::try_from("72026").expect("synthetic term"));
@@ -941,7 +1105,7 @@ fn unknown_target_scoped_core_code_returns_invalid_filter() {
 
     assert_eq!(response.status(), 400);
     let error: ApiErrorEnvelope = serde_json::from_slice(response.body()).expect("error envelope");
-    assert_eq!(error.error().code(), ApiErrorCode::InvalidFilter);
+    assert_eq!(error.error().code(), ApiErrorCode::InvalidFilterOption);
 }
 
 #[test]
@@ -966,6 +1130,27 @@ fn scoped_service_status_renews_target_demand_without_an_apply_endpoint() {
         demand.snapshot().expect("demand snapshot"),
         vec![TermCampusKey::try_new("72026", "NB").expect("scoped target")]
     );
+}
+
+#[test]
+fn scoped_service_status_rejects_non_product_and_online_alias_campuses() {
+    let fixture = fixture();
+    for campus in ["NWK", "CAM", "ONLINE_NB"] {
+        let response = fixture.routes.handle(ExtensionRequest::new(
+            RequestMethod::Get,
+            PRODUCT_SERVICE_STATUS_PATH,
+            Some(format!("activeTerm=72026&activeCampus={campus}")),
+            Vec::new(),
+        ));
+        assert_eq!(
+            response.status(),
+            400,
+            "{campus} must not enter product scope"
+        );
+        let error: ApiErrorEnvelope =
+            serde_json::from_slice(response.body()).expect("error envelope");
+        assert_eq!(error.error().code(), ApiErrorCode::InvalidFilter);
+    }
 }
 
 #[test]
@@ -1041,8 +1226,19 @@ fn online_aliases_are_excluded_from_discovery_status_and_implicit_search_scope()
     assert_eq!(discovery.targets.len(), 1);
     assert_eq!(discovery.targets[0].key, fixture.target);
     let status: ServiceStatusV2 = get(&fixture.routes, PRODUCT_SERVICE_STATUS_PATH);
-    assert_eq!(status.targets.len(), 1);
-    assert_eq!(status.targets[0].target, fixture.target);
+    assert_eq!(status.targets.len(), 6);
+    assert!(
+        status
+            .targets
+            .iter()
+            .all(|target| { matches!(target.target.campus().as_str(), "NB" | "NK" | "CM") })
+    );
+    assert!(
+        status
+            .targets
+            .iter()
+            .any(|target| target.target == fixture.target)
+    );
 
     let courses: CourseQueryResponseV1 = post(
         &fixture.routes,

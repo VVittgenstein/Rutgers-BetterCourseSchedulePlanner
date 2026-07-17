@@ -177,7 +177,7 @@ try {
           : [];
       await route.fulfill({
         body: JSON.stringify(success({
-          contractVersion: 2,
+          contractVersion: 3,
           field: request.field,
           options,
           targetVersions: [],

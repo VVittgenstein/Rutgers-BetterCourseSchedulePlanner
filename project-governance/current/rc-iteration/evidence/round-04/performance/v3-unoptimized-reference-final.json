@@ -1,0 +1,614 @@
+{
+  "budgetsMs": {
+    "filterOptions": {
+      "max": 1500,
+      "p95": 500
+    },
+    "singleCampusSearch": {
+      "max": 2000,
+      "p95": 1000
+    },
+    "status": {
+      "max": 1000,
+      "p95": 250
+    },
+    "threeCampusComplexSearch": {
+      "max": 5000,
+      "p95": 2000
+    }
+  },
+  "campuses": [
+    "NB",
+    "NK",
+    "CM"
+  ],
+  "coldDefinition": "first route invocation after opening one SQLite connection; OS file cache uncontrolled",
+  "complexFilters": {
+    "contractVersion": 3,
+    "values": {
+      "availability": [],
+      "campuses": [
+        "CM",
+        "NB",
+        "NK"
+      ],
+      "core": {
+        "codes": [],
+        "mode": "ANY"
+      },
+      "courseNumberBands": [
+        100
+      ],
+      "credits": null,
+      "examCodes": [],
+      "includeIncomplete": {
+        "modality": false,
+        "prerequisite": false,
+        "synchronicity": false
+      },
+      "instructors": [],
+      "keywords": [],
+      "levels": [
+        "U"
+      ],
+      "meetingLocations": {
+        "locations": [],
+        "mode": "ANY_MEETING"
+      },
+      "modalities": [],
+      "openStatuses": [],
+      "permission": "ANY",
+      "prerequisite": "ANY",
+      "sectionIndexes": [
+        "10052"
+      ],
+      "subjects": [
+        "013"
+      ],
+      "synchronicities": [],
+      "term": "92026"
+    }
+  },
+  "databaseBundle": [
+    {
+      "artifact": "rbcsp.sqlite",
+      "bytes": 26599424,
+      "sha256": "6394f1ee4b7e9abbbd5c5a5795eb156b887242063477a703755cb9ec7b3cf8b2"
+    },
+    {
+      "artifact": "rbcsp.sqlite-wal",
+      "bytes": 849927192,
+      "sha256": "eac6831e5425354f0c38e794d527b82a095e8627664370a95f1dffd2757c1236"
+    },
+    {
+      "artifact": "rbcsp.sqlite-shm",
+      "bytes": 1671168,
+      "sha256": "bab56016309382085a580db2f36c1c49e34b4ebd6fed181255883b51ece68d90"
+    }
+  ],
+  "databaseBundleLabel": "protected-humantest-db-fresh-r2-reference",
+  "environment": {
+    "architecture": "x86_64",
+    "availableParallelism": 32,
+    "buildIdentity": "release-test-exe-sha256:6d32f2a28601d4e60b80dcb0210ed7e96993d3a3a972ccd1eb801801feada39a",
+    "os": "windows",
+    "processorIdentifier": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel"
+  },
+  "exactDynamicFilterValidation": {
+    "timing": {
+      "coldMs": 2391.6985,
+      "warmMaxMs": 3129.7898,
+      "warmP50Ms": 2385.9370000000004,
+      "warmP95Ms": 3129.7898,
+      "warmRepetitions": 10,
+      "warmSamplesMs": [
+        2402.6721000000002,
+        3129.7898,
+        2648.3845,
+        2359.8062,
+        2442.8231,
+        2385.9370000000004,
+        2396.5891,
+        2318.7688,
+        2313.5071,
+        2326.8523999999998
+      ]
+    },
+    "witness": {
+      "materializedSectionKeys": [],
+      "orderedCourseKeys": [],
+      "page": null,
+      "responseBytes": 271,
+      "responseSha256": "8d5f5a45dc9a879a83010ec4f0673e6bb28d0d7bcf47f545722080b49661d7fb"
+    }
+  },
+  "exactDynamicFilterValidationResponse": {
+    "contractVersion": 3,
+    "invalidValues": [],
+    "targetVersions": [
+      {
+        "contentVersion": 1,
+        "target": {
+          "campus": "CM",
+          "term": "92026"
+        }
+      },
+      {
+        "contentVersion": 1,
+        "target": {
+          "campus": "NB",
+          "term": "92026"
+        }
+      },
+      {
+        "contentVersion": 1,
+        "target": {
+          "campus": "NK",
+          "term": "92026"
+        }
+      }
+    ]
+  },
+  "filterOptionsCourseNumberBands": {
+    "timing": {
+      "coldMs": 2777.2437999999997,
+      "warmMaxMs": 4014.7879,
+      "warmP50Ms": 3009.5417,
+      "warmP95Ms": 4014.7879,
+      "warmRepetitions": 10,
+      "warmSamplesMs": [
+        3338.3338,
+        3986.7947,
+        4014.7879,
+        3292.999,
+        3154.3554,
+        3009.5417,
+        2545.4929,
+        2488.7983999999997,
+        2418.1843,
+        2465.3492
+      ]
+    },
+    "witness": {
+      "materializedSectionKeys": [],
+      "orderedCourseKeys": [],
+      "page": null,
+      "responseBytes": 615,
+      "responseSha256": "8ebb823789c853fe920cbde536b49d13b0951dde71b8760fbe17a6ab9c12e037"
+    }
+  },
+  "fixedClock": "2026-07-17T12:00:00Z",
+  "queryContractVersion": 3,
+  "referenceKind": "UNOPTIMIZED_QUERY_V3_FUNCTIONAL_REFERENCE",
+  "schemaVersion": 1,
+  "servingVectorAfter": [
+    {
+      "campus": "CM",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 1,
+      "term": "92026"
+    },
+    {
+      "campus": "NB",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 82,
+      "term": "92026"
+    },
+    {
+      "campus": "NK",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 1,
+      "term": "92026"
+    }
+  ],
+  "servingVectorBefore": [
+    {
+      "campus": "CM",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 1,
+      "term": "92026"
+    },
+    {
+      "campus": "NB",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 82,
+      "term": "92026"
+    },
+    {
+      "campus": "NK",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 1,
+      "term": "92026"
+    }
+  ],
+  "singleCampusNeutralSearch": {
+    "timing": {
+      "coldMs": 2035.7504999999999,
+      "warmMaxMs": 3185.5816,
+      "warmP50Ms": 2150.5548,
+      "warmP95Ms": 3185.5816,
+      "warmRepetitions": 10,
+      "warmSamplesMs": [
+        2080.8855,
+        2027.5472,
+        2138.5906999999997,
+        2065.7635,
+        2150.5548,
+        2456.3148,
+        3185.5816,
+        2711.0265,
+        2653.9185,
+        2201.0838000000003
+      ]
+    },
+    "witness": {
+      "materializedSectionKeys": [
+        {
+          "campus": "NB",
+          "index": "10052",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10054",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10056",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10058",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10060",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "24014",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10062",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10064",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10065",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10067",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10069",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10071",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10073",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10074",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10075",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10076",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10078",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10079",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "24070",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10081",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10087",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10089",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10092",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10093",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "index": "10094",
+          "term": "92026"
+        }
+      ],
+      "orderedCourseKeys": [
+        {
+          "campus": "NB",
+          "courseString": "01:013:120",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:130",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:140",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:141",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:143",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:160",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:176",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:190",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:203",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:204",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:225",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:229",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:240",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:260",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:276",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:290",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:311",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:312",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:314",
+          "term": "92026"
+        },
+        {
+          "campus": "NB",
+          "courseString": "01:013:321",
+          "term": "92026"
+        }
+      ],
+      "page": {
+        "page": 1,
+        "pageSize": 20,
+        "total": 4432,
+        "totalPages": 222
+      },
+      "responseBytes": 242606,
+      "responseSha256": "b15c709bd6010cdf1c8b9e010993f2d5bd2ca985187bc26d7384b00b7136dfe9"
+    }
+  },
+  "status": {
+    "timing": {
+      "coldMs": 2.1447,
+      "warmMaxMs": 1.9530999999999998,
+      "warmP50Ms": 1.5614,
+      "warmP95Ms": 1.8449,
+      "warmRepetitions": 20,
+      "warmSamplesMs": [
+        1.5344,
+        1.5286,
+        1.6578000000000002,
+        1.6618,
+        1.7412,
+        1.6096000000000001,
+        1.9530999999999998,
+        1.6783,
+        1.5083,
+        1.5866,
+        1.5353999999999999,
+        1.6609,
+        1.5314,
+        1.5612,
+        1.5444,
+        1.5614,
+        1.5225,
+        1.8449,
+        1.6489,
+        1.5247
+      ]
+    },
+    "witness": {
+      "materializedSectionKeys": [],
+      "orderedCourseKeys": [],
+      "page": null,
+      "responseBytes": 4796,
+      "responseSha256": "33fcd0d68d6246cab2d4573a26ac0629b2dc9b53c79614d0866984a360705cd0"
+    }
+  },
+  "statusTermPublication": [
+    {
+      "publication": "UNKNOWN",
+      "readyTargetCount": 0,
+      "term": "02026"
+    },
+    {
+      "publication": "UNKNOWN",
+      "readyTargetCount": 0,
+      "term": "12026"
+    },
+    {
+      "publication": "UNKNOWN",
+      "readyTargetCount": 3,
+      "term": "72026"
+    },
+    {
+      "publication": "UNKNOWN",
+      "readyTargetCount": 3,
+      "term": "92026"
+    },
+    {
+      "publication": "UNKNOWN",
+      "readyTargetCount": 0,
+      "term": "02027"
+    }
+  ],
+  "term": "92026",
+  "threeCampusComplexPageTwo": {
+    "materializedSectionKeys": [],
+    "orderedCourseKeys": [],
+    "page": {
+      "page": 2,
+      "pageSize": 20,
+      "total": 1,
+      "totalPages": 1
+    },
+    "responseBytes": 118,
+    "responseSha256": "a126a6eec2460de7cb0bd1415334b650a1f9e1a2c7b7cf73b009c716cacb92c2"
+  },
+  "threeCampusComplexSearch": {
+    "timing": {
+      "coldMs": 2609.9575,
+      "warmMaxMs": 3269.4698,
+      "warmP50Ms": 2635.5545,
+      "warmP95Ms": 3269.4698,
+      "warmRepetitions": 10,
+      "warmSamplesMs": [
+        2543.086,
+        2594.2547999999997,
+        2627.8852,
+        2640.7203,
+        2635.5545,
+        2603.4013,
+        2851.0441,
+        2731.4547000000002,
+        2997.9534000000003,
+        3269.4698
+      ]
+    },
+    "witness": {
+      "materializedSectionKeys": [
+        {
+          "campus": "NB",
+          "index": "10052",
+          "term": "92026"
+        }
+      ],
+      "orderedCourseKeys": [
+        {
+          "campus": "NB",
+          "courseString": "01:013:120",
+          "term": "92026"
+        }
+      ],
+      "page": {
+        "page": 1,
+        "pageSize": 20,
+        "total": 1,
+        "totalPages": 1
+      },
+      "responseBytes": 9733,
+      "responseSha256": "174d20efc52e62698db09f1ac18960eb906362362d9c114fc3b02b5e009ed17c"
+    }
+  },
+  "warmDefinition": "immediately repeated identical in-process route invocations on the same connection"
+}

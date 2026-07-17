@@ -17,7 +17,9 @@ use crate::{
     LocalPathError, LocalRouteExtension, LocalRuntimeCore, LocalRuntimePaths, LocalRuntimeState,
     LocalSurfaceFailure, OperationalGate, PersonalSurface, PrimaryInstanceLease,
     create_local_runtime_core, create_local_watch_socket,
-    product::{create_local_product_routes, start_local_product_refresh},
+    product::{
+        LocalProductRefreshResources, create_local_product_routes, start_local_product_refresh,
+    },
 };
 
 const EXISTING_INSTANCE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -68,6 +70,7 @@ pub struct PreparedLocalRuntime {
     service_status: Arc<ServiceStatusRegistry>,
     watch: Arc<SharedWatchSocket>,
     target_refresh_demand: TargetRefreshDemand,
+    prepared_serving: Arc<bcsp_application::PreparedServingRegistry>,
     extension: Arc<LocalRouteExtension>,
     nonce: SessionNonce,
     shutdown_requests: LocalShutdownListener,
@@ -84,6 +87,7 @@ impl PreparedLocalRuntime {
             create_local_product_routes(database.clone(), core.clone(), open_runtime.clone())
                 .with_target_refresh_demand(target_refresh_demand.clone());
         let service_status = product_routes.service_status_registry();
+        let prepared_serving = product_routes.prepared_serving_registry();
         let product_routes: Arc<dyn RouteExtension> = Arc::new(product_routes);
         let history_store = PersonalStateStore::open(operational.paths().database())
             .map_err(LocalBootstrapError::PersonalState)?;
@@ -96,7 +100,9 @@ impl PreparedLocalRuntime {
         let mutation_store = PersonalStateStore::open(operational.paths().database())
             .map_err(LocalBootstrapError::PersonalState)?;
         let personal = PersonalSurface::new(database, mutation_store, watch.clone())
-            .with_target_refresh_demand(target_refresh_demand.clone());
+            .with_target_refresh_demand(target_refresh_demand.clone())
+            .with_service_status(service_status.clone())
+            .with_prepared_serving(prepared_serving.clone());
         let nonce = SessionNonce::generate();
         let (shutdown_trigger, shutdown_requests) = local_shutdown_channel();
         let extension = Arc::new(LocalRouteExtension::with_product_routes(
@@ -112,6 +118,7 @@ impl PreparedLocalRuntime {
             service_status,
             watch,
             target_refresh_demand,
+            prepared_serving,
             extension,
             nonce,
             shutdown_requests,
@@ -170,10 +177,13 @@ impl PreparedLocalRuntime {
             self.operational.refresh_storage(),
             self.operational.database(),
             &self.core,
-            self.watch.clone(),
-            self.open_runtime.clone(),
-            self.service_status.clone(),
-            self.target_refresh_demand.clone(),
+            LocalProductRefreshResources {
+                watch: self.watch.clone(),
+                open_runtime: self.open_runtime.clone(),
+                service_status: self.service_status.clone(),
+                target_refresh_demand: self.target_refresh_demand.clone(),
+                prepared_serving: self.prepared_serving.clone(),
+            },
         )?;
         let extension: Arc<dyn RouteExtension> = self.extension.clone();
         let socket: Arc<dyn WebSocketExtension> = self.watch.clone();

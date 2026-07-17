@@ -9,14 +9,17 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bcsp_application::{
-    ExtensionRequest, NoopWatchDispatchSink, OpenRuntimeSnapshot, PRODUCT_CATALOG_DISCOVERY_PATH,
-    PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_SERVICE_STATUS_PATH, RequestMethod, RouteExtension,
-    SharedWatchSocket, TargetRefreshDemand, WebSocketExtension,
+    CoordinatorStatusSink, ExtensionRequest, NoopWatchDispatchSink, OpenRuntimeSnapshot,
+    PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_SERVICE_STATUS_PATH,
+    RequestMethod, RouteExtension, ServiceStatusRegistry, SharedWatchSocket, TargetRefreshDemand,
+    TargetWorkActivity, WebSocketExtension,
 };
+use bcsp_catalog::{normalize_target, to_catalog_refresh_command, to_discovery_refresh_command};
 use bcsp_contracts::{
     CampusCode, CatalogDiscoveryRequestV1, FilterRequestV1, FilterValuesInputV1,
-    HttpRequestEnvelope, NormalizedFilterValuesV1, SectionKey, TermCampusKey, TermId, TraceId,
-    WatchClientCommandV1, WatchPolicyV1, WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope,
+    HttpRequestEnvelope, NormalizedFilterValuesV1, SectionKey, ServiceOperationStageV2,
+    ServiceRuntimeV1, ServiceWorkStateV2, TermCampusKey, TermId, TraceId, WatchClientCommandV1,
+    WatchPolicyV1, WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope,
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_runtime::{
@@ -29,12 +32,19 @@ use bcsp_local_user_state::{
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_operational_storage::{
-    DiscoveredCampus, DiscoveredTerm, DiscoveryRefreshCommand, DiscoverySnapshot,
-    DiscoverySourceKind, DiscoverySourceVersion,
+    BeginOpenPullAttemptCommand, DiscoveredCampus, DiscoveredTerm, DiscoveryRefreshCommand,
+    DiscoverySnapshot, DiscoverySourceKind, DiscoverySourceVersion, EmptySnapshotDecision,
+    FinishOpenPullSuccessCommand, OpenCacheStatus, OpenHttpAuditMetadata, OpenRequestLane,
+    PublishOutcome,
+};
+use bcsp_rutgers_client::{
+    DiscoverySnapshot as RutgersDiscoverySnapshot, DiscoverySourceInput, SourceProvenance,
+    decode_catalog_payload, decode_discovery_payload,
 };
 use bcsp_watch::WatchStartAdmission;
 use rusqlite::{Connection, TransactionBehavior};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::mpsc;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -82,6 +92,12 @@ fn filter_request(term: &str) -> FilterRequestV1 {
     FilterRequestV1::new(NormalizedFilterValuesV1::try_new(values).unwrap())
 }
 
+fn filter_request_with_nb(term: &str) -> FilterRequestV1 {
+    let mut values = FilterValuesInputV1::for_term(TermId::try_from(term).unwrap());
+    values.campuses = vec![CampusCode::try_from("NB").expect("NB Campus")];
+    FilterRequestV1::new(NormalizedFilterValuesV1::try_new(values).unwrap())
+}
+
 fn manual_term_discovery(term: TermId) -> DiscoverySnapshot {
     let source_digest = "a".repeat(64);
     let source_version_id = format!("selector:{source_digest}");
@@ -98,7 +114,10 @@ fn manual_term_discovery(term: TermId) -> DiscoverySnapshot {
         display_name: Some(code.to_owned()),
         category: None,
         enabled: Some(true),
-        canonical_facts: serde_json::json!({"test": true}),
+        canonical_facts: serde_json::json!({
+            "campusEnabled": {"state": "VALUE", "value": true},
+            "targetEnabled": {"state": "VALUE", "value": true}
+        }),
         source_version_id: source_version_id.clone(),
     };
     DiscoverySnapshot {
@@ -109,7 +128,9 @@ fn manual_term_discovery(term: TermId) -> DiscoverySnapshot {
             term_code: None,
             display_name: Some(term.as_str().to_owned()),
             published: Some(true),
-            canonical_facts: serde_json::json!({"test": true}),
+            canonical_facts: serde_json::json!({
+                "published": {"state": "VALUE", "value": true}
+            }),
             source_version_id: source_version_id.clone(),
         }],
         campuses: vec![campus("NB"), campus("ONLINE_NB")],
@@ -118,95 +139,166 @@ fn manual_term_discovery(term: TermId) -> DiscoverySnapshot {
 }
 
 fn seed_ready_query_scope(prepared: &PreparedLocalRuntime, terms: &[&str]) {
-    const STARTED: &str = "2026-07-17T00:00:00Z";
-    const COMPLETED: &str = "2026-07-17T00:00:01Z";
-    let source_digest = "b".repeat(64);
-    let source_version_id = format!("selector:{source_digest}");
+    let completed = (OffsetDateTime::now_utc() - time::Duration::seconds(1))
+        .format(&Rfc3339)
+        .expect("fixture completion timestamp");
+    let started = (OffsetDateTime::now_utc() - time::Duration::seconds(2))
+        .format(&Rfc3339)
+        .expect("fixture start timestamp");
     let terms = terms
         .iter()
         .map(|term| TermId::try_from(*term).unwrap())
         .collect::<Vec<_>>();
-    let snapshot = DiscoverySnapshot {
-        sources: vec![DiscoverySourceVersion {
-            source_version_id: source_version_id.clone(),
-            source_kind: DiscoverySourceKind::Selector,
-            source_identity: "RUTGERS_SELECTOR".to_owned(),
-            content_sha256: source_digest,
-            canonical_facts: serde_json::json!({"test": true}),
-            observed_at: STARTED.to_owned(),
+    let discovery_body = serde_json::to_vec(&serde_json::json!({
+        "sourceVersion": "local-runtime-ready-fixture-v1",
+        "terms": terms.iter().map(|term| {
+            let raw = term.as_str();
+            serde_json::json!({
+                "termId": raw,
+                "year": raw[1..].parse::<u16>().expect("fixture term year"),
+                "termCode": &raw[..1],
+                "display": raw,
+                "published": true
+            })
+        }).collect::<Vec<_>>(),
+        "campuses": [{
+            "campusCode": "NB",
+            "display": "New Brunswick",
+            "enabled": true
         }],
-        terms: terms
-            .iter()
-            .map(|term| DiscoveredTerm {
-                term_id: term.clone(),
-                year: None,
-                term_code: None,
-                display_name: Some(term.as_str().to_owned()),
-                published: Some(true),
-                canonical_facts: serde_json::json!({"test": true}),
-                source_version_id: source_version_id.clone(),
-            })
-            .collect(),
-        campuses: terms
-            .iter()
-            .map(|term| DiscoveredCampus {
-                target: TermCampusKey::new(
-                    term.clone(),
-                    CampusCode::try_from("NB").expect("NB Campus"),
-                ),
-                display_name: Some("New Brunswick".to_owned()),
-                category: None,
-                enabled: Some(true),
-                canonical_facts: serde_json::json!({"test": true}),
-                source_version_id: source_version_id.clone(),
-            })
-            .collect(),
-        subjects: Vec::new(),
-    };
+        "targets": terms.iter().map(|term| serde_json::json!({
+            "termId": term.as_str(),
+            "campusCode": "NB",
+            "enabled": true
+        })).collect::<Vec<_>>(),
+        "subjects": []
+    }))
+    .expect("synthetic discovery JSON");
+    let snapshot = RutgersDiscoverySnapshot::try_from_bundle(vec![DiscoverySourceInput::selector(
+        decode_discovery_payload(&discovery_body).expect("decode synthetic discovery"),
+        SourceProvenance::from_body("LOCAL_RUNTIME_READY_DISCOVERY", &started, &discovery_body),
+    )])
+    .expect("normalize synthetic discovery");
     let database = prepared.operational().database();
     let mut database = database.lock().unwrap();
     database
         .operational_mut()
-        .apply_discovery_refresh(DiscoveryRefreshCommand {
-            observation_id: trace(0x800),
-            started_at: STARTED.to_owned(),
-            completed_at: COMPLETED.to_owned(),
-            snapshot,
-        })
+        .apply_discovery_refresh(
+            to_discovery_refresh_command(&snapshot, trace(0x800), &started, &completed)
+                .expect("build synthetic discovery command"),
+        )
         .expect("publish ready-scope discovery fixture");
+    for (position, term) in terms.iter().enumerate() {
+        let target =
+            TermCampusKey::new(term.clone(), CampusCode::try_from("NB").expect("NB Campus"));
+        let body = serde_json::to_vec(&serde_json::json!([{
+            "campusCode": "NB",
+            "courseString": "01:198:111",
+            "subject": "198",
+            "subjectDescription": "Computer Science",
+            "courseNumber": "111",
+            "title": "Synthetic Course",
+            "sections": [{
+                "campusCode": "NB",
+                "index": "10001",
+                "number": "01",
+                "sectionCourseType": "LECTURE",
+                "openStatus": false,
+                "meetingTimes": [],
+                "instructors": []
+            }]
+        }]))
+        .expect("synthetic Catalog JSON");
+        let normalized = normalize_target(
+            target.clone(),
+            decode_catalog_payload(&body).expect("decode synthetic Catalog"),
+            SourceProvenance::from_body("LOCAL_RUNTIME_READY_FIXTURE", &started, &body),
+        )
+        .expect("normalize synthetic Catalog");
+        let observation = trace(0x820 + u64::try_from(position).unwrap());
+        let outcome = database
+            .operational_mut()
+            .apply_catalog_refresh(
+                to_catalog_refresh_command(&normalized, observation, &started, &completed)
+                    .expect("build synthetic Catalog command"),
+                EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            )
+            .expect("publish synthetic Catalog");
+        let content_version = match outcome {
+            PublishOutcome::AppliedChanged {
+                content_version, ..
+            }
+            | PublishOutcome::AppliedUnchanged {
+                content_version, ..
+            } => content_version,
+            other => panic!("unexpected fixture Catalog outcome: {other:?}"),
+        };
+        assert_eq!(content_version, 1, "fixture Catalog content version");
+        let attempt_id = trace(0x840 + u64::try_from(position).unwrap());
+        let run_id = trace(0x850 + u64::try_from(position).unwrap());
+        let section =
+            SectionKey::try_new(term.as_str(), "NB", "10001").expect("synthetic section key");
+        database
+            .operational_mut()
+            .begin_open_pull_attempt(&BeginOpenPullAttemptCommand {
+                attempt_id,
+                run_id,
+                target,
+                captured_catalog_content_version: content_version,
+                rutgers_day: "2026-07-17".to_owned(),
+                started_at: started.clone(),
+                lane: OpenRequestLane::ActiveWatch,
+                requested_interval_seconds: Some(30),
+                effective_interval_seconds: Some(10),
+                schedule_lag_ms: Some(0),
+            })
+            .expect("begin synthetic Open attempt");
+        database
+            .operational_mut()
+            .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                attempt_id,
+                completed_at: completed.clone(),
+                open_sections: vec![section.clone()],
+                source_value_count: 1,
+                watched_sections: vec![section],
+                http: OpenHttpAuditMetadata {
+                    http_status: Some(200),
+                    cache_status: Some(OpenCacheStatus::Miss),
+                    decoded_bytes: Some(2),
+                    decoded_body_sha256: Some("c".repeat(64)),
+                    content_type: Some("application/json".to_owned()),
+                    etag: None,
+                    cache_control: Some("no-store".to_owned()),
+                    date: None,
+                    age_seconds: None,
+                    last_modified: None,
+                    retry_after: None,
+                    retry_after_seconds: None,
+                },
+            })
+            .expect("publish synthetic Open set");
+    }
     drop(database);
-
-    let connection = Connection::open(prepared.paths().database()).expect("fixture connection");
-    for (position, term) in terms.into_iter().enumerate() {
-        let target_id = format!("{term}/NB");
-        let attempt_id = trace(0x810 + u64::try_from(position).unwrap());
-        connection
-            .execute(
-                "INSERT INTO catalog_targets
-                    (target_id, term_id, campus_code, created_at, updated_at,
-                     current_content_version)
-                 VALUES (?1, ?2, 'NB', ?3, ?3, 1)",
-                (&target_id, term.as_str(), COMPLETED),
-            )
-            .expect("seed ready Catalog target");
-        connection
-            .execute(
-                "INSERT INTO open_batch_state
-                    (target_id, last_attempt_sequence, last_observation_sequence,
-                     current_catalog_content_version, lkg_attempt_id,
-                     lkg_observation_sequence, lkg_observed_at,
-                     lkg_canonical_set_sha256, lkg_state_sha256,
-                     last_attempt_id, last_attempt_at, last_success_at)
-                 VALUES (?1, 1, 1, 1, ?2, 1, ?3, ?4, ?5, ?2, ?3, ?3)",
-                (
-                    &target_id,
-                    attempt_id.to_string(),
-                    COMPLETED,
-                    "c".repeat(64),
-                    "d".repeat(64),
-                ),
-            )
-            .expect("seed matching Open LKG");
+    let database = prepared.operational().database();
+    let database = database.lock().unwrap();
+    let discovered = database
+        .operational()
+        .discovered_targets()
+        .expect("read fixture discovery targets");
+    for term in terms {
+        let target = TermCampusKey::new(term, CampusCode::try_from("NB").expect("NB Campus"));
+        assert!(
+            discovered.contains(&target),
+            "fixture target must be discovered"
+        );
+        assert!(
+            database
+                .operational()
+                .complete_target_snapshot_state(&target)
+                .expect("read fixture complete target state")
+                .ready,
+            "fixture target must be READY"
+        );
     }
 }
 
@@ -262,18 +354,25 @@ fn local_manual_term_pull_is_window_bounded_idempotent_and_excludes_online_alias
         .term()
         .clone();
     let database = prepared.operational().database();
+    let completed_at = (OffsetDateTime::now_utc() - time::Duration::seconds(1))
+        .format(&Rfc3339)
+        .expect("completion timestamp");
+    let started_at = (OffsetDateTime::now_utc() - time::Duration::seconds(2))
+        .format(&Rfc3339)
+        .expect("start timestamp");
     database
         .lock()
         .unwrap()
         .operational_mut()
         .apply_discovery_refresh(DiscoveryRefreshCommand {
             observation_id: trace(0x701),
-            started_at: "2026-07-17T00:00:00Z".to_owned(),
-            completed_at: "2026-07-17T00:00:01Z".to_owned(),
+            started_at,
+            completed_at,
             snapshot: manual_term_discovery(manual_term.clone()),
         })
         .expect("publish manual-term discovery fixture");
     let demand = TargetRefreshDemand::default();
+    let service_status = Arc::new(ServiceStatusRegistry::new(ServiceRuntimeV1::Local));
     let mutation_store = PersonalStateStore::open(prepared.paths().database()).unwrap();
     let surface = PersonalSurface::new(
         database,
@@ -286,7 +385,8 @@ fn local_manual_term_pull_is_window_bounded_idempotent_and_excludes_online_alias
             .unwrap(),
         ),
     )
-    .with_target_refresh_demand(demand.clone());
+    .with_target_refresh_demand(demand.clone())
+    .with_service_status(service_status.clone());
     let body = serde_json::to_vec(&HttpRequestEnvelope::new(serde_json::json!({
         "contractVersion": 1,
         "term": manual_term,
@@ -296,16 +396,50 @@ fn local_manual_term_pull_is_window_bounded_idempotent_and_excludes_online_alias
     let first: serde_json::Value =
         serde_json::from_slice(&surface.pull_term(&body).expect("first pull request")).unwrap();
     assert_eq!(first["data"]["disposition"], "ENQUEUED");
-    assert_eq!(
-        first["data"]["targetCount"], 1,
-        "ONLINE_NB is not a real target"
-    );
+    assert_eq!(first["data"]["targetCount"], 3);
     let second: serde_json::Value =
         serde_json::from_slice(&surface.pull_term(&body).expect("duplicate pull request")).unwrap();
     assert_eq!(second["data"]["disposition"], "ALREADY_REQUESTED");
     assert_eq!(
         demand.manual_terms_snapshot().expect("manual demand"),
-        vec![manual_term]
+        vec![manual_term.clone()]
+    );
+
+    for retry in demand
+        .pending_manual_target_retries()
+        .expect("first target retry generation")
+    {
+        assert!(
+            demand
+                .acknowledge_manual_target_retry(&retry)
+                .expect("supervisor acknowledgement")
+        );
+    }
+    service_status.publish_target_activity(TargetWorkActivity {
+        target: TermCampusKey::try_new(manual_term.as_str(), "NK").expect("active NK target"),
+        work_state: ServiceWorkStateV2::Running,
+        stage: Some(ServiceOperationStageV2::CatalogFetch),
+        started_at: Some(OffsetDateTime::now_utc()),
+        next_retry_at: None,
+        error: None,
+    });
+    let partial: serde_json::Value = serde_json::from_slice(
+        &surface
+            .pull_term(&body)
+            .expect("partial target retry request"),
+    )
+    .unwrap();
+    assert_eq!(partial["data"]["disposition"], "ENQUEUED");
+    assert_eq!(partial["data"]["targetCount"], 2);
+    assert_eq!(
+        demand
+            .pending_manual_target_retries()
+            .expect("partial retry generations")
+            .iter()
+            .map(|retry| retry.target().campus().as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["NB", "CM"]),
+        "the active NK workflow is deduplicated while missing NB and CM retry independently",
     );
 
     let automatic = serde_json::to_vec(&HttpRequestEnvelope::new(serde_json::json!({
@@ -333,7 +467,10 @@ fn local_selection_retains_legacy_out_of_range_rows_but_rejects_new_ones() {
         .lock()
         .unwrap()
         .personal_mut()
-        .replace_selected_sections(UserStateRevision::try_from(1).unwrap(), &[old.clone()])
+        .replace_selected_sections(
+            UserStateRevision::try_from(1).unwrap(),
+            std::slice::from_ref(&old),
+        )
         .expect("seed a legacy selection outside the current window");
     let surface = PersonalSurface::new(
         database,
@@ -364,6 +501,65 @@ fn local_selection_retains_legacy_out_of_range_rows_but_rejects_new_ones() {
         surface.put_selection(&add),
         Err(bcsp_local_runtime::LocalSurfaceFailure::unprocessable(
             bcsp_local_runtime::LocalApiErrorCode::TermOutOfRange,
+        )),
+    );
+}
+
+#[test]
+fn local_selection_retains_legacy_unsupported_campus_rows_but_rejects_new_ones() {
+    let temp = TestDirectory::new("selection-legacy-campus");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let database = prepared.operational().database();
+    let legacy = SectionKey::try_new("92026", "NWK", "12345").expect("legacy section");
+    database
+        .lock()
+        .unwrap()
+        .personal_mut()
+        .replace_selected_sections(
+            UserStateRevision::try_from(1).unwrap(),
+            std::slice::from_ref(&legacy),
+        )
+        .expect("seed a legacy selection with an unsupported Campus");
+    let surface = PersonalSurface::new(
+        database,
+        PersonalStateStore::open(prepared.paths().database()).unwrap(),
+        Arc::new(
+            SharedWatchSocket::try_new(
+                Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+                Arc::new(NoopWatchDispatchSink),
+            )
+            .unwrap(),
+        ),
+    );
+
+    let retain = serde_json::to_vec(&HttpRequestEnvelope::new(serde_json::json!({
+        "expectedUserStateRevision": 1,
+        "sections": [legacy.clone()],
+    })))
+    .unwrap();
+    assert!(
+        surface.put_selection(&retain).is_ok(),
+        "legacy unsupported Campus rows remain visible and retained"
+    );
+    let remove = serde_json::to_vec(&HttpRequestEnvelope::new(serde_json::json!({
+        "expectedUserStateRevision": 1,
+        "sections": [],
+    })))
+    .unwrap();
+    assert!(
+        surface.put_selection(&remove).is_ok(),
+        "legacy rows remain removable"
+    );
+    let add = serde_json::to_vec(&HttpRequestEnvelope::new(serde_json::json!({
+        "expectedUserStateRevision": 1,
+        "sections": [legacy],
+    })))
+    .unwrap();
+    assert_eq!(
+        surface.put_selection(&add),
+        Err(bcsp_local_runtime::LocalSurfaceFailure::unprocessable(
+            bcsp_local_runtime::LocalApiErrorCode::InvalidLocalState,
         )),
     );
 }
@@ -1053,22 +1249,26 @@ async fn only_an_authenticated_ui_exit_request_signals_ordered_shutdown() {
 async fn saved_view_http_routes_cover_crud_dirty_state_cas_and_no_url_restore() {
     let temp = TestDirectory::new("saved-view-http");
     let (_root, executable) = package(&temp);
-    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let prepared = PreparedLocalRuntime::from_executable(&executable).unwrap();
     seed_ready_query_scope(&prepared, &["72026", "92026"]);
+    drop(prepared);
+    let prepared = PreparedLocalRuntime::from_executable(&executable).unwrap();
     let running = prepared.start().await.unwrap();
     let origin = running.origin().to_owned();
     let authority = origin.strip_prefix("http://").unwrap();
     let nonce = running.nonce().as_str();
-    let filters_a = serde_json::to_value(filter_request("72026")).unwrap();
-    let filters_b = serde_json::to_value(filter_request("92026")).unwrap();
+    let filters_a = serde_json::to_value(filter_request_with_nb("72026")).unwrap();
+    let filters_b = serde_json::to_value(filter_request_with_nb("92026")).unwrap();
 
-    let initial = success_payload(&request(
+    let initial_response = request(
         authority,
         "GET /api/v1/local/current-filters",
         &origin,
         nonce,
         "",
-    ));
+    );
+    assert_eq!(status(&initial_response), 200, "{initial_response}");
+    let initial = success_payload(&initial_response);
     assert_eq!(initial["stateRevision"], 1);
     assert_eq!(initial["revision"], 0);
     assert!(initial["value"].is_null());
@@ -1107,7 +1307,10 @@ async fn saved_view_http_routes_cover_crud_dirty_state_cas_and_no_url_restore() 
 
     let library = saved_view_library(authority, &origin, nonce);
     assert_eq!(library["views"].as_array().unwrap().len(), 1);
-    assert_eq!(library["views"][0]["matchState"], "CLEAN");
+    assert_eq!(
+        library["views"][0]["matchState"], "CLEAN",
+        "saved-view library: {library:#}"
+    );
 
     let modified = post_api(
         authority,
@@ -1335,14 +1538,16 @@ async fn saved_view_http_routes_cover_crud_dirty_state_cas_and_no_url_restore() 
 async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_reset() {
     let temp = TestDirectory::new("reset-scopes");
     let (_root, executable) = package(&temp);
-    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let prepared = PreparedLocalRuntime::from_executable(&executable).unwrap();
     seed_ready_query_scope(&prepared, &["72026"]);
+    drop(prepared);
+    let prepared = PreparedLocalRuntime::from_executable(&executable).unwrap();
     let running = prepared.start().await.unwrap();
     let origin = running.origin().to_owned();
     let authority = origin.strip_prefix("http://").unwrap();
     let nonce = running.nonce().as_str();
     let database_path = running.prepared().paths().database().to_path_buf();
-    let filters = serde_json::to_value(filter_request("72026")).unwrap();
+    let filters = serde_json::to_value(filter_request_with_nb("72026")).unwrap();
 
     let connection = Connection::open(&database_path).unwrap();
     connection
@@ -1467,7 +1672,7 @@ async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_
     );
     let selection = serde_json::json!({
         "expectedUserStateRevision": 1,
-        "sections": [{"term": "72026", "campus": "CAMPUS_A", "index": "12345"}],
+        "sections": [{"term": "72026", "campus": "NB", "index": "12345"}],
     });
     let selection = post_api(
         authority,

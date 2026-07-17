@@ -355,6 +355,7 @@ pub async fn build_production_runtime() -> Result<PublicRuntime, PublicRuntimeEr
             .map_err(PublicRuntimeError::ProductComposition)?
             .with_target_refresh_demand(target_refresh_demand.clone());
     let service_status = product_routes.service_status_registry();
+    let prepared_serving = product_routes.prepared_serving_registry();
     let mut runtime = PublicRuntime::spawn_with_open_runtime(
         config,
         serving_storage,
@@ -369,7 +370,7 @@ pub async fn build_production_runtime() -> Result<PublicRuntime, PublicRuntimeEr
         .set_delegate(runtime.scheduler.clone())
         .map_err(|_| PublicRuntimeError::StatusComposition)?;
     let mut ids = SystemTraceIdSource;
-    let refresh = OfficialRefreshRuntime::spawn_with_target_refresh_demand(
+    let refresh = OfficialRefreshRuntime::spawn_with_target_refresh_demand_and_prepared(
         crate::PublicProductStorageAccess::new(store),
         policy,
         ids.next_trace_id(),
@@ -378,6 +379,7 @@ pub async fn build_production_runtime() -> Result<PublicRuntime, PublicRuntimeEr
         open_runtime,
         service_status,
         target_refresh_demand,
+        prepared_serving,
     )
     .map_err(PublicRuntimeError::RefreshStartup)?;
     runtime.refresh = Some(refresh);

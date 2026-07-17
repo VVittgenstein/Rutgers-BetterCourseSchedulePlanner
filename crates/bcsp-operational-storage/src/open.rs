@@ -734,8 +734,8 @@ impl OperationalStorage {
             required_success_header("content_type", command.http.content_type.as_deref())?;
         let attempt_id = command.attempt_id.to_string();
 
-        let attempt = load_started_open_attempt(&transaction, command.attempt_id)?;
-        ensure_started_open_attempt_is_current(&transaction, &attempt, command.attempt_id)?;
+        let attempt = load_started_open_attempt(transaction, command.attempt_id)?;
+        ensure_started_open_attempt_is_current(transaction, &attempt, command.attempt_id)?;
         validate_timestamp_order(&attempt.started_at, &command.completed_at)?;
         let target_id = open_target_id(&attempt.target);
         let response = canonicalize_open_response(
@@ -743,14 +743,14 @@ impl OperationalStorage {
             &command.open_sections,
             command.source_value_count,
         )?;
-        let retained_lkg_attempt_id = load_lkg_attempt_id(&transaction, &target_id)?;
+        let retained_lkg_attempt_id = load_lkg_attempt_id(transaction, &target_id)?;
         let (lkg_canonical_set_sha256, lkg_state_sha256) =
-            load_lkg_hashes(&transaction, &target_id)?;
+            load_lkg_hashes(transaction, &target_id)?;
         let body_changed =
             lkg_canonical_set_sha256.as_deref() != Some(response.canonical_set_sha256.as_str());
         let current_catalog_content_version =
-            load_current_catalog_version(&transaction, &target_id)?;
-        let catalog_indices = load_attempt_catalog_indices(&transaction, command.attempt_id)?;
+            load_current_catalog_version(transaction, &target_id)?;
+        let catalog_indices = load_attempt_catalog_indices(transaction, command.attempt_id)?;
         let intersection_count = response
             .canonical_indices
             .intersection(&catalog_indices)
@@ -767,7 +767,7 @@ impl OperationalStorage {
             && !candidate_base_matches
         {
             finalize_non_applied_attempt(
-                &transaction,
+                transaction,
                 &attempt,
                 command.attempt_id,
                 &command.completed_at,
@@ -781,7 +781,7 @@ impl OperationalStorage {
                 None,
             )?;
             prune_open_diagnostics_transaction(
-                &transaction,
+                transaction,
                 &target_id,
                 &attempt.rutgers_day,
                 OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
@@ -832,7 +832,7 @@ impl OperationalStorage {
                 _ => unreachable!("only unsafe response classifications reach this branch"),
             };
             finalize_non_applied_attempt(
-                &transaction,
+                transaction,
                 &attempt,
                 command.attempt_id,
                 &command.completed_at,
@@ -846,7 +846,7 @@ impl OperationalStorage {
                 Some(&state_sha256),
             )?;
             prune_open_diagnostics_transaction(
-                &transaction,
+                transaction,
                 &target_id,
                 &attempt.rutgers_day,
                 OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
@@ -880,7 +880,7 @@ impl OperationalStorage {
             &command.watched_sections,
             &catalog_indices,
         )?;
-        let previous_states = load_current_state_map(&transaction, &target_id)?;
+        let previous_states = load_current_state_map(transaction, &target_id)?;
         let changed_section_count = changed_state_count(&previous_states, &intended_states);
         let observation_sequence = transaction.query_row(
             "SELECT last_observation_sequence + 1 FROM open_batch_state WHERE target_id = ?1",
@@ -1080,7 +1080,7 @@ impl OperationalStorage {
             return Err(StorageError::OpenAttemptSuperseded(command.attempt_id));
         }
         increment_final_counters(
-            &transaction,
+            transaction,
             &target_id,
             &attempt.run_id.to_string(),
             &attempt.rutgers_day,
@@ -1088,13 +1088,13 @@ impl OperationalStorage {
             response.canonical_indices.is_empty(),
         )?;
         let committed_counters = load_committed_open_counters(
-            &transaction,
+            transaction,
             &target_id,
             &attempt.run_id.to_string(),
             &attempt.rutgers_day,
         )?;
         prune_open_diagnostics_transaction(
-            &transaction,
+            transaction,
             &target_id,
             &attempt.rutgers_day,
             OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
@@ -1332,15 +1332,15 @@ impl OperationalStorage {
         validate_safe_code("error_code", &command.error_code)?;
         validate_optional_safe_token("diagnostic_token", command.diagnostic_token.as_deref())?;
         validate_open_http_audit(&command.http, false)?;
-        let attempt = load_started_open_attempt(&transaction, command.attempt_id)?;
-        ensure_started_open_attempt_is_current(&transaction, &attempt, command.attempt_id)?;
+        let attempt = load_started_open_attempt(transaction, command.attempt_id)?;
+        ensure_started_open_attempt_is_current(transaction, &attempt, command.attempt_id)?;
         validate_timestamp_order(&attempt.started_at, &command.completed_at)?;
         let target_id = open_target_id(&attempt.target);
-        let retained_lkg_attempt_id = load_lkg_attempt_id(&transaction, &target_id)?;
+        let retained_lkg_attempt_id = load_lkg_attempt_id(transaction, &target_id)?;
         let catalog_section_count =
-            load_attempt_catalog_indices(&transaction, command.attempt_id)?.len() as u64;
+            load_attempt_catalog_indices(transaction, command.attempt_id)?.len() as u64;
         finalize_non_applied_attempt(
-            &transaction,
+            transaction,
             &attempt,
             command.attempt_id,
             &command.completed_at,
@@ -1358,7 +1358,7 @@ impl OperationalStorage {
             params![command.attempt_id.to_string(), command.diagnostic_token],
         )?;
         prune_open_diagnostics_transaction(
-            &transaction,
+            transaction,
             &target_id,
             &attempt.rutgers_day,
             OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,

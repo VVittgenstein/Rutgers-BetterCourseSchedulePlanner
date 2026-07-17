@@ -65,6 +65,7 @@ export type WatchStartRejectionReason =
   | 'ALREADY_ACTIVE'
   | 'SECTION_NOT_FOUND'
   | 'TARGET_UNAVAILABLE'
+  | 'UNSUPPORTED_TARGET'
   | 'TERM_OUT_OF_RANGE'
   | 'CONNECTION_CLOSING';
 export type WatchStartItemResultV1 =
@@ -90,7 +91,7 @@ export interface WatchStoppedV1 {
   readonly contractVersion: ContractVersionV1;
   readonly activeWatchId: ActiveWatchId;
   readonly sectionKey: SectionKey;
-  readonly reason: 'USER_REQUESTED' | 'CONNECTION_CLOSED' | 'HEARTBEAT_TIMEOUT' | 'SERVICE_STOPPING' | 'TERM_OUT_OF_RANGE';
+  readonly reason: 'USER_REQUESTED' | 'CONNECTION_CLOSED' | 'HEARTBEAT_TIMEOUT' | 'SERVICE_STOPPING' | 'UNSUPPORTED_TARGET' | 'TERM_OUT_OF_RANGE';
   readonly stoppedAt: IsoDateTime;
 }
 

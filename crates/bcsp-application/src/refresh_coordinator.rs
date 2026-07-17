@@ -38,6 +38,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::refresh_generation::refresh_generation_interval;
 use crate::{
     OpenRuntimeSnapshot, OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError,
+    PreparedOpenPublicationBarrier, PreparedServingError, PreparedServingRebuildDemand,
     ProductStorageAccess, RefreshPolicy, RefreshPolicyProvider, RefreshPolicyReadError,
     SharedWatchSocket,
 };
@@ -378,6 +379,7 @@ pub struct SharedRefreshCoordinator<S, U, P, C = SystemCoordinatorClock, I = Sys
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
     status: Arc<dyn CoordinatorStatusSink>,
     workflow_control: Option<Arc<TargetWorkflowControl>>,
+    prepared_rebuild: Option<PreparedServingRebuildDemand>,
     scheduler: OriginEdfScheduler,
     targets: BTreeMap<TermCampusKey, OpenSectionsRequest>,
     activated_targets: BTreeSet<TermCampusKey>,
@@ -421,7 +423,7 @@ where
     /// policy, watch, status, and monotonic epoch. The bounded runtime uses these target-local
     /// schedulers as participants in one process-wide priority queue.
     pub(crate) fn fork_empty(&self) -> Self {
-        Self::with_parts(
+        let mut fork = Self::with_parts(
             self.storage.clone(),
             self.upstream.clone(),
             self.policy.clone(),
@@ -432,7 +434,9 @@ where
             Arc::clone(&self.watch),
             Arc::clone(&self.open_runtime),
             Arc::clone(&self.status),
-        )
+        );
+        fork.prepared_rebuild.clone_from(&self.prepared_rebuild);
+        fork
     }
 }
 
@@ -469,6 +473,7 @@ where
             open_runtime,
             status,
             workflow_control: None,
+            prepared_rebuild: None,
             scheduler: OriginEdfScheduler::new(),
             targets: BTreeMap::new(),
             activated_targets: BTreeSet::new(),
@@ -485,6 +490,11 @@ where
         registration: ScheduledRefreshTarget,
     ) -> Result<(), CoordinatorError> {
         self.register_target_with_mode(registration, false)
+    }
+
+    pub fn with_prepared_rebuild_demand(mut self, demand: PreparedServingRebuildDemand) -> Self {
+        self.prepared_rebuild = Some(demand);
+        self
     }
 
     pub fn register_manual_target(
@@ -582,6 +592,35 @@ where
         self.publish_open_snapshot(target, now, None)?;
         self.publish_status(false);
         Ok(())
+    }
+
+    /// Accepts one explicit Local retry for an idle target and makes its failed workflow due now.
+    /// The scheduler is authoritative for origin cooldowns and in-flight coalescing.
+    pub(crate) fn request_manual_target_retry(
+        &mut self,
+        target: &TermCampusKey,
+    ) -> Result<bool, CoordinatorError> {
+        if !self.targets.contains_key(target) {
+            return Err(CoordinatorError::Scheduler(SchedulerError::UnknownJob));
+        }
+        let now = self.clock.monotonic_now();
+        let Some(kind) = self.scheduler.request_manual_target_retry(target, now)? else {
+            return Ok(false);
+        };
+        self.status.publish_target_activity(TargetWorkActivity {
+            target: target.clone(),
+            work_state: ServiceWorkStateV2::Queued,
+            stage: Some(match kind {
+                OriginJobKind::Catalog => ServiceOperationStageV2::CatalogFetch,
+                OriginJobKind::Open => ServiceOperationStageV2::OpenFetch,
+            }),
+            started_at: None,
+            next_retry_at: None,
+            error: None,
+        });
+        self.publish_open_snapshot(target, now, None)?;
+        self.publish_status(false);
+        Ok(true)
     }
 
     pub fn release_product_demand_target(
@@ -734,7 +773,8 @@ where
                 current_failure_streak,
                 counter_audience: self.counter_audience,
             };
-            let mut persistence = ShortLockOpenPersistence::new(self.storage.clone());
+            let mut persistence =
+                ShortLockOpenPersistence::new(self.storage.clone(), self.prepared_rebuild.clone());
             let mut clock = CoordinatorOpenPullClock(&self.clock);
             let upstream = &self.upstream;
             let watched = Arc::clone(&self.watch);
@@ -1185,6 +1225,7 @@ where
             ServiceOperationStageV2::SnapshotPublish,
         );
         let storage_access = self.storage.clone();
+        let prepared_rebuild = self.prepared_rebuild.clone();
         let prepared = tokio::task::spawn_blocking(move || -> Result<_, CoordinatorError> {
             let mut storage = storage_access
                 .lock_operational()
@@ -1221,9 +1262,18 @@ where
                     candidate,
                     empty_decision,
                 }),
-                None => Ok(PreparedCompleteSnapshot::Retained(
-                    storage.publish_staged_refresh(&observation_id, empty_decision)?,
-                )),
+                None => {
+                    let barrier = prepared_rebuild
+                        .as_ref()
+                        .map(PreparedServingRebuildDemand::begin_publication)
+                        .transpose()?;
+                    let outcome =
+                        storage.publish_staged_refresh(&observation_id, empty_decision)?;
+                    if let Some(barrier) = barrier {
+                        barrier.commit();
+                    }
+                    Ok(PreparedCompleteSnapshot::Retained(outcome))
+                }
             }
         })
         .await
@@ -1291,6 +1341,7 @@ where
             self.storage.clone(),
             candidate,
             empty_decision,
+            self.prepared_rebuild.clone(),
         );
         let mut clock = CoordinatorOpenPullClock(&self.clock);
         let upstream = &self.upstream;
@@ -1396,7 +1447,8 @@ where
             current_failure_streak: dispatch.failure_streak,
             counter_audience: self.counter_audience,
         };
-        let mut persistence = ShortLockOpenPersistence::new(self.storage.clone());
+        let mut persistence =
+            ShortLockOpenPersistence::new(self.storage.clone(), self.prepared_rebuild.clone());
         let mut clock = CoordinatorOpenPullClock(&self.clock);
         let upstream = &self.upstream;
         let watched = Arc::clone(&self.watch);
@@ -1426,6 +1478,10 @@ where
         ))
     }
 
+    // This private adapter deliberately mirrors the durable failure command plus its
+    // separately optional audit record; keeping those fields named at each call site
+    // makes failure provenance reviewable.
+    #[allow(clippy::too_many_arguments)]
     fn finish_catalog_failure(
         &self,
         observation_id: TraceId,
@@ -1592,6 +1648,9 @@ struct ShortLockOpenPersistence<S> {
     storage: S,
     catalog_candidate: Option<CatalogCandidateContext>,
     committed_catalog: Option<PublishOutcome>,
+    prepared_rebuild: Option<PreparedServingRebuildDemand>,
+    open_publication_barrier: Option<PreparedOpenPublicationBarrier>,
+    open_attempt_target: Option<TermCampusKey>,
 }
 
 #[derive(Clone)]
@@ -1601,11 +1660,14 @@ struct CatalogCandidateContext {
 }
 
 impl<S> ShortLockOpenPersistence<S> {
-    const fn new(storage: S) -> Self {
+    fn new(storage: S, prepared_rebuild: Option<PreparedServingRebuildDemand>) -> Self {
         Self {
             storage,
             catalog_candidate: None,
             committed_catalog: None,
+            prepared_rebuild,
+            open_publication_barrier: None,
+            open_attempt_target: None,
         }
     }
 
@@ -1613,6 +1675,7 @@ impl<S> ShortLockOpenPersistence<S> {
         storage: S,
         candidate: CatalogCandidateOpenSnapshot,
         empty_decision: EmptySnapshotDecision,
+        prepared_rebuild: Option<PreparedServingRebuildDemand>,
     ) -> Self {
         Self {
             storage,
@@ -1621,6 +1684,9 @@ impl<S> ShortLockOpenPersistence<S> {
                 empty_decision,
             }),
             committed_catalog: None,
+            prepared_rebuild,
+            open_publication_barrier: None,
+            open_attempt_target: None,
         }
     }
 
@@ -1673,10 +1739,17 @@ where
         command: &BeginOpenPullAttemptCommand,
     ) -> StorageResult<u64> {
         let candidate = self.catalog_candidate.clone();
-        self.with_storage(|storage| match candidate {
+        if candidate.is_none() {
+            self.open_attempt_target = Some(command.target.clone());
+        }
+        let result = self.with_storage(|storage| match candidate {
             Some(context) => storage.begin_candidate_open_pull_attempt(&context.candidate, command),
             None => storage.begin_open_pull_attempt(command),
-        })
+        });
+        if result.is_err() {
+            self.open_attempt_target = None;
+        }
+        result
     }
 
     fn finish_open_pull_success(
@@ -1684,6 +1757,24 @@ where
         command: FinishOpenPullSuccessCommand,
     ) -> StorageResult<OpenCommitOutcome> {
         let candidate = self.catalog_candidate.clone();
+        if candidate.is_none() {
+            let target = self
+                .open_attempt_target
+                .clone()
+                .ok_or(StorageError::InvalidCommand {
+                    field: "prepared_open_attempt_target",
+                    reason: "missing",
+                })?;
+            self.open_publication_barrier = self
+                .prepared_rebuild
+                .as_ref()
+                .map(|demand| demand.begin_open_publication(target))
+                .transpose()
+                .map_err(|_| StorageError::InvalidCommand {
+                    field: "prepared_open_publication_barrier",
+                    reason: "unavailable",
+                })?;
+        }
         let fallback_failure = candidate.as_ref().map(|_| FinishOpenPullFailureCommand {
             attempt_id: command.attempt_id,
             completed_at: command.completed_at.clone(),
@@ -1691,6 +1782,18 @@ where
             error_code: "COMPLETE_SNAPSHOT_COMMIT_FAILED".to_owned(),
             diagnostic_token: None,
         });
+        let publication_barrier = if candidate.is_some() {
+            self.prepared_rebuild
+                .as_ref()
+                .map(PreparedServingRebuildDemand::begin_publication)
+                .transpose()
+                .map_err(|_| StorageError::InvalidCommand {
+                    field: "prepared_serving_publication_barrier",
+                    reason: "unavailable",
+                })?
+        } else {
+            None
+        };
         let result = self.with_storage(|storage| match candidate.clone() {
             Some(context) => storage.finish_candidate_open_pull_success(
                 context.candidate.observation_id,
@@ -1707,17 +1810,58 @@ where
         let result = match result {
             Ok(result) => result,
             Err(error) => {
+                let mut fallback_committed = false;
                 if let (Some(context), Some(failure)) = (candidate, fallback_failure) {
-                    let _ = self.with_storage(|storage| {
-                        storage.finish_candidate_open_pull_failure(
-                            context.candidate.observation_id,
-                            &failure,
-                        )
-                    });
+                    fallback_committed = self
+                        .with_storage(|storage| {
+                            storage.finish_candidate_open_pull_failure(
+                                context.candidate.observation_id,
+                                &failure,
+                            )
+                        })
+                        .is_ok();
+                }
+                if fallback_committed {
+                    if let Some(barrier) = publication_barrier {
+                        barrier.commit_as_open(
+                            self.catalog_candidate
+                                .as_ref()
+                                .expect("candidate checked above")
+                                .candidate
+                                .catalog
+                                .target
+                                .clone(),
+                        );
+                    }
+                } else {
+                    drop(publication_barrier);
                 }
                 return Err(error);
             }
         };
+        if result.catalog.is_some() {
+            if let Some(barrier) = publication_barrier {
+                barrier.commit();
+            }
+        } else {
+            if let Some(barrier) = publication_barrier {
+                barrier.commit_as_open(
+                    candidate
+                        .as_ref()
+                        .expect("candidate branch")
+                        .candidate
+                        .catalog
+                        .target
+                        .clone(),
+                );
+            }
+        }
+        if candidate.is_none()
+            && let Some(barrier) = self.open_publication_barrier.take()
+        {
+            barrier.commit();
+        }
+        self.open_attempt_target = None;
         self.committed_catalog = result.catalog;
         Ok(result.open)
     }
@@ -1727,11 +1871,60 @@ where
         command: &FinishOpenPullFailureCommand,
     ) -> StorageResult<OpenCommitOutcome> {
         let candidate = self.catalog_candidate.clone();
-        self.with_storage(|storage| match candidate {
+        let candidate_open_barrier = if let Some(context) = candidate.as_ref() {
+            self.prepared_rebuild
+                .as_ref()
+                .map(|demand| {
+                    demand.begin_open_publication(context.candidate.catalog.target.clone())
+                })
+                .transpose()
+                .map_err(|_| StorageError::InvalidCommand {
+                    field: "prepared_open_publication_barrier",
+                    reason: "unavailable",
+                })?
+        } else {
+            None
+        };
+        if candidate.is_none() {
+            let target = self
+                .open_attempt_target
+                .clone()
+                .ok_or(StorageError::InvalidCommand {
+                    field: "prepared_open_attempt_target",
+                    reason: "missing",
+                })?;
+            self.open_publication_barrier = self
+                .prepared_rebuild
+                .as_ref()
+                .map(|demand| demand.begin_open_publication(target))
+                .transpose()
+                .map_err(|_| StorageError::InvalidCommand {
+                    field: "prepared_open_publication_barrier",
+                    reason: "unavailable",
+                })?;
+        }
+        let result = self.with_storage(|storage| match candidate.clone() {
             Some(context) => storage
                 .finish_candidate_open_pull_failure(context.candidate.observation_id, command),
             None => storage.finish_open_pull_failure(command),
-        })
+        });
+        if result.is_ok()
+            && candidate.is_none()
+            && let Some(barrier) = self.open_publication_barrier.take()
+        {
+            barrier.commit();
+        }
+        if result.is_ok()
+            && let Some(barrier) = candidate_open_barrier
+        {
+            barrier.commit();
+        }
+        if result.is_ok() {
+            self.open_attempt_target = None;
+        } else {
+            self.open_publication_barrier.take();
+        }
+        result
     }
 }
 
@@ -1869,7 +2062,7 @@ fn target_error_for_outcome(
         error_chain: catalog_audit.and_then(|audit| audit.error_chain.clone()),
         trace_id: open_failure
             .map(|attempt| attempt.attempt_id)
-            .or_else(|| match outcome {
+            .or(match outcome {
                 CoordinatorDispatchOutcome::CompleteSnapshotOpenFailed { trace_id, .. } => {
                     Some(*trace_id)
                 }
@@ -1967,6 +2160,8 @@ pub enum CoordinatorError {
     SourceBytesOverflow,
     #[error("Catalog blocking work did not complete")]
     CatalogBlockingTask,
+    #[error("prepared serving publication barrier is unavailable")]
+    PreparedServing(#[from] PreparedServingError),
     #[error("refresh timestamp could not be represented as RFC 3339")]
     TimestampFormat,
     #[error("Open target is not registered")]

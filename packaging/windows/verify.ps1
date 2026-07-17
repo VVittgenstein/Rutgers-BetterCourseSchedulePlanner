@@ -481,7 +481,7 @@ try {
         $first = $postBrowser
     }
 
-    $marker = [ordered]@{ term = $currentWatchableTerm; campus = 'TEST'; index = '99999' }
+    $marker = [ordered]@{ term = $currentWatchableTerm; campus = 'NB'; index = '99999' }
     $selectionBody = [ordered]@{
         protocolVersion = 1
         payload = [ordered]@{

@@ -1,6 +1,6 @@
 import {
   ProductBootstrapError,
-  type FilterRequestV2,
+  type FilterRequestV3,
   type OpenEpisodeState,
   type SectionKey,
   type TraceId,
@@ -49,12 +49,26 @@ export type SavedViewIncompatibility =
   | { readonly kind: 'INVALID_FIELD_DATA' };
 
 export type SavedViewContent =
-  | { readonly status: 'COMPATIBLE'; readonly filters: FilterRequestV2 }
+  | { readonly status: 'COMPATIBLE'; readonly filters: FilterRequestV3 }
+  | {
+    readonly status: 'REVIEW_REQUIRED';
+    readonly rawSnapshot: unknown;
+    readonly reasons: readonly SavedViewReviewReason[];
+  }
   | {
     readonly status: 'INCOMPATIBLE';
     readonly rawSnapshot: unknown;
     readonly reason: SavedViewIncompatibility;
   };
+
+export interface SavedViewReviewReason {
+  readonly stableId: string;
+  readonly code:
+    | 'ACTIVE_LEGACY_FILTER'
+    | 'UNSUPPORTED_CAMPUS'
+    | 'SCOPE_UNAVAILABLE'
+    | 'DYNAMIC_VALUE_UNAVAILABLE';
+}
 
 export interface CurrentFilters {
   readonly association: FilterAssociation;
@@ -77,7 +91,7 @@ export interface SavedViewDefinition {
   readonly updatedAt: number;
 }
 
-export type SavedViewMatch = 'NOT_APPLIED' | 'CLEAN' | 'MODIFIED' | 'INCOMPATIBLE';
+export type SavedViewMatch = 'NOT_APPLIED' | 'CLEAN' | 'MODIFIED' | 'REVIEW_REQUIRED' | 'INCOMPATIBLE';
 
 export interface SavedViewListItem {
   readonly definition: SavedViewDefinition;
@@ -113,6 +127,7 @@ export type WatchStopReason =
   | 'CONNECTION_CLOSED'
   | 'HEARTBEAT_TIMEOUT'
   | 'SERVICE_STOPPING'
+  | 'UNSUPPORTED_TARGET'
   | 'TERM_OUT_OF_RANGE';
 
 export type EpisodeDisposition =
@@ -180,7 +195,7 @@ export interface ReplaceSelectionRequest {
 export interface ReplaceCurrentFiltersRequest {
   readonly expectedUserStateRevision: number;
   readonly expectedCurrentFiltersRevision: number;
-  readonly filters: FilterRequestV2;
+  readonly filters: FilterRequestV3;
 }
 
 export interface CreateSavedViewRequest extends ReplaceCurrentFiltersRequest {
@@ -202,7 +217,7 @@ export interface RenameSavedViewRequest extends SavedViewCommand {
 }
 
 export interface UpdateSavedViewRequest extends SavedViewCommand {
-  readonly filters: FilterRequestV2;
+  readonly filters: FilterRequestV3;
 }
 
 export interface DuplicateSavedViewRequest {
@@ -278,10 +293,10 @@ function isSectionKey(value: unknown): value is SectionKey {
     && value.index.length > 0;
 }
 
-function isFilterRequest(value: unknown): value is FilterRequestV2 {
+function isFilterRequest(value: unknown): value is FilterRequestV3 {
   return isRecord(value)
     && hasKeys(value, ['contractVersion', 'values'])
-    && value.contractVersion === 2
+    && value.contractVersion === 3
     && isRecord(value.values);
 }
 
@@ -367,7 +382,19 @@ function isSavedViewContent(value: unknown): value is SavedViewContent {
       && isFilterRequest(value.filters))
     || (value.status === 'INCOMPATIBLE'
       && hasKeys(value, ['status', 'rawSnapshot', 'reason'])
-      && isIncompatibility(value.reason));
+      && isIncompatibility(value.reason))
+    || (value.status === 'REVIEW_REQUIRED'
+      && hasKeys(value, ['status', 'rawSnapshot', 'reasons'])
+      && Array.isArray(value.reasons)
+      && value.reasons.every((reason) => isRecord(reason)
+        && hasKeys(reason, ['stableId', 'code'])
+        && typeof reason.stableId === 'string'
+        && [
+          'ACTIVE_LEGACY_FILTER',
+          'UNSUPPORTED_CAMPUS',
+          'SCOPE_UNAVAILABLE',
+          'DYNAMIC_VALUE_UNAVAILABLE',
+        ].includes(String(reason.code))));
 }
 
 function isCurrentFilters(value: unknown): value is CurrentFilters {
@@ -412,7 +439,7 @@ function isDisposition(value: unknown): value is EpisodeDisposition {
   }
   return value.kind === 'WATCH_STOPPED'
     && hasKeys(value, ['kind', 'reason'])
-    && ['USER_REQUESTED', 'CONNECTION_CLOSED', 'HEARTBEAT_TIMEOUT', 'SERVICE_STOPPING', 'TERM_OUT_OF_RANGE']
+    && ['USER_REQUESTED', 'CONNECTION_CLOSED', 'HEARTBEAT_TIMEOUT', 'SERVICE_STOPPING', 'UNSUPPORTED_TARGET', 'TERM_OUT_OF_RANGE']
       .includes(String(value.reason));
 }
 

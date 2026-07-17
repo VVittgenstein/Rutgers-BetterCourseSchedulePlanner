@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::time::Instant;
 
 use bcsp_contracts::{
     CatalogContentVersion, CatalogFieldKnowledge, CatalogFieldPresence, CourseDetailRequestV1,
@@ -15,10 +17,13 @@ use thiserror::Error;
 use time::OffsetDateTime;
 
 use crate::predicates::{
-    evaluate_course_filter_matches, evaluate_section_filters, matched_explanation,
-    section_filters_active,
+    EvaluatedFilters, evaluate_course_filter_matches, evaluate_section_filter_matches,
+    matched_explanation, section_filters_active,
 };
-use crate::{CatalogCorpus, CorpusError, PredicateEvaluation, TextHitPlan, and_all, or_active};
+use crate::{
+    CatalogCorpus, CorpusError, PredicateEvaluation, PreparedCatalogCorpus, TextHitPlan, and_all,
+    or_active,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpenEvidence {
@@ -50,16 +55,265 @@ pub enum QueryError {
     TextContentVersionMismatch,
     #[error("text-hit plan references a variant outside the catalog corpus")]
     ForeignTextHit,
+    #[error("prepared request targets do not match the bound prepared generation")]
+    PreparedTargetSetMismatch,
     #[error("course was not found")]
     CourseNotFound,
     #[error("section was not found")]
     SectionNotFound,
 }
 
+/// Build-once Open evidence index paired with one prepared Catalog corpus.
+/// Raw timestamps are retained so request-time freshness remains a function of
+/// the caller's exact `now` value.
+#[derive(Debug)]
+pub struct PreparedOpenOverlay {
+    target: TermCampusKey,
+    content_version: CatalogContentVersion,
+    evidence: Vec<OpenEvidence>,
+    index: BTreeMap<u64, OpenIndexBucket>,
+}
+
+#[derive(Debug)]
+enum OpenIndexBucket {
+    One(usize),
+    Many(Vec<usize>),
+}
+
+impl PreparedOpenOverlay {
+    pub fn try_new(
+        corpus: &PreparedCatalogCorpus,
+        target: &TermCampusKey,
+        open: impl IntoIterator<Item = OpenEvidence>,
+    ) -> Result<Self, QueryError> {
+        let content_version = corpus
+            .content_version(target)
+            .ok_or(QueryError::PreparedTargetSetMismatch)?;
+        let mut evidence = Vec::<OpenEvidence>::new();
+        for item in open {
+            if item.section_key.term() != target.term()
+                || item.section_key.campus() != target.campus()
+                || corpus.section(&item.section_key).is_none()
+            {
+                return Err(QueryError::ForeignOpenEvidence);
+            }
+            evidence.push(item);
+        }
+        let index = build_open_index_with_hasher(&evidence, open_key_hash)?;
+        Ok(Self {
+            target: target.clone(),
+            content_version,
+            evidence,
+            index,
+        })
+    }
+
+    fn is_bound_to(&self, corpus: &PreparedCatalogCorpus) -> bool {
+        corpus.content_version(&self.target) == Some(self.content_version)
+    }
+
+    fn get(&self, key: &SectionKey) -> Option<&LiveOpenEvidenceV1> {
+        lookup_open_evidence_with_hasher(&self.index, &self.evidence, key, open_key_hash)
+    }
+
+    pub fn evidence(&self) -> impl ExactSizeIterator<Item = &OpenEvidence> {
+        self.evidence.iter()
+    }
+
+    pub fn index_estimated_bytes(&self) -> u64 {
+        let mut bytes = usize_to_u64(std::mem::size_of::<Self>())
+            .saturating_add(usize_to_u64(self.target.term().as_str().len()))
+            .saturating_add(usize_to_u64(self.target.campus().as_str().len()))
+            .saturating_add(
+                usize_to_u64(self.evidence.capacity())
+                    .saturating_mul(usize_to_u64(std::mem::size_of::<OpenEvidence>())),
+            )
+            .saturating_add(usize_to_u64(self.index.len()).saturating_mul(usize_to_u64(
+                std::mem::size_of::<u64>()
+                    + std::mem::size_of::<OpenIndexBucket>()
+                    + 3 * std::mem::size_of::<usize>(),
+            )));
+        for item in &self.evidence {
+            bytes = bytes
+                .saturating_add(usize_to_u64(item.section_key.term().as_str().len()))
+                .saturating_add(usize_to_u64(item.section_key.campus().as_str().len()))
+                .saturating_add(usize_to_u64(item.section_key.index().as_str().len()));
+        }
+        for bucket in self.index.values() {
+            if let OpenIndexBucket::Many(entities) = bucket {
+                bytes = bytes.saturating_add(
+                    usize_to_u64(entities.capacity())
+                        .saturating_mul(usize_to_u64(std::mem::size_of::<usize>())),
+                );
+            }
+        }
+        bytes
+    }
+}
+
+fn build_open_index_with_hasher(
+    evidence: &[OpenEvidence],
+    hash: impl Fn(&SectionKey) -> u64,
+) -> Result<BTreeMap<u64, OpenIndexBucket>, QueryError> {
+    let mut index = BTreeMap::<u64, OpenIndexBucket>::new();
+    for (entity, item) in evidence.iter().enumerate() {
+        match index.entry(hash(&item.section_key)) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(OpenIndexBucket::One(entity));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let duplicate = match entry.get() {
+                    OpenIndexBucket::One(existing) => {
+                        evidence[*existing].section_key == item.section_key
+                    }
+                    OpenIndexBucket::Many(existing) => existing
+                        .iter()
+                        .any(|existing| evidence[*existing].section_key == item.section_key),
+                };
+                if duplicate {
+                    return Err(QueryError::DuplicateOpenEvidence);
+                }
+                match entry.get_mut() {
+                    OpenIndexBucket::One(first) => {
+                        *entry.get_mut() = OpenIndexBucket::Many(vec![*first, entity]);
+                    }
+                    OpenIndexBucket::Many(existing) => existing.push(entity),
+                }
+            }
+        }
+    }
+    Ok(index)
+}
+
+fn lookup_open_evidence_with_hasher<'evidence>(
+    index: &BTreeMap<u64, OpenIndexBucket>,
+    evidence: &'evidence [OpenEvidence],
+    key: &SectionKey,
+    hash: impl Fn(&SectionKey) -> u64,
+) -> Option<&'evidence LiveOpenEvidenceV1> {
+    let bucket = index.get(&hash(key))?;
+    let entity = match bucket {
+        OpenIndexBucket::One(entity) => (evidence[*entity].section_key == *key).then_some(*entity),
+        OpenIndexBucket::Many(entities) => entities
+            .iter()
+            .copied()
+            .find(|entity| evidence[*entity].section_key == *key),
+    }?;
+    Some(&evidence[entity].evidence)
+}
+
+enum EngineCorpus<'a> {
+    Built(CatalogCorpus<'a>),
+    Prepared(&'a PreparedCatalogCorpus),
+}
+
+impl EngineCorpus<'_> {
+    fn term(&self) -> &str {
+        match self {
+            Self::Built(corpus) => corpus.term(),
+            Self::Prepared(corpus) => corpus.term(),
+        }
+    }
+
+    fn for_each_group<'corpus>(
+        &'corpus self,
+        active_targets: &[TermCampusKey],
+        mut visitor: impl FnMut(&'corpus bcsp_contracts::NormalizedCourseGroupV1),
+    ) {
+        match self {
+            Self::Built(corpus) => corpus.groups().for_each(&mut visitor),
+            Self::Prepared(corpus) => {
+                corpus.for_each_group_in_targets(active_targets, visitor);
+            }
+        }
+    }
+
+    fn group(&self, key: &CourseGroupKey) -> Option<&bcsp_contracts::NormalizedCourseGroupV1> {
+        match self {
+            Self::Built(corpus) => corpus.group(key),
+            Self::Prepared(corpus) => corpus.group(key),
+        }
+    }
+
+    fn variants_for(
+        &self,
+        group: &bcsp_contracts::NormalizedCourseGroupV1,
+    ) -> Vec<&bcsp_contracts::NormalizedCourseVariantV1> {
+        match self {
+            Self::Built(corpus) => corpus.variants_for(group),
+            Self::Prepared(corpus) => corpus.variants_for(group),
+        }
+    }
+
+    fn variant(
+        &self,
+        key: &bcsp_contracts::CourseVariantKey,
+    ) -> Option<&bcsp_contracts::NormalizedCourseVariantV1> {
+        match self {
+            Self::Built(corpus) => corpus.variant(key),
+            Self::Prepared(corpus) => corpus.variant(key),
+        }
+    }
+
+    fn for_each_section<'corpus>(
+        &'corpus self,
+        active_targets: &[TermCampusKey],
+        mut visitor: impl FnMut(&'corpus bcsp_contracts::NormalizedSectionV1),
+    ) {
+        match self {
+            Self::Built(corpus) => corpus.sections().for_each(&mut visitor),
+            Self::Prepared(corpus) => {
+                corpus.for_each_section_in_targets(active_targets, visitor);
+            }
+        }
+    }
+
+    fn section(&self, key: &SectionKey) -> Option<&bcsp_contracts::NormalizedSectionV1> {
+        match self {
+            Self::Built(corpus) => corpus.section(key),
+            Self::Prepared(corpus) => corpus.section(key),
+        }
+    }
+
+    fn sections_for(
+        &self,
+        variant: &bcsp_contracts::NormalizedCourseVariantV1,
+    ) -> Vec<&bcsp_contracts::NormalizedSectionV1> {
+        match self {
+            Self::Built(corpus) => corpus.sections_for(variant),
+            Self::Prepared(corpus) => corpus.sections_for(variant),
+        }
+    }
+
+    fn known_occurrences_for(
+        &self,
+        section: &bcsp_contracts::NormalizedSectionV1,
+    ) -> Option<Vec<&bcsp_contracts::NormalizedOccurrenceV1>> {
+        match self {
+            Self::Built(corpus) => corpus.known_occurrences_for(section),
+            Self::Prepared(corpus) => corpus.known_occurrences_for(section),
+        }
+    }
+
+    fn target_versions(&self) -> Vec<(&TermCampusKey, CatalogContentVersion)> {
+        match self {
+            Self::Built(corpus) => corpus.target_versions().collect(),
+            Self::Prepared(corpus) => corpus.target_versions().collect(),
+        }
+    }
+}
+
+enum EngineOpen<'a> {
+    Built(BTreeMap<SectionKey, LiveOpenEvidenceV1>),
+    Prepared(Vec<&'a PreparedOpenOverlay>),
+}
+
 pub struct QueryEngine<'a> {
-    corpus: CatalogCorpus<'a>,
+    corpus: EngineCorpus<'a>,
+    active_targets: Vec<TermCampusKey>,
+    forced_open_unavailable: Vec<TermCampusKey>,
     now: OffsetDateTime,
-    open: BTreeMap<SectionKey, LiveOpenEvidenceV1>,
+    open: EngineOpen<'a>,
 }
 
 impl<'a> QueryEngine<'a> {
@@ -68,7 +322,24 @@ impl<'a> QueryEngine<'a> {
         now: OffsetDateTime,
         open: impl IntoIterator<Item = OpenEvidence>,
     ) -> Result<Self, QueryError> {
-        let corpus = CatalogCorpus::try_new(catalogs)?;
+        let catalogs = catalogs.iter().collect::<Vec<_>>();
+        Self::try_new_from_refs(&catalogs, now, open)
+    }
+
+    pub fn try_new_from_refs(
+        catalogs: &[&'a NormalizedCatalogV1],
+        now: OffsetDateTime,
+        open: impl IntoIterator<Item = OpenEvidence>,
+    ) -> Result<Self, QueryError> {
+        let corpus_started = Instant::now();
+        let corpus = CatalogCorpus::try_new_from_refs(catalogs)?;
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "corpus_build",
+            elapsed_us = elapsed_micros(corpus_started),
+            catalogs = catalogs.len(),
+        );
+        let overlay_started = Instant::now();
         let mut by_section = BTreeMap::new();
         for item in open {
             if corpus.section(&item.section_key).is_none() {
@@ -78,10 +349,73 @@ impl<'a> QueryEngine<'a> {
                 return Err(QueryError::DuplicateOpenEvidence);
             }
         }
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "open_overlay_build",
+            elapsed_us = elapsed_micros(overlay_started),
+            sections = by_section.len(),
+        );
+        let active_targets = corpus
+            .target_versions()
+            .map(|(target, _)| target.clone())
+            .collect();
         Ok(Self {
-            corpus,
+            corpus: EngineCorpus::Built(corpus),
+            active_targets,
+            forced_open_unavailable: Vec::new(),
             now,
-            open: by_section,
+            open: EngineOpen::Built(by_section),
+        })
+    }
+
+    /// Binds one request to a build-once prepared term corpus and Open overlay.
+    /// Only the explicit target vector participates in Search, Detail and text
+    /// evidence validation even though the reusable corpus may contain other
+    /// ready campuses for the same term.
+    pub fn try_new_prepared(
+        corpus: &'a PreparedCatalogCorpus,
+        active_targets: &[TermCampusKey],
+        forced_open_unavailable: &[TermCampusKey],
+        now: OffsetDateTime,
+        open: &[&'a PreparedOpenOverlay],
+    ) -> Result<Self, QueryError> {
+        if active_targets.is_empty() {
+            return Err(QueryError::PreparedTargetSetMismatch);
+        }
+        let mut unique = BTreeSet::new();
+        for target in active_targets {
+            if target.term().as_str() != corpus.term()
+                || !corpus.contains_target(target)
+                || !unique.insert(target.clone())
+            {
+                return Err(QueryError::PreparedTargetSetMismatch);
+            }
+        }
+        let mut open_by_target = BTreeMap::new();
+        for overlay in open {
+            if !overlay.is_bound_to(corpus)
+                || open_by_target
+                    .insert(overlay.target.clone(), *overlay)
+                    .is_some()
+            {
+                return Err(QueryError::PreparedTargetSetMismatch);
+            }
+        }
+        if open_by_target.keys().ne(unique.iter()) {
+            return Err(QueryError::PreparedTargetSetMismatch);
+        }
+        if forced_open_unavailable
+            .iter()
+            .any(|target| !unique.contains(target))
+        {
+            return Err(QueryError::PreparedTargetSetMismatch);
+        }
+        Ok(Self {
+            corpus: EngineCorpus::Prepared(corpus),
+            active_targets: unique.into_iter().collect(),
+            forced_open_unavailable: forced_open_unavailable.to_vec(),
+            now,
+            open: EngineOpen::Prepared(open_by_target.into_values().collect()),
         })
     }
 
@@ -95,32 +429,38 @@ impl<'a> QueryEngine<'a> {
         self.validate_text_plan(filters, text_hits)?;
         let section_filters_active = section_filters_active(filters);
         let mut candidates = Vec::new();
+        let predicate_started = Instant::now();
 
-        for group in self.corpus.groups() {
+        self.corpus.for_each_group(&self.active_targets, |group| {
+            if !self.group_is_active(&group.key) {
+                return;
+            }
             let exact_identifier = exact_course_identifier(filters, &group.key);
             let mut variant_evaluations = Vec::new();
             let mut best_rank = u32::MAX;
             let mut title = None::<&str>;
 
             for variant in self.corpus.variants_for(group) {
-                let (course_evaluation, _) =
+                let course =
                     evaluate_course_filter_matches(&group.key, variant, filters, text_hits);
-                let section_witness = if section_filters_active {
+                let (section_witness, section_admitted) = if section_filters_active {
                     let sections = self.corpus.sections_for(variant);
-                    if sections.is_empty() {
-                        PredicateEvaluation::no_match("section.witness")
+                    let admitted = sections
+                        .into_iter()
+                        .map(|section| self.section_evaluation(section, filters))
+                        .filter(|evaluated| evaluated.admitted)
+                        .map(|evaluated| evaluated.evaluation)
+                        .collect::<Vec<_>>();
+                    if admitted.is_empty() {
+                        (PredicateEvaluation::no_match("section.witness"), false)
                     } else {
-                        or_active(
-                            sections
-                                .into_iter()
-                                .map(|section| self.section_evaluation(section, filters)),
-                        )
+                        (or_active(admitted), true)
                     }
                 } else {
-                    PredicateEvaluation::matched()
+                    (PredicateEvaluation::matched(), true)
                 };
-                let variant_evaluation = and_all([course_evaluation.clone(), section_witness]);
-                if variant_evaluation.outcome() != MatchOutcome::NoMatch {
+                let variant_evaluation = and_all([course.evaluation.clone(), section_witness]);
+                if course.admitted && section_admitted {
                     if let Some(rank) = text_hits.and_then(|plan| plan.rank(&variant.key)) {
                         best_rank = best_rank.min(rank);
                     }
@@ -130,8 +470,8 @@ impl<'a> QueryEngine<'a> {
                     {
                         title = Some(candidate);
                     }
+                    variant_evaluations.push(variant_evaluation);
                 }
-                variant_evaluations.push(variant_evaluation);
             }
 
             let group_evaluation = or_nonempty(variant_evaluations, "variant.witness");
@@ -144,12 +484,51 @@ impl<'a> QueryEngine<'a> {
                     title,
                 });
             }
-        }
-
-        candidates.sort_by(|left, right| compare_course(left, right, request));
-        let (page, items) = paginate_and_materialize(candidates, request.page, |candidate| {
-            self.materialize_course_candidate(candidate, filters, text_hits, section_filters_active)
         });
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "predicate",
+            elapsed_us = elapsed_micros(predicate_started),
+            candidates = candidates.len(),
+            query_kind = "course",
+        );
+
+        let sort_started = Instant::now();
+        candidates.sort_by(|left, right| compare_course(left, right, request));
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "sort",
+            elapsed_us = elapsed_micros(sort_started),
+            candidates = candidates.len(),
+            query_kind = "course",
+        );
+        let pagination_started = Instant::now();
+        let (page, candidates) = paginate(candidates, request.page);
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "pagination",
+            elapsed_us = elapsed_micros(pagination_started),
+            page_items = candidates.len(),
+            query_kind = "course",
+        );
+        let materialization_started = Instant::now();
+        let items = candidates
+            .into_iter()
+            .map(|candidate| {
+                self.materialize_course_candidate(
+                    candidate,
+                    filters,
+                    text_hits,
+                    section_filters_active,
+                )
+            })
+            .collect();
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "materialization",
+            elapsed_us = elapsed_micros(materialization_started),
+            query_kind = "course",
+        );
         Ok(CourseQueryResponseV1 {
             contract_version: QUERY_CONTRACT_VERSION,
             page,
@@ -166,35 +545,79 @@ impl<'a> QueryEngine<'a> {
         self.validate_filters(filters)?;
         self.validate_text_plan(filters, text_hits)?;
         let mut candidates = Vec::new();
-        for section in self.corpus.sections() {
-            let variant = self
-                .corpus
-                .variant(&section.variant_key)
-                .expect("validated corpus contains the section variant");
-            let (course_evaluation, _) =
-                evaluate_course_filter_matches(variant.key.group(), variant, filters, text_hits);
-            let section_evaluation = self.section_evaluation(section, filters);
-            let overall = and_all([course_evaluation, section_evaluation]);
-            if overall.outcome() == MatchOutcome::NoMatch {
-                continue;
-            }
-            candidates.push(SectionCandidate {
-                section,
-                variant,
-                evaluation: overall,
-                section_number: known_string(&section.section_number).unwrap_or_default(),
-                exact_identifier: exact_course_identifier(filters, variant.key.group()),
-                text_rank: text_hits
-                    .and_then(|plan| plan.rank(&variant.key))
-                    .unwrap_or(u32::MAX),
-                open_state: self.open_state_for(&section.key),
+        let predicate_started = Instant::now();
+        self.corpus
+            .for_each_section(&self.active_targets, |section| {
+                if !self.section_is_active(&section.key) {
+                    return;
+                }
+                let variant = self
+                    .corpus
+                    .variant(&section.variant_key)
+                    .expect("validated corpus contains the section variant");
+                let course = evaluate_course_filter_matches(
+                    variant.key.group(),
+                    variant,
+                    filters,
+                    text_hits,
+                );
+                let section_evaluation = self.section_evaluation(section, filters);
+                let overall = and_all([
+                    course.evaluation.clone(),
+                    section_evaluation.evaluation.clone(),
+                ]);
+                if !course.admitted || !section_evaluation.admitted {
+                    return;
+                }
+                candidates.push(SectionCandidate {
+                    section,
+                    variant,
+                    evaluation: overall,
+                    section_number: known_string(&section.section_number).unwrap_or_default(),
+                    exact_identifier: exact_course_identifier(filters, variant.key.group()),
+                    text_rank: text_hits
+                        .and_then(|plan| plan.rank(&variant.key))
+                        .unwrap_or(u32::MAX),
+                    open_state: self.open_state_for(&section.key),
+                });
             });
-        }
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "predicate",
+            elapsed_us = elapsed_micros(predicate_started),
+            candidates = candidates.len(),
+            query_kind = "section",
+        );
 
+        let sort_started = Instant::now();
         candidates.sort_by(|left, right| compare_section(left, right, request));
-        let (page, items) = paginate_and_materialize(candidates, request.page, |candidate| {
-            self.materialize_section_candidate(candidate, filters, text_hits)
-        });
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "sort",
+            elapsed_us = elapsed_micros(sort_started),
+            candidates = candidates.len(),
+            query_kind = "section",
+        );
+        let pagination_started = Instant::now();
+        let (page, candidates) = paginate(candidates, request.page);
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "pagination",
+            elapsed_us = elapsed_micros(pagination_started),
+            page_items = candidates.len(),
+            query_kind = "section",
+        );
+        let materialization_started = Instant::now();
+        let items = candidates
+            .into_iter()
+            .map(|candidate| self.materialize_section_candidate(candidate, filters, text_hits))
+            .collect();
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "materialization",
+            elapsed_us = elapsed_micros(materialization_started),
+            query_kind = "section",
+        );
         Ok(SectionQueryResponseV1 {
             contract_version: QUERY_CONTRACT_VERSION,
             page,
@@ -220,7 +643,7 @@ impl<'a> QueryEngine<'a> {
             .variants_for(group)
             .into_iter()
             .filter_map(|variant| {
-                let (course_evaluation, course_filter_matches) =
+                let course =
                     evaluate_course_filter_matches(&group.key, variant, filters, text_hits);
                 let section_evaluations = self
                     .corpus
@@ -228,30 +651,32 @@ impl<'a> QueryEngine<'a> {
                     .into_iter()
                     .map(|section| self.section_item(section, filters))
                     .collect::<Vec<_>>();
-                let section_witness = if section_filters_active {
-                    if section_evaluations.is_empty() {
-                        PredicateEvaluation::no_match("section.witness")
+                let admitted_section_evaluations = section_evaluations
+                    .iter()
+                    .filter(|(_, evaluated)| evaluated.admitted)
+                    .map(|(_, evaluated)| evaluated.evaluation.clone())
+                    .collect::<Vec<_>>();
+                let (section_witness, section_admitted) = if section_filters_active {
+                    if admitted_section_evaluations.is_empty() {
+                        (PredicateEvaluation::no_match("section.witness"), false)
                     } else {
-                        or_active(
-                            section_evaluations
-                                .iter()
-                                .map(|(_, evaluation)| evaluation.clone()),
-                        )
+                        (or_active(admitted_section_evaluations), true)
                     }
                 } else {
-                    PredicateEvaluation::matched()
+                    (PredicateEvaluation::matched(), true)
                 };
-                let variant_evaluation = and_all([course_evaluation.clone(), section_witness]);
-                if variant_evaluation.outcome() == MatchOutcome::NoMatch {
+                let variant_evaluation = and_all([course.evaluation.clone(), section_witness]);
+                if !course.admitted || !section_admitted {
                     return None;
                 }
                 let sections = section_evaluations
                     .into_iter()
                     .filter_map(|(mut item, section_evaluation)| {
-                        let overall = and_all([course_evaluation.clone(), section_evaluation]);
-                        if section_filters_active && overall.outcome() == MatchOutcome::NoMatch {
+                        if section_filters_active && !section_evaluation.admitted {
                             return None;
                         }
+                        let overall =
+                            and_all([course.evaluation.clone(), section_evaluation.evaluation]);
                         item.explanation = overall.into_explanation();
                         Some(item)
                     })
@@ -259,7 +684,7 @@ impl<'a> QueryEngine<'a> {
                 Some(CourseVariantQueryItemV1 {
                     variant: variant.clone(),
                     explanation: variant_evaluation.into_explanation(),
-                    filter_matches: course_filter_matches,
+                    filter_matches: course.filter_matches,
                     text_match: filters.text().and_then(|text| {
                         text_hits.and_then(|plan| plan.rank(&variant.key)).map(|_| {
                             TextMatchEvidenceV1 {
@@ -292,15 +717,19 @@ impl<'a> QueryEngine<'a> {
             exact_identifier,
             ..
         } = candidate;
-        let (course_evaluation, course_filter_matches) =
+        let course =
             evaluate_course_filter_matches(variant.key.group(), variant, filters, text_hits);
         let (mut item, section_evaluation) = self.section_item(section, filters);
-        debug_assert_eq!(evaluation, and_all([course_evaluation, section_evaluation]));
+        debug_assert!(course.admitted && section_evaluation.admitted);
+        debug_assert_eq!(
+            evaluation,
+            and_all([course.evaluation, section_evaluation.evaluation])
+        );
         item.explanation = evaluation.into_explanation();
         SectionSearchItemV1 {
             variant: variant.clone(),
             section: item,
-            course_filter_matches,
+            course_filter_matches: course.filter_matches,
             text_match: filters.text().and_then(|text| {
                 text_hits
                     .and_then(|plan| plan.rank(&variant.key))
@@ -316,6 +745,9 @@ impl<'a> QueryEngine<'a> {
         &self,
         request: &CourseDetailRequestV1,
     ) -> Result<CourseDetailResponseV1, QueryError> {
+        if !self.group_is_active(&request.key) {
+            return Err(QueryError::CourseNotFound);
+        }
         let group = self
             .corpus
             .group(&request.key)
@@ -354,6 +786,9 @@ impl<'a> QueryEngine<'a> {
         &self,
         request: &SectionDetailRequestV1,
     ) -> Result<SectionDetailResponseV1, QueryError> {
+        if !self.section_is_active(&request.key) {
+            return Err(QueryError::SectionNotFound);
+        }
         let section = self
             .corpus
             .section(&request.key)
@@ -373,11 +808,16 @@ impl<'a> QueryEngine<'a> {
         &self,
         section: &bcsp_contracts::NormalizedSectionV1,
         filters: &NormalizedFilterValuesV1,
-    ) -> (SectionQueryItemV1, PredicateEvaluation) {
+    ) -> (SectionQueryItemV1, EvaluatedFilters) {
         let occurrences = self.corpus.known_occurrences_for(section);
         let open = self.open_for(&section.key);
-        let (evaluation, filter_matches) =
-            evaluate_section_filters(section, occurrences.as_deref(), &open, self.now, filters);
+        let evaluated = evaluate_section_filter_matches(
+            section,
+            occurrences.as_deref(),
+            &open,
+            self.now,
+            filters,
+        );
         (
             SectionQueryItemV1 {
                 section: section.clone(),
@@ -387,10 +827,10 @@ impl<'a> QueryEngine<'a> {
                     .cloned()
                     .collect(),
                 open,
-                explanation: evaluation.clone().into_explanation(),
-                filter_matches,
+                explanation: evaluated.evaluation.clone().into_explanation(),
+                filter_matches: evaluated.filter_matches.clone(),
             },
-            evaluation,
+            evaluated,
         )
     }
 
@@ -398,10 +838,10 @@ impl<'a> QueryEngine<'a> {
         &self,
         section: &bcsp_contracts::NormalizedSectionV1,
         filters: &NormalizedFilterValuesV1,
-    ) -> PredicateEvaluation {
+    ) -> EvaluatedFilters {
         let occurrences = self.corpus.known_occurrences_for(section);
         let open = self.open_for(&section.key);
-        evaluate_section_filters(section, occurrences.as_deref(), &open, self.now, filters).0
+        evaluate_section_filter_matches(section, occurrences.as_deref(), &open, self.now, filters)
     }
 
     fn unfiltered_section_item(
@@ -424,19 +864,71 @@ impl<'a> QueryEngine<'a> {
     }
 
     fn open_for(&self, key: &SectionKey) -> LiveOpenEvidenceV1 {
-        self.open.get(key).cloned().unwrap_or(LiveOpenEvidenceV1 {
-            state: LiveOpenStateV1::Unknown,
-            observed_at: None,
-            fresh_until: None,
-            uncertainty: Some(MatchReasonCode::MissingReliableData),
-        })
+        let (mut evidence, prepared) = match &self.open {
+            EngineOpen::Built(open) => (open.get(key).cloned(), false),
+            EngineOpen::Prepared(open) => (
+                open.iter()
+                    .find(|overlay| {
+                        overlay.target.term() == key.term()
+                            && overlay.target.campus() == key.campus()
+                    })
+                    .and_then(|overlay| overlay.get(key))
+                    .cloned(),
+                true,
+            ),
+        };
+        let Some(mut evidence) = evidence.take() else {
+            return LiveOpenEvidenceV1 {
+                state: LiveOpenStateV1::Unknown,
+                observed_at: None,
+                fresh_until: None,
+                uncertainty: Some(MatchReasonCode::MissingReliableData),
+            };
+        };
+        let forced = self.section_open_is_forced_unavailable(key);
+        let stale_without_prior_uncertainty = evidence.uncertainty.is_none()
+            && !(evidence.observed_at.is_some()
+                && evidence
+                    .fresh_until
+                    .is_some_and(|fresh_until| self.now <= fresh_until));
+        if prepared && (forced || stale_without_prior_uncertainty) {
+            evidence.uncertainty = Some(MatchReasonCode::SourceUnavailable);
+        }
+        evidence
     }
 
     fn open_state_for(&self, key: &SectionKey) -> LiveOpenStateV1 {
-        self.open
-            .get(key)
-            .map(|evidence| evidence.state)
-            .unwrap_or(LiveOpenStateV1::Unknown)
+        match &self.open {
+            EngineOpen::Built(open) => open.get(key),
+            EngineOpen::Prepared(open) => open
+                .iter()
+                .find(|overlay| {
+                    overlay.target.term() == key.term() && overlay.target.campus() == key.campus()
+                })
+                .and_then(|overlay| overlay.get(key)),
+        }
+        .map(|evidence| evidence.state)
+        .unwrap_or(LiveOpenStateV1::Unknown)
+    }
+
+    fn identity_is_active(&self, term: &str, campus: &str) -> bool {
+        self.active_targets
+            .iter()
+            .any(|target| target.term().as_str() == term && target.campus().as_str() == campus)
+    }
+
+    fn group_is_active(&self, key: &CourseGroupKey) -> bool {
+        self.identity_is_active(key.term().as_str(), key.campus().as_str())
+    }
+
+    fn section_is_active(&self, key: &SectionKey) -> bool {
+        self.identity_is_active(key.term().as_str(), key.campus().as_str())
+    }
+
+    fn section_open_is_forced_unavailable(&self, key: &SectionKey) -> bool {
+        self.forced_open_unavailable
+            .iter()
+            .any(|target| target.term() == key.term() && target.campus() == key.campus())
     }
 
     fn validate_filters(&self, filters: &NormalizedFilterValuesV1) -> Result<(), QueryError> {
@@ -444,24 +936,24 @@ impl<'a> QueryEngine<'a> {
             return Err(QueryError::FilterTermMismatch);
         }
         if !filters.core().codes.is_empty() {
-            let authoritative_codes = self
-                .corpus
-                .groups()
-                .filter(|group| {
-                    filters.campuses().is_empty() || filters.campuses().contains(group.key.campus())
-                })
-                .flat_map(|group| self.corpus.variants_for(group))
-                .filter_map(|variant| match &variant.core_codes {
-                    CatalogFieldKnowledge::Known {
+            let mut authoritative_codes = BTreeSet::new();
+            self.corpus.for_each_group(&self.active_targets, |group| {
+                if !self.group_is_active(&group.key)
+                    || (!filters.campuses().is_empty()
+                        && !filters.campuses().contains(group.key.campus()))
+                {
+                    return;
+                }
+                for variant in self.corpus.variants_for(group) {
+                    if let CatalogFieldKnowledge::Known {
                         presence: CatalogFieldPresence::Present { value },
-                    } => Some(value),
-                    CatalogFieldKnowledge::Known { .. } | CatalogFieldKnowledge::Unknown { .. } => {
-                        None
+                    } = &variant.core_codes
+                    {
+                        authoritative_codes
+                            .extend(value.iter().map(|code| code.to_ascii_uppercase()));
                     }
-                })
-                .flatten()
-                .map(|code| code.to_ascii_uppercase())
-                .collect::<BTreeSet<_>>();
+                }
+            });
             if let Some(code) = filters
                 .core()
                 .codes
@@ -494,12 +986,18 @@ impl<'a> QueryEngine<'a> {
         }
 
         let expected = self
-            .corpus
-            .target_versions()
-            .filter(|(target, _)| {
-                filters.campuses().is_empty() || filters.campuses().contains(target.campus())
+            .active_targets
+            .iter()
+            .map(|target| {
+                (
+                    target.clone(),
+                    self.corpus
+                        .target_versions()
+                        .into_iter()
+                        .find_map(|(candidate, version)| (candidate == target).then_some(version))
+                        .expect("active target belongs to the bound corpus"),
+                )
             })
-            .map(|(target, version)| (target.clone(), version))
             .collect::<BTreeMap<TermCampusKey, CatalogContentVersion>>();
         let actual = plan
             .target_versions()
@@ -513,7 +1011,7 @@ impl<'a> QueryEngine<'a> {
         }
         if plan
             .hit_keys()
-            .any(|key| self.corpus.variant(key).is_none())
+            .any(|key| !self.group_is_active(key.group()) || self.corpus.variant(key).is_none())
         {
             return Err(QueryError::ForeignTextHit);
         }
@@ -663,6 +1161,21 @@ fn paginate<T>(mut values: Vec<T>, request: PageRequestV1) -> (PageInfoV1, Vec<T
     )
 }
 
+fn elapsed_micros(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+fn open_key_hash(key: &SectionKey) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
 fn paginate_and_materialize<T, U>(
     values: Vec<T>,
     request: PageRequestV1,
@@ -707,6 +1220,22 @@ mod tests {
 
     use super::*;
 
+    fn constant_open_hash(_: &SectionKey) -> u64 {
+        11
+    }
+
+    fn open_evidence(index: &str) -> OpenEvidence {
+        OpenEvidence {
+            section_key: SectionKey::try_new("92026", "NB", index).expect("section key"),
+            evidence: LiveOpenEvidenceV1 {
+                state: LiveOpenStateV1::Open,
+                observed_at: None,
+                fresh_until: None,
+                uncertainty: None,
+            },
+        }
+    }
+
     #[test]
     fn pagination_invokes_materialization_only_for_the_selected_large_result_page() {
         let materialized = Cell::new(0_u32);
@@ -721,5 +1250,35 @@ mod tests {
         assert_eq!(page.total_pages, 322);
         assert_eq!(materialized.get(), 25);
         assert_eq!(items, (3_400_u32..3_425).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn open_index_collision_keeps_distinct_keys_and_rejects_exact_duplicates() {
+        let evidence = vec![open_evidence("10001"), open_evidence("10002")];
+        let index = build_open_index_with_hasher(&evidence, constant_open_hash)
+            .expect("distinct colliding keys");
+        assert!(matches!(index.get(&11), Some(OpenIndexBucket::Many(values)) if values == &[0, 1]));
+        for item in &evidence {
+            assert_eq!(
+                lookup_open_evidence_with_hasher(
+                    &index,
+                    &evidence,
+                    &item.section_key,
+                    constant_open_hash,
+                ),
+                Some(&item.evidence)
+            );
+        }
+        let missing = SectionKey::try_new("92026", "NB", "10003").expect("missing key");
+        assert_eq!(
+            lookup_open_evidence_with_hasher(&index, &evidence, &missing, constant_open_hash,),
+            None
+        );
+
+        let duplicates = vec![evidence[0].clone(), evidence[0].clone()];
+        assert!(matches!(
+            build_open_index_with_hasher(&duplicates, constant_open_hash),
+            Err(QueryError::DuplicateOpenEvidence)
+        ));
     }
 }

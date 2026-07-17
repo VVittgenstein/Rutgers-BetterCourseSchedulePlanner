@@ -17,13 +17,17 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 
+use crate::discovery_runtime::{
+    product_refresh_targets, publish_discovery_for_refresh_with_prepared,
+    restore_product_refresh_targets,
+};
 use crate::refresh_generation::refresh_generation_interval;
 use crate::{
-    CoordinatorStatusSink, OpenRuntimeSnapshotRegistry, ProductStorageAccess,
-    RefreshPolicyProvider, RefreshRuntime, RutgersRefreshUpstream,
-    RutgersRefreshUpstreamBuildError, SelectorTargetMembership, SharedRefreshCoordinator,
-    SharedWatchSocket, SystemCoordinatorClock, TargetRefreshDemand, publish_discovery_for_refresh,
-    record_discovery_transport_failure, restore_refresh_targets,
+    CoordinatorStatusSink, OpenRuntimeSnapshotRegistry, PreparedServingRebuildRuntime,
+    PreparedServingRegistry, ProductStorageAccess, RefreshPolicyProvider, RefreshRuntime,
+    RutgersRefreshUpstream, RutgersRefreshUpstreamBuildError, SelectorTargetMembership,
+    SharedRefreshCoordinator, SharedWatchSocket, SystemCoordinatorClock, TargetRefreshDemand,
+    is_product_campus, record_discovery_transport_failure,
 };
 
 /// Discovery is deliberately lower frequency than Catalog and Open polling.
@@ -35,6 +39,7 @@ const CI_NO_RUTGERS_ENVIRONMENT: &str = "BCSP_CI_NO_RUTGERS";
 pub struct OfficialRefreshRuntime {
     shutdown: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
+    prepared_rebuild: Option<PreparedServingRebuildRuntime>,
 }
 
 impl OfficialRefreshRuntime {
@@ -79,12 +84,71 @@ impl OfficialRefreshRuntime {
         S: ProductStorageAccess + Clone + Send + 'static,
         P: RefreshPolicyProvider + Clone + Send + 'static,
     {
+        Self::spawn_internal(
+            storage,
+            policy,
+            run_id,
+            counter_audience,
+            watch_socket,
+            open_runtime,
+            status,
+            target_refresh_demand,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_with_target_refresh_demand_and_prepared<S, P>(
+        storage: S,
+        policy: P,
+        run_id: TraceId,
+        counter_audience: OpenCounterAudience,
+        watch_socket: Arc<SharedWatchSocket>,
+        open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
+        status: Arc<dyn CoordinatorStatusSink>,
+        target_refresh_demand: TargetRefreshDemand,
+        prepared_registry: Arc<PreparedServingRegistry>,
+    ) -> Result<Self, OfficialRefreshRuntimeBuildError>
+    where
+        S: ProductStorageAccess + Clone + Send + 'static,
+        P: RefreshPolicyProvider + Clone + Send + 'static,
+    {
+        Self::spawn_internal(
+            storage,
+            policy,
+            run_id,
+            counter_audience,
+            watch_socket,
+            open_runtime,
+            status,
+            target_refresh_demand,
+            Some(prepared_registry),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_internal<S, P>(
+        storage: S,
+        policy: P,
+        run_id: TraceId,
+        counter_audience: OpenCounterAudience,
+        watch_socket: Arc<SharedWatchSocket>,
+        open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
+        status: Arc<dyn CoordinatorStatusSink>,
+        target_refresh_demand: TargetRefreshDemand,
+        prepared_registry: Option<Arc<PreparedServingRegistry>>,
+    ) -> Result<Self, OfficialRefreshRuntimeBuildError>
+    where
+        S: ProductStorageAccess + Clone + Send + 'static,
+        P: RefreshPolicyProvider + Clone + Send + 'static,
+    {
         if ci_network_disabled() {
             status.mark_stopped();
             let (shutdown, _) = watch::channel(false);
             return Ok(Self {
                 shutdown,
                 task: None,
+                prepared_rebuild: None,
             });
         }
         let discovery = RutgersDiscoveryClient::new_official()
@@ -100,9 +164,22 @@ impl OfficialRefreshRuntime {
             OpenCounterAudience::Public => RutgersTermWindowScope::Public,
         };
         let network_budget = Arc::new(Semaphore::new(crate::REFRESH_MAX_CONCURRENCY));
+        let prepared_rebuild = prepared_registry.map(|registry| {
+            PreparedServingRebuildRuntime::spawn(
+                storage.clone(),
+                policy.clone(),
+                counter_audience,
+                Arc::clone(&open_runtime),
+                registry,
+            )
+        });
+        let prepared_demand = prepared_rebuild
+            .as_ref()
+            .map(PreparedServingRebuildRuntime::demand);
+        let task_prepared_demand = prepared_demand.clone();
         let task = tokio::spawn(async move {
             let mut ids = SystemTraceIdSource;
-            let mut current_targets = restore_refresh_targets(&storage).unwrap_or_default();
+            let mut current_targets = restore_product_refresh_targets(&storage).unwrap_or_default();
             membership.replace(
                 current_targets
                     .iter()
@@ -170,16 +247,22 @@ impl OfficialRefreshRuntime {
                                     &storage,
                                     &current_targets,
                                 );
-                                for target in demanded_refresh_targets(
+                                let Ok((active_targets, manual_targets)) =
+                                    authoritative_refresh_targets(
                                     &current_targets,
                                     &demanded,
                                     &pending_manual_targets,
-                                    &window,
-                                ) {
+                                    Ok(window),
+                                )
+                                else {
+                                    tracing::error!(code = "TERM_CALENDAR_UNAVAILABLE");
+                                    continue;
+                                };
+                                for target in active_targets.iter().cloned() {
                                     let key = target.target().clone();
                                     let registration = runtime.register_target_with_snapshot_state(
                                         target,
-                                        !is_automatically_managed_target(&key, &window),
+                                        manual_targets.contains(&key),
                                         complete_snapshot_targets.contains(&key),
                                     );
                                     if registration.is_err() {
@@ -187,9 +270,21 @@ impl OfficialRefreshRuntime {
                                         continue;
                                     }
                                 }
+                                if retain_authoritative_refresh_targets(
+                                    &active_targets,
+                                    |retained| runtime.retain_registered_targets(retained),
+                                )
+                                .is_err()
+                                {
+                                    tracing::error!(code = "SHARED_REFRESH_TARGET_SYNC_FAILED");
+                                }
                                 if runtime.sync_product_demand(&demanded_set).is_err() {
                                     tracing::error!(code = "SHARED_TARGET_DEMAND_SYNC_FAILED");
                                 }
+                                dispatch_manual_target_retries(
+                                    runtime,
+                                    &target_refresh_demand,
+                                );
                             }
                         }
                     }
@@ -248,39 +343,68 @@ impl OfficialRefreshRuntime {
                 };
 
                 let discovery_succeeded = match discovery_result {
-                    Ok(response) => match publish_discovery_for_refresh(
-                        &storage,
-                        response.snapshot(),
-                        observation_id,
-                        started_at.expect("timestamp was validated above"),
-                        completed_at,
-                    ) {
-                        Ok(published) => {
-                            membership.replace(
-                                published
-                                    .targets
-                                    .iter()
-                                    .map(|registration| registration.target().clone()),
-                            );
-                            current_targets = published.targets;
-                            wait_before_attempt =
-                                refresh_generation_interval(current_targets.len());
-                            true
-                        }
-                        Err(_) => {
-                            tracing::error!(code = "DISCOVERY_PUBLISH_FAILED");
-                            wait_before_attempt = DISCOVERY_RETRY_INTERVAL;
-                            false
-                        }
-                    },
-                    Err(failure) => {
-                        let _ = record_discovery_transport_failure(
+                    Ok(response) => {
+                        let product_targets = product_refresh_targets(response.snapshot());
+                        match publish_discovery_for_refresh_with_prepared(
                             &storage,
+                            response.snapshot(),
                             observation_id,
                             started_at.expect("timestamp was validated above"),
                             completed_at,
-                            discovery_failure_code(&failure),
-                        );
+                            task_prepared_demand.as_ref(),
+                        ) {
+                            Ok(_) if product_targets.is_ok() => {
+                                let product_targets = product_targets
+                                    .expect("the product target result was checked above");
+                                membership.replace(
+                                    product_targets
+                                        .iter()
+                                        .map(|registration| registration.target().clone()),
+                                );
+                                current_targets = product_targets;
+                                wait_before_attempt =
+                                    refresh_generation_interval(current_targets.len());
+                                true
+                            }
+                            Err(_) => {
+                                tracing::error!(code = "DISCOVERY_PUBLISH_FAILED");
+                                wait_before_attempt = DISCOVERY_RETRY_INTERVAL;
+                                false
+                            }
+                            Ok(_) => {
+                                tracing::error!(
+                                    code = "DISCOVERY_PRODUCT_TARGET_PROJECTION_FAILED"
+                                );
+                                wait_before_attempt = DISCOVERY_RETRY_INTERVAL;
+                                false
+                            }
+                        }
+                    }
+                    Err(failure) => {
+                        let persist_failure = || {
+                            record_discovery_transport_failure(
+                                &storage,
+                                observation_id,
+                                started_at.expect("timestamp was validated above"),
+                                completed_at,
+                                discovery_failure_code(&failure),
+                            )
+                        };
+                        if let Some(rebuild) = &task_prepared_demand {
+                            match rebuild.begin_publication() {
+                                Ok(barrier) => {
+                                    if persist_failure().is_ok() {
+                                        barrier.commit();
+                                    }
+                                }
+                                Err(error) => tracing::error!(
+                                    ?error,
+                                    code = "DISCOVERY_FAILURE_PUBLICATION_BARRIER_UNAVAILABLE"
+                                ),
+                            }
+                        } else {
+                            let _ = persist_failure();
+                        }
                         tracing::warn!(code = discovery_failure_code(&failure));
                         wait_before_attempt = DISCOVERY_RETRY_INTERVAL;
                         false
@@ -339,12 +463,13 @@ impl OfficialRefreshRuntime {
                     {
                         tracing::error!(code = "SHARED_REFRESH_TARGET_SYNC_FAILED");
                     }
+                    dispatch_manual_target_retries(runtime, &target_refresh_demand);
                     continue;
                 }
                 if active_targets.is_empty() {
                     continue;
                 }
-                let coordinators = vec![SharedRefreshCoordinator::with_parts(
+                let coordinator = SharedRefreshCoordinator::with_parts(
                     storage.clone(),
                     upstream.clone(),
                     policy.clone(),
@@ -355,7 +480,13 @@ impl OfficialRefreshRuntime {
                     watch_socket.clone(),
                     open_runtime.clone(),
                     status.clone(),
-                )];
+                );
+                let coordinator = if let Some(rebuild) = &task_prepared_demand {
+                    coordinator.with_prepared_rebuild_demand(rebuild.clone())
+                } else {
+                    coordinator
+                };
+                let coordinators = vec![coordinator];
                 match RefreshRuntime::spawn_pool_with_target_states_and_budget(
                     coordinators,
                     active_targets,
@@ -368,6 +499,7 @@ impl OfficialRefreshRuntime {
                         if runtime.sync_product_demand(&demanded).is_err() {
                             tracing::error!(code = "SHARED_PRODUCT_DEMAND_SYNC_FAILED");
                         }
+                        dispatch_manual_target_retries(&runtime, &target_refresh_demand);
                         coordinator_runtime = Some(runtime);
                     }
                     Err(_) => tracing::error!(code = "SHARED_REFRESH_START_FAILED"),
@@ -382,6 +514,7 @@ impl OfficialRefreshRuntime {
         Ok(Self {
             shutdown,
             task: Some(task),
+            prepared_rebuild,
         })
     }
 
@@ -389,6 +522,9 @@ impl OfficialRefreshRuntime {
         self.shutdown.send_replace(true);
         if let Some(task) = self.task.take() {
             let _ = task.await;
+        }
+        if let Some(prepared_rebuild) = self.prepared_rebuild.take() {
+            prepared_rebuild.shutdown().await;
         }
     }
 }
@@ -404,6 +540,7 @@ impl Drop for OfficialRefreshRuntime {
         if let Some(task) = self.task.take() {
             task.abort();
         }
+        self.prepared_rebuild.take();
     }
 }
 
@@ -424,10 +561,11 @@ fn selected_refresh_targets(
     available
         .iter()
         .filter(|registration| {
-            automatic_terms.contains(registration.target().term())
-                || (visible_terms.contains(registration.target().term())
-                    && (demanded.contains(registration.target())
-                        || pending_manual_targets.contains(registration.target())))
+            is_product_campus(registration.target().campus().as_str())
+                && (automatic_terms.contains(registration.target().term())
+                    || (visible_terms.contains(registration.target().term())
+                        && (demanded.contains(registration.target())
+                            || pending_manual_targets.contains(registration.target()))))
         })
         .cloned()
         .collect()
@@ -466,29 +604,6 @@ fn is_automatically_managed_target(target: &TermCampusKey, window: &RutgersTermW
     target.term() == window.current_term() || target.term() == window.next_term()
 }
 
-fn demanded_refresh_targets(
-    available: &[crate::ScheduledRefreshTarget],
-    demanded: &[TermCampusKey],
-    pending_manual_targets: &BTreeSet<TermCampusKey>,
-    window: &RutgersTermWindow,
-) -> Vec<crate::ScheduledRefreshTarget> {
-    let demanded = demanded.iter().cloned().collect::<BTreeSet<_>>();
-    let visible_terms = window
-        .visible_terms()
-        .iter()
-        .map(|term| term.term().clone())
-        .collect::<BTreeSet<_>>();
-    available
-        .iter()
-        .filter(|registration| {
-            visible_terms.contains(registration.target().term())
-                && (demanded.contains(registration.target())
-                    || pending_manual_targets.contains(registration.target()))
-        })
-        .cloned()
-        .collect()
-}
-
 fn pending_manual_refresh_targets<S>(
     storage: &S,
     available: &[crate::ScheduledRefreshTarget],
@@ -503,7 +618,10 @@ where
     }
     let requested = available
         .iter()
-        .filter(|registration| manual_terms.contains(registration.target().term()))
+        .filter(|registration| {
+            manual_terms.contains(registration.target().term())
+                && is_product_campus(registration.target().campus().as_str())
+        })
         .map(|registration| registration.target().clone())
         .collect::<BTreeSet<_>>();
     let Ok(storage) = storage.lock_operational() else {
@@ -519,6 +637,36 @@ where
         .collect()
 }
 
+fn dispatch_manual_target_retries(runtime: &RefreshRuntime, demand: &TargetRefreshDemand) {
+    let Ok(retries) = demand.pending_manual_target_retries() else {
+        tracing::error!(code = "SHARED_MANUAL_RETRY_DEMAND_UNAVAILABLE");
+        return;
+    };
+    for retry in retries {
+        match runtime.request_manual_target_retry(&retry) {
+            Ok(_) => {
+                if demand.acknowledge_manual_target_retry(&retry).is_err() {
+                    tracing::error!(
+                        code = "SHARED_MANUAL_RETRY_ACKNOWLEDGEMENT_FAILED",
+                        target = ?retry.target(),
+                        generation = retry.generation(),
+                    );
+                }
+            }
+            Err(crate::RefreshRuntimeRegistrationError::UnknownTarget) => {
+                // Registration and discovery replacement are asynchronous. Keep the generation
+                // pending so the next target scan can deliver it to the authoritative runtime.
+            }
+            Err(error) => tracing::error!(
+                code = "SHARED_MANUAL_RETRY_DISPATCH_FAILED",
+                target = ?retry.target(),
+                generation = retry.generation(),
+                error = ?error,
+            ),
+        }
+    }
+}
+
 fn complete_snapshot_targets<S>(
     storage: &S,
     available: &[crate::ScheduledRefreshTarget],
@@ -531,12 +679,12 @@ where
     };
     available
         .iter()
-        .filter_map(|registration| {
+        .filter(|registration| {
             storage
                 .complete_target_snapshot_state(registration.target())
                 .is_ok_and(|state| state.ready)
-                .then(|| registration.target().clone())
         })
+        .map(|registration| registration.target().clone())
         .collect()
 }
 
@@ -559,7 +707,9 @@ fn restore_manual_term_demand<S>(
     };
     let mut requested_terms = BTreeSet::new();
     for registration in available {
-        if !manual_terms.contains(registration.target().term()) {
+        if !manual_terms.contains(registration.target().term())
+            || !is_product_campus(registration.target().campus().as_str())
+        {
             continue;
         }
         let attempted = storage
@@ -681,7 +831,7 @@ mod tests {
             registration("12027", "NWK", 2027, "1"),
             registration("92026", "NB", 2026, "9"),
             registration("72026", "NB", 2026, "7"),
-            registration("92026", "CAMDEN", 2026, "9"),
+            registration("92026", "CM", 2026, "9"),
         ];
 
         let selected =
@@ -694,6 +844,11 @@ mod tests {
             selected
                 .iter()
                 .all(|target| matches!(target.term().as_str(), "72026" | "92026"))
+        );
+        assert!(
+            selected
+                .iter()
+                .all(|target| matches!(target.campus().as_str(), "NB" | "NK" | "CM"))
         );
     }
 

@@ -176,7 +176,7 @@ const courseItem = {
   }],
 };
 const courseResponse = {
-  contractVersion: 1,
+  contractVersion: 3,
   items: [courseItem],
   page: { page: 1, pageSize: 25, total: 1, totalPages: 1 },
 };
@@ -275,7 +275,7 @@ async function installApi(page, scenario) {
     ['/api/v1/query/filter-schema', filterSchema],
     ['/api/v1/catalog/discovery', discovery],
     ['/api/v1/query/courses', courseResponse],
-    ['/api/v1/query/course-detail', { contractVersion: 1, course: courseItem }],
+    ['/api/v1/query/course-detail', { contractVersion: 3, course: courseItem }],
   ]);
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url());

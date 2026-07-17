@@ -23,7 +23,8 @@ use time::OffsetDateTime;
 use crate::{
     ApplicationClock, CoordinatorStatusSink, CoordinatorStatusSnapshot,
     OpenRuntimeSnapshotRegistry, RefreshPolicy, RefreshPolicyProvider, SharedRuntimeContext,
-    TargetWorkActivity, WorkflowOperationActivity, WorkflowOperationId,
+    TargetWorkActivity, WorkflowOperationActivity, WorkflowOperationId, is_product_campus,
+    product_target_keys, product_term_publication,
 };
 
 #[derive(Clone, Debug)]
@@ -401,6 +402,9 @@ where
     }
 }
 
+// The error is the complete V1 fallback payload required by the raw-wire contract. Boxing it
+// would complicate every caller without reducing the payload that must ultimately be served.
+#[allow(clippy::result_large_err)]
 pub(crate) fn project_service_status_v2<C, P>(
     storage: &mut OperationalStorage,
     runtime: &SharedRuntimeContext<C, P>,
@@ -459,23 +463,13 @@ where
         .iter()
         .map(|term| term.term().clone())
         .collect::<BTreeSet<_>>();
-    let discovered_targets = discovery
-        .targets
-        .iter()
-        .map(|target| target.key.clone())
-        .filter(|target| {
-            visible_ids.contains(target.term()) && !is_online_alias(target.campus().as_str())
-        })
-        .collect::<BTreeSet<_>>();
     let visible_terms = window
         .visible_terms()
         .iter()
         .map(|term| ServiceVisibleTermV2 {
             term: term.term().clone(),
             relative_offset: term.relative_offset(),
-            discovered: discovered_targets
-                .iter()
-                .any(|target| target.term() == term.term()),
+            publication: product_term_publication(&published, term.term(), observed_at),
             auto_managed: term.auto_managed(),
             manual_pull_allowed: registry.runtime() == ServiceRuntimeV1::Local
                 && !term.auto_managed(),
@@ -497,7 +491,12 @@ where
             }
         }
     }
-    let mut targets = Vec::with_capacity(discovered_targets.len());
+    let product_targets = window
+        .visible_terms()
+        .iter()
+        .flat_map(|term| product_target_keys(term.term()))
+        .collect::<Vec<_>>();
+    let mut targets = Vec::with_capacity(product_targets.len());
     let mut issues = Vec::new();
     if let Some(error) = &discovery.status.error {
         issues.push(ServiceIssueV1 {
@@ -509,7 +508,7 @@ where
             retry_at: activity.operation.next_retry_at,
         });
     }
-    for target in discovered_targets {
+    for target in product_targets {
         let candidate_activity = target_activity.get(&target).copied();
         let running_operation = running_by_target.get(&target).copied();
         let catalog_state = storage.target_state(&target).map_err(|_| {
@@ -641,6 +640,10 @@ where
     let operations = activity
         .workflow_operations
         .iter()
+        .filter(|operation| {
+            visible_ids.contains(operation.id.target.term())
+                && is_product_campus(operation.id.target.campus().as_str())
+        })
         .map(|operation| ServiceOperationV2 {
             target: operation.id.target.clone(),
             stage: operation.stage,
@@ -687,10 +690,6 @@ where
         targets,
         issues,
     })
-}
-
-fn is_online_alias(campus: &str) -> bool {
-    matches!(campus, "ONLINE_NB" | "ONLINE_NK" | "ONLINE_CM")
 }
 
 fn parse_timestamp(value: &str) -> Option<OffsetDateTime> {
@@ -893,11 +892,11 @@ fn open_failure_issue(
 }
 
 #[allow(dead_code)]
-fn current_open_failure_code<'a>(
+fn current_open_failure_code(
     last_attempt_sequence: u64,
     last_failure_attempt_sequence: Option<u64>,
-    last_failure_error_code: Option<&'a str>,
-) -> Option<&'a str> {
+    last_failure_error_code: Option<&str>,
+) -> Option<&str> {
     (last_failure_attempt_sequence == Some(last_attempt_sequence))
         .then_some(last_failure_error_code)
         .flatten()

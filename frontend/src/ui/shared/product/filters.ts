@@ -4,14 +4,13 @@ import type {
   CourseSortV1,
   CreditRangeV1,
   FilterFieldId,
-  FilterRequestV2,
+  FilterRequestV3,
   FilterValuesV1,
   ModalityFilterV1,
   PageRequestV1,
   SectionQueryRequestV1,
   SectionSortV1,
 } from './contracts/query';
-import type { CatalogSynchronicity } from './contracts/catalog';
 
 export const FILTER_FIELD_IDS = Object.freeze([
   'FLT-C01', 'FLT-C02', 'FLT-C03', 'FLT-C04', 'FLT-C05',
@@ -21,10 +20,10 @@ export const FILTER_FIELD_IDS = Object.freeze([
 ] as const satisfies readonly FilterFieldId[]);
 
 export const FILTER_REQUEST_FIELDS = Object.freeze([
-  'term', 'campuses', 'subjects', 'keywords', 'courseNumbers', 'levels', 'credits',
+  'term', 'campuses', 'subjects', 'keywords', 'courseNumberBands', 'levels', 'credits',
   'core', 'prerequisite', 'sectionIndexes',
   'openStatuses', 'modalities', 'synchronicities', 'instructors', 'availability',
-  'meetingLocations', 'examCodes', 'permission',
+  'meetingLocations', 'examCodes', 'permission', 'includeIncomplete',
 ] as const satisfies readonly (keyof FilterValuesV1)[]);
 
 export interface FilterStateV1 extends Omit<FilterValuesV1, 'term'> {
@@ -57,7 +56,7 @@ export function createNeutralFilterState(term: string | null = null): FilterStat
     campuses: [],
     subjects: [],
     keywords: [],
-    courseNumbers: [],
+    courseNumberBands: [],
     levels: [],
     credits: null,
     core: { codes: [], mode: 'ANY' },
@@ -71,20 +70,22 @@ export function createNeutralFilterState(term: string | null = null): FilterStat
     meetingLocations: { locations: [], mode: 'ANY_MEETING' },
     examCodes: [],
     permission: 'ANY',
+    includeIncomplete: {
+      prerequisite: false,
+      modality: false,
+      synchronicity: false,
+    },
   };
 }
 
-/** Converts persisted V1 filter snapshots to the active V2 UI state without
+/** Coerces an active V3 filter snapshot without inventing legacy V2 semantics or
  * silently retaining fields that no longer exist in the product surface. */
-export function coerceFilterStateV2(candidate: unknown, fallbackTerm: string | null = null): FilterStateV1 {
+export function coerceFilterStateV3(candidate: unknown, fallbackTerm: string | null = null): FilterStateV1 {
   const neutral = createNeutralFilterState(fallbackTerm);
   if (candidate === null || typeof candidate !== 'object') return neutral;
   const value = candidate as Record<string, unknown>;
   const array = (key: string): string[] => Array.isArray(value[key])
     ? value[key].filter((entry): entry is string => typeof entry === 'string')
-    : [];
-  const legacyText = typeof value.text === 'string'
-    ? value.text.trim().split(/\s+/u).filter(Boolean)
     : [];
   const meeting = value.meetingLocations;
   const meetingLocations = Array.isArray(meeting)
@@ -110,8 +111,11 @@ export function coerceFilterStateV2(candidate: unknown, fallbackTerm: string | n
     term: typeof value.term === 'string' ? value.term : fallbackTerm,
     campuses: array('campuses'),
     subjects: array('subjects'),
-    keywords: array('keywords').length > 0 ? array('keywords') : legacyText,
-    courseNumbers: array('courseNumbers'),
+    keywords: array('keywords'),
+    courseNumberBands: Array.isArray(value.courseNumberBands)
+      ? value.courseNumberBands.filter((entry): entry is number =>
+        Number.isSafeInteger(entry) && entry >= 0 && entry % 100 === 0)
+      : [],
     levels: array('levels'),
     credits,
     core,
@@ -120,8 +124,10 @@ export function coerceFilterStateV2(candidate: unknown, fallbackTerm: string | n
       : 'ANY',
     sectionIndexes: array('sectionIndexes'),
     openStatuses: array('openStatuses') as FilterStateV1['openStatuses'],
-    modalities: array('modalities') as FilterStateV1['modalities'],
-    synchronicities: array('synchronicities') as FilterStateV1['synchronicities'],
+    modalities: array('modalities').filter((entry): entry is FilterStateV1['modalities'][number] =>
+      entry === 'ON_CAMPUS_OR_IN_PERSON' || entry === 'ONLINE' || entry === 'HYBRID'),
+    synchronicities: array('synchronicities').filter((entry): entry is FilterStateV1['synchronicities'][number] =>
+      entry === 'SYNC' || entry === 'ASYNC' || entry === 'MIXED'),
     instructors: array('instructors'),
     availability: Array.isArray(value.availability)
       ? value.availability as FilterStateV1['availability']
@@ -131,8 +137,18 @@ export function coerceFilterStateV2(candidate: unknown, fallbackTerm: string | n
     permission: value.permission === 'REQUIRED' || value.permission === 'NOT_REQUIRED'
       ? value.permission
       : 'ANY',
+    includeIncomplete: value.includeIncomplete !== null && typeof value.includeIncomplete === 'object'
+      ? {
+        prerequisite: (value.includeIncomplete as Record<string, unknown>).prerequisite === true,
+        modality: (value.includeIncomplete as Record<string, unknown>).modality === true,
+        synchronicity: (value.includeIncomplete as Record<string, unknown>).synchronicity === true,
+      }
+      : neutral.includeIncomplete,
   };
 }
+
+/** Source-compatible alias retained while persisted Local state migrates to V3. */
+export const coerceFilterStateV2 = coerceFilterStateV3;
 
 const utf8 = new TextEncoder();
 
@@ -173,6 +189,18 @@ function canonicalStrings(
 ): string[] {
   if (values.length > 100) fail('TOO_MANY_VALUES', `${field} exceeds 100 values`);
   return [...new Set(values.map((value) => normalize(value, field)))].sort(compareUtf8);
+}
+
+function canonicalBands(values: readonly number[]): number[] {
+  const maximumCourseNumberBand = 4_294_967_100;
+  if (values.length > 100) fail('TOO_MANY_VALUES', 'courseNumberBands exceeds 100 values');
+  if (values.some((value) => !Number.isSafeInteger(value)
+    || value < 0
+    || value > maximumCourseNumberBand
+    || value % 100 !== 0)) {
+    fail('INVALID_TOKEN', 'courseNumberBands must contain u32-safe nonnegative multiples of 100');
+  }
+  return [...new Set(values)].sort((left, right) => left - right);
 }
 
 function normalizeKeywords(values: readonly string[]): string[] {
@@ -243,7 +271,7 @@ export function toFilterValuesV1(state: FilterStateV1): FilterValuesV1 {
     campuses: canonicalStrings(state.campuses, 'campuses', canonicalIdentity),
     subjects: canonicalStrings(state.subjects, 'subjects', canonicalIdentity),
     keywords: normalizeKeywords(state.keywords),
-    courseNumbers: canonicalStrings(state.courseNumbers, 'courseNumbers', (value, field) => normalizeToken(value, field, true)),
+    courseNumberBands: canonicalBands(state.courseNumberBands),
     levels: canonicalStrings(state.levels, 'levels', (value, field) => normalizeToken(value, field, true)),
     credits: normalizeCredits(state.credits),
     core: {
@@ -255,9 +283,9 @@ export function toFilterValuesV1(state: FilterStateV1): FilterValuesV1 {
     openStatuses: [...new Set(state.openStatuses)].sort((left, right) =>
       ['OPEN', 'CLOSED', 'UNKNOWN'].indexOf(left) - ['OPEN', 'CLOSED', 'UNKNOWN'].indexOf(right)),
     modalities: [...new Set<ModalityFilterV1>(state.modalities)].sort((left, right) =>
-      ['ON_CAMPUS_OR_IN_PERSON', 'ONLINE', 'HYBRID', 'OTHER', 'UNKNOWN'].indexOf(left)
-      - ['ON_CAMPUS_OR_IN_PERSON', 'ONLINE', 'HYBRID', 'OTHER', 'UNKNOWN'].indexOf(right)),
-    synchronicities: [...new Set<CatalogSynchronicity>(state.synchronicities)].sort(compareUtf8),
+      ['ON_CAMPUS_OR_IN_PERSON', 'ONLINE', 'HYBRID'].indexOf(left)
+      - ['ON_CAMPUS_OR_IN_PERSON', 'ONLINE', 'HYBRID'].indexOf(right)),
+    synchronicities: [...new Set(state.synchronicities)].sort(compareUtf8),
     instructors,
     availability: normalizeAvailability(state.availability),
     meetingLocations: {
@@ -266,9 +294,10 @@ export function toFilterValuesV1(state: FilterStateV1): FilterValuesV1 {
     },
     examCodes: canonicalStrings(state.examCodes, 'examCodes', (value, field) => normalizeToken(value, field, true)),
     permission: state.permission,
+    includeIncomplete: { ...state.includeIncomplete },
   };
   const total = [
-    values.campuses, values.subjects, values.keywords, values.courseNumbers, values.levels, values.core.codes,
+    values.campuses, values.subjects, values.keywords, values.courseNumberBands, values.levels, values.core.codes,
     values.sectionIndexes, values.openStatuses,
     values.modalities, values.synchronicities, values.instructors, values.availability,
     values.meetingLocations.locations, values.examCodes,
@@ -277,8 +306,8 @@ export function toFilterValuesV1(state: FilterStateV1): FilterValuesV1 {
   return values;
 }
 
-export function toFilterRequestV1(state: FilterStateV1): FilterRequestV2 {
-  return { contractVersion: 2, values: toFilterValuesV1(state) };
+export function toFilterRequestV1(state: FilterStateV1): FilterRequestV3 {
+  return { contractVersion: 3, values: toFilterValuesV1(state) };
 }
 
 export function serializeFilterRequestV1(state: FilterStateV1): string {

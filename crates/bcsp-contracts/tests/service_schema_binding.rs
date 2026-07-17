@@ -9,8 +9,8 @@ use bcsp_contracts::{
     ServiceLevelV1, ServiceOperationPhaseV1, ServiceOperationStageV2, ServiceOperationV1,
     ServiceOperationV2, ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceStatusV1,
     ServiceStatusV2, ServiceTargetErrorV2, ServiceTargetStatusV1, ServiceTargetStatusV2,
-    ServiceTermWindowV2, ServiceVisibleTermV2, ServiceWorkStateV2, TermCampusKey, TermId, TraceId,
-    contract_manifest,
+    ServiceTermPublicationV2, ServiceTermWindowV2, ServiceVisibleTermV2, ServiceWorkStateV2,
+    TermCampusKey, TermId, TraceId, contract_manifest,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -32,7 +32,7 @@ fn service_status_v2_schema_is_bound_to_wire_shapes_and_enum_values() {
     let visible = ServiceVisibleTermV2 {
         term: summer.clone(),
         relative_offset: 0,
-        discovered: true,
+        publication: ServiceTermPublicationV2::Published,
         auto_managed: true,
         manual_pull_allowed: false,
         watchable: true,
@@ -113,6 +113,10 @@ fn service_status_v2_schema_is_bound_to_wire_shapes_and_enum_values() {
         (
             "bcsp.service.work-state.v2",
             enum_values(ServiceWorkStateV2::ALL),
+        ),
+        (
+            "bcsp.service.term-publication.v2",
+            enum_values(ServiceTermPublicationV2::ALL),
         ),
     ] {
         let expected = schema(schema_id)

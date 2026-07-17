@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 use bcsp_contracts::{
     CatalogContentVersion, CatalogFieldKnowledge, CatalogFieldPresence, CatalogOccurrenceKeyV1,
@@ -21,6 +23,36 @@ pub struct CatalogCorpus<'a> {
     variants: BTreeMap<&'a CourseVariantKey, &'a NormalizedCourseVariantV1>,
     sections: BTreeMap<&'a SectionKey, &'a NormalizedSectionV1>,
     occurrences: BTreeMap<&'a CatalogOccurrenceKeyV1, &'a NormalizedOccurrenceV1>,
+}
+
+/// Build-once, owned Catalog indexes used by the prepared serving path.
+///
+/// The normalized Catalog snapshots remain shared through `Arc`; only their
+/// identity-to-position indexes are owned here. This avoids both self-
+/// referential storage and rebuilding the complete corpus for every request.
+#[derive(Debug)]
+pub struct PreparedCatalogCorpus {
+    term: String,
+    catalogs: Vec<Arc<NormalizedCatalogV1>>,
+    target_versions: BTreeMap<TermCampusKey, CatalogContentVersion>,
+    targets: BTreeMap<TermCampusKey, PreparedTargetIndex>,
+}
+
+#[derive(Debug)]
+struct PreparedTargetIndex {
+    catalog: usize,
+    group_order: Vec<usize>,
+    section_order: Vec<usize>,
+    groups: BTreeMap<u64, IndexBucket>,
+    variants: BTreeMap<u64, IndexBucket>,
+    sections: BTreeMap<u64, IndexBucket>,
+    occurrences: BTreeMap<u64, IndexBucket>,
+}
+
+#[derive(Debug)]
+enum IndexBucket {
+    One(usize),
+    Many(Vec<usize>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -53,7 +85,11 @@ pub enum CorpusError {
 
 impl<'a> CatalogCorpus<'a> {
     pub fn try_new(catalogs: &'a [NormalizedCatalogV1]) -> Result<Self, CorpusError> {
-        let Some(first) = catalogs.first() else {
+        Self::try_new_from_refs(catalogs.iter().collect::<Vec<_>>().as_slice())
+    }
+
+    pub fn try_new_from_refs(catalogs: &[&'a NormalizedCatalogV1]) -> Result<Self, CorpusError> {
+        let Some(first) = catalogs.first().copied() else {
             return Err(CorpusError::Empty);
         };
         let term = first.target.term().as_str();
@@ -70,7 +106,7 @@ impl<'a> CatalogCorpus<'a> {
         let mut occurrences = BTreeMap::new();
         let mut targets = BTreeSet::new();
         let mut target_versions = BTreeMap::new();
-        for catalog in catalogs {
+        for &catalog in catalogs {
             if !targets.insert(&catalog.target) {
                 return Err(CorpusError::DuplicateTarget);
             }
@@ -255,5 +291,402 @@ impl<'a> CatalogCorpus<'a> {
             } => Some(keys.iter().map(|key| self.occurrences[key]).collect()),
             _ => None,
         }
+    }
+}
+
+impl PreparedCatalogCorpus {
+    pub fn try_new(
+        catalogs: impl IntoIterator<Item = Arc<NormalizedCatalogV1>>,
+    ) -> Result<Self, CorpusError> {
+        let catalogs = catalogs.into_iter().collect::<Vec<_>>();
+        let catalog_refs = catalogs.iter().map(Arc::as_ref).collect::<Vec<_>>();
+        // Reuse the reference oracle's complete identity and relationship
+        // validation once, before publishing the owned indexes.
+        CatalogCorpus::try_new_from_refs(&catalog_refs)?;
+
+        let term = catalogs
+            .first()
+            .expect("validated non-empty Catalog corpus")
+            .target
+            .term()
+            .as_str()
+            .to_owned();
+        let mut target_versions = BTreeMap::new();
+        let mut targets = BTreeMap::new();
+        for (catalog_index, catalog) in catalogs.iter().enumerate() {
+            let target = catalog.target.clone();
+            target_versions.insert(target.clone(), catalog.content_version);
+            let mut group_order = (0..catalog.course_groups.len()).collect::<Vec<_>>();
+            group_order.sort_by(|left, right| {
+                catalog.course_groups[*left]
+                    .key
+                    .cmp(&catalog.course_groups[*right].key)
+            });
+            let mut section_order = (0..catalog.sections.len()).collect::<Vec<_>>();
+            section_order.sort_by(|left, right| {
+                catalog.sections[*left]
+                    .key
+                    .cmp(&catalog.sections[*right].key)
+            });
+            targets.insert(
+                target,
+                PreparedTargetIndex {
+                    catalog: catalog_index,
+                    group_order,
+                    section_order,
+                    groups: build_index(catalog.course_groups.iter().map(|group| &group.key)),
+                    variants: build_index(
+                        catalog.course_variants.iter().map(|variant| &variant.key),
+                    ),
+                    sections: build_index(catalog.sections.iter().map(|section| &section.key)),
+                    occurrences: build_index(
+                        catalog.occurrences.iter().map(|occurrence| &occurrence.key),
+                    ),
+                },
+            );
+        }
+
+        Ok(Self {
+            term,
+            catalogs,
+            target_versions,
+            targets,
+        })
+    }
+
+    pub const fn term(&self) -> &str {
+        self.term.as_str()
+    }
+
+    pub fn contains_target(&self, target: &TermCampusKey) -> bool {
+        self.target_versions.contains_key(target)
+    }
+
+    pub fn content_version(&self, target: &TermCampusKey) -> Option<CatalogContentVersion> {
+        self.target_versions.get(target).copied()
+    }
+
+    pub fn target_versions(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&TermCampusKey, CatalogContentVersion)> + '_ {
+        self.target_versions
+            .iter()
+            .map(|(target, version)| (target, *version))
+    }
+
+    pub(crate) fn for_each_group_in_targets<'corpus>(
+        &'corpus self,
+        targets: &[TermCampusKey],
+        mut visitor: impl FnMut(&'corpus NormalizedCourseGroupV1),
+    ) {
+        for target in targets {
+            if let Some(index) = self.targets.get(target) {
+                let catalog = &self.catalogs[index.catalog];
+                for entity in &index.group_order {
+                    visitor(&catalog.course_groups[*entity]);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn group(&self, key: &CourseGroupKey) -> Option<&NormalizedCourseGroupV1> {
+        let index = self.target_index(key.term().as_str(), key.campus().as_str())?;
+        let catalog = &self.catalogs[index.catalog];
+        lookup_index(&index.groups, &catalog.course_groups, key, |group| {
+            &group.key
+        })
+        .map(|entity| &catalog.course_groups[entity])
+    }
+
+    pub(crate) fn variants_for(
+        &self,
+        group: &NormalizedCourseGroupV1,
+    ) -> Vec<&NormalizedCourseVariantV1> {
+        let index = self
+            .target_index(group.key.term().as_str(), group.key.campus().as_str())
+            .expect("validated group target belongs to the prepared corpus");
+        let catalog = &self.catalogs[index.catalog];
+        group
+            .variant_keys
+            .iter()
+            .map(|key| {
+                let entity =
+                    lookup_index(&index.variants, &catalog.course_variants, key, |variant| {
+                        &variant.key
+                    })
+                    .expect("validated group references a prepared variant");
+                &catalog.course_variants[entity]
+            })
+            .collect()
+    }
+
+    pub(crate) fn variant(&self, key: &CourseVariantKey) -> Option<&NormalizedCourseVariantV1> {
+        let index =
+            self.target_index(key.group().term().as_str(), key.group().campus().as_str())?;
+        let catalog = &self.catalogs[index.catalog];
+        lookup_index(&index.variants, &catalog.course_variants, key, |variant| {
+            &variant.key
+        })
+        .map(|entity| &catalog.course_variants[entity])
+    }
+
+    pub(crate) fn for_each_section_in_targets<'corpus>(
+        &'corpus self,
+        targets: &[TermCampusKey],
+        mut visitor: impl FnMut(&'corpus NormalizedSectionV1),
+    ) {
+        for target in targets {
+            if let Some(index) = self.targets.get(target) {
+                let catalog = &self.catalogs[index.catalog];
+                for entity in &index.section_order {
+                    visitor(&catalog.sections[*entity]);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn section(&self, key: &SectionKey) -> Option<&NormalizedSectionV1> {
+        let index = self.target_index(key.term().as_str(), key.campus().as_str())?;
+        let catalog = &self.catalogs[index.catalog];
+        lookup_index(&index.sections, &catalog.sections, key, |section| {
+            &section.key
+        })
+        .map(|entity| &catalog.sections[entity])
+    }
+
+    pub(crate) fn sections_for(
+        &self,
+        variant: &NormalizedCourseVariantV1,
+    ) -> Vec<&NormalizedSectionV1> {
+        let group = variant.key.group();
+        let index = self
+            .target_index(group.term().as_str(), group.campus().as_str())
+            .expect("validated variant target belongs to the prepared corpus");
+        let catalog = &self.catalogs[index.catalog];
+        variant
+            .section_keys
+            .iter()
+            .map(|key| {
+                let entity = lookup_index(&index.sections, &catalog.sections, key, |section| {
+                    &section.key
+                })
+                .expect("validated variant references a prepared section");
+                &catalog.sections[entity]
+            })
+            .collect()
+    }
+
+    pub(crate) fn known_occurrences_for(
+        &self,
+        section: &NormalizedSectionV1,
+    ) -> Option<Vec<&NormalizedOccurrenceV1>> {
+        let index =
+            self.target_index(section.key.term().as_str(), section.key.campus().as_str())?;
+        let catalog = &self.catalogs[index.catalog];
+        match &section.occurrence_keys {
+            CatalogFieldKnowledge::Known {
+                presence: CatalogFieldPresence::Present { value: keys },
+            } => Some(
+                keys.iter()
+                    .map(|key| {
+                        let entity = lookup_index(
+                            &index.occurrences,
+                            &catalog.occurrences,
+                            key,
+                            |occurrence| &occurrence.key,
+                        )
+                        .expect("validated section references a prepared occurrence");
+                        &catalog.occurrences[entity]
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    pub fn index_estimated_bytes(&self) -> u64 {
+        let mut bytes = usize_to_u64(std::mem::size_of::<Self>())
+            .saturating_add(usize_to_u64(self.term.capacity()))
+            .saturating_add(
+                usize_to_u64(self.catalogs.capacity())
+                    .saturating_mul(usize_to_u64(std::mem::size_of::<Arc<NormalizedCatalogV1>>())),
+            )
+            .saturating_add(map_node_bytes::<TermCampusKey, CatalogContentVersion>(
+                self.target_versions.len(),
+            ))
+            .saturating_add(map_node_bytes::<TermCampusKey, PreparedTargetIndex>(
+                self.targets.len(),
+            ));
+        for target in self.target_versions.keys().chain(self.targets.keys()) {
+            bytes = bytes
+                .saturating_add(usize_to_u64(target.term().as_str().len()))
+                .saturating_add(usize_to_u64(target.campus().as_str().len()));
+        }
+        for index in self.targets.values() {
+            bytes = bytes
+                .saturating_add(
+                    usize_to_u64(index.group_order.capacity())
+                        .saturating_mul(usize_to_u64(std::mem::size_of::<usize>())),
+                )
+                .saturating_add(
+                    usize_to_u64(index.section_order.capacity())
+                        .saturating_mul(usize_to_u64(std::mem::size_of::<usize>())),
+                );
+            for buckets in [
+                &index.groups,
+                &index.variants,
+                &index.sections,
+                &index.occurrences,
+            ] {
+                bytes = bytes.saturating_add(index_bucket_map_bytes(buckets));
+            }
+        }
+        bytes
+    }
+
+    fn target_index(&self, term: &str, campus: &str) -> Option<&PreparedTargetIndex> {
+        self.targets.iter().find_map(|(target, index)| {
+            (target.term().as_str() == term && target.campus().as_str() == campus).then_some(index)
+        })
+    }
+}
+
+fn build_index<'key, K: Hash + 'key>(
+    keys: impl IntoIterator<Item = &'key K>,
+) -> BTreeMap<u64, IndexBucket> {
+    build_index_with_hasher(keys, key_hash)
+}
+
+fn build_index_with_hasher<'key, K: 'key>(
+    keys: impl IntoIterator<Item = &'key K>,
+    hash: impl Fn(&K) -> u64,
+) -> BTreeMap<u64, IndexBucket> {
+    let mut buckets = BTreeMap::new();
+    for (index, key) in keys.into_iter().enumerate() {
+        match buckets.entry(hash(key)) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(IndexBucket::One(index));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => match entry.get_mut() {
+                IndexBucket::One(first) => {
+                    *entry.get_mut() = IndexBucket::Many(vec![*first, index]);
+                }
+                IndexBucket::Many(indices) => indices.push(index),
+            },
+        }
+    }
+    buckets
+}
+
+fn lookup_index<T, K: Eq + Hash>(
+    buckets: &BTreeMap<u64, IndexBucket>,
+    values: &[T],
+    key: &K,
+    key_of: impl Fn(&T) -> &K,
+) -> Option<usize> {
+    lookup_index_with_hasher(buckets, values, key, key_of, key_hash)
+}
+
+fn lookup_index_with_hasher<T, K: Eq>(
+    buckets: &BTreeMap<u64, IndexBucket>,
+    values: &[T],
+    key: &K,
+    key_of: impl Fn(&T) -> &K,
+    hash: impl Fn(&K) -> u64,
+) -> Option<usize> {
+    let bucket = buckets.get(&hash(key))?;
+    match bucket {
+        IndexBucket::One(index) => (key_of(&values[*index]) == key).then_some(*index),
+        IndexBucket::Many(indices) => indices
+            .iter()
+            .copied()
+            .find(|index| key_of(&values[*index]) == key),
+    }
+}
+
+fn key_hash(key: &impl Hash) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn index_bucket_map_bytes(buckets: &BTreeMap<u64, IndexBucket>) -> u64 {
+    let mut bytes = map_node_bytes::<u64, IndexBucket>(buckets.len());
+    for bucket in buckets.values() {
+        if let IndexBucket::Many(indices) = bucket {
+            bytes = bytes.saturating_add(
+                usize_to_u64(indices.capacity())
+                    .saturating_mul(usize_to_u64(std::mem::size_of::<usize>())),
+            );
+        }
+    }
+    bytes
+}
+
+fn map_node_bytes<K, V>(len: usize) -> u64 {
+    usize_to_u64(len).saturating_mul(usize_to_u64(
+        std::mem::size_of::<K>() + std::mem::size_of::<V>() + 3 * std::mem::size_of::<usize>(),
+    ))
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod prepared_index_tests {
+    use super::*;
+
+    fn constant_hash(_: &String) -> u64 {
+        7
+    }
+
+    #[test]
+    fn compact_index_one_bucket_rechecks_the_complete_key() {
+        let values = vec!["alpha".to_owned()];
+        let index = build_index_with_hasher(values.iter(), constant_hash);
+        assert_eq!(
+            lookup_index_with_hasher(
+                &index,
+                &values,
+                &"alpha".to_owned(),
+                |value| value,
+                constant_hash
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            lookup_index_with_hasher(
+                &index,
+                &values,
+                &"beta".to_owned(),
+                |value| value,
+                constant_hash
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn compact_index_many_bucket_is_collision_safe_for_hits_and_misses() {
+        let values = vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
+        let index = build_index_with_hasher(values.iter(), constant_hash);
+        assert!(matches!(index.get(&7), Some(IndexBucket::Many(values)) if values == &[0, 1, 2]));
+        for (expected, value) in values.iter().enumerate() {
+            assert_eq!(
+                lookup_index_with_hasher(&index, &values, value, |value| value, constant_hash),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            lookup_index_with_hasher(
+                &index,
+                &values,
+                &"delta".to_owned(),
+                |value| value,
+                constant_hash
+            ),
+            None
+        );
     }
 }

@@ -326,7 +326,7 @@ fn saved_views_crud_is_cas_safe_and_tracks_clean_modified_association() {
         .unwrap()
         .expect("created Saved View has a raw snapshot");
     assert_eq!(raw_revision, created.definition.revision);
-    assert_eq!(raw_snapshot["schemaVersion"], 2);
+    assert_eq!(raw_snapshot["schemaVersion"], 3);
     assert_eq!(raw_snapshot["codecVersion"], 1);
 
     assert!(matches!(

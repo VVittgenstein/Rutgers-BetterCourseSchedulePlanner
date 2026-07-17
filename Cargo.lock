@@ -134,8 +134,10 @@ dependencies = [
  "bcsp-query",
  "bcsp-rutgers-client",
  "bcsp-watch",
+ "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "time",
@@ -143,6 +145,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -198,11 +201,13 @@ name = "bcsp-local-runtime"
 version = "0.1.0"
 dependencies = [
  "bcsp-application",
+ "bcsp-catalog",
  "bcsp-contracts",
  "bcsp-domain",
  "bcsp-local-user-state",
  "bcsp-open",
  "bcsp-operational-storage",
+ "bcsp-rutgers-client",
  "bcsp-watch",
  "include_dir",
  "open",
@@ -312,6 +317,7 @@ dependencies = [
  "serde",
  "thiserror",
  "time",
+ "tracing",
 ]
 
 [[package]]

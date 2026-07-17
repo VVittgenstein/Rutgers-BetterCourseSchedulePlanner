@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { useEffect, useState } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BcspI18nProvider } from '../src/ui/shared/i18n/runtime';
@@ -15,7 +15,10 @@ import type {
   ServiceVisibleTermV2,
 } from '../src/ui/shared/product';
 import { createNeutralFilterState } from '../src/ui/shared/product';
-import { QueryScopeControl } from '../src/ui/shared/search/QueryScopeControl';
+import {
+  QueryScopeControl,
+  resolveQueryScopeAction,
+} from '../src/ui/shared/search/QueryScopeControl';
 import {
   SearchSessionProvider,
   type SearchScope,
@@ -39,6 +42,7 @@ const known = (value: string) => ({
 } as const);
 
 const TERM_LABELS: Readonly<Record<string, string>> = {
+  '02026': 'Winter 2026',
   '12026': 'Spring 2026',
   '72026': 'Summer 2026',
   '92026': 'Fall 2026',
@@ -98,6 +102,19 @@ function target(
   };
 }
 
+function targetError(code: string) {
+  return {
+    code,
+    httpStatus: 503,
+    contentType: 'text/html',
+    contentEncoding: null,
+    decodedBytes: 2048,
+    errorClass: 'UPSTREAM',
+    errorChain: 'fixture',
+    traceId: 'trace-fixture',
+  } as const;
+}
+
 function status(
   runtime: 'LOCAL' | 'PUBLIC',
   visibleTerms: readonly ServiceVisibleTermV2[],
@@ -135,7 +152,7 @@ function visible(
   return {
     term,
     relativeOffset,
-    discovered: true,
+    publication: 'PUBLISHED',
     autoManaged: relativeOffset === 0 || relativeOffset === 1,
     manualPullAllowed,
     watchable: relativeOffset === 0 || relativeOffset === 1,
@@ -171,6 +188,8 @@ function ScopeHarness({
         renderUnavailableAction={local ? (context) => (
           <LocalTermPullAction {...context} onPull={onPull} />
         ) : undefined}
+        searchAvailable={applied !== null}
+        searchFormId="test-filter-form"
         status={serviceStatus}
       />
       <output data-testid="candidate">{JSON.stringify(candidate)}</output>
@@ -209,7 +228,7 @@ function SessionProbe() {
 
 const staleRequest: CourseQueryRequestV1 = {
   filters: {
-    contractVersion: 2,
+    contractVersion: 3,
     values: {
       ...createNeutralFilterState('12026'),
       campuses: ['NB'],
@@ -220,7 +239,7 @@ const staleRequest: CourseQueryRequestV1 = {
 };
 
 const staleResponse: CourseQueryResponseV1 = {
-  contractVersion: 2,
+  contractVersion: 3,
   items: [],
   page: { page: 1, pageSize: 25, total: 4559, totalPages: 183 },
 };
@@ -260,6 +279,95 @@ function StaleResponseProbe() {
 afterEach(cleanup);
 
 describe('RC3 query scope contract', () => {
+  it('uses one pure resolver for Apply, Applied, Pull, publication, activity, and 0/3–3/3 readiness', () => {
+    const past = visible('12026', -1, true);
+    const current = visible('72026', 0);
+    const next = visible('92026', 1);
+    const terms = [past, current, next];
+    const baseInput = {
+      actionPending: false,
+      applied: null,
+      candidate: { term: past.term, campuses: [] },
+      pullAllowed: true,
+      status: status('LOCAL', terms, []),
+      term: past,
+    } as const;
+
+    expect(resolveQueryScopeAction(baseInput)).toMatchObject({
+      enabled: true, kind: 'PULL', observation: { readyCount: 0 }, reason: null,
+    });
+    expect(resolveQueryScopeAction({ ...baseInput, pullRequestPending: true })).toMatchObject({
+      enabled: false, kind: 'PULL', reason: 'PULL_ACTIVE',
+    });
+    expect(resolveQueryScopeAction({
+      ...baseInput, term: { ...past, publication: 'UNPUBLISHED' },
+    })).toMatchObject({ enabled: false, kind: 'PULL', reason: 'PULL_UNPUBLISHED' });
+    expect(resolveQueryScopeAction({
+      ...baseInput, term: { ...past, publication: 'UNKNOWN' },
+    })).toMatchObject({ enabled: false, kind: 'PULL', reason: 'PULL_PUBLICATION_UNKNOWN' });
+
+    const activeTargets = ['NB', 'NK', 'CM'].map((campus) => target(past.term, campus, {
+      snapshotAvailability: 'NO_COMPLETE_SNAPSHOT', workState: 'RUNNING', stage: 'CATALOG_FETCH',
+      usable: false, catalogContentVersion: null, lastCompleteAt: null,
+    }));
+    expect(resolveQueryScopeAction({
+      ...baseInput, status: status('LOCAL', terms, activeTargets),
+    })).toMatchObject({
+      enabled: false, kind: 'PULL', observation: { active: true }, reason: 'PULL_ACTIVE',
+    });
+    const terminal = target(past.term, 'NB', {
+      snapshotAvailability: 'NO_COMPLETE_SNAPSHOT', workState: 'RETRY_WAIT', usable: false,
+      catalogContentVersion: null, lastCompleteAt: null, nextRetryAt: null, error: targetError('TERMINAL'),
+    });
+    expect(resolveQueryScopeAction({
+      ...baseInput, status: status('LOCAL', terms, [terminal]),
+    })).toMatchObject({ enabled: true, kind: 'PULL', reason: null });
+
+    const oneReady = status('LOCAL', terms, [target(past.term, 'NB')]);
+    expect(resolveQueryScopeAction({
+      ...baseInput, candidate: { term: past.term, campuses: ['NB'] }, status: oneReady,
+    })).toMatchObject({ enabled: true, kind: 'APPLY', observation: { readyCount: 1 } });
+    const twoReady = status('LOCAL', terms, [target(past.term, 'NB'), target(past.term, 'NK')]);
+    expect(resolveQueryScopeAction({
+      ...baseInput, candidate: { term: past.term, campuses: ['NK'] }, status: twoReady,
+    })).toMatchObject({ enabled: true, kind: 'APPLY', observation: { readyCount: 2 } });
+    const threeReady = status('LOCAL', terms, [
+      target(past.term, 'NB'), target(past.term, 'NK'), target(past.term, 'CM'),
+    ]);
+    expect(resolveQueryScopeAction({ ...baseInput, status: threeReady })).toMatchObject({
+      enabled: false, kind: 'APPLY', observation: { allReady: true, readyCount: 3 }, reason: 'SELECT_READY_CAMPUS',
+    });
+    expect(resolveQueryScopeAction({
+      ...baseInput,
+      applied: { term: past.term, campuses: ['NK'] },
+      candidate: { term: past.term, campuses: ['NB'] },
+      status: threeReady,
+    })).toMatchObject({ enabled: true, kind: 'APPLY', reason: null });
+    expect(resolveQueryScopeAction({
+      ...baseInput,
+      applied: { term: past.term, campuses: ['NB'] },
+      candidate: { term: past.term, campuses: ['NB'] },
+      status: threeReady,
+    })).toMatchObject({ enabled: false, kind: 'APPLIED', reason: 'ALREADY_APPLIED' });
+    expect(resolveQueryScopeAction({
+      ...baseInput,
+      actionPending: true,
+      candidate: { term: past.term, campuses: ['NB'] },
+      status: threeReady,
+    })).toMatchObject({ enabled: false, kind: 'APPLY', reason: 'VALIDATING' });
+
+    for (const autoManagedTerm of [current, next]) {
+      expect(resolveQueryScopeAction({
+        ...baseInput,
+        candidate: { term: autoManagedTerm.term, campuses: [] },
+        pullAllowed: false,
+        term: autoManagedTerm,
+      }).kind).toBe('APPLY');
+    }
+    expect(resolveQueryScopeAction({
+      ...baseInput, status: status('PUBLIC', terms, []),
+    }).kind).toBe('APPLY');
+  });
   it('never falls back to the unbounded Discovery term list before Status V2 arrives', () => {
     render(
       <BcspI18nProvider initialLocale="en-US">
@@ -269,6 +377,8 @@ describe('RC3 query scope contract', () => {
           discovery={discovery(['12025', '72025', '92025', '12026', '72026', '92026'])}
           onApply={vi.fn()}
           onCandidateChange={vi.fn()}
+          searchAvailable={false}
+          searchFormId="test-filter-form"
           status={null}
         />
       </BcspI18nProvider>,
@@ -280,7 +390,7 @@ describe('RC3 query scope contract', () => {
   it('renders exactly two Public terms, five Local terms, and never auto-selects a Campus', () => {
     const publicTerms = [visible('72026', 0), visible('92026', 1)];
     const publicStatus = status('PUBLIC', publicTerms, [
-      target('72026', 'NB'), target('72026', 'NK'), target('92026', 'NB'),
+      target('72026', 'NB'), target('72026', 'NK'), target('72026', 'CM'), target('92026', 'NB'),
     ]);
     const first = render(
       <ScopeHarness
@@ -289,33 +399,62 @@ describe('RC3 query scope contract', () => {
       />,
     );
     expect(screen.getAllByRole('radio')).toHaveLength(2);
-    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    expect(document.querySelector('[data-scope-layout="public-2x3-search"]')).not.toBeNull();
+    expect([...document.querySelectorAll('[data-scope-cell]')].map((cell) => cell.getAttribute('data-scope-cell'))).toEqual([
+      'term-0', 'term-1', 'campus-NB', 'campus-NK', 'campus-CM', 'scope-action', 'search',
+    ]);
+    expect(document.querySelector('[data-scope-cell="search"]')?.getAttribute('data-span')).toBe('true');
+    expect([...document.querySelectorAll('.query-scope input, .query-scope button')]
+      .map((control) => control.closest('[data-scope-cell]')?.getAttribute('data-scope-cell'))).toEqual([
+      'term-0', 'term-1', 'campus-NB', 'campus-NK', 'campus-CM', 'scope-action', 'search',
+    ]);
     expect(screen.getAllByRole('checkbox').every((input) => !(input as HTMLInputElement).checked)).toBe(true);
-    expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+    const disabledApply = screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement;
+    expect(disabledApply.disabled).toBe(true);
+    expect(document.querySelector('[data-scope-cell="term-0"]')?.textContent).toContain('Ready 3/3');
+    const disabledApplyDescription = disabledApply.getAttribute('aria-describedby');
+    expect(disabledApplyDescription).not.toBeNull();
+    expect(document.getElementById(disabledApplyDescription ?? '')?.textContent).toContain(
+      'Select at least one ready Campus',
+    );
     first.unmount();
 
     const localTerms = [
-      visible('12026', -2, true),
-      visible('72026', -1, true),
-      visible('92026', 0),
-      visible('02027', 1),
-      visible('12027', 2, true),
+      visible('02026', -2, true),
+      visible('12026', -1, true),
+      visible('72026', 0),
+      visible('92026', 1),
+      visible('02027', 2, true),
     ];
     render(
       <ScopeHarness
         catalogDiscovery={discovery(localTerms.map(({ term }) => term))}
         local
-        serviceStatus={status('LOCAL', localTerms, [target('92026', 'NB')])}
+        serviceStatus={status('LOCAL', localTerms, [target('72026', 'NB')])}
       />,
     );
     expect(screen.getAllByRole('radio')).toHaveLength(5);
+    expect(document.querySelector('[data-scope-layout="local-2x5"]')).not.toBeNull();
+    expect([...document.querySelectorAll('[data-scope-cell]')].map((cell) => cell.getAttribute('data-scope-cell'))).toEqual([
+      'term--2', 'term--1', 'term-0', 'term-1', 'term-2',
+      'campus-NB', 'campus-NK', 'campus-CM', 'scope-action', 'search',
+    ]);
+    const semanticControlOrder = [...document.querySelectorAll('.query-scope input, .query-scope button')]
+      .map((control) => control.closest('[data-scope-cell]')?.getAttribute('data-scope-cell'));
+    expect(semanticControlOrder).toEqual([
+      'term--2', 'term--1', 'term-0', 'term-1', 'term-2',
+      'campus-NB', 'campus-NK', 'campus-CM', 'scope-action', 'search',
+    ]);
     expect(screen.getAllByRole('checkbox').every((input) => !(input as HTMLInputElement).checked)).toBe(true);
+    expect(document.querySelector('.query-scope')?.textContent).toContain('Not loaded 0/3');
+    expect(document.querySelector('[data-scope-cell="term--2"]')?.textContent).toContain('Not loaded 0/3');
   });
 
   it('uses a localized term label when an unpublished visible term has no Discovery target', () => {
     const terms = [
       visible('72026', 0),
-      { ...visible('92026', 1), discovered: false },
+      { ...visible('92026', 1), publication: 'UNPUBLISHED' },
     ];
     render(
       <ScopeHarness
@@ -325,6 +464,42 @@ describe('RC3 query scope contract', () => {
     );
 
     expect(screen.getByRole('radio', { name: /Fall 2026/u })).toBeTruthy();
+    expect(document.querySelector('[data-scope-cell="term-1"]')?.textContent).toContain('Not loaded 0/3');
+    expect(document.querySelector('.query-scope')?.textContent).not.toMatch(
+      /Not published by Rutgers|Publication status unknown/u,
+    );
+  });
+
+  it('distinguishes publication unknown, active, retry, and terminal term states', () => {
+    const terms = [visible('72026', 0), visible('92026', 1)];
+    const activeAndTerminal = status('PUBLIC', terms, [
+      target('72026', 'NB', {
+        snapshotAvailability: 'NO_COMPLETE_SNAPSHOT', workState: 'RUNNING', stage: 'OPEN_FETCH', usable: false,
+      }),
+      target('92026', 'NB', {
+        snapshotAvailability: 'NO_COMPLETE_SNAPSHOT', workState: 'RETRY_WAIT', usable: false,
+        nextRetryAt: null, error: targetError('TERMINAL'),
+      }),
+    ]);
+    const view = render(<ScopeHarness catalogDiscovery={discovery(['72026', '92026'])} serviceStatus={activeAndTerminal} />);
+    expect(document.querySelector('[data-scope-cell="term-0"]')?.textContent).toContain('Queued or loading');
+    expect(document.querySelector('[data-scope-cell="term-1"]')?.textContent).toContain('Load failed; retry available');
+    view.unmount();
+
+    const retryAndUnknownTerms = [
+      visible('72026', 0),
+      { ...visible('92026', 1), publication: 'UNKNOWN' as const },
+    ];
+    const retryAndUnknown = status('PUBLIC', retryAndUnknownTerms, [target('72026', 'NB', {
+      snapshotAvailability: 'NO_COMPLETE_SNAPSHOT', workState: 'RETRY_WAIT', usable: false,
+      nextRetryAt: '2026-07-17T01:00:00Z', error: targetError('RETRY'),
+    })]);
+    render(<ScopeHarness catalogDiscovery={discovery(['72026', '92026'])} serviceStatus={retryAndUnknown} />);
+    expect(document.querySelector('[data-scope-cell="term-0"]')?.textContent).toContain('Retry scheduled');
+    expect(document.querySelector('[data-scope-cell="term-1"]')?.textContent).toContain('Not loaded 0/3');
+    expect(document.querySelector('.query-scope')?.textContent).not.toMatch(
+      /Not published by Rutgers|Publication status unknown/u,
+    );
   });
 
   it('keeps candidate and applied scopes separate until the explicit Apply action', () => {
@@ -357,8 +532,11 @@ describe('RC3 query scope contract', () => {
     expect(screen.getByTestId('successful-total').textContent).toBe('none');
   });
 
-  it('enables Apply for a partial-ready selection and keeps READY plus retry usable', () => {
-    const terms = [visible('72026', 0), visible('92026', 1)];
+  it('keeps READY and LKG targets usable when publication is UNKNOWN', () => {
+    const terms = [
+      { ...visible('72026', 0), publication: 'UNKNOWN' as const },
+      visible('92026', 1),
+    ];
     const serviceStatus = status('PUBLIC', terms, [
       target('72026', 'NB'),
       target('72026', 'NK', {
@@ -368,10 +546,14 @@ describe('RC3 query scope contract', () => {
         catalogContentVersion: null,
         lastCompleteAt: null,
         nextRetryAt: '2026-07-17T00:01:00Z',
+        stage: 'CATALOG_PROCESS',
+        error: targetError('RUTGERS_503'),
       }),
       target('72026', 'CM', {
         workState: 'RETRY_WAIT',
         nextRetryAt: '2026-07-17T00:01:00Z',
+        stage: 'OPEN_FETCH',
+        error: targetError('OPEN_RETRY'),
       }),
     ]);
     render(
@@ -381,28 +563,63 @@ describe('RC3 query scope contract', () => {
       />,
     );
 
-    const campusGroup = screen.getByRole('group', { name: '02 Campus' });
-    const nb = within(campusGroup).getByRole('checkbox', { name: /New Brunswick/u });
-    const nk = within(campusGroup).getByRole('checkbox', { name: /Newark/u });
-    const cm = within(campusGroup).getByRole('checkbox', { name: /CM/u });
+    const nb = screen.getByRole('checkbox', { name: /NB/u });
+    const nk = screen.getByRole('checkbox', { name: /NK/u });
+    const cm = screen.getByRole('checkbox', { name: /CM/u });
     expect((nk as HTMLInputElement).disabled).toBe(true);
     expect((cm as HTMLInputElement).disabled).toBe(false);
     expect(screen.getByText(/Refresh failed; retry scheduled/u)).toBeTruthy();
+    expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).toContain('CATALOG_PROCESS');
+    expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).toContain('2026-07-17T00:01:00Z');
+    expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).toContain('RUTGERS_503');
+    expect(document.querySelector('[data-scope-cell="campus-CM"]')?.textContent).toContain(
+      'The last complete data remains available',
+    );
+    expect(document.querySelector('[data-scope-cell="term-0"]')?.textContent).toContain(
+      'Partially available 2/3',
+    );
     fireEvent.click(nb);
     expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
-    expect(screen.getByText('Current range')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+    const applied = screen.getByRole('button', { name: 'Applied' }) as HTMLButtonElement;
+    expect(applied.disabled).toBe(true);
+    const appliedDescription = applied.getAttribute('aria-describedby');
+    expect(appliedDescription).not.toBeNull();
+    expect(document.getElementById(appliedDescription ?? '')?.textContent).toBe(
+      'This term and Campus range is already applied.',
+    );
+  });
+
+  it('blocks Search with every unavailable applied target and ignores unselected targets', () => {
+    const terms = [visible('72026', 0), visible('92026', 1)];
+    const ready = status('PUBLIC', terms, [
+      target('72026', 'NB'), target('72026', 'NK'), target('72026', 'CM'),
+    ]);
+    const view = render(<ScopeHarness catalogDiscovery={discovery(['72026', '92026'])} serviceStatus={ready} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /^NB/u }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect((screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled).toBe(false);
+
+    view.rerender(<ScopeHarness catalogDiscovery={discovery(['72026', '92026'])} serviceStatus={status('PUBLIC', terms, [
+      target('72026', 'NB', { snapshotAvailability: 'NO_COMPLETE_SNAPSHOT', usable: false }),
+      target('72026', 'NK', { snapshotAvailability: 'NO_COMPLETE_SNAPSHOT', usable: false }),
+      target('72026', 'CM'),
+    ])} />);
+    const search = screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement;
+    expect(search.disabled).toBe(true);
+    const reason = document.getElementById(search.getAttribute('aria-describedby') ?? '')?.textContent ?? '';
+    expect(reason).toContain('72026/NB');
+    expect(reason).not.toContain('72026/NK');
   });
 
   it('uses one button for Apply or Local Pull and disables it while the term is already requested', async () => {
     const terms = [
-      visible('12026', -2, true), visible('72026', -1, true), visible('92026', 0),
-      visible('02027', 1), visible('12027', 2, true),
+      visible('02026', -2, true), visible('12026', -1, true), visible('72026', 0),
+      visible('92026', 1), visible('02027', 2, true),
     ];
     const onPull = vi.fn(async () => undefined);
     const ready = status('LOCAL', terms, [
-      target('92026', 'NB'),
+      target('72026', 'NB'),
       target('12026', 'NB', {
         snapshotAvailability: 'UNREQUESTED', usable: false, catalogContentVersion: null, lastCompleteAt: null,
       }),
@@ -429,17 +646,118 @@ describe('RC3 query scope contract', () => {
         initialCandidate={{ term: '12026', campuses: [] }}
         local
         onPull={onPull}
-        serviceStatus={status('LOCAL', terms, [target('12026', 'NB', {
-          snapshotAvailability: 'NO_COMPLETE_SNAPSHOT',
-          workState: 'QUEUED',
-          stage: 'CATALOG_FETCH',
-          usable: false,
-          catalogContentVersion: null,
-          lastCompleteAt: null,
-        })])}
+        serviceStatus={status('LOCAL', terms, [
+          target('12026', 'NB', {
+            snapshotAvailability: 'NO_COMPLETE_SNAPSHOT',
+            workState: 'QUEUED',
+            stage: 'CATALOG_FETCH',
+            usable: false,
+            catalogContentVersion: null,
+            lastCompleteAt: null,
+          }),
+          target('12026', 'NK', {
+            snapshotAvailability: 'NO_COMPLETE_SNAPSHOT',
+            workState: 'RUNNING',
+            stage: 'OPEN_FETCH',
+            usable: false,
+            catalogContentVersion: null,
+            lastCompleteAt: null,
+          }),
+          target('12026', 'CM', {
+            snapshotAvailability: 'NO_COMPLETE_SNAPSHOT',
+            workState: 'RETRY_WAIT',
+            usable: false,
+            catalogContentVersion: null,
+            lastCompleteAt: null,
+            error: targetError('TERMINAL_PARSE'),
+          }),
+        ])}
       />,
     );
-    expect((screen.getByRole('button', { name: 'Pull' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Pull' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(document.querySelector('[data-scope-cell="campus-NB"]')?.textContent).toContain('CATALOG_FETCH');
+    expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).toContain('OPEN_FETCH');
+    expect(document.querySelector('[data-scope-cell="campus-CM"]')?.textContent).toContain('TERMINAL_PARSE');
+  });
+
+  it('keeps term Pull enabled when one Campus is active but other targets still need work', () => {
+    const terms = [
+      visible('02026', -2, true), visible('12026', -1, true), visible('72026', 0),
+      visible('92026', 1), visible('02027', 2, true),
+    ];
+    render(<ScopeHarness
+      catalogDiscovery={discovery(terms.map(({ term }) => term), ['NB', 'NK', 'CM'])}
+      initialCandidate={{ term: '12026', campuses: [] }}
+      local
+      serviceStatus={status('LOCAL', terms, [target('12026', 'NB', {
+        snapshotAvailability: 'NO_COMPLETE_SNAPSHOT', workState: 'QUEUED', stage: 'CATALOG_FETCH',
+        usable: false, catalogContentVersion: null, lastCompleteAt: null,
+      })])}
+    />);
+    expect((screen.getByRole('button', { name: 'Pull' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('deduplicates a terminal retry until active work or genuinely new terminal evidence arrives', async () => {
+    const terms = [
+      visible('02026', -2, true), visible('12026', -1, true), visible('72026', 0),
+      visible('92026', 1), visible('02027', 2, true),
+    ];
+    const terminalTargets = ['NB', 'NK', 'CM'].map((campus) => target('12026', campus, {
+      snapshotAvailability: 'NO_COMPLETE_SNAPSHOT',
+      workState: 'RETRY_WAIT',
+      usable: false,
+      catalogContentVersion: null,
+      lastCompleteAt: null,
+      nextRetryAt: null,
+      error: targetError('TERMINAL_INITIAL'),
+    }));
+    const onPull = vi.fn(async () => undefined);
+    const view = render(<ScopeHarness
+      catalogDiscovery={discovery(terms.map(({ term }) => term), ['NB', 'NK', 'CM'])}
+      initialCandidate={{ term: '12026', campuses: [] }}
+      local
+      onPull={onPull}
+      serviceStatus={status('LOCAL', terms, terminalTargets)}
+    />);
+
+    const pull = screen.getByRole('button', { name: 'Pull' }) as HTMLButtonElement;
+    expect(pull.disabled).toBe(false);
+    fireEvent.click(pull);
+    await waitFor(() => expect(pull.disabled).toBe(true));
+    fireEvent.click(pull);
+    expect(onPull).toHaveBeenCalledTimes(1);
+
+    const activeTargets = ['NB', 'NK', 'CM'].map((campus) => target('12026', campus, {
+      snapshotAvailability: 'NO_COMPLETE_SNAPSHOT',
+      workState: campus === 'NB' ? 'QUEUED' : 'RUNNING',
+      stage: 'CATALOG_FETCH',
+      usable: false,
+      catalogContentVersion: null,
+      lastCompleteAt: null,
+      nextRetryAt: null,
+      error: null,
+    }));
+    view.rerender(<ScopeHarness
+      catalogDiscovery={discovery(terms.map(({ term }) => term), ['NB', 'NK', 'CM'])}
+      initialCandidate={{ term: '12026', campuses: [] }}
+      local
+      onPull={onPull}
+      serviceStatus={status('LOCAL', terms, activeTargets)}
+    />);
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Pull' }) as HTMLButtonElement).disabled).toBe(true));
+
+    const nextTerminalTargets = terminalTargets.map((entry) => ({
+      ...entry,
+      error: { ...targetError('TERMINAL_NEXT'), traceId: 'trace-next-generation' },
+    }));
+    view.rerender(<ScopeHarness
+      catalogDiscovery={discovery(terms.map(({ term }) => term), ['NB', 'NK', 'CM'])}
+      initialCandidate={{ term: '12026', campuses: [] }}
+      local
+      onPull={onPull}
+      serviceStatus={status('LOCAL', terms, nextTerminalTargets)}
+    />);
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Pull' }) as HTMLButtonElement).disabled).toBe(false));
   });
 
   it('never projects ONLINE aliases into the Campus UI', () => {
@@ -455,8 +773,45 @@ describe('RC3 query scope contract', () => {
         ])}
       />,
     );
-    const campusGroup = screen.getByRole('group', { name: '02 Campus' });
-    expect(within(campusGroup).getAllByRole('checkbox')).toHaveLength(1);
-    expect(campusGroup.textContent).not.toMatch(/ONLINE_(NB|NK|CM)/u);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    expect(document.querySelector('.query-scope')?.textContent).not.toMatch(/ONLINE_(NB|NK|CM)/u);
+  });
+
+  it('keeps unpublished and unknown Local Pull visible and disabled without a nearby reason', () => {
+    const terms = [
+      visible('02026', -2, true), visible('12026', -1, true), visible('72026', 0),
+      visible('92026', 1), { ...visible('02027', 2, true), publication: 'UNPUBLISHED' },
+    ];
+    const view = render(
+      <ScopeHarness
+        catalogDiscovery={discovery(['72026', '92026'], ['NB', 'NK', 'CM'])}
+        initialCandidate={{ term: '02027', campuses: [] }}
+        local
+        serviceStatus={status('LOCAL', terms, [target('72026', 'NB')])}
+      />,
+    );
+    const pull = screen.getByRole('button', { name: 'Pull' }) as HTMLButtonElement;
+    expect(pull.disabled).toBe(true);
+    const unpublishedReason = document.getElementById(pull.getAttribute('aria-describedby') ?? '');
+    expect(unpublishedReason?.textContent).toBe('Not published by Rutgers');
+    expect((unpublishedReason as HTMLElement | null)?.hidden).toBe(true);
+    expect(pull.getAttribute('title')).toBeNull();
+    expect(document.querySelector('[data-scope-cell="scope-action"] .query-scope__status')).toBeNull();
+
+    const unknownTerms = terms.map((term) => term.term === '02027'
+      ? { ...term, publication: 'UNKNOWN' as const }
+      : term);
+    view.rerender(<ScopeHarness
+      catalogDiscovery={discovery(['72026', '92026'], ['NB', 'NK', 'CM'])}
+      initialCandidate={{ term: '02027', campuses: [] }}
+      local
+      serviceStatus={status('LOCAL', unknownTerms, [target('72026', 'NB')])}
+    />);
+    const unknownPull = screen.getByRole('button', { name: 'Pull' }) as HTMLButtonElement;
+    expect(unknownPull.disabled).toBe(true);
+    const unknownReason = document.getElementById(unknownPull.getAttribute('aria-describedby') ?? '');
+    expect(unknownReason?.textContent).toBe('Publication status unknown');
+    expect((unknownReason as HTMLElement | null)?.hidden).toBe(true);
+    expect(document.querySelector('[data-scope-cell="scope-action"] .query-scope__status')).toBeNull();
   });
 });

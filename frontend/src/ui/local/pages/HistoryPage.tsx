@@ -37,6 +37,7 @@ function watchStopLabel(reason: WatchStopReason, chinese: boolean): string {
     CONNECTION_CLOSED: ['Connection closed', '连接已关闭'],
     HEARTBEAT_TIMEOUT: ['Connection heartbeat timed out', '连接心跳超时'],
     SERVICE_STOPPING: ['Local service stopped', '本地服务已停止'],
+    UNSUPPORTED_TARGET: ['Campus is no longer supported', 'Campus 已不受支持'],
     TERM_OUT_OF_RANGE: ['Term moved outside the watch window', '学期已移出可监看范围'],
   };
   return labels[reason][chinese ? 1 : 0];

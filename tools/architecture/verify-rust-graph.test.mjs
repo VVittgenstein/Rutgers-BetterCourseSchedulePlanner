@@ -19,12 +19,12 @@ import {
 const REPO_ROOT = '/repo';
 const DENY_DOCUMENT = JSON.parse(readFileSync(new URL('./p4-public-source-deny.json', import.meta.url), 'utf8'));
 
-function internalDependency(name) {
+function internalDependency(name, kind = 'normal') {
   return {
     name,
     source: null,
     req: '=0.1.0',
-    kind: null,
+    kind: kind === 'dev' ? 'dev' : null,
     rename: null,
     optional: false,
     uses_default_features: true,
@@ -67,6 +67,7 @@ function fixture() {
       features: {},
       dependencies: [
         ...spec.internal.map(internalDependency),
+        ...(spec.internalDev ?? []).map((name) => internalDependency(name, 'dev')),
         ...spec.external.map(([dependencyName, kind]) => externalDependency(dependencyName, kind)),
       ],
       targets: [{
@@ -144,6 +145,32 @@ assert.deepEqual(GRAPH_SPEC['bcsp-operational-storage'].external, [
   ['thiserror', 'normal'],
   ['time', 'normal'],
   ['tracing', 'normal'],
+]);
+assert.deepEqual(GRAPH_SPEC['bcsp-query'].external, [
+  ['proptest', 'dev'],
+  ['serde', 'normal'],
+  ['thiserror', 'normal'],
+  ['time', 'normal'],
+  ['tracing', 'normal'],
+]);
+assert.deepEqual(GRAPH_SPEC['bcsp-application'].external, [
+  ['axum', 'normal'],
+  ['rusqlite', 'normal'],
+  ['serde', 'normal'],
+  ['serde_json', 'normal'],
+  ['sha2', 'dev'],
+  ['tempfile', 'dev'],
+  ['thiserror', 'normal'],
+  ['time', 'normal'],
+  ['tokio', 'normal'],
+  ['tower', 'normal'],
+  ['tower-http', 'normal'],
+  ['tracing', 'normal'],
+  ['tracing-subscriber', 'dev'],
+]);
+assert.deepEqual(GRAPH_SPEC['bcsp-local-runtime'].internalDev, [
+  'bcsp-catalog',
+  'bcsp-rutgers-client',
 ]);
 assert.deepEqual(publicClosurePackages(fixture()), [
   'bcsp-contracts',
@@ -231,6 +258,10 @@ expectFailure((metadata) => {
 expectFailure((metadata) => {
   dependencyByName(metadata, 'bcsp-domain', 'bcsp-contracts').req = '*';
 }, /internal version requirement must be =0\.1\.0/);
+
+expectFailure((metadata) => {
+  dependencyByName(metadata, 'bcsp-local-runtime', 'bcsp-catalog').kind = null;
+}, /bcsp-local-runtime -> bcsp-catalog dependency kind mismatch/);
 
 expectFailure((metadata) => {
   packageByName(metadata, 'bcsp-domain').version = '0.2.0';
@@ -427,6 +458,16 @@ const includeAliasAudit = auditRustSourceFiles(new Map([
   ['crates/shared/src/lib.rs', 'use std::include_str as load_text;\nconst VALUE: &str = load_text!("../outside");'],
 ]), DENY_DOCUMENT);
 assert.ok(includeAliasAudit.errors.some((error) => /include_str alias\/reference is forbidden/.test(error)));
+
+const groupedIncludeAliasAudit = auditRustSourceFiles(new Map([
+  ['crates/shared/src/lib.rs', 'use std::{include as splice_source};\nsplice_source!("../outside.rs");'],
+]), DENY_DOCUMENT);
+assert.ok(groupedIncludeAliasAudit.errors.some((error) => /include alias\/reference is forbidden/.test(error)));
+
+const ordinaryIncludeBindingAudit = auditRustSourceFiles(new Map([
+  ['crates/shared/src/lib.rs', 'for (include, expected) in [(false, 1), (true, 2)] { assert_eq!(include, expected > 1); }'],
+]), DENY_DOCUMENT);
+assert.equal(ordinaryIncludeBindingAudit.sourceEscapeCount, 0);
 
 const concatMarkerAudit = auditRustSourceFiles(new Map([
   ['crates/shared/src/lib.rs', 'const VALUE: &str = concat!("saved", "_view");'],

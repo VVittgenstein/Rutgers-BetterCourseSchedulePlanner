@@ -23,6 +23,40 @@ impl PersonalStateStore {
         load_current_filters(&self.connection)
     }
 
+    /// Returns the exact persisted current-filter snapshot and the revision
+    /// that owns it. This lets the Local application validate a legacy V2
+    /// migration candidate against operational Catalog state without making
+    /// the personal-state crate depend on operational storage.
+    pub fn current_filters_raw_snapshot(
+        &self,
+    ) -> PersonalStateResult<Option<(CurrentFiltersRevision, u64, JsonValue)>> {
+        let stored = self
+            .connection
+            .query_row(
+                "SELECT revision, schema_version, snapshot_json
+                 FROM personal_current_filters_v1
+                 WHERE singleton_id = 1 AND has_value = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        stored
+            .map(|(revision, schema_version, raw)| {
+                Ok((
+                    CurrentFiltersRevision::from_stored(nonnegative_i64_to_u64(revision)?),
+                    nonnegative_i64_to_u64(schema_version)?,
+                    serde_json::from_str(&raw)?,
+                ))
+            })
+            .transpose()
+    }
+
     pub fn saved_views(&self) -> PersonalStateResult<Vec<SavedViewDefinition>> {
         let mut statement = self.connection.prepare(
             "SELECT view_id, name, schema_version, revision, snapshot_json,
@@ -150,8 +184,8 @@ impl PersonalStateStore {
                 reason: definition
                     .content
                     .incompatibility()
-                    .expect("incompatible content has a reason")
-                    .clone(),
+                    .cloned()
+                    .unwrap_or(crate::SavedViewIncompatibility::InvalidFieldData),
             }
         })?;
         let current = write_current_filters(

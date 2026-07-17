@@ -4,6 +4,8 @@ import type {
   CourseDetailResponseV1,
   CourseQueryRequestV1,
   CourseQueryResponseV1,
+  DynamicFilterValidationRequestV3,
+  DynamicFilterValidationResponseV3,
   FilterSchemaV1,
   FilterOptionsRequestV2,
   FilterOptionsResponseV2,
@@ -24,6 +26,7 @@ import type { ProductClientPort } from './ProductClient';
 export const PRODUCT_API_ROUTES = {
   filterSchema: { method: 'GET', path: '/api/v1/query/filter-schema' },
   filterOptions: { method: 'POST', path: '/api/v1/query/filter-options' },
+  validateDynamicFilters: { method: 'POST', path: '/api/v1/query/validate-dynamic-filters' },
   serviceStatus: { method: 'GET', path: '/api/v1/service/status' },
   catalogDiscovery: { method: 'POST', path: '/api/v1/catalog/discovery' },
   courseSearch: { method: 'POST', path: '/api/v1/query/courses' },
@@ -45,6 +48,10 @@ export interface ProductApiPort {
     request: FilterOptionsRequestV2,
     signal?: AbortSignal,
   ): Promise<FilterOptionsResponseV2>;
+  validateDynamicFilters(
+    request: DynamicFilterValidationRequestV3,
+    signal?: AbortSignal,
+  ): Promise<DynamicFilterValidationResponseV3>;
   serviceStatus(signal?: AbortSignal, scope?: ServiceStatusScope): Promise<ServiceStatus>;
   catalogDiscovery(
     request: CatalogDiscoveryRequestV1,
@@ -93,6 +100,17 @@ export class ProductApi implements ProductApiPort {
   ): Promise<FilterOptionsResponseV2> {
     return this.#client.post<FilterOptionsRequestV2, FilterOptionsResponseV2>(
       PRODUCT_API_ROUTES.filterOptions.path,
+      request,
+      signal,
+    );
+  }
+
+  validateDynamicFilters(
+    request: DynamicFilterValidationRequestV3,
+    signal?: AbortSignal,
+  ): Promise<DynamicFilterValidationResponseV3> {
+    return this.#client.post<DynamicFilterValidationRequestV3, DynamicFilterValidationResponseV3>(
+      PRODUCT_API_ROUTES.validateDynamicFilters.path,
       request,
       signal,
     );

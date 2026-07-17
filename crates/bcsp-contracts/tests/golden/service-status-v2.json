@@ -17,7 +17,7 @@
       {
         "term": "12026",
         "relativeOffset": -1,
-        "discovered": true,
+        "publication": "UNKNOWN",
         "autoManaged": false,
         "manualPullAllowed": true,
         "watchable": false
@@ -25,7 +25,7 @@
       {
         "term": "72026",
         "relativeOffset": 0,
-        "discovered": true,
+        "publication": "PUBLISHED",
         "autoManaged": true,
         "manualPullAllowed": false,
         "watchable": true
@@ -33,7 +33,7 @@
       {
         "term": "92026",
         "relativeOffset": 1,
-        "discovered": true,
+        "publication": "UNPUBLISHED",
         "autoManaged": true,
         "manualPullAllowed": false,
         "watchable": true

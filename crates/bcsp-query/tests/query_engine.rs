@@ -1,20 +1,22 @@
 mod support;
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use bcsp_contracts::{
-    AvailabilityWindowV1, CampusCode, CatalogFieldKnowledge, CatalogModality, CatalogRequiredness,
-    CatalogSubjectCode, CatalogSynchronicity, CourseDetailRequestV1, CourseGroupKey,
+    AvailabilityWindowV1, CampusCode, CatalogFieldKnowledge, CatalogModality,
+    CatalogPrerequisiteState, CatalogRequiredness, CatalogSubjectCode, CatalogSynchronicity,
+    CatalogUnknownReason, CoreFilterV1, CourseDetailRequestV1, CourseGroupKey,
     CourseQueryRequestV1, CourseSortFieldV1, CourseSortV1, CourseVariantKey, CreditRangeV1,
     FilterFieldId, FilterRequestV1, FilterSearchTextV1, FilterSetModeV1, FilterTokenV1,
     LiveOpenEvidenceV1, LiveOpenStateV1, MatchOutcome, MatchReasonCode, MeetingLocationFilterV2,
-    MeetingLocationMatchModeV2, ModalityFilterV1, PageRequestV1, PermissionFilterV1,
-    PrerequisiteFilterV1, SectionDetailRequestV1, SectionQueryRequestV1, SectionSortV1,
-    SortDirectionV1, WeekdayV1,
+    MeetingLocationMatchModeV2, PageRequestV1, PermissionFilterV1, PrerequisiteFilterV1,
+    SectionDetailRequestV1, SectionQueryRequestV1, SectionSortV1, SortDirectionV1, UserModalityV3,
+    UserSynchronicityV3, WeekdayV1,
 };
 use bcsp_query::{
-    CorpusError, QueryEngine, QueryError, TextHit, TextHitPlan, TextTargetVersion,
-    evaluate_section_filters,
+    CorpusError, PreparedCatalogCorpus, PreparedOpenOverlay, QueryEngine, QueryError, TextHit,
+    TextHitPlan, TextTargetVersion, evaluate_section_filters,
 };
 use time::Duration;
 
@@ -25,14 +27,109 @@ fn token(value: &str) -> FilterTokenV1 {
 }
 
 #[test]
-fn all_18_v2_filters_match_one_same_variant_and_section() {
+fn prepared_open_lookup_preserves_freshness_boundary_and_forced_mask_precedence() {
+    let mut catalog = empty_catalog("NB", 1);
+    let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+    let target = catalog.target.clone();
+    let corpus = PreparedCatalogCorpus::try_new([Arc::new(catalog)]).expect("prepared corpus");
+    let detail = SectionDetailRequestV1::new(keys.section.clone());
+
+    let mut conflicting = open_evidence(&keys.section, LiveOpenStateV1::Open);
+    conflicting.evidence.uncertainty = Some(MatchReasonCode::ConflictingEvidence);
+    let overlay = PreparedOpenOverlay::try_new(&corpus, &target, [conflicting])
+        .expect("prepared conflicting evidence");
+    let engine = QueryEngine::try_new_prepared(
+        &corpus,
+        std::slice::from_ref(&target),
+        std::slice::from_ref(&target),
+        now(),
+        &[&overlay],
+    )
+    .expect("forced prepared engine");
+    assert_eq!(
+        engine
+            .section_detail(&detail)
+            .unwrap()
+            .section
+            .open
+            .uncertainty,
+        Some(MatchReasonCode::SourceUnavailable),
+        "forced precommit unavailability overrides an existing uncertainty"
+    );
+
+    let missing =
+        PreparedOpenOverlay::try_new(&corpus, &target, []).expect("prepared missing evidence");
+    let engine = QueryEngine::try_new_prepared(
+        &corpus,
+        std::slice::from_ref(&target),
+        std::slice::from_ref(&target),
+        now(),
+        &[&missing],
+    )
+    .expect("forced missing engine");
+    assert_eq!(
+        engine
+            .section_detail(&detail)
+            .unwrap()
+            .section
+            .open
+            .uncertainty,
+        Some(MatchReasonCode::MissingReliableData),
+        "a missing Open record remains missing rather than becoming forced evidence"
+    );
+
+    let fresh_until = now() + Duration::minutes(5);
+    let mut fresh = open_evidence(&keys.section, LiveOpenStateV1::Open);
+    fresh.evidence.observed_at = Some(now());
+    fresh.evidence.fresh_until = Some(fresh_until);
+    fresh.evidence.uncertainty = None;
+    let fresh =
+        PreparedOpenOverlay::try_new(&corpus, &target, [fresh]).expect("prepared fresh evidence");
+    let at_boundary = QueryEngine::try_new_prepared(
+        &corpus,
+        std::slice::from_ref(&target),
+        &[],
+        fresh_until,
+        &[&fresh],
+    )
+    .expect("boundary engine");
+    assert_eq!(
+        at_boundary
+            .section_detail(&detail)
+            .unwrap()
+            .section
+            .open
+            .uncertainty,
+        None
+    );
+    let after_boundary = QueryEngine::try_new_prepared(
+        &corpus,
+        std::slice::from_ref(&target),
+        &[],
+        fresh_until + Duration::nanoseconds(1),
+        &[&fresh],
+    )
+    .expect("stale engine");
+    assert_eq!(
+        after_boundary
+            .section_detail(&detail)
+            .unwrap()
+            .section
+            .open
+            .uncertainty,
+        Some(MatchReasonCode::SourceUnavailable)
+    );
+}
+
+#[test]
+fn all_18_v3_filters_match_one_same_variant_and_section() {
     let mut catalog = empty_catalog("NB", 1);
     let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
     let mut input = neutral_input();
     input.campuses = vec![CampusCode::try_from("NB").unwrap()];
     input.subjects = vec![CatalogSubjectCode::try_from("198").unwrap()];
     input.text = Some(FilterSearchTextV1::try_from("01:198:111").unwrap());
-    input.course_numbers = vec![token("111")];
+    input.course_number_bands = vec![100];
     input.levels = vec![token("U")];
     input.credits = Some(CreditRangeV1::try_new(Some(300), Some(300)).unwrap());
     input.core.codes = vec![token("CC"), token("QR")];
@@ -40,8 +137,8 @@ fn all_18_v2_filters_match_one_same_variant_and_section() {
     input.prerequisite = PrerequisiteFilterV1::Has;
     input.section_indexes = vec![keys.section.index().clone()];
     input.open_statuses = vec![LiveOpenStateV1::Open];
-    input.modalities = vec![ModalityFilterV1::Online];
-    input.synchronicities = vec![CatalogSynchronicity::Sync];
+    input.modalities = vec![UserModalityV3::Online];
+    input.synchronicities = vec![UserSynchronicityV3::Sync];
     input.instructors = vec![token("ADA   LOVELACE")];
     input.availability = vec![
         AvailabilityWindowV1::try_new(WeekdayV1::Monday, 540, 570).unwrap(),
@@ -108,6 +205,127 @@ fn all_18_v2_filters_match_one_same_variant_and_section() {
             .chain(variant.sections[0].filter_matches.iter())
             .all(|entry| entry.explanation.outcome() == MatchOutcome::Match)
     );
+}
+
+#[test]
+fn every_03_through_18_canonical_neutral_preserves_unknown_and_missing_corpus() {
+    let mut catalog = empty_catalog("NB", 1);
+    add_course(&mut catalog, "01:198:111", "00001", 'a');
+    let incomplete = add_course(&mut catalog, "01:198:211", "00002", 'b');
+    let variant = variant_mut(&mut catalog, &incomplete.variant);
+    variant.subject_code = CatalogFieldKnowledge::unknown(CatalogUnknownReason::NotObserved);
+    variant.course_number = CatalogFieldKnowledge::present("NOT_NUMERIC".to_owned());
+    variant.level = CatalogFieldKnowledge::unknown(CatalogUnknownReason::SourceUnavailable);
+    variant.credits = CatalogFieldKnowledge::absent();
+    variant.core_codes = CatalogFieldKnowledge::unknown(CatalogUnknownReason::Malformed);
+    variant.prerequisite_notes = CatalogFieldKnowledge::explicit_null();
+    variant.prerequisite_state = CatalogPrerequisiteState::Unknown;
+    let section = section_mut(&mut catalog, &incomplete.section);
+    section.instructors = CatalogFieldKnowledge::unknown(CatalogUnknownReason::SparseEvidence);
+    section.delivery_modality = CatalogModality::UnknownConflict;
+    section.synchronicity = CatalogSynchronicity::Unknown;
+    section.exam_code = CatalogFieldKnowledge::unknown(CatalogUnknownReason::NotObserved);
+    section.exam_code_text = CatalogFieldKnowledge::absent();
+    section.special_permission_add_code =
+        CatalogFieldKnowledge::unknown(CatalogUnknownReason::ConflictingEvidence);
+    section.special_permission_add_description = CatalogFieldKnowledge::explicit_null();
+    section.special_permission_drop_code = CatalogFieldKnowledge::absent();
+    section.special_permission_drop_description = CatalogFieldKnowledge::absent();
+    let occurrence = occurrence_mut(&mut catalog, &incomplete.section);
+    occurrence.modality = CatalogFieldKnowledge::unknown(CatalogUnknownReason::Malformed);
+    occurrence.synchronicity =
+        CatalogFieldKnowledge::unknown(CatalogUnknownReason::SourceUnavailable);
+    occurrence.days = CatalogFieldKnowledge::unknown(CatalogUnknownReason::NotObserved);
+    occurrence.time = bcsp_contracts::CatalogTimeKnowledgeV1::Invalid;
+    occurrence.campus = CatalogFieldKnowledge::unknown(CatalogUnknownReason::SparseEvidence);
+    occurrence.building = CatalogFieldKnowledge::explicit_null();
+    occurrence.room = CatalogFieldKnowledge::absent();
+    occurrence.requiredness = CatalogRequiredness::UnknownRequiredness;
+
+    let catalogs = vec![catalog];
+    let engine = QueryEngine::try_new(&catalogs, now(), []).expect("fixed mixed-quality corpus");
+    let assert_neutral = |field: FilterFieldId, input: bcsp_contracts::FilterValuesInputV1| {
+        let course = engine
+            .course_search(
+                &course_request(
+                    input.clone(),
+                    PageRequestV1::default(),
+                    CourseSortV1::default(),
+                ),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{field} course neutral failed: {error:?}"));
+        let section = engine
+            .section_search(
+                &section_request(input, PageRequestV1::default(), SectionSortV1::default()),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{field} section neutral failed: {error:?}"));
+        assert_eq!(course.page.total, 2, "{field} narrowed Course results");
+        assert_eq!(section.page.total, 2, "{field} narrowed Section results");
+    };
+
+    let fields = [
+        FilterFieldId::CourseSubject,
+        FilterFieldId::CourseText,
+        FilterFieldId::CourseNumberBand,
+        FilterFieldId::CourseLevel,
+        FilterFieldId::CourseCredits,
+        FilterFieldId::CourseCoreCode,
+        FilterFieldId::CoursePrerequisite,
+        FilterFieldId::SectionIndex,
+        FilterFieldId::SectionOpenStatus,
+        FilterFieldId::SectionModality,
+        FilterFieldId::SectionSynchronicity,
+        FilterFieldId::SectionInstructor,
+        FilterFieldId::SectionAvailability,
+        FilterFieldId::SectionMeetingLocation,
+        FilterFieldId::SectionExam,
+        FilterFieldId::SectionPermission,
+    ];
+    assert_eq!(fields, FilterFieldId::ALL[2..]);
+    for field in fields {
+        let mut input = neutral_input();
+        match field {
+            FilterFieldId::CourseSubject => input.subjects = Vec::new(),
+            FilterFieldId::CourseText => input.text = None,
+            FilterFieldId::CourseNumberBand => input.course_number_bands = Vec::new(),
+            FilterFieldId::CourseLevel => input.levels = Vec::new(),
+            FilterFieldId::CourseCredits => input.credits = None,
+            FilterFieldId::CourseCoreCode => input.core = CoreFilterV1::default(),
+            FilterFieldId::CoursePrerequisite => input.prerequisite = PrerequisiteFilterV1::Any,
+            FilterFieldId::SectionIndex => input.section_indexes = Vec::new(),
+            FilterFieldId::SectionOpenStatus => input.open_statuses = Vec::new(),
+            FilterFieldId::SectionModality => input.modalities = Vec::new(),
+            FilterFieldId::SectionSynchronicity => input.synchronicities = Vec::new(),
+            FilterFieldId::SectionInstructor => input.instructors = Vec::new(),
+            FilterFieldId::SectionAvailability => input.availability = Vec::new(),
+            FilterFieldId::SectionMeetingLocation => {
+                input.meeting_locations = MeetingLocationFilterV2::default()
+            }
+            FilterFieldId::SectionExam => input.exam_codes = Vec::new(),
+            FilterFieldId::SectionPermission => input.permission = PermissionFilterV1::Any,
+            FilterFieldId::CourseTerm | FilterFieldId::CourseCampus => {
+                unreachable!("01–02 are QueryScope, not the 03–18 filter rail")
+            }
+        }
+        assert_neutral(field, input);
+    }
+
+    for field in [
+        FilterFieldId::CoursePrerequisite,
+        FilterFieldId::SectionModality,
+        FilterFieldId::SectionSynchronicity,
+    ] {
+        let mut input = neutral_input();
+        match field {
+            FilterFieldId::CoursePrerequisite => input.include_incomplete.prerequisite = true,
+            FilterFieldId::SectionModality => input.include_incomplete.modality = true,
+            FilterFieldId::SectionSynchronicity => input.include_incomplete.synchronicity = true,
+            _ => unreachable!("the include-incomplete controls are field-bound"),
+        }
+        assert_neutral(field, input);
+    }
 }
 
 #[test]
@@ -840,11 +1058,12 @@ fn unknown_course_knowledge_remains_uncertain_and_reasons_are_stable() {
 
     let mut input = neutral_input();
     input.subjects = vec![CatalogSubjectCode::try_from("198").unwrap()];
-    input.course_numbers = vec![token("111")];
+    input.course_number_bands = vec![100];
     input.levels = vec![token("U")];
     input.credits = Some(CreditRangeV1::try_new(Some(300), Some(300)).unwrap());
     input.core.codes = vec![token("CC")];
     input.prerequisite = PrerequisiteFilterV1::Has;
+    input.include_incomplete.prerequisite = true;
     let request = course_request(input, PageRequestV1::default(), CourseSortV1::default());
     let catalogs = vec![catalog];
     let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
@@ -857,7 +1076,7 @@ fn unknown_course_knowledge_remains_uncertain_and_reasons_are_stable() {
     assert_eq!(uncertain.explanation.outcome(), MatchOutcome::Uncertain);
     for field in [
         FilterFieldId::CourseSubject,
-        FilterFieldId::CourseNumber,
+        FilterFieldId::CourseNumberBand,
         FilterFieldId::CourseLevel,
         FilterFieldId::CourseCredits,
         FilterFieldId::CourseCoreCode,
@@ -891,8 +1110,10 @@ fn delivery_axes_do_not_guess_conflicting_or_unspecified_values() {
     section.delivery_modality = CatalogModality::UnknownConflict;
     section.synchronicity = CatalogSynchronicity::Unspecified;
     let mut input = neutral_input();
-    input.modalities = vec![ModalityFilterV1::Online];
-    input.synchronicities = vec![CatalogSynchronicity::Sync];
+    input.modalities = vec![UserModalityV3::Online];
+    input.synchronicities = vec![UserSynchronicityV3::Sync];
+    input.include_incomplete.modality = true;
+    input.include_incomplete.synchronicity = true;
     let filters = normalized(input);
     let occurrence_refs = catalog.occurrences.iter().collect::<Vec<_>>();
     let (overall, matches) = evaluate_section_filters(
@@ -922,6 +1143,249 @@ fn delivery_axes_do_not_guess_conflicting_or_unspecified_values() {
             .outcome(),
         MatchOutcome::Uncertain
     );
+}
+
+#[test]
+fn incomplete_admission_is_additive_and_required_for_each_active_uncertain_axis() {
+    let mut catalog = empty_catalog("NB", 1);
+    let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+    variant_mut(&mut catalog, &keys.variant).prerequisite_state =
+        bcsp_contracts::CatalogPrerequisiteState::Unknown;
+    let section = section_mut(&mut catalog, &keys.section);
+    section.delivery_modality = CatalogModality::Other;
+    section.synchronicity = CatalogSynchronicity::Unspecified;
+
+    let request_for = |prerequisite: bool, modality: bool, synchronicity: bool| {
+        let mut input = neutral_input();
+        input.prerequisite = PrerequisiteFilterV1::Has;
+        input.modalities = vec![UserModalityV3::Online];
+        input.synchronicities = vec![UserSynchronicityV3::Sync];
+        input.include_incomplete.prerequisite = prerequisite;
+        input.include_incomplete.modality = modality;
+        input.include_incomplete.synchronicity = synchronicity;
+        course_request(input, PageRequestV1::default(), CourseSortV1::default())
+    };
+
+    let excluded_request = request_for(false, false, false);
+    let occurrence_refs = catalog.occurrences.iter().collect::<Vec<_>>();
+    let (raw_section_evaluation, raw_section_matches) = evaluate_section_filters(
+        &catalog.sections[0],
+        Some(&occurrence_refs),
+        &open_evidence(&keys.section, LiveOpenStateV1::Open).evidence,
+        now(),
+        excluded_request.filters.values(),
+    );
+    assert_eq!(
+        raw_section_evaluation.outcome(),
+        MatchOutcome::Uncertain,
+        "admission must not rewrite raw predicate evidence"
+    );
+    for field in [
+        FilterFieldId::SectionModality,
+        FilterFieldId::SectionSynchronicity,
+    ] {
+        let explanation = &raw_section_matches
+            .iter()
+            .find(|entry| entry.field_id == field)
+            .unwrap()
+            .explanation;
+        assert_eq!(explanation.outcome(), MatchOutcome::Uncertain, "{field}");
+        assert!(
+            explanation
+                .reasons()
+                .iter()
+                .all(|reason| !reason.code().is_known_mismatch()),
+            "excluded uncertainty must retain uncertainty reasons for {field}"
+        );
+    }
+
+    let catalogs = vec![catalog];
+    let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
+    for flags in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+    ] {
+        let response = engine
+            .course_search(&request_for(flags.0, flags.1, flags.2), None)
+            .unwrap();
+        assert_eq!(response.page.total, 0, "flags={flags:?}");
+    }
+    let admitted = engine
+        .course_search(&request_for(true, true, true), None)
+        .unwrap();
+    assert_eq!(admitted.page.total, 1);
+    assert_eq!(
+        admitted.items[0].explanation.outcome(),
+        MatchOutcome::Uncertain
+    );
+}
+
+#[test]
+fn incomplete_section_admission_is_additive_without_hiding_raw_descendants_or_detail() {
+    let mut catalog = empty_catalog("NB", 1);
+    let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+    let uncertain_section = add_section(&mut catalog, &keys.variant, "00002");
+    let known_mismatch_section = add_section(&mut catalog, &keys.variant, "00003");
+    section_mut(&mut catalog, &uncertain_section).delivery_modality = CatalogModality::Other;
+    section_mut(&mut catalog, &known_mismatch_section).delivery_modality =
+        CatalogModality::OnCampusOrInPerson;
+
+    let request_for = |include_incomplete: bool| {
+        let mut input = neutral_input();
+        input.modalities = vec![UserModalityV3::Online];
+        input.include_incomplete.modality = include_incomplete;
+        input
+    };
+    let catalogs = vec![catalog];
+    let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
+
+    let strict_course = engine
+        .course_search(
+            &course_request(
+                request_for(false),
+                PageRequestV1::default(),
+                CourseSortV1::default(),
+            ),
+            None,
+        )
+        .unwrap();
+    assert_eq!(strict_course.page.total, 1);
+    assert_eq!(strict_course.items[0].variants[0].sections.len(), 1);
+    assert_eq!(
+        strict_course.items[0].variants[0].sections[0].section.key,
+        keys.section
+    );
+    let strict_sections = engine
+        .section_search(
+            &section_request(
+                request_for(false),
+                PageRequestV1::default(),
+                SectionSortV1::default(),
+            ),
+            None,
+        )
+        .unwrap();
+    assert_eq!(strict_sections.page.total, 1);
+
+    let additive_course = engine
+        .course_search(
+            &course_request(
+                request_for(true),
+                PageRequestV1::default(),
+                CourseSortV1::default(),
+            ),
+            None,
+        )
+        .unwrap();
+    assert_eq!(additive_course.page.total, 1);
+    let sections = &additive_course.items[0].variants[0].sections;
+    assert_eq!(sections.len(), 2, "known mismatch must stay excluded");
+    let uncertain = sections
+        .iter()
+        .find(|item| item.section.key == uncertain_section)
+        .unwrap();
+    assert_eq!(uncertain.section.delivery_modality, CatalogModality::Other);
+    assert_eq!(uncertain.explanation.outcome(), MatchOutcome::Uncertain);
+    let modality_evidence = &uncertain
+        .filter_matches
+        .iter()
+        .find(|entry| entry.field_id == FilterFieldId::SectionModality)
+        .unwrap()
+        .explanation;
+    assert_eq!(modality_evidence.outcome(), MatchOutcome::Uncertain);
+    assert_eq!(
+        modality_evidence.reasons()[0].code(),
+        MatchReasonCode::UnknownValue
+    );
+    assert!(
+        sections
+            .iter()
+            .all(|item| item.section.key != known_mismatch_section),
+        "includeIncomplete must never admit a known mismatch"
+    );
+
+    let additive_sections = engine
+        .section_search(
+            &section_request(
+                request_for(true),
+                PageRequestV1::default(),
+                SectionSortV1::default(),
+            ),
+            None,
+        )
+        .unwrap();
+    assert_eq!(additive_sections.page.total, 2);
+    assert_eq!(
+        additive_sections
+            .items
+            .iter()
+            .find(|item| item.section.section.key == uncertain_section)
+            .unwrap()
+            .section
+            .explanation
+            .outcome(),
+        MatchOutcome::Uncertain
+    );
+
+    let course_detail = engine
+        .course_detail(&CourseDetailRequestV1::new(keys.group))
+        .unwrap();
+    assert_eq!(course_detail.course.variants[0].sections.len(), 3);
+    let section_detail = engine
+        .section_detail(&SectionDetailRequestV1::new(uncertain_section))
+        .unwrap();
+    assert_eq!(
+        section_detail.section.section.delivery_modality,
+        CatalogModality::Other
+    );
+}
+
+#[test]
+fn incomplete_switches_are_no_ops_for_neutral_fields() {
+    let mut catalog = empty_catalog("NB", 1);
+    add_course(&mut catalog, "01:198:111", "00001", 'a');
+    let mut input = neutral_input();
+    input.include_incomplete.prerequisite = true;
+    input.include_incomplete.modality = true;
+    input.include_incomplete.synchronicity = true;
+    let request = course_request(input, PageRequestV1::default(), CourseSortV1::default());
+    let catalogs = vec![catalog];
+    let response = QueryEngine::try_new(&catalogs, now(), [])
+        .unwrap()
+        .course_search(&request, None)
+        .unwrap();
+    assert_eq!(response.page.total, 1);
+    assert_eq!(response.items[0].explanation.outcome(), MatchOutcome::Match);
+}
+
+#[test]
+fn course_number_band_zero_matches_every_actual_ascii_number_from_000_through_099() {
+    let mut catalog = empty_catalog("NB", 1);
+    for (identifier, index, fingerprint, number) in [
+        ("01:198:000", "00001", 'a', "000"),
+        ("01:198:099", "00002", 'b', "099"),
+        ("01:198:100", "00003", 'c', "100"),
+    ] {
+        let keys = add_course(&mut catalog, identifier, index, fingerprint);
+        variant_mut(&mut catalog, &keys.variant).course_number =
+            CatalogFieldKnowledge::present(number.to_owned());
+    }
+    let mut input = neutral_input();
+    input.course_number_bands = vec![0];
+    let request = course_request(input, PageRequestV1::default(), CourseSortV1::default());
+    let catalogs = vec![catalog];
+    let response = QueryEngine::try_new(&catalogs, now(), [])
+        .unwrap()
+        .course_search(&request, None)
+        .unwrap();
+    assert_eq!(response.page.total, 2);
+    assert!(response.items.iter().all(|item| {
+        matches!(
+            item.group.key.course_string().as_str(),
+            "01:198:000" | "01:198:099"
+        )
+    }));
 }
 
 #[test]

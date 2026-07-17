@@ -21,9 +21,10 @@ pub use model::{
     HistoryWriteOutcome, LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest,
     PersonalMigrationRecord, PersonalResetResult, PersonalStateSnapshot, PersonalTableCounts,
     SavedViewContent, SavedViewDefinition, SavedViewDeleteResult, SavedViewIncompatibility,
-    SavedViewMatch, SavedViewMutation, SavedViewRevision, SavedViewsDeleteAllResult,
-    SelectionMutation, SettingsRevision, SqliteConfiguration, StoredCurrentFilters, StoredSettings,
-    UnixMillis, UserStateRevision, VolumePercent, WalCheckpoint, WatchFastLaneSeconds,
+    SavedViewMatch, SavedViewMutation, SavedViewReviewCode, SavedViewReviewReason,
+    SavedViewRevision, SavedViewsDeleteAllResult, SelectionMutation, SettingsRevision,
+    SqliteConfiguration, StoredCurrentFilters, StoredSettings, UnixMillis, UserStateRevision,
+    VolumePercent, WalCheckpoint, WatchFastLaneSeconds,
 };
 pub use store::PersonalStateStore;
 

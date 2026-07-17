@@ -19,6 +19,7 @@ bcsp-operational-storage = { version = "=0.1.0", path = "../bcsp-operational-sto
 bcsp-query = { version = "=0.1.0", path = "../bcsp-query" }
 bcsp-rutgers-client = { version = "=0.1.0", path = "../bcsp-rutgers-client" }
 bcsp-watch = { version = "=0.1.0", path = "../bcsp-watch" }
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -29,4 +30,6 @@ tower-http.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+sha2.workspace = true
 tempfile.workspace = true
+tracing-subscriber.workspace = true

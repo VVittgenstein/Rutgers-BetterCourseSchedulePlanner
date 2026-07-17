@@ -1,21 +1,23 @@
 use std::collections::BTreeSet;
 
 use bcsp_contracts::{
-    AvailabilityWindowV1, CatalogDiagnosticCode, CatalogFieldKnowledge,
+    AvailabilityWindowV1, CatalogContentVersion, CatalogDiagnosticCode, CatalogFieldKnowledge,
     CatalogInstructorReliability, CatalogModality, CatalogOccurrenceEvidence,
     CatalogOccurrenceKeyV1, CatalogOccurrenceKind, CatalogOpenStatusProvenance,
     CatalogPrerequisiteState, CatalogRequiredness, CatalogSnapshotOpenStatusV1,
     CatalogSynchronicity, CatalogTimeKnowledgeV1, CatalogUnknownReason, CoreFilterV1,
     CourseDetailRequestV1, CourseDetailResponseV1, CourseGroupKey, CourseQueryItemV1,
     CourseQueryRequestV1, CourseQueryResponseV1, CourseSortV1, CourseVariantKey,
-    CourseVariantQueryItemV1, CreditRangeV1, FilterCanonicalNeutralV1, FilterFieldId,
-    FilterMatchV1, FilterRequestV1, FilterSchemaV1, FilterSetModeV1, FilterTokenV1,
-    LiveOpenEvidenceV1, LiveOpenStateV1, MatchExplanation, NormalizedCourseGroupV1,
-    NormalizedCourseVariantV1, NormalizedFilterValuesV1, NormalizedOccurrenceV1,
-    NormalizedSectionV1, PageInfoV1, PageRequestV1, QUERY_CONTRACT_VERSION, SchemaDirection,
-    SectionDetailRequestV1, SectionDetailResponseV1, SectionKey, SectionQueryItemV1,
-    SectionQueryRequestV1, SectionQueryResponseV1, SectionSearchItemV1, SectionSortV1, TermId,
-    TextMatchEvidenceV1, UnknownFieldPolicy, WeekdayV1, contract_manifest, filter_schema_v1,
+    CourseVariantQueryItemV1, CreditRangeV1, DynamicFilterValidationRequestV3,
+    DynamicFilterValidationResponseV3, FilterCanonicalNeutralV1, FilterFieldId, FilterMatchV1,
+    FilterOptionTargetVersionV2, FilterRequestV1, FilterSchemaV1, FilterSetModeV1, FilterTokenV1,
+    InvalidDynamicFilterValueV3, LiveOpenEvidenceV1, LiveOpenStateV1, MatchExplanation,
+    NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedFilterValuesV1,
+    NormalizedOccurrenceV1, NormalizedSectionV1, PageInfoV1, PageRequestV1, QUERY_CONTRACT_VERSION,
+    SchemaDirection, SectionDetailRequestV1, SectionDetailResponseV1, SectionKey,
+    SectionQueryItemV1, SectionQueryRequestV1, SectionQueryResponseV1, SectionSearchItemV1,
+    SectionSortV1, TermCampusKey, TermId, TextMatchEvidenceV1, UnknownFieldPolicy, WeekdayV1,
+    contract_manifest, filter_schema_v1,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -225,6 +227,19 @@ fn query_manifest_object_fields_match_serde_shapes() {
     let filter_schema: FilterSchemaV1 = filter_schema_v1();
     let values = NormalizedFilterValuesV1::for_term(TermId::try_from("T2026F").unwrap());
     let filter_request = FilterRequestV1::new(values.clone());
+    let dynamic_validation_request = DynamicFilterValidationRequestV3::new(filter_request.clone());
+    let invalid_dynamic_value = InvalidDynamicFilterValueV3 {
+        field: FilterFieldId::CourseSubject,
+        value: "999".to_owned(),
+    };
+    let dynamic_validation_response = DynamicFilterValidationResponseV3 {
+        contract_version: QUERY_CONTRACT_VERSION,
+        target_versions: vec![FilterOptionTargetVersionV2 {
+            target: TermCampusKey::try_new("T2026F", "CAMPUS_A").unwrap(),
+            content_version: CatalogContentVersion::try_from(1).unwrap(),
+        }],
+        invalid_values: vec![invalid_dynamic_value.clone()],
+    };
     let page_request = PageRequestV1::default();
     let course_sort = CourseSortV1::default();
     let section_sort = SectionSortV1::default();
@@ -314,6 +329,18 @@ fn query_manifest_object_fields_match_serde_shapes() {
     );
     assert_binding("bcsp.query.normalized-filter-values.v1", &values);
     assert_binding("bcsp.query.filter-request.v1", &filter_request);
+    assert_binding(
+        "bcsp.query.dynamic-filter-validation-request.v3",
+        &dynamic_validation_request,
+    );
+    assert_binding(
+        "bcsp.query.invalid-dynamic-filter-value.v3",
+        &invalid_dynamic_value,
+    );
+    assert_binding(
+        "bcsp.query.dynamic-filter-validation-response.v3",
+        &dynamic_validation_response,
+    );
     assert_binding("bcsp.query.page-request.v1", &page_request);
     assert_binding("bcsp.query.course-sort.v1", &course_sort);
     assert_binding("bcsp.query.section-sort.v1", &section_sort);

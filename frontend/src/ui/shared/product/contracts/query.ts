@@ -1,5 +1,4 @@
 import type {
-  CatalogSynchronicity,
   NormalizedCourseGroupV1,
   NormalizedCourseVariantV1,
   NormalizedOccurrenceV1,
@@ -26,9 +25,8 @@ export type LiveOpenStateV1 = 'OPEN' | 'CLOSED' | 'UNKNOWN';
 export type ModalityFilterV1 =
   | 'ON_CAMPUS_OR_IN_PERSON'
   | 'ONLINE'
-  | 'HYBRID'
-  | 'OTHER'
-  | 'UNKNOWN';
+  | 'HYBRID';
+export type SynchronicityFilterV3 = 'SYNC' | 'ASYNC' | 'MIXED';
 export type PermissionFilterV1 = 'ANY' | 'REQUIRED' | 'NOT_REQUIRED';
 export type WeekdayV1 =
   | 'MONDAY' | 'TUESDAY' | 'WEDNESDAY' | 'THURSDAY'
@@ -36,7 +34,7 @@ export type WeekdayV1 =
 
 export type FilterValueKindV1 =
   | 'TERM_ID' | 'CAMPUS_CODE_SET' | 'SUBJECT_CODE_SET' | 'KEYWORD_SET'
-  | 'COURSE_NUMBER_SET' | 'LEVEL_SET' | 'CREDIT_RANGE' | 'CORE_CODE_SET'
+  | 'COURSE_NUMBER_BAND' | 'LEVEL_SET' | 'CREDIT_RANGE' | 'CORE_CODE_SET'
   | 'PREREQUISITE_PRESENCE' | 'SECTION_INDEX_SET' | 'OPEN_STATUS_SET' | 'MODALITY_SET'
   | 'SYNCHRONICITY_SET' | 'INSTRUCTOR_NAME_SET' | 'AVAILABILITY_WINDOWS'
   | 'MEETING_LOCATION_SET' | 'EXAM_CODE_SET' | 'PERMISSION_REQUIREMENT';
@@ -51,7 +49,8 @@ export type FilterValidationV1 =
   | 'REQUIRED' | 'DYNAMIC_DICTIONARY' | 'NONEMPTY_WHEN_ACTIVE'
   | 'ORDERED_INCLUSIVE_RANGE' | 'ORDERED_MINUTE_INTERVAL'
   | 'SECTION_INDEX_IDENTITY' | 'STRUCTURED_ONLY' | 'MAX32_TEXT_TOKENS'
-  | 'MAX128_TOKEN_BYTES' | 'TOKEN_CONTAINS_ALPHANUMERIC';
+  | 'MAX128_TOKEN_BYTES' | 'TOKEN_CONTAINS_ALPHANUMERIC'
+  | 'NONNEGATIVE_HUNDRED_BAND';
 export type FilterQueryEncodingV1 =
   | 'EXACT_ONE' | 'EXACT_ANY' | 'KEYWORD_TOKEN_AND_EXACT_IDENTIFIER_PRIORITY'
   | 'INCLUSIVE_RANGE' | 'EXPLICIT_ANY_ALL' | 'TERNARY_PRESENCE'
@@ -109,7 +108,7 @@ export interface FilterValuesV1 {
   readonly campuses: readonly string[];
   readonly subjects: readonly string[];
   readonly keywords: readonly string[];
-  readonly courseNumbers: readonly string[];
+  readonly courseNumberBands: readonly number[];
   readonly levels: readonly string[];
   readonly credits: CreditRangeV1 | null;
   readonly core: CoreFilterV1;
@@ -117,16 +116,23 @@ export interface FilterValuesV1 {
   readonly sectionIndexes: readonly string[];
   readonly openStatuses: readonly LiveOpenStateV1[];
   readonly modalities: readonly ModalityFilterV1[];
-  readonly synchronicities: readonly CatalogSynchronicity[];
+  readonly synchronicities: readonly SynchronicityFilterV3[];
   readonly instructors: readonly string[];
   readonly availability: readonly AvailabilityWindowV1[];
   readonly meetingLocations: MeetingLocationFilterV2;
   readonly examCodes: readonly string[];
   readonly permission: PermissionFilterV1;
+  readonly includeIncomplete: IncludeIncompleteV3;
 }
 
-export interface FilterRequestV2 {
-  readonly contractVersion: 2;
+export interface IncludeIncompleteV3 {
+  readonly prerequisite: boolean;
+  readonly modality: boolean;
+  readonly synchronicity: boolean;
+}
+
+export interface FilterRequestV3 {
+  readonly contractVersion: 3;
   readonly values: FilterValuesV1;
 }
 
@@ -134,7 +140,8 @@ export interface FilterRequestV2 {
  * Kept as a source-compatible name while the wider query surface retains its
  * original V1-suffixed type names. Filter requests themselves are V2-only.
  */
-export type FilterRequestV1 = FilterRequestV2;
+export type FilterRequestV2 = FilterRequestV3;
+export type FilterRequestV1 = FilterRequestV3;
 
 export interface PageRequestV1 {
   readonly page: number;
@@ -255,18 +262,19 @@ export interface SectionDetailResponseV1 {
   readonly section: SectionQueryItemV1;
 }
 
-export type FilterOptionsFieldV2 =
+export type FilterOptionsFieldV3 =
   | 'KEYWORD'
+  | 'COURSE_NUMBER_BAND'
   | 'COURSE_LEVEL'
   | 'INSTRUCTOR'
   | 'MEETING_LOCATION'
   | 'EXAM_CODE';
 
-export interface FilterOptionsRequestV2 {
-  readonly contractVersion: 2;
+export interface FilterOptionsRequestV3 {
+  readonly contractVersion: 3;
   readonly term: string;
   readonly campuses: readonly string[];
-  readonly field: FilterOptionsFieldV2;
+  readonly field: FilterOptionsFieldV3;
   readonly query?: string;
   readonly limit?: number;
 }
@@ -281,10 +289,30 @@ export interface FilterOptionTargetVersionV2 {
   readonly contentVersion: number;
 }
 
-export interface FilterOptionsResponseV2 {
-  readonly contractVersion: 2;
-  readonly field: FilterOptionsFieldV2;
+export interface DynamicFilterValidationRequestV3 {
+  readonly filters: FilterRequestV3;
+}
+
+export interface DynamicFilterInvalidValueV3 {
+  readonly field: FilterFieldId;
+  readonly value: string;
+}
+
+export interface DynamicFilterValidationResponseV3 {
+  readonly contractVersion: 3;
+  readonly targetVersions: readonly FilterOptionTargetVersionV2[];
+  readonly invalidValues: readonly DynamicFilterInvalidValueV3[];
+}
+
+export interface FilterOptionsResponseV3 {
+  readonly contractVersion: 3;
+  readonly field: FilterOptionsFieldV3;
   readonly targetVersions: readonly FilterOptionTargetVersionV2[];
   readonly options: readonly FilterOptionV2[];
   readonly truncated: boolean;
 }
+
+/** Source-compatible names retained while callers migrate to the V3 wire. */
+export type FilterOptionsFieldV2 = FilterOptionsFieldV3;
+export type FilterOptionsRequestV2 = FilterOptionsRequestV3;
+export type FilterOptionsResponseV2 = FilterOptionsResponseV3;

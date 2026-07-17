@@ -1,11 +1,11 @@
 import type {
   CatalogSynchronicity,
+  CatalogModality,
   CatalogUnknownReason,
   FilterSerializationIssue,
   LiveOpenStateV1,
   MatchOutcome,
   MatchReasonCode,
-  ModalityFilterV1,
   OpenCircuitState,
   OpenEpisodeState,
   OpenFreshnessState,
@@ -54,7 +54,8 @@ export const modalityMessageKeys = {
   HYBRID: 'filter.option.hybrid',
   OTHER: 'filter.option.other',
   UNKNOWN: 'common.unknown',
-} as const satisfies Readonly<Record<ModalityFilterV1, MessageKey>>;
+  UNKNOWN_CONFLICT: 'common.unknown',
+} as const satisfies Readonly<Record<CatalogModality, MessageKey>>;
 
 export const synchronicityMessageKeys = {
   SYNC: 'filter.option.sync',

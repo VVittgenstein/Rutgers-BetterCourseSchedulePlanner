@@ -1,5 +1,5 @@
 {
-  "contractVersion": 2,
+  "contractVersion": 3,
   "fields": [
     {
       "stableId": "FLT-C01",
@@ -95,9 +95,9 @@
     },
     {
       "stableId": "FLT-C05",
-      "requestField": "courseNumbers",
+      "requestField": "courseNumberBands",
       "scope": "COURSE",
-      "valueKind": "COURSE_NUMBER_SET",
+      "valueKind": "COURSE_NUMBER_BAND",
       "neutral": "EMPTY_SET",
       "default": "EMPTY_SET",
       "canonicalNeutral": {
@@ -105,12 +105,10 @@
         "value": []
       },
       "normalization": [
-        "TRIM",
-        "ASCII_UPPERCASE",
         "SORT_DEDUPLICATE"
       ],
       "validation": [
-        "NONEMPTY_WHEN_ACTIVE"
+        "NONNEGATIVE_HUNDRED_BAND"
       ],
       "queryEncoding": "EXACT_ANY",
       "i18nKey": "filter.flt-c05",

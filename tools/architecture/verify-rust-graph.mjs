@@ -65,7 +65,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-query',
     kind: 'lib',
     internal: ['bcsp-contracts', 'bcsp-domain'],
-    external: [['proptest', DEV], ['serde', NORMAL], ['thiserror', NORMAL], ['time', NORMAL]],
+    external: [['proptest', DEV], ['serde', NORMAL], ['thiserror', NORMAL], ['time', NORMAL], ['tracing', NORMAL]],
   },
   'bcsp-rutgers-client': {
     dir: 'crates/bcsp-rutgers-client',
@@ -101,7 +101,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-application',
     kind: 'lib',
     internal: ['bcsp-catalog', 'bcsp-contracts', 'bcsp-domain', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-query', 'bcsp-rutgers-client', 'bcsp-watch'],
-    external: [['axum', NORMAL], ['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tower', NORMAL], ['tower-http', NORMAL], ['tracing', NORMAL]],
+    external: [['axum', NORMAL], ['rusqlite', NORMAL], ['serde', NORMAL], ['serde_json', NORMAL], ['sha2', DEV], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tower', NORMAL], ['tower-http', NORMAL], ['tracing', NORMAL], ['tracing-subscriber', DEV]],
   },
   'bcsp-local-user-state': {
     dir: 'crates/bcsp-local-user-state',
@@ -113,6 +113,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-local-runtime',
     kind: 'lib',
     internal: ['bcsp-application', 'bcsp-contracts', 'bcsp-domain', 'bcsp-local-user-state', 'bcsp-open', 'bcsp-operational-storage', 'bcsp-watch'],
+    internalDev: ['bcsp-catalog', 'bcsp-rutgers-client'],
     external: [['include_dir', NORMAL], ['open', NORMAL], ['rusqlite', DEV], ['serde', NORMAL], ['serde_json', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tokio', NORMAL], ['tracing', NORMAL], ['tracing-subscriber', NORMAL]],
   },
   'bcsp-public-operations': {
@@ -285,9 +286,9 @@ function validateDependencyCommon(packageName, dependency, expectedKind, expecte
   }
 }
 
-function validateInternalDependency(packageName, dependency, repoRoot, workspaceVersion, errors) {
+function validateInternalDependency(packageName, dependency, expectedKind, repoRoot, workspaceVersion, errors) {
   const targetSpec = GRAPH_SPEC[dependency.name];
-  validateDependencyCommon(packageName, dependency, NORMAL, [], true, errors);
+  validateDependencyCommon(packageName, dependency, expectedKind, [], true, errors);
   if (dependency.source !== null) errors.push(`${packageName} -> ${dependency.name} internal source must be null`);
   const expectedRequirement = `=${workspaceVersion}`;
   if (dependency.req !== expectedRequirement) {
@@ -420,7 +421,11 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
 
     const actualInternal = [];
     const actualExternal = [];
-    const expectedInternal = new Set(spec.internal);
+    const expectedInternalKinds = new Map([
+      ...spec.internal.map((name) => [name, NORMAL]),
+      ...(spec.internalDev ?? []).map((name) => [name, DEV]),
+    ]);
+    const expectedInternal = new Set(expectedInternalKinds.keys());
     const expectedExternal = new Map(spec.external);
     for (const dependency of pkg.dependencies ?? []) {
       const kind = dependencyKind(dependency);
@@ -430,8 +435,9 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
       if (MEMBER_SET.has(dependency.name)) {
         actualInternal.push(dependency.name);
         edges.get(pkg.name).add(dependency.name);
-        if (expectedInternal.has(dependency.name) && workspaceVersion !== undefined) {
-          validateInternalDependency(pkg.name, dependency, root, workspaceVersion, errors);
+        const expectedKind = expectedInternalKinds.get(dependency.name);
+        if (expectedKind && workspaceVersion !== undefined) {
+          validateInternalDependency(pkg.name, dependency, expectedKind, root, workspaceVersion, errors);
         }
       } else {
         actualExternal.push(pairKey(dependency.name, kind ?? `invalid(${dependency.kind})`));
@@ -866,7 +872,7 @@ export function auditRustSourceFiles(files, denyDocument) {
       for (const macroName of ['include', 'include_str', 'include_bytes', 'include_dir', 'concat', 'concat_bytes', 'concat_idents']) {
         if (macroName === 'include_dir' && approvedPublicWebAssetEmbed(file, source, codeOnly)) continue;
         const pattern = new RegExp(`(^|[^A-Za-z0-9_])${macroName}\\s*!`, 'u');
-        const referencePattern = new RegExp(`\\b${macroName}\\b`, 'u');
+        const referencePattern = new RegExp(`\\buse\\b[^;]*\\b${macroName}\\b[^;]*;`, 'u');
         const referenceSurface = macroName === 'include_dir'
           ? codeOnly.replace(/\buse\s+include_dir\s+as\s+_\s*;/gu, '')
           : codeOnly;

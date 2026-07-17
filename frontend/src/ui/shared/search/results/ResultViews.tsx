@@ -768,7 +768,7 @@ export function SectionDetailView({ response, sectionHref, onSectionNavigate }: 
               {formatKnowledge(section.section.examCode, i18n)} · {formatKnowledge(section.section.examCodeText, i18n)}
             </dd>
           </div>
-          <div className="search-results__field">
+          <div className="search-results__field search-results__field--full-row">
             <dt className="search-results__label">{i18n.t('result.permission_add')}</dt>
             <dd className="search-results__value">
               {formatKnowledge(section.section.specialPermissionAddDescription, i18n)}

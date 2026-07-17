@@ -375,6 +375,7 @@ pub enum WatchStartRejectionReason {
     AlreadyActive,
     SectionNotFound,
     TargetUnavailable,
+    UnsupportedTarget,
     TermOutOfRange,
     ConnectionClosing,
 }
@@ -385,6 +386,7 @@ impl WatchStartRejectionReason {
         Self::AlreadyActive,
         Self::SectionNotFound,
         Self::TargetUnavailable,
+        Self::UnsupportedTarget,
         Self::TermOutOfRange,
         Self::ConnectionClosing,
     ];
@@ -507,6 +509,7 @@ pub enum WatchStopReason {
     ConnectionClosed,
     HeartbeatTimeout,
     ServiceStopping,
+    UnsupportedTarget,
     TermOutOfRange,
 }
 
@@ -516,6 +519,7 @@ impl WatchStopReason {
         Self::ConnectionClosed,
         Self::HeartbeatTimeout,
         Self::ServiceStopping,
+        Self::UnsupportedTarget,
         Self::TermOutOfRange,
     ];
 }

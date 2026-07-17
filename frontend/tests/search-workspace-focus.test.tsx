@@ -2,6 +2,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,7 +41,7 @@ vi.mock('../src/ui/shared/search/results', () => ({
       <p>Course results page {response.page.page}</p>
       <button
         className="search-results__button"
-        onClick={() => onCourseDetail({ campus: 'NB', courseString: '01:198:211', term: '2026-9' })}
+        onClick={() => onCourseDetail({ campus: 'NB', courseString: '01:198:211', term: '72026' })}
         type="button"
       >
         Open course detail
@@ -57,7 +58,7 @@ vi.mock('../src/ui/shared/search/results', () => ({
         Toggle Section disclosure
       </button>
       <button
-        onClick={() => onSectionNavigate?.({ campus: 'NB', index: '12345', term: '2026-9' })}
+        onClick={() => onSectionNavigate?.({ campus: 'NB', index: '12345', term: '72026' })}
         type="button"
       >
         Open Section detail
@@ -74,6 +75,8 @@ const SCHEMA = JSON.parse(readFileSync(
   resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
   'utf8',
 )) as FilterSchemaV1;
+const TERM = '72026';
+const NEXT_TERM = '92026';
 
 const known = (value: string) => ({
   knowledge: 'KNOWN',
@@ -97,17 +100,18 @@ const discovery: CatalogDiscoveryResponseV1 = {
     lastSuccess: point,
     latestAttempt: point,
   },
+  coreCodeDictionaries: [],
   subjects: [],
   targets: [{
     campusLabel: known('New Brunswick'),
-    key: { campus: 'NB', term: '2026-9' },
+    key: { campus: 'NB', term: TERM },
     provenance: {
       ...point,
       payloadDigest: 'a'.repeat(64),
       sourceId: 'synthetic-selector',
       sourceKind: 'SELECTOR',
     },
-    termLabel: known('Fall 2026'),
+    termLabel: known('Upstream label must not render'),
   }],
 };
 
@@ -121,7 +125,7 @@ const shellState: Extract<ShellDataState, { status: 'READY' }> = {
 
 function response(page: number): CourseQueryResponseV1 {
   return {
-    contractVersion: 2,
+    contractVersion: 3,
     items: [{}] as CourseQueryResponseV1['items'],
     page: { page, pageSize: 25, total: 50, totalPages: 2 },
   };
@@ -142,17 +146,20 @@ const readyStatus = {
   level: 'PARTIALLY_READY',
   discovery: discovery.status,
   termWindow: {
-    currentTerm: '2026-9',
-    nextTerm: '2027-0',
+    currentTerm: TERM,
+    nextTerm: NEXT_TERM,
     visibleTerms: [
-      { term: '2026-9', relativeOffset: 0, discovered: true, autoManaged: true, manualPullAllowed: false, watchable: true },
-      { term: '2027-0', relativeOffset: 1, discovered: false, autoManaged: true, manualPullAllowed: false, watchable: true },
+      { term: '02026', relativeOffset: -2, publication: 'PUBLISHED', autoManaged: false, manualPullAllowed: true, watchable: false },
+      { term: '12026', relativeOffset: -1, publication: 'PUBLISHED', autoManaged: false, manualPullAllowed: true, watchable: false },
+      { term: TERM, relativeOffset: 0, publication: 'PUBLISHED', autoManaged: true, manualPullAllowed: false, watchable: true },
+      { term: NEXT_TERM, relativeOffset: 1, publication: 'UNPUBLISHED', autoManaged: true, manualPullAllowed: false, watchable: true },
+      { term: '02027', relativeOffset: 2, publication: 'UNPUBLISHED', autoManaged: false, manualPullAllowed: true, watchable: false },
     ],
   },
-  automaticTermSummaries: [{ term: '2026-9', readyTargetCount: 1, totalTargetCount: 1 }],
+  automaticTermSummaries: [{ term: TERM, readyTargetCount: 1, totalTargetCount: 3 }],
   operations: [],
   targets: [{
-    target: { campus: 'NB', term: '2026-9' }, primary: true,
+    target: { campus: 'NB', term: TERM }, primary: true,
     snapshotAvailability: 'READY', workState: 'IDLE', stage: null, usable: true,
     catalogContentVersion: 1, lastCompleteAt: point.observedAt, nextRetryAt: null, error: null,
   }],
@@ -160,7 +167,7 @@ const readyStatus = {
 } satisfies ServiceStatusV2;
 
 function applyScope(): void {
-  fireEvent.click(screen.getByRole('checkbox', { name: /New Brunswick/u }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /NB/u }));
   fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
 }
 
@@ -170,12 +177,63 @@ afterEach(() => {
 });
 
 describe('search focus continuity', () => {
+  it('restores only the session page scroll after the Course workspace remounts', async () => {
+    let pageScroll = 176;
+    vi.spyOn(globalThis, 'scrollY', 'get').mockImplementation(() => pageScroll);
+    const scrollTo = vi.spyOn(globalThis, 'scrollTo').mockImplementation((options) => {
+      if (typeof options === 'object' && options !== null) pageScroll = options.top ?? 0;
+    });
+    const runtime = runtimeWith({});
+
+    function RemountHarness() {
+      const [mounted, setMounted] = useState(true);
+      return (
+        <>
+          <button onClick={() => setMounted((current) => !current)} type="button">
+            {mounted ? 'Leave Courses' : 'Return to Courses'}
+          </button>
+          {mounted ? (
+            <SearchWorkspace runtime={runtime} serviceStatus={readyStatus} shellState={shellState} />
+          ) : <p>Another workspace</p>}
+        </>
+      );
+    }
+
+    render(
+      <BcspI18nProvider initialLocale="en-US">
+        <AppRouterProvider initialPath="/">
+          <SearchSessionProvider>
+            <RemountHarness />
+          </SearchSessionProvider>
+        </AppRouterProvider>
+      </BcspI18nProvider>,
+    );
+
+    const firstInternalList = document.querySelector<HTMLElement>('.filter-panel__subject-list');
+    expect(firstInternalList).not.toBeNull();
+    if (firstInternalList === null) throw new Error('Expected the subject option list.');
+    firstInternalList.scrollTop = 731;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave Courses' }));
+    expect(screen.getByText('Another workspace')).toBeTruthy();
+    pageScroll = 0;
+    scrollTo.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Return to Courses' }));
+
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({
+      behavior: 'auto', left: 0, top: 176,
+    }));
+    const restoredInternalList = document.querySelector<HTMLElement>('.filter-panel__subject-list');
+    expect(restoredInternalList).not.toBe(firstInternalList);
+    expect(restoredInternalList?.scrollTop).toBe(0);
+  });
+
   it('moves through search, pagination, detail, and back without losing the output context', async () => {
     const searchCourses = vi.fn<ProductApiPort['searchCourses']>()
       .mockResolvedValueOnce(response(1))
       .mockResolvedValueOnce(response(2));
     const courseDetail = vi.fn<ProductApiPort['courseDetail']>()
-      .mockResolvedValue({ contractVersion: 2, course: {} } as CourseDetailResponseV1);
+      .mockResolvedValue({ contractVersion: 3, course: {} } as CourseDetailResponseV1);
     const view = render(
       <BcspI18nProvider initialLocale="en-US">
         <AppRouterProvider initialPath="/">
@@ -188,7 +246,7 @@ describe('search focus continuity', () => {
       </BcspI18nProvider>,
     );
     const output = view.container.querySelector<HTMLElement>('.bcsp-search-workspace__results')!;
-    const outputHeading = screen.getByRole('heading', { name: 'Result index' });
+    const outputHeading = view.container.querySelector<HTMLElement>('#bcsp-search-results-title')!;
     const scrollIntoView = vi.fn();
     Object.defineProperty(output, 'scrollIntoView', { configurable: true, value: scrollIntoView });
 
@@ -223,7 +281,7 @@ describe('search focus continuity', () => {
       .mockRejectedValueOnce(new Error('synthetic search failure'))
       .mockResolvedValueOnce(response(2));
     const sectionDetail = vi.fn<ProductApiPort['sectionDetail']>().mockResolvedValue({
-      contractVersion: 2,
+      contractVersion: 3,
       section: {},
       variant: {},
     } as SectionDetailResponseV1);
@@ -241,18 +299,20 @@ describe('search focus continuity', () => {
             <RouterLink to="/history">History</RouterLink>
             <RouterLink to="/settings">Settings</RouterLink>
           </nav>
-          {courseRoute ? (
-            <SearchWorkspace
-              runtime={runtime}
-              serviceStatus={readyStatus}
-              shellState={shellState}
-            />
-          ) : <p>Top-level page {pathname}</p>}
+          <main id="bcsp-workspace" tabIndex={-1}>
+            {courseRoute ? (
+              <SearchWorkspace
+                runtime={runtime}
+                serviceStatus={readyStatus}
+                shellState={shellState}
+              />
+            ) : <p>Top-level page {pathname}</p>}
+          </main>
         </>
       );
     }
 
-    const view = render(
+    render(
       <BcspI18nProvider initialLocale="en-US">
         <AppRouterProvider initialPath="/">
           <SearchSessionProvider>
@@ -266,7 +326,6 @@ describe('search focus continuity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await screen.findByText('Course results page 1');
 
-    fireEvent.click(screen.getByText('Same-Section constraints'));
     fireEvent.change(screen.getByLabelText('Section indexes'), { target: { value: '54321' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add Section indexes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -284,10 +343,11 @@ describe('search focus continuity', () => {
     const disclosure = screen.getByRole('button', { name: 'Toggle Section disclosure' });
     fireEvent.click(disclosure);
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
-    const filterRegion = view.container.querySelector<HTMLElement>('.bcsp-search-workspace__filters');
-    if (filterRegion === null) throw new Error('filter region is required');
-    filterRegion.scrollTop = 176;
-    fireEvent.scroll(filterRegion);
+    let pageScroll = 176;
+    vi.spyOn(globalThis, 'scrollY', 'get').mockImplementation(() => pageScroll);
+    const scrollTo = vi.spyOn(globalThis, 'scrollTo').mockImplementation((options) => {
+      if (typeof options === 'object' && options !== null) pageScroll = options.top ?? 0;
+    });
 
     for (const [label, path] of [
       ['Watch', '/watch'],
@@ -302,8 +362,7 @@ describe('search focus continuity', () => {
       expect(screen.getAllByText('54321').length).toBeGreaterThan(0);
       expect(screen.getByRole('button', { name: 'Toggle Section disclosure' })
         .getAttribute('aria-expanded')).toBe('true');
-      expect(view.container.querySelector<HTMLElement>('.bcsp-search-workspace__filters')?.scrollTop)
-        .toBe(176);
+      await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ behavior: 'auto', left: 0, top: 176 }));
     }
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Section detail' }));

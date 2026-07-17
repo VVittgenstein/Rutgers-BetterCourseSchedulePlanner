@@ -1,14 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use bcsp_contracts::{
     ApiErrorBody, ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope, CatalogDiscoveryRequestV1,
-    CourseDetailRequestV1, CourseQueryRequestV1, FilterOptionsRequestV2, HttpRequestEnvelope,
-    HttpSuccessEnvelope, NormalizedFilterValuesV1, OpenSectionStatusRequestV1, OpenStatusRequestV1,
-    QueryContractVersion, SectionDetailRequestV1, SectionQueryRequestV1, ServiceIssueComponentV1,
-    ServiceOperationV1, ServiceRuntimeV1, SystemTraceIdSource, TermCampusKey, TraceIdSource,
-    decode_versioned_envelope_json,
+    CourseDetailRequestV1, CourseQueryRequestV1, DynamicFilterValidationRequestV3,
+    FilterOptionsRequestV2, HttpRequestEnvelope, HttpSuccessEnvelope, NormalizedFilterValuesV1,
+    OpenSectionStatusRequestV1, OpenStatusRequestV1, QueryContractVersion, SectionDetailRequestV1,
+    SectionQueryRequestV1, ServiceIssueComponentV1, ServiceOperationV1, ServiceRuntimeV1,
+    SystemTraceIdSource, TermCampusKey, TraceIdSource, decode_versioned_envelope_json,
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_operational_storage::OperationalStorage;
@@ -17,14 +18,17 @@ use serde::Serialize;
 
 use crate::service_status::{project_service_status_v2, unavailable_service_status};
 use crate::{
-    ApplicationClock, ExtensionRequest, ExtensionResponse, ExtensionRoute, OpenRuntimeSnapshot,
-    OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError, RefreshPolicyProvider,
-    RequestMethod, RouteExtension, ServiceStatusRegistry, SharedQueryError, SharedRuntimeContext,
-    SharedRuntimeError, TargetRefreshDemand, TargetRefreshDemandError,
+    ApplicationClock, ExtensionRequest, ExtensionResponse, ExtensionRoute,
+    OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError, PreparedQueryService,
+    PreparedServingBinding, PreparedServingError, PreparedServingRegistry, PreparedServingSnapshot,
+    RefreshPolicyProvider, RequestMethod, RouteExtension, ServiceStatusRegistry, SharedQueryError,
+    SharedRuntimeContext, SharedRuntimeError, TargetRefreshDemand, TargetRefreshDemandError,
+    is_product_campus, rebuild_prepared_serving_from_access,
 };
 
 pub const PRODUCT_FILTER_SCHEMA_PATH: &str = "/api/v1/query/filter-schema";
 pub const PRODUCT_FILTER_OPTIONS_PATH: &str = "/api/v1/query/filter-options";
+pub const PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH: &str = "/api/v1/query/validate-dynamic-filters";
 pub const PRODUCT_CATALOG_DISCOVERY_PATH: &str = "/api/v1/catalog/discovery";
 pub const PRODUCT_COURSE_SEARCH_PATH: &str = "/api/v1/query/courses";
 pub const PRODUCT_SECTION_SEARCH_PATH: &str = "/api/v1/query/sections";
@@ -37,6 +41,7 @@ pub const PRODUCT_SERVICE_STATUS_PATH: &str = "/api/v1/service/status";
 pub static SHARED_PRODUCT_ROUTE_INVENTORY: &[ExtensionRoute] = &[
     ExtensionRoute::new(RequestMethod::Get, PRODUCT_FILTER_SCHEMA_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_FILTER_OPTIONS_PATH),
+    ExtensionRoute::new(RequestMethod::Post, PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_CATALOG_DISCOVERY_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_COURSE_SEARCH_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_SECTION_SEARCH_PATH),
@@ -82,6 +87,7 @@ pub struct SharedProductRoutes<C, P, S = SharedProductStorage> {
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
     service_status: Arc<ServiceStatusRegistry>,
     target_refresh_demand: Option<TargetRefreshDemand>,
+    prepared_serving: Arc<PreparedServingRegistry>,
 }
 
 impl<C, P> SharedProductRoutes<C, P>
@@ -94,13 +100,16 @@ where
         runtime: SharedRuntimeContext<C, P>,
         open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
     ) -> Self {
-        Self {
+        let routes = Self {
             storage,
             runtime,
             open_runtime,
             service_status: Arc::new(ServiceStatusRegistry::new(ServiceRuntimeV1::Local)),
             target_refresh_demand: None,
-        }
+            prepared_serving: Arc::new(PreparedServingRegistry::default()),
+        };
+        routes.rebuild_prepared_serving_lkg();
+        routes
     }
 
     pub fn storage(&self) -> SharedProductStorage {
@@ -119,13 +128,16 @@ where
         runtime: SharedRuntimeContext<C, P>,
         open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
     ) -> Self {
-        Self {
+        let routes = Self {
             storage,
             runtime,
             open_runtime,
             service_status: Arc::new(ServiceStatusRegistry::new(ServiceRuntimeV1::Local)),
             target_refresh_demand: None,
-        }
+            prepared_serving: Arc::new(PreparedServingRegistry::default()),
+        };
+        routes.rebuild_prepared_serving_lkg();
+        routes
     }
 
     pub fn with_target_refresh_demand(mut self, demand: TargetRefreshDemand) -> Self {
@@ -135,6 +147,7 @@ where
 
     pub fn with_service_status(mut self, service_status: Arc<ServiceStatusRegistry>) -> Self {
         self.service_status = service_status;
+        self.rebuild_prepared_serving_lkg();
         self
     }
 
@@ -150,6 +163,35 @@ where
         Arc::clone(&self.open_runtime)
     }
 
+    pub fn prepared_serving_registry(&self) -> Arc<PreparedServingRegistry> {
+        Arc::clone(&self.prepared_serving)
+    }
+
+    /// Rebuilds one immutable generation. File-backed stores release the
+    /// global operational mutex before all Catalog/Open projection and FTS
+    /// construction; in-memory stores are retained only as a test fallback.
+    pub fn rebuild_prepared_serving_snapshot(
+        &self,
+    ) -> Result<Arc<PreparedServingSnapshot>, PreparedServingError> {
+        rebuild_prepared_serving_from_access(
+            &self.storage,
+            &self.runtime,
+            &self.open_runtime,
+            self.service_status.runtime(),
+            &self.prepared_serving,
+        )
+    }
+
+    fn rebuild_prepared_serving_lkg(&self) {
+        if let Err(error) = self.rebuild_prepared_serving_snapshot() {
+            tracing::warn!(
+                target: "bcsp_prepared_serving",
+                ?error,
+                "prepared serving rebuild failed; preserving previous generation",
+            );
+        }
+    }
+
     fn filter_schema(&self) -> ExtensionResponse {
         success_response(self.runtime.filter_schema())
     }
@@ -163,13 +205,32 @@ where
             return api_error_response(400, ApiErrorCode::InvalidFilter);
         }
         let targets = request.targets();
-        self.with_storage(|storage| {
-            self.validate_targets(storage, &targets)?;
-            self.request_target_refresh(storage, &targets)?;
-            self.require_targets_ready(storage, &targets)?;
-            crate::SharedQueryService::new(storage)
+        self.with_prepared(|snapshot| {
+            self.validate_prepared_targets(snapshot, &targets)?;
+            self.request_prepared_target_refresh(snapshot, &targets)?;
+            self.require_prepared_targets_ready(snapshot, &targets)?;
+            PreparedQueryService::from_binding(snapshot)
                 .filter_options(&targets, &request)
-                .map_err(|error| ProductRouteFailure::Runtime(SharedRuntimeError::Query(error)))
+                .map_err(query_route_failure)
+        })
+    }
+
+    fn validate_dynamic_filters(&self, request: &ExtensionRequest) -> ExtensionResponse {
+        let request: DynamicFilterValidationRequestV3 = match decode_payload(request.body()) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+        if request.filters.contract_version() != QueryContractVersion::V3 {
+            return api_error_response(400, ApiErrorCode::InvalidFilter);
+        }
+        self.with_prepared(|snapshot| {
+            let targets = self.prepared_search_targets(snapshot, request.filters.values())?;
+            self.validate_prepared_targets(snapshot, &targets)?;
+            self.request_prepared_target_refresh(snapshot, &targets)?;
+            self.require_prepared_targets_ready(snapshot, &targets)?;
+            PreparedQueryService::from_binding(snapshot)
+                .dynamic_filter_validation(&targets, request.filters.values())
+                .map_err(query_route_failure)
         })
     }
 
@@ -184,6 +245,7 @@ where
             .snapshot()
             .map(|snapshot| snapshot.operation)
             .unwrap_or_else(|_| ServiceOperationV1::starting());
+        let lock_started = Instant::now();
         let mut storage = match self.storage.lock_operational() {
             Ok(storage) => storage,
             Err(_) => {
@@ -196,6 +258,13 @@ where
                 ));
             }
         };
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "storage_lock_wait",
+            elapsed_us = elapsed_micros(lock_started),
+            route = "service_status",
+        );
+        let operation_started = Instant::now();
         if !scoped_targets.is_empty() {
             if let Err(error) = self.validate_targets(&mut storage, &scoped_targets) {
                 drop(storage);
@@ -208,6 +277,12 @@ where
         }
         let status = project_service_status_v2(&mut storage, &self.runtime, &self.service_status);
         drop(storage);
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "storage_lock_held",
+            elapsed_us = elapsed_micros(operation_started),
+            route = "service_status",
+        );
         match status {
             Ok(status) => success_response(status),
             Err(status) => success_response(status),
@@ -219,38 +294,7 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
-        self.with_storage(|storage| {
-            let mut discovery = self
-                .runtime
-                .catalog_discovery(storage)
-                .map_err(ProductRouteFailure::Runtime)?;
-            discovery
-                .targets
-                .retain(|target| !is_online_alias(target.key.campus().as_str()));
-            let mut ready_targets = BTreeSet::new();
-            for target in &discovery.targets {
-                let state = storage
-                    .complete_target_snapshot_state(&target.key)
-                    .map_err(|source| {
-                        ProductRouteFailure::Runtime(SharedRuntimeError::Query(
-                            SharedQueryError::Storage {
-                                target: target.key.clone(),
-                                source,
-                            },
-                        ))
-                    })?;
-                if state.ready {
-                    ready_targets.insert(target.key.clone());
-                }
-            }
-            discovery
-                .subjects
-                .retain(|subject| ready_targets.contains(&subject.target));
-            discovery
-                .core_code_dictionaries
-                .retain(|dictionary| ready_targets.contains(&dictionary.target));
-            Ok(discovery)
-        })
+        self.with_prepared(|snapshot| Ok(snapshot.discovery_at(self.runtime.now())))
     }
 
     fn course_search(&self, request: &ExtensionRequest) -> ExtensionResponse {
@@ -258,30 +302,28 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
-        if request.filters.contract_version() != QueryContractVersion::V2 {
+        if request.filters.contract_version() != QueryContractVersion::V3 {
             return api_error_response(400, ApiErrorCode::InvalidFilter);
         }
-        let policy = match self.runtime.refresh_policy() {
-            Ok(policy) => policy,
-            Err(error) => {
-                return product_failure_response(ProductRouteFailure::Runtime(error));
-            }
-        };
-        self.with_storage(|storage| {
-            let targets = self.search_targets(storage, request.filters.values())?;
-            self.validate_targets(storage, &targets)?;
-            self.request_target_refresh(storage, &targets)?;
-            self.require_targets_ready(storage, &targets)?;
-            let snapshots = self.snapshots(&targets)?;
-            self.runtime
-                .course_search_with_policy(
-                    storage,
-                    &targets,
-                    &request,
-                    |target| runtime_for(&snapshots, target),
-                    policy,
-                )
-                .map_err(ProductRouteFailure::Runtime)
+        self.with_prepared(|snapshot| {
+            let stage_started = Instant::now();
+            let targets = self.prepared_search_targets(snapshot, request.filters.values())?;
+            trace_route_stage("target_selection", "course_search", stage_started);
+            let stage_started = Instant::now();
+            self.validate_prepared_targets(snapshot, &targets)?;
+            trace_route_stage("target_validation", "course_search", stage_started);
+            let stage_started = Instant::now();
+            self.request_prepared_target_refresh(snapshot, &targets)?;
+            trace_route_stage("refresh_request", "course_search", stage_started);
+            let stage_started = Instant::now();
+            self.require_prepared_targets_ready(snapshot, &targets)?;
+            trace_route_stage("ready_check", "course_search", stage_started);
+            let stage_started = Instant::now();
+            let result = PreparedQueryService::from_binding(snapshot)
+                .course_search(&targets, &request, self.runtime.now())
+                .map_err(query_route_failure);
+            trace_route_stage("query_runtime", "course_search", stage_started);
+            result
         })
     }
 
@@ -290,30 +332,17 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
-        if request.filters.contract_version() != QueryContractVersion::V2 {
+        if request.filters.contract_version() != QueryContractVersion::V3 {
             return api_error_response(400, ApiErrorCode::InvalidFilter);
         }
-        let policy = match self.runtime.refresh_policy() {
-            Ok(policy) => policy,
-            Err(error) => {
-                return product_failure_response(ProductRouteFailure::Runtime(error));
-            }
-        };
-        self.with_storage(|storage| {
-            let targets = self.search_targets(storage, request.filters.values())?;
-            self.validate_targets(storage, &targets)?;
-            self.request_target_refresh(storage, &targets)?;
-            self.require_targets_ready(storage, &targets)?;
-            let snapshots = self.snapshots(&targets)?;
-            self.runtime
-                .section_search_with_policy(
-                    storage,
-                    &targets,
-                    &request,
-                    |target| runtime_for(&snapshots, target),
-                    policy,
-                )
-                .map_err(ProductRouteFailure::Runtime)
+        self.with_prepared(|snapshot| {
+            let targets = self.prepared_search_targets(snapshot, request.filters.values())?;
+            self.validate_prepared_targets(snapshot, &targets)?;
+            self.request_prepared_target_refresh(snapshot, &targets)?;
+            self.require_prepared_targets_ready(snapshot, &targets)?;
+            PreparedQueryService::from_binding(snapshot)
+                .section_search(&targets, &request, self.runtime.now())
+                .map_err(query_route_failure)
         })
     }
 
@@ -322,31 +351,18 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
-        if request.contract_version != QueryContractVersion::V2 {
+        if request.contract_version != QueryContractVersion::V3 {
             return api_error_response(400, ApiErrorCode::InvalidFilter);
         }
         let target = request.key.target();
         let targets = vec![target];
-        let policy = match self.runtime.refresh_policy() {
-            Ok(policy) => policy,
-            Err(error) => {
-                return product_failure_response(ProductRouteFailure::Runtime(error));
-            }
-        };
-        self.with_storage(|storage| {
-            self.validate_targets(storage, &targets)?;
-            self.request_target_refresh(storage, &targets)?;
-            self.require_targets_ready(storage, &targets)?;
-            let snapshots = self.snapshots(&targets)?;
-            self.runtime
-                .course_detail_with_policy(
-                    storage,
-                    &targets,
-                    &request,
-                    |target| runtime_for(&snapshots, target),
-                    policy,
-                )
-                .map_err(ProductRouteFailure::Runtime)
+        self.with_prepared(|snapshot| {
+            self.validate_prepared_targets(snapshot, &targets)?;
+            self.request_prepared_target_refresh(snapshot, &targets)?;
+            self.require_prepared_targets_ready(snapshot, &targets)?;
+            PreparedQueryService::from_binding(snapshot)
+                .course_detail(&targets, &request, self.runtime.now())
+                .map_err(query_route_failure)
         })
     }
 
@@ -355,31 +371,18 @@ where
             Ok(request) => request,
             Err(response) => return response,
         };
-        if request.contract_version != QueryContractVersion::V2 {
+        if request.contract_version != QueryContractVersion::V3 {
             return api_error_response(400, ApiErrorCode::InvalidFilter);
         }
         let target = request.key.target();
         let targets = vec![target];
-        let policy = match self.runtime.refresh_policy() {
-            Ok(policy) => policy,
-            Err(error) => {
-                return product_failure_response(ProductRouteFailure::Runtime(error));
-            }
-        };
-        self.with_storage(|storage| {
-            self.validate_targets(storage, &targets)?;
-            self.request_target_refresh(storage, &targets)?;
-            self.require_targets_ready(storage, &targets)?;
-            let snapshots = self.snapshots(&targets)?;
-            self.runtime
-                .section_detail_with_policy(
-                    storage,
-                    &targets,
-                    &request,
-                    |target| runtime_for(&snapshots, target),
-                    policy,
-                )
-                .map_err(ProductRouteFailure::Runtime)
+        self.with_prepared(|snapshot| {
+            self.validate_prepared_targets(snapshot, &targets)?;
+            self.request_prepared_target_refresh(snapshot, &targets)?;
+            self.require_prepared_targets_ready(snapshot, &targets)?;
+            PreparedQueryService::from_binding(snapshot)
+                .section_detail(&targets, &request, self.runtime.now())
+                .map_err(query_route_failure)
         })
     }
 
@@ -434,9 +437,9 @@ where
         })
     }
 
-    fn search_targets(
+    fn prepared_search_targets(
         &self,
-        storage: &mut OperationalStorage,
+        snapshot: &PreparedServingSnapshot,
         filters: &NormalizedFilterValuesV1,
     ) -> Result<Vec<TermCampusKey>, ProductRouteFailure> {
         if !filters.campuses().is_empty() {
@@ -448,16 +451,13 @@ where
                 .collect());
         }
 
-        let discovery = self
-            .runtime
-            .catalog_discovery(storage)
-            .map_err(ProductRouteFailure::Runtime)?;
-        let targets = discovery
+        let targets = snapshot
+            .discovery()
             .targets
-            .into_iter()
-            .map(|target| target.key)
+            .iter()
+            .map(|target| target.key.clone())
             .filter(|target| target.term() == filters.term())
-            .filter(|target| !is_online_alias(target.campus().as_str()))
+            .filter(|target| is_product_campus(target.campus().as_str()))
             .collect::<Vec<_>>();
         if targets.is_empty() {
             Err(ProductRouteFailure::CatalogUnavailable)
@@ -466,13 +466,85 @@ where
         }
     }
 
-    fn snapshots(
+    fn request_prepared_target_refresh(
         &self,
+        snapshot: &PreparedServingSnapshot,
         targets: &[TermCampusKey],
-    ) -> Result<BTreeMap<TermCampusKey, OpenRuntimeSnapshot>, ProductRouteFailure> {
-        self.open_runtime
-            .snapshots(targets)
-            .map_err(ProductRouteFailure::OpenRuntime)
+    ) -> Result<(), ProductRouteFailure> {
+        let Some(demand) = &self.target_refresh_demand else {
+            return Ok(());
+        };
+        let manual_terms = demand
+            .manual_terms_snapshot()?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let local_window = (self.service_status.runtime() == ServiceRuntimeV1::Local)
+            .then(|| RutgersTermWindow::at(self.runtime.now(), RutgersTermWindowScope::Local))
+            .transpose()
+            .map_err(|_| ProductRouteFailure::InvalidTarget)?;
+        let eligible = targets
+            .iter()
+            .filter(|target| {
+                let manual = local_window.as_ref().is_some_and(|window| {
+                    window
+                        .visible_terms()
+                        .iter()
+                        .find(|term| term.term() == target.term())
+                        .is_some_and(|term| !term.auto_managed())
+                });
+                !manual || manual_terms.contains(target.term()) || snapshot.is_ready(target)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        demand.request_all(&eligible)?;
+        Ok(())
+    }
+
+    fn require_prepared_targets_ready(
+        &self,
+        snapshot: &PreparedServingSnapshot,
+        targets: &[TermCampusKey],
+    ) -> Result<(), ProductRouteFailure> {
+        let unavailable = targets
+            .iter()
+            .filter(|target| !snapshot.is_ready(target))
+            .cloned()
+            .collect::<Vec<_>>();
+        if unavailable.is_empty() {
+            Ok(())
+        } else {
+            Err(ProductRouteFailure::SearchDataNotReady(unavailable))
+        }
+    }
+
+    fn validate_prepared_targets(
+        &self,
+        snapshot: &PreparedServingSnapshot,
+        targets: &[TermCampusKey],
+    ) -> Result<(), ProductRouteFailure> {
+        if targets.is_empty() {
+            return Err(ProductRouteFailure::InvalidTarget);
+        }
+        let scope = match self.service_status.runtime() {
+            ServiceRuntimeV1::Local => RutgersTermWindowScope::Local,
+            ServiceRuntimeV1::Public => RutgersTermWindowScope::Public,
+        };
+        let window = RutgersTermWindow::at(self.runtime.now(), scope)
+            .map_err(|_| ProductRouteFailure::InvalidTarget)?;
+        let visible_terms = window
+            .visible_terms()
+            .iter()
+            .map(|term| term.term())
+            .collect::<BTreeSet<_>>();
+        if targets.iter().all(|target| {
+            visible_terms.contains(target.term())
+                && is_product_campus(target.campus().as_str())
+                && (snapshot.is_discovered(target) || snapshot.is_ready(target))
+        }) {
+            Ok(())
+        } else {
+            Err(ProductRouteFailure::InvalidTarget)
+        }
     }
 
     fn request_target_refresh(
@@ -576,12 +648,15 @@ where
             .targets
             .into_iter()
             .map(|target| target.key)
-            .filter(|target| !is_online_alias(target.campus().as_str()))
+            .filter(|target| is_product_campus(target.campus().as_str()))
             .collect::<BTreeSet<_>>();
         if targets.iter().all(|target| {
             visible_terms.contains(target.term())
-                && !is_online_alias(target.campus().as_str())
-                && discovered.contains(target)
+                && is_product_campus(target.campus().as_str())
+                && (discovered.contains(target)
+                    || storage
+                        .complete_target_snapshot_state(target)
+                        .is_ok_and(|state| state.ready))
         }) {
             Ok(())
         } else {
@@ -596,13 +671,45 @@ where
     where
         T: Serialize,
     {
+        let lock_started = Instant::now();
         let mut storage = match self.storage.lock_operational() {
             Ok(storage) => storage,
             Err(_) => return api_error_response(500, ApiErrorCode::InternalError),
         };
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "storage_lock_wait",
+            elapsed_us = elapsed_micros(lock_started),
+            route = "shared_product_operation",
+        );
+        let operation_started = Instant::now();
         let result = operation(&mut storage);
         drop(storage);
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "storage_lock_held",
+            elapsed_us = elapsed_micros(operation_started),
+            route = "shared_product_operation",
+        );
         match result {
+            Ok(value) => success_response(value),
+            Err(error) => product_failure_response(error),
+        }
+    }
+
+    fn with_prepared<T>(
+        &self,
+        operation: impl FnOnce(&PreparedServingBinding) -> Result<T, ProductRouteFailure>,
+    ) -> ExtensionResponse
+    where
+        T: Serialize,
+    {
+        // Bind exactly once before target selection or demand bookkeeping.
+        let snapshot = match self.prepared_serving.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => return product_failure_response(prepared_route_failure(error)),
+        };
+        match operation(&snapshot) {
             Ok(value) => success_response(value),
             Err(error) => product_failure_response(error),
         }
@@ -623,6 +730,9 @@ where
         match (request.method(), request.path()) {
             (RequestMethod::Get, PRODUCT_FILTER_SCHEMA_PATH) => self.filter_schema(),
             (RequestMethod::Post, PRODUCT_FILTER_OPTIONS_PATH) => self.filter_options(&request),
+            (RequestMethod::Post, PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH) => {
+                self.validate_dynamic_filters(&request)
+            }
             (RequestMethod::Get, PRODUCT_SERVICE_STATUS_PATH) => self.service_status(&request),
             (RequestMethod::Post, PRODUCT_CATALOG_DISCOVERY_PATH) => {
                 self.catalog_discovery(&request)
@@ -640,11 +750,14 @@ where
     }
 }
 
-fn runtime_for(
-    snapshots: &BTreeMap<TermCampusKey, OpenRuntimeSnapshot>,
-    target: &TermCampusKey,
-) -> OpenRuntimeSnapshot {
-    snapshots.get(target).cloned().unwrap_or_default()
+fn query_route_failure(error: SharedQueryError) -> ProductRouteFailure {
+    ProductRouteFailure::Runtime(SharedRuntimeError::Query(error))
+}
+
+fn prepared_route_failure(error: PreparedServingError) -> ProductRouteFailure {
+    query_route_failure(SharedQueryError::Prepared {
+        source: Box::new(error),
+    })
 }
 
 fn parse_status_scope(query: Option<&str>) -> Result<Vec<TermCampusKey>, ()> {
@@ -669,13 +782,14 @@ fn parse_status_scope(query: Option<&str>) -> Result<Vec<TermCampusKey>, ()> {
         (Some(_), true) | (None, false) => Err(()),
         (Some(term), false) => campuses
             .into_iter()
-            .map(|campus| TermCampusKey::try_new(&term, &campus).map_err(|_| ()))
+            .map(|campus| {
+                if !is_product_campus(&campus) {
+                    return Err(());
+                }
+                TermCampusKey::try_new(&term, &campus).map_err(|_| ())
+            })
             .collect(),
     }
-}
-
-fn is_online_alias(campus: &str) -> bool {
-    matches!(campus, "ONLINE_NB" | "ONLINE_NK" | "ONLINE_CM")
 }
 
 fn decode_payload<T>(body: &[u8]) -> Result<T, ExtensionResponse>
@@ -691,10 +805,31 @@ fn success_response<T>(value: T) -> ExtensionResponse
 where
     T: Serialize,
 {
-    match serde_json::to_vec(&HttpSuccessEnvelope::new(value)) {
+    let serialization_started = Instant::now();
+    let response = match serde_json::to_vec(&HttpSuccessEnvelope::new(value)) {
         Ok(body) => ExtensionResponse::json_bytes(200, body),
         Err(_) => api_error_response(500, ApiErrorCode::InternalError),
-    }
+    };
+    tracing::debug!(
+        target: "bcsp_performance",
+        phase = "serialization",
+        elapsed_us = elapsed_micros(serialization_started),
+        response_bytes = response.body().len(),
+    );
+    response
+}
+
+fn elapsed_micros(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+fn trace_route_stage(phase: &'static str, route: &'static str, started: Instant) {
+    tracing::debug!(
+        target: "bcsp_performance",
+        phase,
+        elapsed_us = elapsed_micros(started),
+        route,
+    );
 }
 
 fn api_error_response(status: u16, code: ApiErrorCode) -> ExtensionResponse {
@@ -783,7 +918,8 @@ fn runtime_failure_status(error: SharedRuntimeError) -> (u16, ApiErrorCode) {
             | SharedQueryError::FtsUnavailable { .. }
             | SharedQueryError::Storage { .. }
             | SharedQueryError::Projection { .. }
-            | SharedQueryError::TextEvidence { .. },
+            | SharedQueryError::TextEvidence { .. }
+            | SharedQueryError::Prepared { .. },
         ) => (503, ApiErrorCode::UpstreamUnavailable),
         SharedRuntimeError::Query(SharedQueryError::TargetNotPublished { .. }) => {
             (503, ApiErrorCode::CatalogNotReady)

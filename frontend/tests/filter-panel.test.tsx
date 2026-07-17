@@ -6,18 +6,13 @@ import { useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { SupportedLocale } from '../src/ui/shared/i18n/contract';
 import { BcspI18nProvider } from '../src/ui/shared/i18n/runtime';
-import type {
-  CatalogDiscoveryResponseV1,
-  FilterOptionsFieldV2,
-  FilterOptionsResponseV2,
-  FilterSchemaV1,
-} from '../src/ui/shared/product';
 import {
-  FILTER_FIELD_IDS,
   createNeutralFilterState,
-  toFilterValuesV1,
+  type CatalogDiscoveryResponseV1,
+  type FilterOptionsFieldV2,
+  type FilterOptionsResponseV2,
+  type FilterSchemaV1,
   type FilterStateV1,
 } from '../src/ui/shared/product';
 import { FILTER_PANEL_CSS, FilterPanel } from '../src/ui/shared/search/filters';
@@ -27,481 +22,253 @@ const SCHEMA = JSON.parse(readFileSync(
   'utf8',
 )) as FilterSchemaV1;
 
-function known(value: string) {
-  return { knowledge: 'KNOWN', presence: { presence: 'PRESENT', value } } as const;
-}
+const point = {
+  contentVersion: 1,
+  observationId: '20000000-0000-4000-8000-000000000001',
+  observedAt: '2026-07-17T00:00:00Z',
+} as const;
+const provenance = {
+  ...point,
+  payloadDigest: 'a'.repeat(64),
+  sourceId: 'synthetic-selector',
+  sourceKind: 'SELECTOR',
+} as const;
+const known = (value: string) => ({
+  knowledge: 'KNOWN',
+  presence: { presence: 'PRESENT', value },
+} as const);
 
-function discovery(subjectCount = 300): CatalogDiscoveryResponseV1 {
-  const provenance = {
-    observationId: '20000000-0000-4000-8000-000000000001',
-    observedAt: '2026-07-15T00:00:00Z',
-    payloadDigest: 'b'.repeat(64),
-    sourceId: 'synthetic-selector',
-    sourceKind: 'SELECTOR',
-  } as const;
-  const point = {
-    contentVersion: 2,
-    observationId: provenance.observationId,
-    observedAt: provenance.observedAt,
-  } as const;
-  return {
-    contractVersion: 1,
-    observedAt: provenance.observedAt,
-    sources: [],
-    status: {
-      availability: 'CURRENT',
-      error: null,
-      isStale: false,
-      lastSuccess: point,
-      latestAttempt: point,
-    },
-    targets: [
-      {
-        campusLabel: known('New Brunswick'),
-        key: { campus: 'NB', term: 'T2026F' },
-        provenance,
-        termLabel: known('Fall 2026'),
-      },
-      {
-        campusLabel: known('Newark'),
-        key: { campus: 'NK', term: 'T2026F' },
-        provenance,
-        termLabel: known('Fall 2026'),
-      },
-    ],
-    coreCodeDictionaries: ['NB', 'NK'].map((campus) => {
-      const target = { campus, term: 'T2026F' };
-      return {
-        contentVersion: 2,
-        options: [{ code: 'QQ', description: known('Quantitative and Formal Reasoning') }],
-        provenance: {
-          observationId: provenance.observationId,
-          observedAt: provenance.observedAt,
-          payloadDigest: provenance.payloadDigest,
-          source: 'RUTGERS_CATALOG' as const,
-          target,
-        },
-        target,
-      };
-    }),
-    subjects: Array.from({ length: subjectCount }, (_, index) => {
-      const code = `S${String(index).padStart(3, '0')}`;
-      return {
-        code,
-        label: known(`Subject ${index}`),
-        provenance: { kind: 'DISCOVERY', discovery: provenance } as const,
-        target: { campus: 'NB', term: 'T2026F' },
-      };
-    }),
-  };
-}
-
-const OPTION_LABELS: Record<FilterOptionsFieldV2, readonly { value: string; label: string }[]> = {
-  KEYWORD: [
-    { value: 'data', label: 'data' },
-    { value: 'structures', label: 'structures' },
-  ],
-  COURSE_LEVEL: [
-    { value: 'U', label: 'Undergraduate / U' },
-    { value: 'G', label: 'Graduate / G' },
-  ],
-  INSTRUCTOR: [
-    { value: 'Smith, Jane', label: 'Smith, Jane' },
-    { value: 'Lovelace, Ada', label: 'Lovelace, Ada' },
-  ],
-  MEETING_LOCATION: [{ value: 'BUSCH', label: 'Busch / BUSCH' }],
-  EXAM_CODE: [{ value: 'A', label: 'A / Final exam' }],
+const DISCOVERY: CatalogDiscoveryResponseV1 = {
+  contractVersion: 1,
+  observedAt: point.observedAt,
+  sources: [],
+  status: {
+    availability: 'CURRENT', error: null, isStale: false,
+    lastSuccess: point, latestAttempt: point,
+  },
+  coreCodeDictionaries: [],
+  subjects: [{
+    code: '198',
+    label: known('Computer Science'),
+    provenance: { kind: 'DISCOVERY', discovery: provenance },
+    target: { campus: 'NB', term: '72026' },
+  }],
+  targets: [],
 };
 
-const loadOptions = vi.fn(async (
-  field: FilterOptionsFieldV2,
-  query?: string,
-): Promise<FilterOptionsResponseV2> => {
-  const needle = query?.trim().toLocaleLowerCase() ?? '';
-  const options = OPTION_LABELS[field].filter(({ label, value }) =>
-    needle.length === 0
-    || label.toLocaleLowerCase().includes(needle)
-    || value.toLocaleLowerCase().includes(needle));
+const OPTIONS: Readonly<Record<FilterOptionsFieldV2, readonly { value: string; label: string }[]>> = {
+  KEYWORD: Array.from({ length: 12 }, (_, index) => ({
+    value: `keyword-${String(index + 1).padStart(2, '0')}`,
+    label: `Keyword ${String(index + 1).padStart(2, '0')}`,
+  })),
+  COURSE_NUMBER_BAND: Array.from({ length: 12 }, (_, index) => ({
+    value: String(index * 100),
+    label: `${String(index * 100).padStart(3, '0')}–${String(index * 100 + 99).padStart(3, '0')}`,
+  })),
+  COURSE_LEVEL: [{ value: 'U', label: 'U' }, { value: 'G', label: 'G' }],
+  INSTRUCTOR: [{ value: 'Ada Lovelace', label: 'Ada Lovelace' }],
+  MEETING_LOCATION: [{ value: 'CAC', label: 'CAC' }],
+  EXAM_CODE: [{ value: 'A', label: 'A' }],
+};
+
+function response(field: FilterOptionsFieldV2): FilterOptionsResponseV2 {
   return {
-    contractVersion: 2,
+    contractVersion: 3,
     field,
-    options,
-    targetVersions: [{ target: { campus: 'NB', term: 'T2026F' }, contentVersion: 2 }],
+    targetVersions: [{ target: { campus: 'NB', term: '72026' }, contentVersion: 7 }],
+    options: OPTIONS[field],
     truncated: false,
   };
-});
+}
+
+const loadOptions = async (field: FilterOptionsFieldV2) => response(field);
 
 function Harness({
-  initial = { ...createNeutralFilterState('T2026F'), campuses: ['NB'] },
-  onSubmit = vi.fn(),
+  initial = { ...createNeutralFilterState('72026'), campuses: ['NB'] },
   locale = 'en-US',
-  catalogDiscovery = discovery(),
-  searchAvailable = true,
-  disabled = !searchAvailable,
+  onSubmit = vi.fn(),
 }: {
   readonly initial?: FilterStateV1;
+  readonly locale?: 'en-US' | 'zh-CN';
   readonly onSubmit?: () => void;
-  readonly locale?: SupportedLocale;
-  readonly catalogDiscovery?: CatalogDiscoveryResponseV1;
-  readonly searchAvailable?: boolean;
-  readonly disabled?: boolean;
 }) {
   const [value, setValue] = useState(initial);
   return (
     <BcspI18nProvider initialLocale={locale}>
       <FilterPanel
-        disabled={disabled}
-        schema={SCHEMA}
-        discovery={catalogDiscovery}
+        discovery={DISCOVERY}
+        formId="course-filter-form"
         loadOptions={loadOptions}
-        value={value}
         onChange={setValue}
         onSubmit={onSubmit}
-        searchAvailable={searchAvailable}
+        schema={SCHEMA}
+        searchAvailable
+        value={value}
       />
-      <output data-testid="filter-state">{JSON.stringify(value)}</output>
+      <output data-testid="state">{JSON.stringify(value)}</output>
     </BcspI18nProvider>
   );
 }
 
-function state(): FilterStateV1 {
-  return JSON.parse(screen.getByTestId('filter-state').textContent ?? '{}') as FilterStateV1;
-}
+afterEach(cleanup);
 
-function addToken(label: string, value: string): void {
-  fireEvent.change(screen.getByLabelText(label), { target: { value } });
-  fireEvent.click(screen.getByRole('button', { name: `Add ${label}` }));
-}
-
-afterEach(() => {
-  cleanup();
-  loadOptions.mockClear();
-  document.documentElement.style.removeProperty('--bcsp-navigation-height');
-  Object.defineProperty(window, 'scrollY', { configurable: true, value: 0 });
-});
-
-describe('controlled 03–18 FilterPanel', () => {
-  it('keeps touch, fine-pointer, press, and reduced-motion rules bounded', () => {
-    expect(FILTER_PANEL_CSS).toContain('min-width: 2.75rem; min-height: 2.75rem');
-    expect(FILTER_PANEL_CSS).toContain('@media (hover: hover) and (pointer: fine)');
-    expect(FILTER_PANEL_CSS).toContain('transform: scale(0.97)');
-    expect(FILTER_PANEL_CSS).toContain('@media (prefers-reduced-motion: reduce)');
+describe('RC I Round 4 flat 03–18 FilterPanel', () => {
+  it('keeps the rail on page scroll while styling only long option lists as accessible scroll regions', () => {
+    expect(FILTER_PANEL_CSS).toContain('.filter-panel__subject-list::-webkit-scrollbar');
+    expect(FILTER_PANEL_CSS).toContain('.filter-panel__dictionary-options::-webkit-scrollbar');
+    expect(FILTER_PANEL_CSS).toContain('overflow-y: auto');
+    expect(FILTER_PANEL_CSS).toContain('scrollbar-width: thin');
+    expect(FILTER_PANEL_CSS).toContain('scrollbar-color:');
+    expect(FILTER_PANEL_CSS).toContain('scrollbar-gutter: stable');
+    expect(FILTER_PANEL_CSS).toContain('touch-action: pan-y');
+    expect(FILTER_PANEL_CSS).not.toMatch(/\.filter-panel\s*\{[^}]*overflow/);
+    expect(FILTER_PANEL_CSS).not.toContain('@keyframes');
     expect(FILTER_PANEL_CSS).not.toContain('transition: all');
   });
 
-  it('renders the 16 filter rows continuously as 03–18 after scope moved outside the form', () => {
+  it('renders all 16 rows continuously as 03–18 with no accordion or Search hero', () => {
     const view = render(<Harness />);
-    const rows = [...view.container.querySelectorAll<HTMLElement>('[data-filter-row]')];
-
-    expect(rows.map((row) => row.dataset.filterRow)).toEqual(
-      FILTER_FIELD_IDS.filter((id) => id !== 'FLT-C01' && id !== 'FLT-C02'),
-    );
+    const rows = [...view.container.querySelectorAll('[data-filter-row]')];
     expect(rows).toHaveLength(16);
-    expect([...view.container.querySelectorAll('.filter-panel__ordinal')]
-      .map((node) => node.textContent)).toEqual(
+    expect(rows.map((row) => row.querySelector('.filter-panel__ordinal')?.textContent)).toEqual(
       Array.from({ length: 16 }, (_, index) => String(index + 3).padStart(2, '0')),
     );
-    for (const retired of ['FLT-C10', 'FLT-S02', 'FLT-S08', 'FLT-S11']) {
-      expect(view.container.querySelector(`[data-filter-row="${retired}"]`)).toBeNull();
-    }
-    expect(screen.queryByLabelText(/Course locations|Section numbers|Building codes|Eligibility/u)).toBeNull();
-    expect(screen.getByRole('form', { name: 'Course and Section filters' })).toBeTruthy();
-    expect(screen.getByText('Query matrix / 16 channels')).toBeTruthy();
+    expect(view.container.querySelector('details')).toBeNull();
+    expect(view.container.querySelector('[data-filter-fields="03-18"]')).not.toBeNull();
+    expect(screen.queryByText('Build a precise search')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Search' })).toBeNull();
   });
 
-  it('uses the approved Chinese labels without translating Rutgers catalog values', () => {
+  it('uses the HumanTest labels and does not expose technical unknown categories', async () => {
     render(<Harness locale="zh-CN" />);
-
-    expect(screen.getByRole('form', { name: '课程与课节筛选条件' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '建立精确搜索' })).toBeTruthy();
-    expect(screen.getAllByText('关键词匹配').length).toBeGreaterThan(0);
-    expect(screen.getByText('Index号索引')).toBeTruthy();
-    expect(screen.getByText('子校区')).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText('搜索学科目录'), {
-      target: { value: 'Subject 299' },
-    });
-    expect(screen.getByRole('checkbox', { name: /S299.*Subject 299/u })).toBeTruthy();
+    expect(screen.getByText('课程号段')).toBeTruthy();
+    expect(screen.getByText('课程层次')).toBeTruthy();
+    expect(screen.getByRole('radio', { name: '有先修要求' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: '无先修要求' })).toBeTruthy();
+    expect(screen.getAllByRole('checkbox', { name: /完整数据显示/u })).toHaveLength(3);
+    expect(screen.getByRole('checkbox', { name: '线下' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: '在线' })).toBeTruthy();
+    expect(screen.getAllByRole('checkbox', { name: '混合' })).toHaveLength(2);
+    expect(screen.queryByRole('checkbox', { name: '其他' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: '未知' })).toBeNull();
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: '000级' })).toBeTruthy());
   });
 
-  it('disables dictionaries and submit while the applied target is not ready', () => {
-    const view = render(<Harness catalogDiscovery={discovery(0)} searchAvailable={false} />);
-    const gate = view.container.querySelector<HTMLFieldSetElement>('.filter-panel__gate');
-
-    expect(gate?.disabled).toBe(true);
-    expect(gate?.getAttribute('aria-busy')).toBeNull();
-    expect((screen.getByRole('combobox', { name: 'Keyword match' }) as HTMLInputElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getAllByText('Apply a ready query range').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Choose at least one ready Campus above/u)).toBeTruthy();
-  });
-
-  it('only commits published Keyword and Instructor candidates with case-insensitive lookup', async () => {
+  it('uses plain English labels for course level, prerequisites, format, and timing', async () => {
     render(<Harness />);
-
-    const keyword = screen.getByRole('combobox', { name: 'Keyword match' });
-    fireEvent.change(keyword, { target: { value: 'DAT' } });
-    expect(state().keywords).toEqual([]);
-    expect(screen.queryByRole('button', { name: /Add Keyword/u })).toBeNull();
-    await screen.findByRole('option', { name: 'data' });
-    fireEvent.keyDown(keyword, { key: 'Enter' });
-    await waitFor(() => expect(state().keywords).toEqual(['data']));
-
-    fireEvent.click(screen.getByText('Same-Section constraints'));
-    const instructor = screen.getByRole('combobox', { name: 'Instructor' });
-    fireEvent.change(instructor, { target: { value: 'SMI' } });
-    expect(state().instructors).toEqual([]);
-    await screen.findByRole('option', { name: 'Smith, Jane' });
-    expect(loadOptions).toHaveBeenCalledWith('INSTRUCTOR', 'SMI', expect.any(AbortSignal));
-    fireEvent.keyDown(instructor, { key: 'Enter' });
-    await waitFor(() => expect(state().instructors).toEqual(['Smith, Jane']));
-
-    fireEvent.change(instructor, { target: { value: 'not-published' } });
-    await screen.findByText('No published option matches this search.');
-    fireEvent.keyDown(instructor, { key: 'Enter' });
-    expect(state().instructors).toEqual(['Smith, Jane']);
+    expect(screen.getByText('Course level')).toBeTruthy();
+    expect(screen.getByText('Prerequisites')).toBeTruthy();
+    expect(screen.getByText('Class format')).toBeTruthy();
+    expect(screen.getByText('Meeting timing')).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'In person' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Synchronous' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Asynchronous' })).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: '000-level' })).toBeTruthy());
   });
 
-  it('serializes all retained fields, including dictionary-backed Level, Subcampus, and Exam', async () => {
+  it('loads every actual course-number band and stores numeric sorted V3 values', async () => {
     render(<Harness />);
-
-    fireEvent.change(screen.getByLabelText('Search subject dictionary'), {
-      target: { value: 'Subject 299' },
-    });
-    fireEvent.click(screen.getByRole('checkbox', { name: /S299.*Subject 299/u }));
-
-    const keyword = screen.getByRole('combobox', { name: 'Keyword match' });
-    fireEvent.change(keyword, { target: { value: 'structures' } });
-    await screen.findByRole('option', { name: 'structures' });
-    fireEvent.keyDown(keyword, { key: 'Enter' });
-    addToken('Course numbers', 'cs111');
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'U · Undergraduate' }));
-    fireEvent.change(screen.getByLabelText('Minimum credits'), { target: { value: '3' } });
-    fireEvent.change(screen.getByLabelText('Maximum credits'), { target: { value: '4.5' } });
-    fireEvent.change(screen.getByLabelText('Core code match mode'), { target: { value: 'ALL' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: /QQ.*Quantitative and Formal Reasoning/u }));
-    fireEvent.change(screen.getByLabelText('Prerequisite presence'), { target: { value: 'HAS' } });
-
-    fireEvent.click(screen.getByText('Same-Section constraints'));
-    addToken('Section indexes', '12345');
-    fireEvent.click(within(screen.getByRole('group', { name: 'Open status' }))
-      .getByRole('checkbox', { name: 'Open' }));
-    fireEvent.click(within(screen.getByRole('group', { name: 'Modality' }))
-      .getByRole('checkbox', { name: 'Online' }));
-    fireEvent.click(within(screen.getByRole('group', { name: 'Synchronicity' }))
-      .getByRole('checkbox', { name: 'Sync' }));
-    const instructor = screen.getByRole('combobox', { name: 'Instructor' });
-    fireEvent.change(instructor, { target: { value: 'smi' } });
-    await screen.findByRole('option', { name: 'Smith, Jane' });
-    fireEvent.keyDown(instructor, { key: 'Enter' });
-    fireEvent.change(screen.getByLabelText('Weekday'), { target: { value: 'FRIDAY' } });
-    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '10:30' } });
-    fireEvent.change(screen.getByLabelText('End'), { target: { value: '12:15' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add window' }));
-    fireEvent.change(screen.getByLabelText('Subcampus match mode'), {
-      target: { value: 'ALL_REQUIRED_MEETINGS' },
-    });
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Busch / BUSCH' }));
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'A / Final exam' }));
-    fireEvent.change(screen.getByLabelText('Permission requirement'), {
-      target: { value: 'REQUIRED' },
-    });
-
-    expect(toFilterValuesV1(state())).toEqual({
-      term: 'T2026F',
-      campuses: ['NB'],
-      subjects: ['S299'],
-      keywords: ['structures'],
-      courseNumbers: ['CS111'],
-      levels: ['U'],
-      credits: { minimumHundredths: 300, maximumHundredths: 450 },
-      core: { codes: ['QQ'], mode: 'ALL' },
-      prerequisite: 'HAS',
-      sectionIndexes: ['12345'],
-      openStatuses: ['OPEN'],
-      modalities: ['ONLINE'],
-      synchronicities: ['SYNC'],
-      instructors: ['Smith, Jane'],
-      availability: [{ weekday: 'FRIDAY', startMinute: 630, endMinute: 735 }],
-      meetingLocations: { locations: ['BUSCH'], mode: 'ALL_REQUIRED_MEETINGS' },
-      examCodes: ['A'],
-      permission: 'REQUIRED',
-    });
-  }, 10_000);
-
-  it('keeps Core choices dictionary-only, removes the old search box, and preserves ANY/ALL', () => {
-    render(<Harness />);
-
-    expect(screen.queryByLabelText('Search published Core codes')).toBeNull();
-    expect(screen.getByRole('group', { name: 'Published Core codes' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('checkbox', { name: /QQ.*Quantitative and Formal Reasoning/u }));
-    fireEvent.change(screen.getByLabelText('Core code match mode'), { target: { value: 'ALL' } });
-    expect(state().core).toEqual({ codes: ['QQ'], mode: 'ALL' });
-    fireEvent.change(screen.getByLabelText('Core code match mode'), { target: { value: 'ANY' } });
-    expect(state().core).toEqual({ codes: ['QQ'], mode: 'ANY' });
-  });
-
-  it('shows and explicitly removes incompatible Saved View Core values', () => {
-    const view = render(<Harness initial={{
-      ...createNeutralFilterState('T2026F'),
-      campuses: ['NB'],
-      core: { codes: ['LEGACY'], mode: 'ALL' },
-      keywords: ['data'],
-      levels: ['U'],
-      instructors: ['Smith, Jane'],
-      meetingLocations: { locations: ['BUSCH'], mode: 'ALL_REQUIRED_MEETINGS' },
-      examCodes: ['A'],
-    }} />);
-
-    expect(screen.getByText('Saved incompatible Core codes')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Remove incompatible Core code LEGACY' }));
-    expect(state().core).toEqual({ codes: [], mode: 'ALL' });
-
-    expect(state()).toMatchObject({
-      campuses: ['NB'],
-      keywords: ['data'],
-      levels: ['U'],
-      instructors: ['Smith, Jane'],
-      meetingLocations: { locations: ['BUSCH'], mode: 'ALL_REQUIRED_MEETINGS' },
-      examCodes: ['A'],
-    });
-    expect(view.container.querySelector('[data-filter-row="FLT-S07"]')).not.toBeNull();
-  });
-
-  it('moves from 03–09 to 10–18 inside the desktop rail, focuses the new summary, and preserves values', async () => {
-    const view = render(
-      <div className="bcsp-search-workspace__filters" style={{ overflowY: 'auto' }}>
-        <Harness />
-      </div>,
-    );
-    const rail = view.container.querySelector<HTMLElement>('.bcsp-search-workspace__filters');
-    if (rail === null) throw new Error('filter rail is required');
-    Object.defineProperties(rail, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 1200 },
-    });
-    Object.defineProperty(rail, 'getBoundingClientRect', {
-      configurable: true,
-      value: () => ({
-        top: 100, bottom: 500, left: 0, right: 500, width: 500, height: 400,
-        x: 0, y: 100, toJSON() {},
-      }),
-    });
-    const stickyHeader = view.container.querySelector<HTMLElement>('.filter-panel__head');
-    if (stickyHeader === null) throw new Error('sticky filter header is required');
-    Object.defineProperty(stickyHeader, 'getBoundingClientRect', {
-      configurable: true,
-      value: () => ({
-        top: 100, bottom: 180, left: 0, right: 500, width: 500, height: 80,
-        x: 0, y: 100, toJSON() {},
-      }),
-    });
-
-    addToken('Course numbers', '198111');
-    const sectionSummary = screen.getByText('Same-Section constraints').closest('summary');
-    if (sectionSummary === null) throw new Error('Section summary is required');
-    Object.defineProperty(sectionSummary, 'getBoundingClientRect', {
-      configurable: true,
-      value: () => ({
-        top: 360, bottom: 410, left: 0, right: 500, width: 500, height: 50,
-        x: 0, y: 360, toJSON() {},
-      }),
-    });
-
-    fireEvent.click(sectionSummary);
+    const bandGroup = await screen.findByRole('group', { name: 'Course number band' });
+    fireEvent.click(within(bandGroup).getByRole('checkbox', { name: '400-level' }));
     await waitFor(() => {
-      expect(document.activeElement).toBe(sectionSummary);
-      expect(rail.scrollTop).toBe(180);
+      const state = JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1;
+      expect(state.courseNumberBands).toEqual([400]);
     });
-    expect(state().courseNumbers).toEqual(['198111']);
-    expect((sectionSummary.parentElement as HTMLDetailsElement).open).toBe(true);
-    expect(screen.getByText('Course constraints').closest('details')?.hasAttribute('open')).toBe(false);
+    fireEvent.click(within(bandGroup).getByRole('checkbox', { name: '000-level' }));
+    await waitFor(() => {
+      const state = JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1;
+      expect(state.courseNumberBands).toEqual([0, 400]);
+    });
+    expect(document.querySelector('[data-filter-chip="FLT-C05"]')?.textContent).toContain('000-level');
   });
 
-  it.each(['Enter', ' '])(
-    'returns from 10–18 to 03–09 with %s keyboard activation and a sticky-safe window position',
-    async (key) => {
-      const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
-      document.documentElement.style.setProperty('--bcsp-navigation-height', '64px');
-      Object.defineProperty(window, 'scrollY', { configurable: true, value: 100 });
-      render(<Harness />);
+  it('keeps every long checkbox option reachable and supports Home/End in searchable dictionaries', async () => {
+    render(<Harness />);
+    const bandGroup = await screen.findByRole('group', { name: 'Course number band' });
+    const bands = within(bandGroup).getAllByRole('checkbox');
+    expect(bands).toHaveLength(12);
+    expect(bands[0]?.getAttribute('aria-label')).toBe('000-level');
+    expect(bands.at(-1)?.getAttribute('aria-label')).toBe('1100-level');
+    bands.at(-1)?.focus();
+    expect(document.activeElement).toBe(bands.at(-1));
 
-      const sectionSummary = screen.getByText('Same-Section constraints').closest('summary');
-      const courseSummary = screen.getByText('Course constraints').closest('summary');
-      if (sectionSummary === null || courseSummary === null) {
-        throw new Error('both summaries are required');
-      }
-      fireEvent.click(sectionSummary);
-      await waitFor(() => expect(document.activeElement).toBe(sectionSummary));
-      Object.defineProperty(courseSummary, 'getBoundingClientRect', {
-        configurable: true,
-        value: () => ({
-          top: 400, bottom: 450, left: 0, right: 500, width: 500, height: 50,
-          x: 0, y: 400, toJSON() {},
-        }),
-      });
+    const keywordInput = screen.getByRole('combobox', { name: 'Keyword match' });
+    fireEvent.focus(keywordInput);
+    await waitFor(() => expect(keywordInput.getAttribute('aria-expanded')).toBe('true'));
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Keyword 12' })).toBeTruthy());
+    fireEvent.keyDown(keywordInput, { key: 'End' });
+    await waitFor(() => expect(keywordInput.getAttribute('aria-activedescendant')).toMatch(/option-11$/));
+    fireEvent.keyDown(keywordInput, { key: 'Home' });
+    await waitFor(() => expect(keywordInput.getAttribute('aria-activedescendant')).toMatch(/option-0$/));
+  });
 
-      fireEvent.keyDown(courseSummary, { key });
-      (courseSummary.parentElement as HTMLDetailsElement).open = true;
-      fireEvent(courseSummary.parentElement as HTMLDetailsElement, new Event('toggle'));
-      await waitFor(() => {
-        expect(document.activeElement).toBe(courseSummary);
-        expect(scrollTo).toHaveBeenLastCalledWith({ behavior: 'auto', top: 436 });
-      });
-      expect(screen.getByText('Same-Section constraints').closest('details')?.hasAttribute('open')).toBe(false);
-      document.documentElement.style.removeProperty('--bcsp-navigation-height');
-    },
-  );
+  it('keeps every filter neutral by default, including all three incomplete-data switches', () => {
+    render(<Harness />);
+    const state = JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1;
+    expect(state.prerequisite).toBe('ANY');
+    expect(state.modalities).toEqual([]);
+    expect(state.synchronicities).toEqual([]);
+    expect(state.includeIncomplete).toEqual({
+      prerequisite: false,
+      modality: false,
+      synchronicity: false,
+    });
+  });
 
-  it.each(['mouse', 'Enter', ' '] as const)(
-    'supports %s activation in both 03–09 → 10–18 and 10–18 → 03–09 directions',
-    async (method) => {
-      vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
-      render(<Harness />);
-      const sectionSummary = screen.getByText('Same-Section constraints').closest('summary');
-      const courseSummary = screen.getByText('Course constraints').closest('summary');
-      if (sectionSummary === null || courseSummary === null) {
-        throw new Error('both summaries are required');
-      }
-      const activate = (summary: HTMLElement) => {
-        if (method === 'mouse') {
-          fireEvent.click(summary);
-          return;
-        }
-        fireEvent.keyDown(summary, { key: method });
-        (summary.parentElement as HTMLDetailsElement).open = true;
-        fireEvent(summary.parentElement as HTMLDetailsElement, new Event('toggle'));
-      };
+  it('implements 09 as a clearable single selection with an independent additive switch', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Has prerequisite' }));
+    fireEvent.click(screen.getAllByRole('checkbox', { name: /Complete data display/u })[0] as HTMLElement);
+    let state = JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1;
+    expect(state.prerequisite).toBe('HAS');
+    expect(state.includeIncomplete.prerequisite).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    state = JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1;
+    expect(state.prerequisite).toBe('ANY');
+    expect(state.includeIncomplete.prerequisite).toBe(true);
+  });
 
-      activate(sectionSummary);
-      await waitFor(() => expect(document.activeElement).toBe(sectionSummary));
-      expect((sectionSummary.parentElement as HTMLDetailsElement).open).toBe(true);
-      expect((courseSummary.parentElement as HTMLDetailsElement).open).toBe(false);
+  it('implements 12 and 13 as OR multi-selects with independent additive switches', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Online' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Hybrid' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Synchronous' }));
+    const incomplete = screen.getAllByRole('checkbox', { name: /Complete data display/u });
+    fireEvent.click(incomplete[1] as HTMLElement);
+    fireEvent.click(incomplete[2] as HTMLElement);
+    const state = JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1;
+    expect(state.modalities).toEqual(['ONLINE', 'HYBRID']);
+    expect(state.synchronicities).toEqual(['SYNC']);
+    expect(state.includeIncomplete).toEqual({
+      prerequisite: false,
+      modality: true,
+      synchronicity: true,
+    });
+  });
 
-      activate(courseSummary);
-      await waitFor(() => expect(document.activeElement).toBe(courseSummary));
-      expect((courseSummary.parentElement as HTMLDetailsElement).open).toBe(true);
-      expect((sectionSummary.parentElement as HTMLDetailsElement).open).toBe(false);
-    },
-  );
+  it('clears 03–18 to neutral while preserving the applied term and Campus scope', async () => {
+    render(<Harness initial={{
+      ...createNeutralFilterState('72026'),
+      campuses: ['NB', 'CM'],
+      levels: ['U'],
+      modalities: ['ONLINE'],
+      includeIncomplete: { prerequisite: false, modality: true, synchronicity: false },
+    }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    const state = JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1;
+    expect(state.term).toBe('72026');
+    expect(state.campuses).toEqual(['NB', 'CM']);
+    expect(state.levels).toEqual([]);
+    expect(state.modalities).toEqual([]);
+    expect(state.includeIncomplete.modality).toBe(false);
+  });
 
-  it('adds/removes an availability window and submits once while preserving the target', () => {
+  it('submits exactly once through its stable native form', () => {
     const onSubmit = vi.fn();
     render(<Harness onSubmit={onSubmit} />);
-
-    fireEvent.click(screen.getByText('Same-Section constraints'));
-    fireEvent.change(screen.getByLabelText('Weekday'), { target: { value: 'FRIDAY' } });
-    fireEvent.change(screen.getByLabelText('Start'), { target: { value: '10:30' } });
-    fireEvent.change(screen.getByLabelText('End'), { target: { value: '12:15' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add window' }));
-    expect(state().availability).toEqual([
-      { weekday: 'FRIDAY', startMinute: 630, endMinute: 735 },
-    ]);
-    fireEvent.click(screen.getByRole('button', { name: 'Remove availability window 1' }));
-    expect(state().availability).toEqual([]);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    const form = document.getElementById('course-filter-form');
+    if (!(form instanceof HTMLFormElement)) throw new Error('Expected native filter form.');
+    fireEvent.submit(form);
     expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(state()).toMatchObject({ term: 'T2026F', campuses: ['NB'] });
   });
 });

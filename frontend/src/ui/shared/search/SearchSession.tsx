@@ -160,7 +160,7 @@ function reduceSearchSession(
   return { ...state, expandedSectionDisclosures };
 }
 
-interface SearchSessionRuntime {
+export interface SearchSessionRuntime {
   readonly state: SearchSessionState;
   readonly applyScope: (scope: SearchScope, filters: FilterStateV1) => void;
   readonly initializeScope: (
@@ -173,8 +173,8 @@ interface SearchSessionRuntime {
     request: CourseQueryRequestV1,
     response: CourseQueryResponseV1,
   ) => void;
-  readonly restoreFilterScrollTop: () => number;
-  readonly saveFilterScrollTop: (scrollTop: number) => void;
+  readonly restorePageScroll: () => void;
+  readonly savePageScroll: () => void;
   readonly setDraftFilters: (filters: FilterStateV1, edited: boolean) => void;
   readonly setCandidateScope: (scope: SearchScope) => void;
   readonly setSectionDisclosureExpanded: (disclosureId: string, expanded: boolean) => void;
@@ -184,7 +184,7 @@ const SearchSessionContext = createContext<SearchSessionRuntime | null>(null);
 
 export function SearchSessionProvider({ children }: { readonly children: ReactNode }) {
   const [state, dispatch] = useReducer(reduceSearchSession, INITIAL_SEARCH_SESSION);
-  const filterScrollTop = useRef(0);
+  const pageScroll = useRef<number | null>(null);
   const initializeScope = useCallback((
     candidate: SearchScope,
     applied: SearchScope | null,
@@ -216,17 +216,21 @@ export function SearchSessionProvider({ children }: { readonly children: ReactNo
   ) => {
     dispatch({ type: 'SET_SECTION_DISCLOSURE', disclosureId, expanded });
   }, []);
-  const restoreFilterScrollTop = useCallback(() => filterScrollTop.current, []);
-  const saveFilterScrollTop = useCallback((scrollTop: number) => {
-    filterScrollTop.current = scrollTop;
+  const savePageScroll = useCallback(() => {
+    pageScroll.current = Math.max(0, globalThis.scrollY ?? 0);
+  }, []);
+  const restorePageScroll = useCallback(() => {
+    if (pageScroll.current === null) return;
+    if ((globalThis.scrollY ?? 0) === pageScroll.current) return;
+    globalThis.scrollTo?.({ behavior: 'auto', left: 0, top: pageScroll.current });
   }, []);
   const value = useMemo<SearchSessionRuntime>(() => ({
     applyScope,
     initializeScope,
     recordSubmission,
     recordSuccess,
-    restoreFilterScrollTop,
-    saveFilterScrollTop,
+    restorePageScroll,
+    savePageScroll,
     setDraftFilters,
     setCandidateScope,
     setSectionDisclosureExpanded,
@@ -236,8 +240,8 @@ export function SearchSessionProvider({ children }: { readonly children: ReactNo
     initializeScope,
     recordSubmission,
     recordSuccess,
-    restoreFilterScrollTop,
-    saveFilterScrollTop,
+    restorePageScroll,
+    savePageScroll,
     setDraftFilters,
     setCandidateScope,
     setSectionDisclosureExpanded,

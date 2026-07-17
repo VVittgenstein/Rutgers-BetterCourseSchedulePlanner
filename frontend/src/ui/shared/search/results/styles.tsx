@@ -154,6 +154,10 @@ export const SEARCH_RESULTS_CSS = String.raw`
   padding: 0.55rem;
 }
 
+.search-results__field--full-row {
+  grid-column: 1 / -1;
+}
+
 .search-results__value {
   font-size: 0.86rem;
   line-height: 1.35;

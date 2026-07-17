@@ -8,7 +8,9 @@ pub const PACKAGE_BOUNDARY: &str = "bcsp-application";
 mod discovery_runtime;
 mod host;
 mod official_refresh_runtime;
+mod prepared_serving;
 mod product_routes;
+mod product_scope;
 mod query_service;
 mod refresh_coordinator;
 mod refresh_generation;
@@ -31,14 +33,25 @@ pub use host::{
 pub use official_refresh_runtime::{
     DISCOVERY_RETRY_INTERVAL, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,
 };
+pub use prepared_serving::{
+    PreparedCatalogVectorEntry, PreparedOpenOverlay, PreparedOpenPublicationBarrier,
+    PreparedOpenVectorEntry, PreparedServingBinding, PreparedServingError,
+    PreparedServingRebuildDemand, PreparedServingRebuildRuntime, PreparedServingRegistry,
+    PreparedServingSnapshot, build_prepared_serving_snapshot, rebuild_prepared_open_from_access,
+    rebuild_prepared_open_overlay, rebuild_prepared_serving_from_access,
+};
 pub use product_routes::{
     PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH, PRODUCT_COURSE_SEARCH_PATH,
-    PRODUCT_FILTER_OPTIONS_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
-    PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
-    PRODUCT_SERVICE_STATUS_PATH, ProductStorageAccess, ProductStorageLockError,
-    SHARED_PRODUCT_ROUTE_INVENTORY, SharedProductRoutes, SharedProductStorage,
+    PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH, PRODUCT_FILTER_OPTIONS_PATH,
+    PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH, PRODUCT_OPEN_STATUS_PATH,
+    PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH, PRODUCT_SERVICE_STATUS_PATH,
+    ProductStorageAccess, ProductStorageLockError, SHARED_PRODUCT_ROUTE_INVENTORY,
+    SharedProductRoutes, SharedProductStorage,
 };
-pub use query_service::{SharedQueryError, SharedQueryService};
+pub use product_scope::{
+    PRODUCT_CAMPUS_CODES, is_product_campus, product_target_keys, product_term_publication,
+};
+pub use query_service::{PreparedQueryService, SharedQueryError, SharedQueryService};
 pub use refresh_coordinator::{
     CatalogPullFailure, CatalogPullResponse, CoordinatorClock, CoordinatorDispatchOutcome,
     CoordinatorError, CoordinatorStatusSink, CoordinatorStatusSnapshot, NoopCoordinatorStatusSink,
@@ -61,7 +74,9 @@ pub use rutgers_refresh_upstream::{
 pub use service_status::{
     ServiceActivitySnapshot, ServiceStatusRegistry, ServiceStatusRegistryError,
 };
-pub use target_refresh_demand::{TargetRefreshDemand, TargetRefreshDemandError};
+pub use target_refresh_demand::{
+    ManualTargetRetryRequest, TargetRefreshDemand, TargetRefreshDemandError,
+};
 pub use watch_socket::{
     NoopWatchDispatchSink, SharedWatchSocket, SystemWatchClock, WatchAdmissionSource,
     WatchDispatchSink,
@@ -83,6 +98,7 @@ pub fn boundary_marker() -> &'static str {
 
 mod dependency_contract {
     use axum as _;
+    use rusqlite as _;
     use serde_json as _;
     use tokio as _;
     use tower as _;

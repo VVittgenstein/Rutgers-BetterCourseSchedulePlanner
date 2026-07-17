@@ -252,18 +252,18 @@ describe('P7.2-004 local personal state', () => {
     await waitFor(() => expect(requests).toContain('/api/v1/local/saved-views'));
   });
 
-  it('accepts V2 current filters and Saved views while preserving backend incompatibility', () => {
+  it('accepts V3 current filters and Saved views while preserving backend incompatibility', () => {
     const bootstrap = localBootstrapWithV2Filters();
 
     const parsed = parseLocalBootstrapData(bootstrap);
 
     expect(parsed.state.currentFilters.value?.content).toMatchObject({
       status: 'COMPATIBLE',
-      filters: { contractVersion: 2 },
+      filters: { contractVersion: 3 },
     });
     expect(parsed.state.savedViews[0]?.content).toMatchObject({
       status: 'COMPATIBLE',
-      filters: { contractVersion: 2 },
+      filters: { contractVersion: 3 },
     });
     expect(parsed.state.savedViews[1]?.content).toEqual({
       status: 'INCOMPATIBLE',
@@ -274,6 +274,39 @@ describe('P7.2-004 local personal state', () => {
       },
       reason: { kind: 'UNKNOWN_FIELD', stableId: 'FLT-C10' },
     });
+  });
+
+  it('accepts every frozen REVIEW_REQUIRED migration reason and rejects unknown reason codes', () => {
+    const bootstrap = localBootstrapWithV2Filters();
+    const reasons = [
+      { stableId: 'FLT-C04', code: 'ACTIVE_LEGACY_FILTER' },
+      { stableId: 'FLT-C01', code: 'UNSUPPORTED_CAMPUS' },
+      { stableId: 'FLT-C01', code: 'SCOPE_UNAVAILABLE' },
+      { stableId: 'FLT-C05', code: 'DYNAMIC_VALUE_UNAVAILABLE' },
+    ] as const;
+    const withReview = {
+      ...bootstrap,
+      state: {
+        ...bootstrap.state,
+        currentFilters: {
+          ...bootstrap.state.currentFilters,
+          value: {
+            association: { kind: 'CUSTOM' },
+            content: { status: 'REVIEW_REQUIRED', rawSnapshot: { codecVersion: 2 }, reasons },
+          },
+        },
+      },
+    };
+    expect(parseLocalBootstrapData(withReview).state.currentFilters.value?.content).toMatchObject({
+      status: 'REVIEW_REQUIRED',
+      reasons,
+    });
+    const unknownReason = structuredClone(withReview);
+    if (unknownReason.state.currentFilters.value?.content.status !== 'REVIEW_REQUIRED') {
+      throw new Error('Expected REVIEW_REQUIRED fixture.');
+    }
+    unknownReason.state.currentFilters.value.content.reasons[3]!.code = 'UNKNOWN_REASON';
+    expect(() => parseLocalBootstrapData(unknownReason)).toThrow(ProductBootstrapError);
   });
 
   it('requires backend migration before legacy filters can be marked compatible', () => {

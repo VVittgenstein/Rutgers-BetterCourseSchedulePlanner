@@ -79,6 +79,7 @@ pub enum WatchStartAdmission {
     },
     SectionNotFound,
     TargetUnavailable,
+    UnsupportedTarget,
     TermOutOfRange,
 }
 
@@ -278,6 +279,14 @@ where
                         section: item.section_key,
                         policy: core_policy(&item.policy),
                         admission: CoreStartAdmission::TargetUnavailable,
+                    });
+                    continue;
+                }
+                WatchStartAdmission::UnsupportedTarget => {
+                    specs.push(CoreStartSpec {
+                        section: item.section_key,
+                        policy: core_policy(&item.policy),
+                        admission: CoreStartAdmission::UnsupportedTarget,
                     });
                     continue;
                 }
@@ -675,6 +684,12 @@ where
                     WatchStartItemResultV1::Rejected {
                         section_key: value.section,
                         reason: WatchStartRejectionReason::TargetUnavailable,
+                    }
+                }
+                crate::effect::CoreStartDisposition::RejectedUnsupportedTarget => {
+                    WatchStartItemResultV1::Rejected {
+                        section_key: value.section,
+                        reason: WatchStartRejectionReason::UnsupportedTarget,
                     }
                 }
                 crate::effect::CoreStartDisposition::RejectedTermOutOfRange => {

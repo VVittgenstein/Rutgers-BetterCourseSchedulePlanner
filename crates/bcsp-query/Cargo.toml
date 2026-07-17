@@ -15,6 +15,7 @@ bcsp-domain = { version = "=0.1.0", path = "../bcsp-domain" }
 serde.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

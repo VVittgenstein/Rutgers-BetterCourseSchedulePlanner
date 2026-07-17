@@ -17,8 +17,8 @@ use crate::refresh_coordinator::{
     ConcurrentOpenExecution, ConcurrentOpenSchedule, TargetWorkflowControl,
 };
 use crate::{
-    CoordinatorDispatchOutcome, CoordinatorError, ProductStorageAccess, RefreshPolicyProvider,
-    RefreshUpstream, ScheduledRefreshTarget, SharedRefreshCoordinator,
+    CoordinatorDispatchOutcome, CoordinatorError, ManualTargetRetryRequest, ProductStorageAccess,
+    RefreshPolicyProvider, RefreshUpstream, ScheduledRefreshTarget, SharedRefreshCoordinator,
 };
 
 const REFRESH_COORDINATOR_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -35,6 +35,10 @@ enum RefreshRuntimeCommand {
         manual_one_shot: bool,
     },
     ActivateOpen(TermCampusKey),
+    ManualRetry {
+        target: TermCampusKey,
+        generation: u64,
+    },
     ReleaseProductDemand(TermCampusKey),
     RemoveTarget(TermCampusKey),
 }
@@ -86,6 +90,7 @@ pub struct RefreshRuntime {
     registered_targets: Arc<Mutex<BTreeSet<TermCampusKey>>>,
     registered_target_modes: Arc<Mutex<BTreeMap<TermCampusKey, bool>>>,
     active_open_targets: Arc<Mutex<BTreeSet<TermCampusKey>>>,
+    manual_retry_generations: Arc<Mutex<BTreeMap<TermCampusKey, u64>>>,
     task: Option<JoinHandle<()>>,
 }
 
@@ -234,6 +239,7 @@ impl RefreshRuntime {
                 .collect::<BTreeMap<_, _>>(),
         ));
         let active_open_targets = Arc::new(Mutex::new(BTreeSet::new()));
+        let manual_retry_generations = Arc::new(Mutex::new(BTreeMap::new()));
         let (shutdown, mut shutdown_receiver) = watch::channel(false);
         let (command_sender, mut command_receiver) =
             mpsc::unbounded_channel::<RefreshRuntimeCommand>();
@@ -333,6 +339,21 @@ impl RefreshRuntime {
                                         );
                                     }
                                 }
+                            }
+                            RefreshRuntimeCommand::ManualRetry { target, generation } => {
+                                if let Some(entry) = target_coordinators.get_mut(&target)
+                                    && let Err(error) =
+                                        entry.coordinator.request_manual_target_retry(&target)
+                                {
+                                    tracing::error!(
+                                        code = "SHARED_MANUAL_RETRY_FAILED",
+                                        target = ?target,
+                                        generation,
+                                        error = ?error,
+                                    );
+                                }
+                                // A registered target absent from the idle map is already running;
+                                // consuming this generation is the required active-target dedupe.
                             }
                             RefreshRuntimeCommand::ReleaseProductDemand(target) => {
                                 desired_product_demand.remove(&target);
@@ -584,6 +605,7 @@ impl RefreshRuntime {
             registered_targets,
             registered_target_modes,
             active_open_targets,
+            manual_retry_generations,
             task: Some(task),
         })
     }
@@ -699,6 +721,48 @@ impl RefreshRuntime {
             .is_err()
         {
             active.remove(target);
+            return Err(RefreshRuntimeRegistrationError::Stopped);
+        }
+        Ok(true)
+    }
+
+    pub fn request_manual_target_retry(
+        &self,
+        request: &ManualTargetRetryRequest,
+    ) -> Result<bool, RefreshRuntimeRegistrationError> {
+        if !self
+            .registered_targets
+            .lock()
+            .map_err(|_| RefreshRuntimeRegistrationError::Unavailable)?
+            .contains(request.target())
+        {
+            return Err(RefreshRuntimeRegistrationError::UnknownTarget);
+        }
+        let mut generations = self
+            .manual_retry_generations
+            .lock()
+            .map_err(|_| RefreshRuntimeRegistrationError::Unavailable)?;
+        let previous = generations.get(request.target()).copied();
+        if previous.is_some_and(|generation| generation >= request.generation()) {
+            return Ok(false);
+        }
+        generations.insert(request.target().clone(), request.generation());
+        if self
+            .command_sender
+            .send(RefreshRuntimeCommand::ManualRetry {
+                target: request.target().clone(),
+                generation: request.generation(),
+            })
+            .is_err()
+        {
+            match previous {
+                Some(previous) => {
+                    generations.insert(request.target().clone(), previous);
+                }
+                None => {
+                    generations.remove(request.target());
+                }
+            }
             return Err(RefreshRuntimeRegistrationError::Stopped);
         }
         Ok(true)
@@ -1101,6 +1165,7 @@ mod tests {
     struct ConcurrentFailingUpstream {
         active: Arc<AtomicUsize>,
         maximum: Arc<AtomicUsize>,
+        attempts: Arc<AtomicUsize>,
     }
 
     impl RefreshUpstream for ConcurrentFailingUpstream {
@@ -1110,6 +1175,7 @@ mod tests {
         ) -> crate::RefreshFuture<'a, Result<crate::CatalogPullResponse, crate::CatalogPullFailure>>
         {
             Box::pin(async move {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
                 let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
                 self.maximum.fetch_max(active, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(75)).await;
@@ -1177,6 +1243,7 @@ mod tests {
                 registered_targets: Arc::new(Mutex::new(registered)),
                 registered_target_modes: Arc::new(Mutex::new(registered_modes)),
                 active_open_targets: Arc::new(Mutex::new(BTreeSet::new())),
+                manual_retry_generations: Arc::new(Mutex::new(BTreeMap::new())),
                 task: None,
             },
             command_receiver,
@@ -1240,6 +1307,52 @@ mod tests {
             commands.try_recv(),
             Ok(RefreshRuntimeCommand::ActivateOpen(received)) if received == target
         ));
+    }
+
+    #[test]
+    fn manual_retry_generations_dedupe_per_target_and_keep_partial_targets_independent() {
+        let nb = registration_for("NB").target().clone();
+        let nk = registration_for("NK").target().clone();
+        let cm = registration_for("CM").target().clone();
+        let (runtime, mut commands) = runtime_shell(BTreeSet::from([nb.clone(), nk, cm.clone()]));
+        let demand = crate::TargetRefreshDemand::default();
+        assert_eq!(
+            demand
+                .request_manual_target_retries(&[nb.clone(), cm.clone()])
+                .expect("partial target retry"),
+            2,
+        );
+        let retries = demand
+            .pending_manual_target_retries()
+            .expect("retry generations");
+        for retry in &retries {
+            assert!(
+                runtime
+                    .request_manual_target_retry(retry)
+                    .expect("first generation")
+            );
+            assert!(
+                !runtime
+                    .request_manual_target_retry(retry)
+                    .expect("same generation is coalesced")
+            );
+        }
+        let received = std::iter::from_fn(|| commands.try_recv().ok())
+            .map(|command| match command {
+                RefreshRuntimeCommand::ManualRetry { target, generation } => (target, generation),
+                _ => panic!("only manual retry commands are expected"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(received.len(), 2);
+        assert_eq!(
+            received
+                .iter()
+                .map(|(target, _)| target.clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([nb, cm]),
+            "the ready/active middle target is never included or fabricated",
+        );
+        assert!(received[0].1 < received[1].1);
     }
 
     #[test]
@@ -1321,6 +1434,123 @@ mod tests {
         assert_eq!(status.maximum.load(Ordering::SeqCst), 3);
         assert!(status.maximum.load(Ordering::SeqCst) <= REFRESH_MAX_CONCURRENCY);
         assert_eq!(runtime.registered_targets().expect("targets").len(), 4);
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn explicit_retry_restarts_an_idle_failed_target_and_dedupes_an_active_generation() {
+        let storage = Arc::new(Mutex::new(
+            OperationalStorage::open_in_memory().expect("storage"),
+        ));
+        let upstream = ConcurrentFailingUpstream::default();
+        let policy = crate::FixedRefreshPolicyProvider::new(
+            crate::RefreshPolicy::try_new(Duration::from_secs(600), GeneralOpenInterval::public())
+                .expect("policy"),
+        );
+        let watch = Arc::new(
+            crate::SharedWatchSocket::try_new(
+                Arc::new(|_: &bcsp_contracts::SectionKey| WatchStartAdmission::admitted(None)),
+                Arc::new(crate::NoopWatchDispatchSink),
+            )
+            .expect("watch"),
+        );
+        let registry = Arc::new(crate::OpenRuntimeSnapshotRegistry::default());
+        let run_id = "00000000-0000-4000-8000-000000000779"
+            .parse()
+            .expect("run ID");
+        let registration = registration_for("NB");
+        let target = registration.target().clone();
+        let coordinator = SharedRefreshCoordinator::new(
+            storage,
+            upstream.clone(),
+            policy,
+            run_id,
+            OpenCounterAudience::Public,
+            watch,
+            registry,
+        );
+        let runtime = RefreshRuntime::spawn_pool_with_manual_targets_and_budget(
+            vec![coordinator],
+            vec![registration],
+            &BTreeSet::from([target.clone()]),
+            Arc::new(Semaphore::new(REFRESH_MAX_CONCURRENCY)),
+        )
+        .expect("runtime");
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if upstream.attempts.load(Ordering::SeqCst) == 1
+                    && upstream.active.load(Ordering::SeqCst) == 0
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("first failed workflow becomes idle");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let demand = crate::TargetRefreshDemand::default();
+        assert_eq!(
+            demand
+                .request_manual_target_retries(std::slice::from_ref(&target))
+                .expect("terminal retry generation"),
+            1,
+        );
+        let first_retry = demand
+            .pending_manual_target_retries()
+            .expect("pending retry")
+            .into_iter()
+            .next()
+            .expect("retry generation");
+        assert!(
+            runtime
+                .request_manual_target_retry(&first_retry)
+                .expect("retry command")
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if upstream.attempts.load(Ordering::SeqCst) >= 2
+                    && upstream.active.load(Ordering::SeqCst) == 1
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("explicit command restarts before the five-second automatic backoff");
+
+        assert!(
+            demand
+                .acknowledge_manual_target_retry(&first_retry)
+                .expect("first generation acknowledged")
+        );
+        assert_eq!(
+            demand
+                .request_manual_target_retries(std::slice::from_ref(&target))
+                .expect("active generation"),
+            1,
+        );
+        let active_retry = demand
+            .pending_manual_target_retries()
+            .expect("active retry")
+            .into_iter()
+            .next()
+            .expect("active retry generation");
+        assert!(
+            runtime
+                .request_manual_target_retry(&active_retry)
+                .expect("active command accepted for coalescing")
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            upstream.attempts.load(Ordering::SeqCst),
+            2,
+            "a retry generation received while the target is running is consumed without a duplicate workflow",
+        );
         runtime.shutdown().await;
     }
 

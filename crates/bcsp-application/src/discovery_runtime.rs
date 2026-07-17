@@ -10,7 +10,11 @@ use bcsp_operational_storage::{
 use bcsp_rutgers_client::{DiscoverySnapshot, OpenSectionsRequest, OpenSectionsRequestError};
 use thiserror::Error;
 
-use crate::{ProductStorageAccess, ScheduledRefreshTarget};
+use crate::{
+    PreparedServingError, PreparedServingRebuildDemand, ProductStorageAccess,
+    ScheduledRefreshTarget,
+};
+use crate::{is_product_campus, product_target_keys};
 
 const ONLINE_CAMPUS_ALIASES: [&str; 3] = ["ONLINE_NB", "ONLINE_NK", "ONLINE_CM"];
 
@@ -32,6 +36,27 @@ pub fn publish_discovery_for_refresh<S>(
 where
     S: ProductStorageAccess,
 {
+    publish_discovery_for_refresh_with_prepared(
+        storage,
+        discovery,
+        observation_id,
+        started_at,
+        completed_at,
+        None,
+    )
+}
+
+pub(crate) fn publish_discovery_for_refresh_with_prepared<S>(
+    storage: &S,
+    discovery: &DiscoverySnapshot,
+    observation_id: TraceId,
+    started_at: impl Into<String>,
+    completed_at: impl Into<String>,
+    prepared: Option<&PreparedServingRebuildDemand>,
+) -> Result<PublishedRefreshTargets, DiscoveryRuntimeError>
+where
+    S: ProductStorageAccess,
+{
     let targets = scheduled_targets(discovery)?;
     let command = to_discovery_refresh_command(
         discovery,
@@ -39,10 +64,16 @@ where
         started_at.into(),
         completed_at.into(),
     )?;
+    let barrier = prepared
+        .map(PreparedServingRebuildDemand::begin_publication)
+        .transpose()?;
     let outcome = storage
         .lock_operational()
         .map_err(|_| DiscoveryRuntimeError::StorageLock)?
         .apply_discovery_refresh(command)?;
+    if let Some(barrier) = barrier {
+        barrier.commit();
+    }
     Ok(PublishedRefreshTargets { outcome, targets })
 }
 
@@ -90,6 +121,97 @@ where
         .map_err(|_| DiscoveryRuntimeError::StorageLock)?
         .published_discovery_snapshot()?;
     scheduled_targets_from_persisted(&published.snapshot)
+}
+
+/// Derives the fixed Round 4 product scheduler set from one validated Rutgers discovery.
+///
+/// One affirmative NB/NK/CM target proves that the term is published. Once published, the term
+/// expands to all three product Campuses so Local term-level Pull and automatic current/next
+/// refresh never inherit a partial or selector-order-dependent target set.
+pub(crate) fn product_refresh_targets(
+    discovery: &DiscoverySnapshot,
+) -> Result<Vec<ScheduledRefreshTarget>, DiscoveryRuntimeError> {
+    let mut registrations = Vec::new();
+    for term in &discovery.terms {
+        if term.published.value() != Some(&true)
+            || !discovery.targets.iter().any(|target| {
+                target.key.term() == &term.term_id
+                    && is_product_campus(target.key.campus().as_str())
+                    && target.enabled.value() == Some(&true)
+                    && discovery.campuses.iter().any(|campus| {
+                        campus.campus_code == *target.key.campus()
+                            && campus.enabled.value() == Some(&true)
+                    })
+            })
+        {
+            continue;
+        }
+        for target in product_target_keys(&term.term_id) {
+            let request = OpenSectionsRequest::try_from_persisted_discovery(
+                term.source_id.as_str(),
+                &term.term_id,
+                &target,
+                term.year
+                    .value()
+                    .copied()
+                    .and_then(|year| u16::try_from(year).ok()),
+                term.term_code.value().map(String::as_str),
+            )?;
+            registrations.push(ScheduledRefreshTarget::try_new(target, request)?);
+        }
+    }
+    registrations.sort_by(|left, right| left.target().cmp(right.target()));
+    Ok(registrations)
+}
+
+pub(crate) fn restore_product_refresh_targets<S>(
+    storage: &S,
+) -> Result<Vec<ScheduledRefreshTarget>, DiscoveryRuntimeError>
+where
+    S: ProductStorageAccess,
+{
+    let published = storage
+        .lock_operational()
+        .map_err(|_| DiscoveryRuntimeError::StorageLock)?
+        .published_discovery_snapshot()?;
+    product_refresh_targets_from_persisted(&published.snapshot)
+}
+
+fn product_refresh_targets_from_persisted(
+    discovery: &StoredDiscoverySnapshot,
+) -> Result<Vec<ScheduledRefreshTarget>, DiscoveryRuntimeError> {
+    let mut registrations = Vec::new();
+    for term in &discovery.terms {
+        if term.published != Some(true)
+            || !discovery.campuses.iter().any(|target| {
+                target.target.term() == &term.term_id
+                    && is_product_campus(target.target.campus().as_str())
+                    && target.enabled == Some(true)
+                    && crate::product_scope::stored_presence_is_true(
+                        &target.canonical_facts,
+                        "campusEnabled",
+                    )
+                    && crate::product_scope::stored_presence_is_true(
+                        &target.canonical_facts,
+                        "targetEnabled",
+                    )
+            })
+        {
+            continue;
+        }
+        for target in product_target_keys(&term.term_id) {
+            let request = OpenSectionsRequest::try_from_persisted_discovery(
+                &term.source_version_id,
+                &term.term_id,
+                &target,
+                term.year,
+                term.term_code.as_deref(),
+            )?;
+            registrations.push(ScheduledRefreshTarget::try_new(target, request)?);
+        }
+    }
+    registrations.sort_by(|left, right| left.target().cmp(right.target()));
+    Ok(registrations)
 }
 
 fn scheduled_targets(
@@ -195,6 +317,8 @@ pub enum DiscoveryRuntimeError {
     OpenRequest(#[from] OpenSectionsRequestError),
     #[error(transparent)]
     Coordinator(#[from] crate::CoordinatorError),
+    #[error(transparent)]
+    PreparedServing(#[from] PreparedServingError),
     #[error("discovery target has no matching term: {0:?}")]
     TargetWithoutTerm(TermCampusKey),
     #[error("published discovery contains a duplicate source version")]
@@ -203,4 +327,85 @@ pub enum DiscoveryRuntimeError {
     TargetSourceOwnershipMismatch(TermCampusKey),
     #[error("published discovery target references an unknown source version")]
     UnknownSourceVersion,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use bcsp_contracts::TraceId;
+    use bcsp_operational_storage::OperationalStorage;
+    use bcsp_rutgers_client::{DiscoverySnapshot, SourceProvenance, decode_discovery_payload};
+
+    use super::{
+        product_refresh_targets, publish_discovery_for_refresh, restore_product_refresh_targets,
+    };
+
+    const DISCOVERY: &[u8] = br#"{
+      "sourceVersion":"round-4-product-scope",
+      "terms":[
+        {"termId":"92026","year":2026,"termCode":"9","published":true},
+        {"termId":"12027","year":2027,"termCode":"1","published":false}
+      ],
+      "campuses":[
+        {"campusCode":"NB","enabled":true},
+        {"campusCode":"ONLINE_NB","enabled":true},
+        {"campusCode":"NWK","enabled":true}
+      ],
+      "targets":[
+        {"termId":"92026","campusCode":"NB","enabled":true},
+        {"termId":"92026","campusCode":"ONLINE_NB","enabled":true},
+        {"termId":"12027","campusCode":"NWK","enabled":true}
+      ],
+      "subjects":[]
+    }"#;
+
+    fn discovery() -> DiscoverySnapshot {
+        DiscoverySnapshot::try_from_raw(
+            decode_discovery_payload(DISCOVERY).expect("discovery JSON"),
+            SourceProvenance::from_body("ROUND_4_PRODUCT_SCOPE", "2026-07-17T12:00:00Z", DISCOVERY),
+        )
+        .expect("validated discovery")
+    }
+
+    #[test]
+    fn one_affirmative_main_campus_expands_to_exactly_nb_nk_cm_and_restores_identically() {
+        let discovery = discovery();
+        let projected = product_refresh_targets(&discovery).expect("product targets");
+        assert_eq!(
+            projected
+                .iter()
+                .map(|target| (
+                    target.target().term().as_str(),
+                    target.target().campus().as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![("92026", "CM"), ("92026", "NB"), ("92026", "NK")],
+        );
+
+        let storage = Arc::new(Mutex::new(
+            OperationalStorage::open_in_memory().expect("storage"),
+        ));
+        publish_discovery_for_refresh(
+            &storage,
+            &discovery,
+            "00000000-0000-4000-8000-000000000001"
+                .parse::<TraceId>()
+                .expect("trace"),
+            "2026-07-17T12:00:00Z",
+            "2026-07-17T12:00:01Z",
+        )
+        .expect("publish");
+        let restored = restore_product_refresh_targets(&storage).expect("restored targets");
+        assert_eq!(
+            restored
+                .iter()
+                .map(|target| target.target().clone())
+                .collect::<Vec<_>>(),
+            projected
+                .iter()
+                .map(|target| target.target().clone())
+                .collect::<Vec<_>>(),
+        );
+    }
 }

@@ -17,7 +17,11 @@ import type {
 } from '../src/ui/shared/product';
 import { ProductClientError } from '../src/ui/shared/product';
 import { createNeutralFilterState } from '../src/ui/shared/product';
-import { SearchWorkspace } from '../src/ui/shared/search';
+import {
+  SearchSessionProvider,
+  SearchWorkspace,
+  useSearchSession,
+} from '../src/ui/shared/search';
 import { AppRouterProvider } from '../src/ui/shared/routing';
 import type { ShellDataState } from '../src/ui/shared/shell';
 
@@ -25,8 +29,8 @@ const SCHEMA = JSON.parse(readFileSync(
   resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
   'utf8',
 )) as FilterSchemaV1;
-const TERM = '2026-9';
-const NEXT_TERM = '2027-0';
+const TERM = '72026';
+const NEXT_TERM = '92026';
 const known = (value: string) => ({
   knowledge: 'KNOWN',
   presence: { presence: 'PRESENT', value },
@@ -63,7 +67,7 @@ function discovery(): CatalogDiscoveryResponseV1 {
       campusLabel: known('New Brunswick'),
       key: { campus: 'NB', term: TERM },
       provenance,
-      termLabel: known('Fall 2026'),
+      termLabel: known('This upstream label must not render'),
     }],
   };
 }
@@ -77,7 +81,7 @@ const shellState: Extract<ShellDataState, { status: 'READY' }> = {
 };
 
 const emptyCourses: CourseQueryResponseV1 = {
-  contractVersion: 2,
+  contractVersion: 3,
   items: [],
   page: { page: 1, pageSize: 25, total: 0, totalPages: 0 },
 };
@@ -93,8 +97,11 @@ function serviceStatus(usable: boolean, retrying = false): ServiceStatusV2 {
       currentTerm: TERM,
       nextTerm: NEXT_TERM,
       visibleTerms: [
-        { term: TERM, relativeOffset: 0, discovered: true, autoManaged: true, manualPullAllowed: false, watchable: true },
-        { term: NEXT_TERM, relativeOffset: 1, discovered: false, autoManaged: true, manualPullAllowed: false, watchable: true },
+        { term: '02026', relativeOffset: -2, publication: 'PUBLISHED', autoManaged: false, manualPullAllowed: true, watchable: false },
+        { term: '12026', relativeOffset: -1, publication: 'PUBLISHED', autoManaged: false, manualPullAllowed: true, watchable: false },
+        { term: TERM, relativeOffset: 0, publication: 'PUBLISHED', autoManaged: true, manualPullAllowed: false, watchable: true },
+        { term: NEXT_TERM, relativeOffset: 1, publication: 'UNPUBLISHED', autoManaged: true, manualPullAllowed: false, watchable: true },
+        { term: '02027', relativeOffset: 2, publication: 'UNPUBLISHED', autoManaged: false, manualPullAllowed: true, watchable: false },
       ],
     },
     automaticTermSummaries: [
@@ -145,8 +152,29 @@ function renderWorkspace(
 }
 
 function applyNewBrunswick(): void {
-  fireEvent.click(screen.getByRole('checkbox', { name: /New Brunswick/u }));
+  fireEvent.click(screen.getByRole('checkbox', { name: /NB/u }));
   fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+}
+
+function SearchSessionProbe() {
+  const session = useSearchSession();
+  return (
+    <output data-testid="search-session-probe">
+      {JSON.stringify({
+        appliedScope: session.state.appliedScope,
+        hasSubmittedQuery: session.state.lastSubmittedRequest !== null,
+        hasSuccessfulQuery: session.state.lastSuccessfulResponse !== null,
+      })}
+    </output>
+  );
+}
+
+function readSearchSessionProbe() {
+  return JSON.parse(screen.getByTestId('search-session-probe').textContent ?? '{}') as {
+    readonly appliedScope: { readonly campuses: readonly string[]; readonly term: string } | null;
+    readonly hasSubmittedQuery: boolean;
+    readonly hasSuccessfulQuery: boolean;
+  };
 }
 
 afterEach(cleanup);
@@ -156,8 +184,8 @@ describe('RC3 unified Course workspace controller', () => {
     const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue(emptyCourses);
     renderWorkspace(productRuntime({ searchCourses }), '/', serviceStatus(false));
 
-    expect((screen.getByRole('radio', { name: /Fall 2026/u }) as HTMLInputElement).disabled).toBe(false);
-    expect((screen.getByRole('checkbox', { name: /New Brunswick/u }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('radio', { name: /Summer 2026/u }) as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByRole('checkbox', { name: /NB/u }) as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByLabelText('Term')).toBeNull();
@@ -166,13 +194,13 @@ describe('RC3 unified Course workspace controller', () => {
 
   it('starts with current term and no auto-selected Campus, then enables one partial-ready target', () => {
     renderWorkspace(productRuntime({}));
-    expect((screen.getByRole('radio', { name: /Fall 2026/u }) as HTMLInputElement).checked).toBe(true);
-    const campus = screen.getByRole('checkbox', { name: /New Brunswick/u }) as HTMLInputElement;
+    expect((screen.getByRole('radio', { name: /Summer 2026/u }) as HTMLInputElement).checked).toBe(true);
+    const campus = screen.getByRole('checkbox', { name: /NB/u }) as HTMLInputElement;
     expect(campus.checked).toBe(false);
     expect((screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled).toBe(true);
 
     applyNewBrunswick();
-    expect(screen.getByText('Current range')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Applied' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -214,7 +242,7 @@ describe('RC3 unified Course workspace controller', () => {
     view.rerender(application({
       ...createNeutralFilterState(TERM),
       campuses: ['NB'],
-      courseNumbers: ['999'],
+      courseNumberBands: [900],
     }));
     await waitFor(() => expect(signal?.aborted).toBe(true));
     expect(view.container.querySelector('[data-query-state="idle"]')).not.toBeNull();
@@ -229,21 +257,33 @@ describe('RC3 unified Course workspace controller', () => {
     expect(view.container.textContent).not.toContain('4,559');
   });
 
-  it('preserves valid target-bound values and removes only invalid options when applying a scope', async () => {
+  it('rejects an invalid target-bound definition without partially applying or deleting values', async () => {
     const onFiltersChange = vi.fn();
-    const filterOptions = vi.fn(async (
-      request: Parameters<NonNullable<ProductApiPort['filterOptions']>>[0],
-    ): Promise<FilterOptionsResponseV2> => ({
-      contractVersion: 2,
-      field: request.field,
-      options: request.query === 'data' ? [{ value: 'data', label: 'data' }] : [],
+    const filterOptions = vi.fn<ProductApiPort['filterOptions']>();
+    const validateDynamicFilters = vi.fn<ProductApiPort['validateDynamicFilters']>().mockResolvedValue({
+      contractVersion: 3,
       targetVersions: [{ target: { term: TERM, campus: 'NB' }, contentVersion: 1 }],
-      truncated: false,
-    }));
+      invalidValues: [
+        { field: 'FLT-C03', value: '999' },
+        { field: 'FLT-C04', value: 'retired-token' },
+        { field: 'FLT-C05', value: '900' },
+        { field: 'FLT-C06', value: 'G' },
+        { field: 'FLT-C08', value: 'BAD-CORE' },
+        { field: 'FLT-S05', value: 'Retired Instructor' },
+        { field: 'FLT-S07', value: 'OLD-CAMPUS' },
+        { field: 'FLT-S09', value: 'Z' },
+      ],
+    });
     const initialFilters = {
       ...createNeutralFilterState(TERM),
       keywords: ['data', 'retired-token'],
       subjects: ['198', '999'],
+      courseNumberBands: [200, 900],
+      levels: ['U', 'G'],
+      core: { codes: ['CC', 'BAD-CORE'], mode: 'ANY' as const },
+      instructors: ['Ada Lovelace', 'Retired Instructor'],
+      meetingLocations: { locations: ['CAC', 'OLD-CAMPUS'], mode: 'ANY_MEETING' as const },
+      examCodes: ['A', 'Z'],
     };
     render(
       <BcspI18nProvider initialLocale="en-US">
@@ -251,7 +291,7 @@ describe('RC3 unified Course workspace controller', () => {
           <SearchWorkspace
             initialFilters={initialFilters}
             onFiltersChange={onFiltersChange}
-            runtime={productRuntime({ filterOptions })}
+            runtime={productRuntime({ filterOptions, validateDynamicFilters })}
             serviceStatus={serviceStatus(true)}
             shellState={shellState}
           />
@@ -259,20 +299,143 @@ describe('RC3 unified Course workspace controller', () => {
       </BcspI18nProvider>,
     );
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /New Brunswick/u }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /NB/u }));
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
 
-    await waitFor(() => expect(onFiltersChange).toHaveBeenCalledTimes(1));
-    expect(onFiltersChange.mock.calls[0]?.[0]).toMatchObject({
-      campuses: ['NB'],
-      keywords: ['data'],
-      subjects: ['198'],
-      term: TERM,
+    await waitFor(() => expect(validateDynamicFilters).toHaveBeenCalledTimes(1));
+    const alert = (await screen.findByRole('alert')).textContent ?? '';
+    for (const invalid of ['999', 'retired-token', '900', 'G', 'BAD-CORE', 'Retired Instructor', 'OLD-CAMPUS', 'Z']) {
+      expect(alert).toContain(invalid);
+    }
+    expect(alert).toContain('Subject: 999');
+    expect(alert).toContain('Keyword match: retired-token');
+    expect(alert).not.toContain('FLT-');
+    expect(onFiltersChange).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/retired-token/u).length).toBeGreaterThan(0);
+    expect(filterOptions).not.toHaveBeenCalled();
+    expect(validateDynamicFilters.mock.calls[0]?.[0]).toEqual({
+      filters: expect.objectContaining({
+        contractVersion: 3,
+        values: expect.objectContaining({
+          campuses: ['NB'], courseNumberBands: [200, 900], examCodes: ['A', 'Z'], levels: ['G', 'U'],
+          subjects: ['198', '999'],
+        }),
+      }),
     });
-    expect(screen.getByText(/Unavailable dictionary options were removed/u)).toBeTruthy();
-    expect(filterOptions.mock.calls.filter(([request]) => (
-      request.field === 'KEYWORD' && request.query === 'data'
-    ))).toHaveLength(1);
+  });
+
+  it('keeps the old applied scope, results, and Search usable when exact validation rejects a new candidate', async () => {
+    const baseStatus = serviceStatus(true);
+    const nb = baseStatus.targets[0];
+    if (nb === undefined) throw new Error('Expected NB fixture target.');
+    const multiCampusStatus: ServiceStatusV2 = {
+      ...baseStatus,
+      targets: [nb, { ...nb, primary: false, target: { term: TERM, campus: 'NK' } }],
+    };
+    const validateDynamicFilters = vi.fn<ProductApiPort['validateDynamicFilters']>()
+      .mockResolvedValueOnce({ contractVersion: 3, invalidValues: [], targetVersions: [] })
+      .mockResolvedValueOnce({
+        contractVersion: 3,
+        invalidValues: [{ field: 'FLT-C04', value: 'retired-token' }],
+        targetVersions: [],
+      });
+    const filterOptions = vi.fn<ProductApiPort['filterOptions']>();
+    const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue(emptyCourses);
+    const onFiltersChange = vi.fn();
+    render(
+      <BcspI18nProvider initialLocale="en-US">
+        <AppRouterProvider initialPath="/">
+          <SearchWorkspace
+            initialFilters={{ ...createNeutralFilterState(TERM), keywords: ['retired-token'] }}
+            onFiltersChange={onFiltersChange}
+            runtime={productRuntime({ filterOptions, searchCourses, validateDynamicFilters })}
+            serviceStatus={multiCampusStatus}
+            shellState={shellState}
+          />
+        </AppRouterProvider>
+      </BcspI18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /^NB/u }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Applied' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByRole('heading', { name: 'No matching records' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /^NK/u }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(
+      screen.getAllByRole('alert').some((alert) => alert.textContent?.includes('retired-token')),
+    ).toBe(true));
+    expect(validateDynamicFilters).toHaveBeenCalledTimes(2);
+    expect(onFiltersChange).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('heading', { name: 'No matching records' })).toBeTruthy();
+    const search = screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement;
+    expect(search.disabled).toBe(false);
+    fireEvent.click(search);
+    await waitFor(() => expect(searchCourses).toHaveBeenCalledTimes(2));
+    expect(searchCourses.mock.calls[1]?.[0].filters.values.campuses).toEqual(['NB']);
+  });
+
+  it('keeps old results during candidate edits, then clears the full query session after a successful scope change without auto-searching', async () => {
+    const baseStatus = serviceStatus(true);
+    const nb = baseStatus.targets[0];
+    if (nb === undefined) throw new Error('Expected NB fixture target.');
+    const multiCampusStatus: ServiceStatusV2 = {
+      ...baseStatus,
+      targets: [nb, { ...nb, primary: false, target: { term: TERM, campus: 'NK' } }],
+    };
+    const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue(emptyCourses);
+    const filterOptions = vi.fn<ProductApiPort['filterOptions']>().mockImplementation(async (request) => ({
+      contractVersion: 3,
+      field: request.field,
+      options: [],
+      targetVersions: [],
+      truncated: false,
+    }));
+    const runtime = productRuntime({ filterOptions, searchCourses });
+    const view = render(
+      <BcspI18nProvider initialLocale="en-US">
+        <AppRouterProvider initialPath="/">
+          <SearchSessionProvider>
+            <SearchWorkspace
+              runtime={runtime}
+              serviceStatus={multiCampusStatus}
+              shellState={shellState}
+            />
+            <SearchSessionProbe />
+          </SearchSessionProvider>
+        </AppRouterProvider>
+      </BcspI18nProvider>,
+    );
+
+    applyNewBrunswick();
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByRole('heading', { name: 'No matching records' })).toBeTruthy();
+    expect(searchCourses).toHaveBeenCalledTimes(1);
+    expect(readSearchSessionProbe()).toMatchObject({
+      appliedScope: { campuses: ['NB'], term: TERM },
+      hasSubmittedQuery: true,
+      hasSuccessfulQuery: true,
+    });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /^NK/u }));
+    expect(screen.getByRole('heading', { name: 'No matching records' })).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(searchCourses).toHaveBeenCalledTimes(1);
+    expect(readSearchSessionProbe().appliedScope?.campuses).toEqual(['NB']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Applied' })).toBeTruthy());
+    expect(screen.queryByRole('heading', { name: 'No matching records' })).toBeNull();
+    expect(view.container.querySelector('.bcsp-search-workspace')?.getAttribute('data-results-visible')).toBe('false');
+    expect(view.container.querySelector('[data-query-state="idle"]')).not.toBeNull();
+    expect(searchCourses).toHaveBeenCalledTimes(1);
+    expect(readSearchSessionProbe()).toMatchObject({
+      appliedScope: { campuses: ['NB', 'NK'], term: TERM },
+      hasSubmittedQuery: false,
+      hasSuccessfulQuery: false,
+    });
   });
 
   it('returns to the initialization prompt when readiness races with SEARCH_DATA_NOT_READY', async () => {
@@ -302,7 +465,7 @@ describe('RC3 unified Course workspace controller', () => {
     const filterOptions = vi.fn(async (
       request: Parameters<ProductApiPort['filterOptions']>[0],
     ): Promise<FilterOptionsResponseV2> => ({
-      contractVersion: 2,
+      contractVersion: 3,
       field: request.field,
       options: request.field === 'KEYWORD'
         ? [{ value: 'data', label: 'data' }]
@@ -319,7 +482,6 @@ describe('RC3 unified Course workspace controller', () => {
     fireEvent.change(keyword, { target: { value: 'data' } });
     await screen.findByRole('option', { name: 'data' });
     fireEvent.keyDown(keyword, { key: 'Enter' });
-    fireEvent.click(screen.getByText('Same-Section constraints'));
     fireEvent.click(within(screen.getByRole('group', { name: 'Open status' }))
       .getByRole('checkbox', { name: 'Open' }));
     const instructor = screen.getByRole('combobox', { name: 'Instructor' });
@@ -341,7 +503,6 @@ describe('RC3 unified Course workspace controller', () => {
     const searchSections = vi.fn<ProductApiPort['searchSections']>();
     renderWorkspace(productRuntime({ searchCourses, searchSections }));
     applyNewBrunswick();
-    fireEvent.click(screen.getByText('Same-Section constraints'));
     fireEvent.change(screen.getByLabelText('Section indexes'), { target: { value: '12345' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add Section indexes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -355,7 +516,6 @@ describe('RC3 unified Course workspace controller', () => {
     const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue(emptyCourses);
     const view = renderWorkspace(productRuntime({ searchCourses }));
     applyNewBrunswick();
-    fireEvent.click(screen.getByText('Same-Section constraints'));
     const sectionIndexInput = screen.getByLabelText('Section indexes');
     fireEvent.change(sectionIndexInput, { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add Section indexes' }));
@@ -376,7 +536,7 @@ describe('RC3 unified Course workspace controller', () => {
     const first = renderWorkspace(productRuntime({ sectionDetail }), `/sections/${TERM}/NB/12345`);
     await waitFor(() => expect(sectionDetail).toHaveBeenCalledTimes(1));
     expect(sectionDetail.mock.calls[0]?.[0]).toEqual({
-      contractVersion: 2,
+      contractVersion: 3,
       key: { campus: 'NB', index: '12345', term: TERM },
     });
     first.unmount();

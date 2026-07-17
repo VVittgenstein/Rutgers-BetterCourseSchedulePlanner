@@ -1077,8 +1077,30 @@ fn fts_search_uses_literal_token_and_and_returns_stable_variant_rank() {
         .published_course_fts_terms(&scope, 1, Some("ALP"), 10)
         .expect("published FTS vocabulary is target/version scoped");
     assert_eq!(keyword_terms, vec!["alpha"]);
+    assert!(
+        storage
+            .published_course_fts_term_exists(&scope, 1, "alpha")
+            .expect("exact published term exists")
+    );
+    assert!(
+        storage
+            .published_course_fts_term_exists(&scope, 1, "ALPHA")
+            .expect("exact published term lookup is case-insensitive")
+    );
+    assert!(
+        !storage
+            .published_course_fts_term_exists(&scope, 1, "absent")
+            .expect("absent exact published term")
+    );
     assert!(matches!(
         storage.published_course_fts_terms(&scope, 2, None, 10),
+        Err(StorageError::CatalogContentVersionMismatch {
+            requested: 2,
+            current: 1
+        })
+    ));
+    assert!(matches!(
+        storage.published_course_fts_term_exists(&scope, 2, "alpha"),
         Err(StorageError::CatalogContentVersionMismatch {
             requested: 2,
             current: 1

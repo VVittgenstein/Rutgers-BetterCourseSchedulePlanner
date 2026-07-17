@@ -65,7 +65,7 @@ fn every_schema_id_is_unique_and_versioned() {
     assert_eq!(ids.len(), manifest.schemas.len());
     assert!(
         ids.iter()
-            .all(|id| id.ends_with(".v1") || id.ends_with(".v2"))
+            .all(|id| id.ends_with(".v1") || id.ends_with(".v2") || id.ends_with(".v3"))
     );
 }
 

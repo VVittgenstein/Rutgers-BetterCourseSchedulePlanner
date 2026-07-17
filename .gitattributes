@@ -6,3 +6,4 @@
 /deploy/public/config/*.example text eol=lf
 /deploy/public/docs/*.md text eol=lf
 /.github/workflows/*.yml text eol=lf
+*.sql text eol=lf

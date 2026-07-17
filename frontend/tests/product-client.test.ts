@@ -16,6 +16,8 @@ import type {
   CourseDetailResponseV1,
   CourseQueryRequestV1,
   CourseQueryResponseV1,
+  DynamicFilterValidationRequestV3,
+  DynamicFilterValidationResponseV3,
   FilterSchemaV1,
   SectionDetailRequestV1,
   SectionDetailResponseV1,
@@ -113,7 +115,7 @@ describe('ProductApi', () => {
     expect(new Headers(scopedInit?.headers).get('x-bcsp-session')).toBe('scope-session');
   });
 
-  it('binds every typed operation to the eight shared Rust routes', async () => {
+  it('binds every typed operation, including exact dynamic-filter validation, to the shared Rust routes', async () => {
     const rustRequest = readGolden<HttpRequestEnvelope<{
       readonly sectionKey: { readonly term: string; readonly campus: string; readonly index: string };
       readonly courseGroupKey: {
@@ -128,6 +130,9 @@ describe('ProductApi', () => {
       sort: { field: 'SECTION_INDEX', direction: 'ASCENDING' },
     };
     const discoveryRequest: CatalogDiscoveryRequestV1 = { contractVersion: 1 };
+    const dynamicFilterValidationRequest: DynamicFilterValidationRequestV3 = {
+      filters: courseRequest.filters,
+    };
     const courseDetailRequest: CourseDetailRequestV1 = {
       contractVersion: 1,
       key: rustRequest.payload.courseGroupKey,
@@ -157,6 +162,8 @@ describe('ProductApi', () => {
 
     const filterSchema: Promise<FilterSchemaV1> = api.filterSchema();
     const discovery: Promise<CatalogDiscoveryResponseV1> = api.catalogDiscovery(discoveryRequest);
+    const dynamicFilterValidation: Promise<DynamicFilterValidationResponseV3> = api
+      .validateDynamicFilters(dynamicFilterValidationRequest);
     const courses: Promise<CourseQueryResponseV1> = api.searchCourses(courseRequest);
     const sections: Promise<SectionQueryResponseV1> = api.searchSections(sectionRequest);
     const courseDetail: Promise<CourseDetailResponseV1> = api.courseDetail(courseDetailRequest);
@@ -168,6 +175,7 @@ describe('ProductApi', () => {
     await Promise.all([
       filterSchema,
       discovery,
+      dynamicFilterValidation,
       courses,
       sections,
       courseDetail,
@@ -192,6 +200,12 @@ describe('ProductApi', () => {
         envelope: { protocolVersion: 1, payload: discoveryRequest },
         method: 'POST',
         path: '/api/v1/catalog/discovery',
+        session: 'synthetic-session',
+      },
+      {
+        envelope: { protocolVersion: 1, payload: dynamicFilterValidationRequest },
+        method: 'POST',
+        path: '/api/v1/query/validate-dynamic-filters',
         session: 'synthetic-session',
       },
       {

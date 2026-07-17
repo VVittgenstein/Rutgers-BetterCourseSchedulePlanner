@@ -64,6 +64,7 @@ fn mixed_admission_is_ordered_and_rejections_do_not_consume_capacity() {
     let found = section(1);
     let missing = section(2);
     let unavailable = section(3);
+    let unsupported = section(14);
     let mut manager = WatchManager::try_new(
         FakeClock,
         FakeIds(0x100),
@@ -76,12 +77,19 @@ fn mixed_admission_is_ordered_and_rejections_do_not_consume_capacity() {
         .start_with_admission(
             connection,
             trace(2),
-            items([found.clone(), missing.clone(), unavailable.clone()]),
+            items([
+                found.clone(),
+                missing.clone(),
+                unavailable.clone(),
+                unsupported.clone(),
+            ]),
             |candidate| {
                 if candidate == &missing {
                     WatchStartAdmission::SectionNotFound
                 } else if candidate == &unavailable {
                     WatchStartAdmission::TargetUnavailable
+                } else if candidate == &unsupported {
+                    WatchStartAdmission::UnsupportedTarget
                 } else {
                     WatchStartAdmission::admitted(None)
                 }
@@ -105,6 +113,13 @@ fn mixed_admission_is_ordered_and_rejections_do_not_consume_capacity() {
         WatchStartItemResultV1::Rejected {
             section_key: unavailable,
             reason: WatchStartRejectionReason::TargetUnavailable,
+        }
+    );
+    assert_eq!(
+        result.items()[3],
+        WatchStartItemResultV1::Rejected {
+            section_key: unsupported,
+            reason: WatchStartRejectionReason::UnsupportedTarget,
         }
     );
 

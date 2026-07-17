@@ -1,11 +1,13 @@
 use std::collections::BTreeSet;
 
 use bcsp_contracts::{
-    AvailabilityWindowV1, CourseQueryResponseV1, CreditRangeV1, FILTER_FIELD_COUNT, FilterFieldId,
-    FilterRequestV1, FilterScopeV1, FilterSearchTextV1, FilterTokenV1, FilterValuesInputV1,
-    LiveOpenStateV1, MAX_AVAILABILITY_WINDOWS, MAX_FILTER_VALUES_PER_FIELD, MAX_PAGE_SIZE,
-    MeetingLocationFilterV2, NormalizedFilterValuesV1, PageRequestV1, QueryContractVersion, TermId,
-    WeekdayV1, filter_schema_v1,
+    AvailabilityWindowV1, CourseQueryResponseV1, CreditRangeV1, DynamicFilterValidationRequestV3,
+    DynamicFilterValidationResponseV3, FILTER_FIELD_COUNT, FilterFieldId, FilterRequestV1,
+    FilterScopeV1, FilterSearchTextV1, FilterTokenV1, FilterValuesInputV1,
+    InvalidDynamicFilterValueV3, LiveOpenStateV1, MAX_AVAILABILITY_WINDOWS,
+    MAX_FILTER_VALUES_PER_FIELD, MAX_PAGE_SIZE, MeetingLocationFilterV2, NormalizedFilterValuesV1,
+    PageRequestV1, QUERY_CONTRACT_VERSION, QueryContractVersion, TermId, WeekdayV1,
+    filter_schema_v1,
 };
 use serde_json::{Value, json};
 
@@ -15,7 +17,7 @@ fn neutral_values_json() -> Value {
         "campuses": [],
         "subjects": [],
         "keywords": [],
-        "courseNumbers": [],
+        "courseNumberBands": [],
         "levels": [],
         "credits": null,
         "core": { "codes": [], "mode": "ANY" },
@@ -28,7 +30,12 @@ fn neutral_values_json() -> Value {
         "availability": [],
         "meetingLocations": { "locations": [], "mode": "ANY_MEETING" },
         "examCodes": [],
-        "permission": "ANY"
+        "permission": "ANY",
+        "includeIncomplete": {
+            "prerequisite": false,
+            "modality": false,
+            "synchronicity": false
+        }
     })
 }
 
@@ -96,7 +103,7 @@ fn stable_filter_ids_are_exact_ordered_and_unique() {
 #[test]
 fn single_filter_schema_covers_every_request_field_once() {
     let schema = filter_schema_v1();
-    assert_eq!(schema.contract_version, QueryContractVersion::V2);
+    assert_eq!(schema.contract_version, QueryContractVersion::V3);
     assert_eq!(schema.fields.len(), FILTER_FIELD_COUNT);
     assert_eq!(
         schema
@@ -133,7 +140,7 @@ fn single_filter_schema_covers_every_request_field_once() {
 fn normalized_filter_values_sort_and_deduplicate_every_collection() {
     let mut value = neutral_values_json();
     value["campuses"] = json!(["CAMPUS_B", "CAMPUS_A", "CAMPUS_A"]);
-    value["courseNumbers"] = json!(["200", "100", "100"]);
+    value["courseNumberBands"] = json!([200, 100, 100]);
     value["openStatuses"] = json!(["UNKNOWN", "OPEN", "OPEN"]);
     value["availability"] = json!([
         {"weekday":"TUESDAY", "startMinute":600, "endMinute":660},
@@ -150,14 +157,7 @@ fn normalized_filter_values_sort_and_deduplicate_every_collection() {
             .collect::<Vec<_>>(),
         ["CAMPUS_A", "CAMPUS_B"]
     );
-    assert_eq!(
-        parsed
-            .course_numbers()
-            .iter()
-            .map(|value| value.as_str())
-            .collect::<Vec<_>>(),
-        ["100", "200"]
-    );
+    assert_eq!(parsed.course_number_bands(), [100, 200]);
     assert_eq!(
         parsed.open_statuses(),
         &[LiveOpenStateV1::Open, LiveOpenStateV1::Unknown]
@@ -167,7 +167,7 @@ fn normalized_filter_values_sort_and_deduplicate_every_collection() {
 
 #[test]
 fn client_filter_request_rejects_unknown_fields_at_every_boundary() {
-    let request = json!({"contractVersion": 2, "values": neutral_values_json()});
+    let request = json!({"contractVersion": 3, "values": neutral_values_json()});
     serde_json::from_value::<FilterRequestV1>(request.clone()).unwrap();
 
     let mut top_level = request.clone();
@@ -177,6 +177,95 @@ fn client_filter_request_rejects_unknown_fields_at_every_boundary() {
     let mut nested = request;
     nested["values"]["future"] = json!(true);
     assert!(serde_json::from_value::<FilterRequestV1>(nested).is_err());
+}
+
+#[test]
+fn exact_dynamic_validation_has_a_dedicated_limit_free_wire_contract() {
+    let filters: FilterRequestV1 = serde_json::from_value(json!({
+        "contractVersion": 3,
+        "values": neutral_values_json(),
+    }))
+    .unwrap();
+    let request = DynamicFilterValidationRequestV3::new(filters);
+    let request_json = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        request_json.pointer("/filters/contractVersion"),
+        Some(&json!(3))
+    );
+    assert!(request_json.get("query").is_none());
+    assert!(request_json.get("limit").is_none());
+
+    let response = DynamicFilterValidationResponseV3 {
+        contract_version: QUERY_CONTRACT_VERSION,
+        target_versions: Vec::new(),
+        invalid_values: vec![
+            InvalidDynamicFilterValueV3 {
+                field: FilterFieldId::CourseSubject,
+                value: "999".to_owned(),
+            },
+            InvalidDynamicFilterValueV3 {
+                field: FilterFieldId::CourseCoreCode,
+                value: "RETIRED".to_owned(),
+            },
+        ],
+    };
+    assert_eq!(
+        serde_json::to_value(response).unwrap(),
+        json!({
+            "contractVersion": 3,
+            "targetVersions": [],
+            "invalidValues": [
+                {"field": "FLT-C03", "value": "999"},
+                {"field": "FLT-C08", "value": "RETIRED"},
+            ],
+        })
+    );
+
+    let mut unknown = request_json;
+    unknown["limit"] = json!(100);
+    assert!(serde_json::from_value::<DynamicFilterValidationRequestV3>(unknown).is_err());
+}
+
+#[test]
+fn v3_requires_complete_incomplete_controls_and_rejects_legacy_filter_values() {
+    let mut missing = neutral_values_json();
+    missing.as_object_mut().unwrap().remove("includeIncomplete");
+    assert!(serde_json::from_value::<NormalizedFilterValuesV1>(missing).is_err());
+
+    let mut legacy_numbers = neutral_values_json();
+    legacy_numbers["courseNumbers"] = json!([]);
+    assert!(serde_json::from_value::<NormalizedFilterValuesV1>(legacy_numbers).is_err());
+
+    for (field, value) in [
+        ("modalities", json!(["OTHER"])),
+        ("modalities", json!(["UNKNOWN"])),
+        ("synchronicities", json!(["UNSPECIFIED"])),
+        ("synchronicities", json!(["UNKNOWN"])),
+    ] {
+        let mut invalid = neutral_values_json();
+        invalid[field] = value;
+        assert!(
+            serde_json::from_value::<NormalizedFilterValuesV1>(invalid).is_err(),
+            "{field} must reject technical raw categories"
+        );
+    }
+}
+
+#[test]
+fn course_number_bands_are_numeric_canonical_and_exact_hundreds() {
+    let mut normalized = neutral_values_json();
+    normalized["courseNumberBands"] = json!([4_294_967_100_u64, 400, 0, 100, 100]);
+    let normalized: NormalizedFilterValuesV1 = serde_json::from_value(normalized).unwrap();
+    assert_eq!(
+        normalized.course_number_bands(),
+        &[0, 100, 400, 4_294_967_100]
+    );
+
+    for invalid_band in [1_u64, 99, 101, 4_294_967_200, u64::from(u32::MAX)] {
+        let mut invalid = neutral_values_json();
+        invalid["courseNumberBands"] = json!([invalid_band]);
+        assert!(serde_json::from_value::<NormalizedFilterValuesV1>(invalid).is_err());
+    }
 }
 
 #[test]
@@ -234,10 +323,9 @@ fn search_text_exactly_matches_the_fts_acceptance_boundary() {
 fn normalized_constructor_enforces_collection_limits() {
     let term = TermId::try_from("T2026F").unwrap();
     let mut too_many_one_field = FilterValuesInputV1::for_term(term.clone());
-    too_many_one_field.course_numbers = (0..=MAX_FILTER_VALUES_PER_FIELD)
-        .map(|value| FilterTokenV1::try_from(format!("C{value}")))
-        .collect::<Result<_, _>>()
-        .unwrap();
+    too_many_one_field.course_number_bands = (0..=MAX_FILTER_VALUES_PER_FIELD)
+        .map(|value| u32::try_from(value).unwrap() * 100)
+        .collect();
     assert!(NormalizedFilterValuesV1::try_new(too_many_one_field).is_err());
 
     let mut too_many_windows = FilterValuesInputV1::for_term(term);
@@ -260,7 +348,7 @@ fn normalized_constructor_enforces_collection_limits() {
             .collect::<Result<Vec<_>, _>>()
             .unwrap()
     };
-    too_many_total.course_numbers = values("C");
+    too_many_total.course_number_bands = (0..90).map(|value| value * 100).collect();
     too_many_total.levels = values("L");
     too_many_total.core.codes = values("K");
     too_many_total.instructors = values("I");

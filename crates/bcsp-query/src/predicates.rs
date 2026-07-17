@@ -2,9 +2,10 @@ use bcsp_contracts::{
     CatalogFieldKnowledge, CatalogFieldPresence, CatalogModality, CatalogPrerequisiteState,
     CatalogRequiredness, CatalogSynchronicity, CourseGroupKey, CreditRangeV1, FilterFieldId,
     FilterMatchV1, FilterSetModeV1, FilterTokenV1, LiveOpenEvidenceV1, LiveOpenStateV1,
-    MatchExplanation, MatchReasonCode, MeetingLocationMatchModeV2, ModalityFilterV1,
+    MatchExplanation, MatchOutcome, MatchReasonCode, MeetingLocationMatchModeV2,
     NormalizedCourseVariantV1, NormalizedFilterValuesV1, NormalizedOccurrenceV1,
-    NormalizedSectionV1, PermissionFilterV1, PrerequisiteFilterV1,
+    NormalizedSectionV1, PermissionFilterV1, PrerequisiteFilterV1, UserModalityV3,
+    UserSynchronicityV3, course_number_band,
 };
 use time::OffsetDateTime;
 
@@ -14,23 +15,22 @@ use crate::knowledge::{evaluate_known, unknown_reason_code};
 use crate::text::TextHitPlan;
 use crate::{PredicateEvaluation, and_all, or_active};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EvaluatedFilters {
+    pub(crate) evaluation: PredicateEvaluation,
+    pub(crate) filter_matches: Vec<FilterMatchV1>,
+    pub(crate) admitted: bool,
+}
+
 pub(crate) fn evaluate_course_filter_matches(
     group: &CourseGroupKey,
     variant: &NormalizedCourseVariantV1,
     filters: &NormalizedFilterValuesV1,
     text_hits: Option<&TextHitPlan>,
-) -> (PredicateEvaluation, Vec<FilterMatchV1>) {
+) -> EvaluatedFilters {
     let evaluations =
         course_filter_evaluations(group, variant, filters, text_hits).collect::<Vec<_>>();
-    let overall = and_all(evaluations.iter().map(|(_, value)| value.clone()));
-    let matches = evaluations
-        .into_iter()
-        .map(|(field_id, evaluation)| FilterMatchV1 {
-            field_id,
-            explanation: evaluation.into_explanation(),
-        })
-        .collect();
-    (overall, matches)
+    summarize_filter_evaluations(evaluations, filters)
 }
 
 pub fn evaluate_section_filters(
@@ -40,16 +40,21 @@ pub fn evaluate_section_filters(
     now: OffsetDateTime,
     filters: &NormalizedFilterValuesV1,
 ) -> (PredicateEvaluation, Vec<FilterMatchV1>) {
-    let evaluations = section_filter_evaluations(section, occurrences, open, now, filters);
-    let overall = and_all(evaluations.iter().map(|(_, value)| value.clone()));
-    let matches = evaluations
-        .into_iter()
-        .map(|(field_id, evaluation)| FilterMatchV1 {
-            field_id,
-            explanation: evaluation.into_explanation(),
-        })
-        .collect();
-    (overall, matches)
+    let evaluated = evaluate_section_filter_matches(section, occurrences, open, now, filters);
+    (evaluated.evaluation, evaluated.filter_matches)
+}
+
+pub(crate) fn evaluate_section_filter_matches(
+    section: &NormalizedSectionV1,
+    occurrences: Option<&[&NormalizedOccurrenceV1]>,
+    open: &LiveOpenEvidenceV1,
+    now: OffsetDateTime,
+    filters: &NormalizedFilterValuesV1,
+) -> EvaluatedFilters {
+    summarize_filter_evaluations(
+        section_filter_evaluations(section, occurrences, open, now, filters),
+        filters,
+    )
 }
 
 pub(crate) fn course_filter_evaluations<'a>(
@@ -90,12 +95,8 @@ pub(crate) fn course_filter_evaluations<'a>(
             },
         ),
         (
-            FilterFieldId::CourseNumber,
-            exact_values(
-                &variant.course_number,
-                token_values(filters.course_numbers()),
-                FilterFieldId::CourseNumber,
-            ),
+            FilterFieldId::CourseNumberBand,
+            evaluate_course_number_band(&variant.course_number, filters.course_number_bands()),
         ),
         (
             FilterFieldId::CourseLevel,
@@ -285,6 +286,31 @@ fn evaluate_prerequisite(
     }
 }
 
+fn evaluate_course_number_band(
+    actual: &CatalogFieldKnowledge<String>,
+    selected: &[u32],
+) -> PredicateEvaluation {
+    if selected.is_empty() {
+        return PredicateEvaluation::matched();
+    }
+    let field = FilterFieldId::CourseNumberBand.wire_name();
+    match actual {
+        CatalogFieldKnowledge::Known {
+            presence: CatalogFieldPresence::Present { value },
+        } => match course_number_band(value) {
+            Some(band) if selected.contains(&band) => PredicateEvaluation::matched(),
+            Some(_) => PredicateEvaluation::no_match(field),
+            None => PredicateEvaluation::uncertain(field, MatchReasonCode::InvalidValue),
+        },
+        CatalogFieldKnowledge::Known {
+            presence: CatalogFieldPresence::ExplicitNull | CatalogFieldPresence::Absent,
+        } => PredicateEvaluation::uncertain(field, MatchReasonCode::MissingReliableData),
+        CatalogFieldKnowledge::Unknown { reason } => {
+            PredicateEvaluation::uncertain(field, unknown_reason_code(*reason))
+        }
+    }
+}
+
 fn evaluate_open(
     evidence: &LiveOpenEvidenceV1,
     now: OffsetDateTime,
@@ -315,36 +341,30 @@ fn evaluate_open(
     }
 }
 
-fn evaluate_modality(
-    actual: CatalogModality,
-    selected: &[ModalityFilterV1],
-) -> PredicateEvaluation {
+fn evaluate_modality(actual: CatalogModality, selected: &[UserModalityV3]) -> PredicateEvaluation {
     if selected.is_empty() {
         return PredicateEvaluation::matched();
     }
     let field = FilterFieldId::SectionModality.wire_name();
     match actual {
-        CatalogModality::Unknown | CatalogModality::UnknownConflict => {
-            if selected.contains(&ModalityFilterV1::Unknown) {
-                PredicateEvaluation::matched()
-            } else {
-                PredicateEvaluation::uncertain(
-                    field,
-                    if actual == CatalogModality::UnknownConflict {
-                        MatchReasonCode::ConflictingEvidence
-                    } else {
-                        MatchReasonCode::UnknownValue
-                    },
-                )
-            }
+        CatalogModality::Other | CatalogModality::Unknown | CatalogModality::UnknownConflict => {
+            PredicateEvaluation::uncertain(
+                field,
+                if actual == CatalogModality::UnknownConflict {
+                    MatchReasonCode::ConflictingEvidence
+                } else {
+                    MatchReasonCode::UnknownValue
+                },
+            )
         }
         known => {
             let selected_value = match known {
-                CatalogModality::OnCampusOrInPerson => ModalityFilterV1::OnCampusOrInPerson,
-                CatalogModality::Hybrid => ModalityFilterV1::Hybrid,
-                CatalogModality::Online => ModalityFilterV1::Online,
-                CatalogModality::Other => ModalityFilterV1::Other,
-                CatalogModality::Unknown | CatalogModality::UnknownConflict => unreachable!(),
+                CatalogModality::OnCampusOrInPerson => UserModalityV3::OnCampusOrInPerson,
+                CatalogModality::Hybrid => UserModalityV3::Hybrid,
+                CatalogModality::Online => UserModalityV3::Online,
+                CatalogModality::Other
+                | CatalogModality::Unknown
+                | CatalogModality::UnknownConflict => unreachable!(),
             };
             bool_result(
                 selected.contains(&selected_value),
@@ -356,29 +376,75 @@ fn evaluate_modality(
 
 fn evaluate_synchronicity(
     actual: CatalogSynchronicity,
-    selected: &[CatalogSynchronicity],
+    selected: &[UserSynchronicityV3],
 ) -> PredicateEvaluation {
     if selected.is_empty() {
         return PredicateEvaluation::matched();
     }
     let field = FilterFieldId::SectionSynchronicity.wire_name();
     match actual {
-        CatalogSynchronicity::Unknown => {
-            if selected.contains(&CatalogSynchronicity::Unknown) {
-                PredicateEvaluation::matched()
-            } else {
-                PredicateEvaluation::uncertain(field, MatchReasonCode::UnknownValue)
-            }
-        }
-        CatalogSynchronicity::Unspecified
-            if !selected.contains(&CatalogSynchronicity::Unspecified) =>
-        {
+        CatalogSynchronicity::Unknown | CatalogSynchronicity::Unspecified => {
             PredicateEvaluation::uncertain(field, MatchReasonCode::UnknownValue)
         }
-        known => bool_result(
-            selected.contains(&known),
-            FilterFieldId::SectionSynchronicity,
-        ),
+        known => {
+            let selected_value = match known {
+                CatalogSynchronicity::Sync => UserSynchronicityV3::Sync,
+                CatalogSynchronicity::Async => UserSynchronicityV3::Async,
+                CatalogSynchronicity::Mixed => UserSynchronicityV3::Mixed,
+                CatalogSynchronicity::Unspecified | CatalogSynchronicity::Unknown => unreachable!(),
+            };
+            bool_result(
+                selected.contains(&selected_value),
+                FilterFieldId::SectionSynchronicity,
+            )
+        }
+    }
+}
+
+fn summarize_filter_evaluations(
+    evaluations: Vec<(FilterFieldId, PredicateEvaluation)>,
+    filters: &NormalizedFilterValuesV1,
+) -> EvaluatedFilters {
+    let admitted = evaluations
+        .iter()
+        .all(|(field, evaluation)| admit_filter_evaluation(*field, evaluation, filters));
+    let evaluation = and_all(evaluations.iter().map(|(_, value)| value.clone()));
+    let filter_matches = evaluations
+        .into_iter()
+        .map(|(field_id, evaluation)| FilterMatchV1 {
+            field_id,
+            explanation: evaluation.into_explanation(),
+        })
+        .collect();
+    EvaluatedFilters {
+        evaluation,
+        filter_matches,
+        admitted,
+    }
+}
+
+fn admit_filter_evaluation(
+    field: FilterFieldId,
+    evaluation: &PredicateEvaluation,
+    filters: &NormalizedFilterValuesV1,
+) -> bool {
+    match evaluation.outcome() {
+        MatchOutcome::NoMatch => false,
+        MatchOutcome::Match => true,
+        MatchOutcome::Uncertain => match field {
+            FilterFieldId::CoursePrerequisite
+                if filters.prerequisite() != PrerequisiteFilterV1::Any =>
+            {
+                filters.include_incomplete().prerequisite
+            }
+            FilterFieldId::SectionModality if !filters.modalities().is_empty() => {
+                filters.include_incomplete().modality
+            }
+            FilterFieldId::SectionSynchronicity if !filters.synchronicities().is_empty() => {
+                filters.include_incomplete().synchronicity
+            }
+            _ => true,
+        },
     }
 }
 

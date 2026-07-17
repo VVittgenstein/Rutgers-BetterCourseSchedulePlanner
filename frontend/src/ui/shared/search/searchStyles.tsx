@@ -14,19 +14,25 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
   min-width: 0;
 }
 
+.bcsp-search-workspace__scope {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .bcsp-search-workspace[data-detail-route='true'] {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .bcsp-search-workspace__filters {
   container-type: inline-size;
-  position: sticky;
-  top: var(--bcsp-navigation-height, 3.5rem);
   align-self: start;
-  max-height: calc(100dvh - var(--bcsp-navigation-height, 3.5rem));
-  overflow: auto;
   border-right: 1px solid var(--bcsp-line);
   background: var(--bcsp-paper-raised);
+}
+
+.bcsp-search-workspace[data-results-visible='false'] .bcsp-search-workspace__filters {
+  grid-column: 1 / -1;
+  border-right: 0;
 }
 
 .bcsp-search-workspace__results {
@@ -71,8 +77,33 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
 
 .bcsp-search-workspace__state {
   display: grid;
-  min-height: 26rem;
-  align-content: center;
+  align-content: start;
+}
+
+.bcsp-search-state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--bcsp-space-2);
+  align-items: start;
+  padding: var(--bcsp-space-3);
+  border: 1px solid var(--bcsp-line);
+  border-left: 4px solid var(--bcsp-line);
+  background: var(--bcsp-paper-raised);
+}
+
+.bcsp-search-state--error { border-left-color: var(--bcsp-danger, #8f1d14); }
+.bcsp-search-state__marker {
+  color: var(--bcsp-accent);
+  font-family: var(--bcsp-font-data);
+  font-weight: 800;
+  line-height: 1.4;
+}
+.bcsp-search-state__copy { display: grid; gap: 0.25rem; min-width: 0; }
+.bcsp-search-state__copy h4 { margin: 0; font-size: 0.82rem; }
+.bcsp-search-state__copy > span {
+  color: var(--bcsp-ink-muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
 }
 
 .bcsp-search-workspace__detail-actions {
@@ -118,15 +149,13 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
   }
 }
 
-@media (max-width: 47.999rem) {
+/* 24rem controls + 26rem useful result measure + structural borders. */
+@media (max-width: 51.999rem) {
   .bcsp-search-workspace {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .bcsp-search-workspace__filters {
-    position: static;
-    max-height: none;
-    overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--bcsp-line);
   }
@@ -135,9 +164,6 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
     padding: var(--bcsp-space-3);
   }
 
-  .bcsp-search-workspace__state {
-    min-height: 18rem;
-  }
 }
 `;
 

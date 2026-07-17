@@ -17,9 +17,9 @@ mod knowledge;
 mod predicates;
 mod text;
 
-pub use corpus::{CatalogCorpus, CorpusError};
+pub use corpus::{CatalogCorpus, CorpusError, PreparedCatalogCorpus};
 pub use credits::{CreditValue, CreditValueParseError, parse_credit_value};
-pub use engine::{OpenEvidence, QueryEngine, QueryError};
+pub use engine::{OpenEvidence, PreparedOpenOverlay, QueryEngine, QueryError};
 pub use evaluation::{PredicateEvaluation, and_all, or_active};
 pub use predicates::evaluate_section_filters;
 pub use text::{TextHit, TextHitPlan, TextHitPlanError, TextTargetVersion};

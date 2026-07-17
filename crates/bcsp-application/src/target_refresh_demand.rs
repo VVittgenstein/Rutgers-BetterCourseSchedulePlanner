@@ -15,7 +15,30 @@ pub const TARGET_DEMAND_LEASE: Duration = Duration::from_secs(120);
 pub struct TargetRefreshDemand {
     targets: Arc<Mutex<BTreeMap<TermCampusKey, Instant>>>,
     manual_terms: Arc<Mutex<BTreeSet<TermId>>>,
+    manual_target_retries: Arc<Mutex<ManualTargetRetryState>>,
     lease_duration: Duration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManualTargetRetryRequest {
+    target: TermCampusKey,
+    generation: u64,
+}
+
+impl ManualTargetRetryRequest {
+    pub const fn target(&self) -> &TermCampusKey {
+        &self.target
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+#[derive(Debug, Default)]
+struct ManualTargetRetryState {
+    next_generation: u64,
+    pending: BTreeMap<TermCampusKey, u64>,
 }
 
 impl Default for TargetRefreshDemand {
@@ -23,6 +46,7 @@ impl Default for TargetRefreshDemand {
         Self {
             targets: Arc::new(Mutex::new(BTreeMap::new())),
             manual_terms: Arc::new(Mutex::new(BTreeSet::new())),
+            manual_target_retries: Arc::new(Mutex::new(ManualTargetRetryState::default())),
             lease_duration: TARGET_DEMAND_LEASE,
         }
     }
@@ -91,6 +115,72 @@ impl TargetRefreshDemand {
             .map(|terms| terms.iter().cloned().collect())
     }
 
+    /// Records one explicit Local retry generation for each target that is not already pending.
+    ///
+    /// The generation is target-bound and remains pending until the official refresh supervisor
+    /// observes that target as queued/running (or otherwise accepts the command). Repeated clicks
+    /// before that acknowledgement cannot multiply work.
+    pub fn request_manual_target_retries(
+        &self,
+        targets: &[TermCampusKey],
+    ) -> Result<usize, TargetRefreshDemandError> {
+        let mut state = self
+            .manual_target_retries
+            .lock()
+            .map_err(|_| TargetRefreshDemandError::Unavailable)?;
+        let new_targets = targets
+            .iter()
+            .filter(|target| !state.pending.contains_key(*target))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let required =
+            u64::try_from(new_targets.len()).map_err(|_| TargetRefreshDemandError::Unavailable)?;
+        if state.next_generation.checked_add(required).is_none() {
+            return Err(TargetRefreshDemandError::Unavailable);
+        }
+        for target in new_targets {
+            state.next_generation += 1;
+            let generation = state.next_generation;
+            state.pending.insert(target, generation);
+        }
+        usize::try_from(required).map_err(|_| TargetRefreshDemandError::Unavailable)
+    }
+
+    pub fn pending_manual_target_retries(
+        &self,
+    ) -> Result<Vec<ManualTargetRetryRequest>, TargetRefreshDemandError> {
+        self.manual_target_retries
+            .lock()
+            .map_err(|_| TargetRefreshDemandError::Unavailable)
+            .map(|state| {
+                state
+                    .pending
+                    .iter()
+                    .map(|(target, generation)| ManualTargetRetryRequest {
+                        target: target.clone(),
+                        generation: *generation,
+                    })
+                    .collect()
+            })
+    }
+
+    /// Acknowledges exactly the observed generation. A newer request can never be erased by a
+    /// delayed supervisor acknowledgement.
+    pub fn acknowledge_manual_target_retry(
+        &self,
+        request: &ManualTargetRetryRequest,
+    ) -> Result<bool, TargetRefreshDemandError> {
+        let mut state = self
+            .manual_target_retries
+            .lock()
+            .map_err(|_| TargetRefreshDemandError::Unavailable)?;
+        if state.pending.get(request.target()) != Some(&request.generation()) {
+            return Ok(false);
+        }
+        state.pending.remove(request.target());
+        Ok(true)
+    }
+
     #[cfg(test)]
     fn with_lease_duration(lease_duration: Duration) -> Self {
         Self {
@@ -108,6 +198,7 @@ pub enum TargetRefreshDemandError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
@@ -152,6 +243,75 @@ mod tests {
             vec![term]
         );
         assert!(demand.snapshot().expect("targets").is_empty());
+    }
+
+    #[test]
+    fn manual_target_retry_generations_are_per_target_pending_and_exactly_acknowledged() {
+        let demand = TargetRefreshDemand::default();
+        let nb = TermCampusKey::try_new("12027", "NB").expect("NB");
+        let nk = TermCampusKey::try_new("12027", "NK").expect("NK");
+        let cm = TermCampusKey::try_new("12027", "CM").expect("CM");
+
+        assert_eq!(
+            demand
+                .request_manual_target_retries(&[nb.clone(), cm.clone(), nb.clone()])
+                .expect("first target requests"),
+            2,
+        );
+        assert_eq!(
+            demand
+                .request_manual_target_retries(&[nb.clone(), cm.clone()])
+                .expect("pending duplicates"),
+            0,
+        );
+        let first = demand
+            .pending_manual_target_retries()
+            .expect("pending generations");
+        assert_eq!(
+            first
+                .iter()
+                .map(|request| request.target().clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([nb.clone(), cm.clone()]),
+            "only the independently missing targets are queued in stable target order",
+        );
+        let first_nb = first
+            .iter()
+            .find(|request| request.target() == &nb)
+            .expect("first NB generation")
+            .clone();
+        assert!(
+            demand
+                .acknowledge_manual_target_retry(&first_nb)
+                .expect("ack NB")
+        );
+        assert_eq!(
+            demand
+                .request_manual_target_retries(&[nb.clone(), nk.clone()])
+                .expect("next retry generation"),
+            2,
+        );
+        let second = demand
+            .pending_manual_target_retries()
+            .expect("second generations");
+        let next_nb = second
+            .iter()
+            .find(|request| request.target() == &nb)
+            .expect("new NB generation");
+        assert!(next_nb.generation() > first_nb.generation());
+        assert!(
+            !demand
+                .acknowledge_manual_target_retry(&first_nb)
+                .expect("stale ack"),
+            "a delayed acknowledgement cannot erase the newer target generation",
+        );
+        assert_eq!(
+            second
+                .iter()
+                .map(|request| request.target().clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([nb, nk, cm]),
+        );
     }
 
     #[test]

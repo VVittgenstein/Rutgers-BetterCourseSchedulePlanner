@@ -98,6 +98,16 @@ enum JobRegistrationMode {
     OneShot,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct JobRegistration {
+    interval: Duration,
+    first_due: MonotonicTime,
+    normal_lane: OriginSchedulerLane,
+    active_watch_count: u64,
+    mode: JobRegistrationMode,
+    generation_pending: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum OriginCircuit {
     #[default]
@@ -194,12 +204,14 @@ impl OriginEdfScheduler {
     ) -> Result<(), SchedulerError> {
         self.upsert(
             OriginJobKey::catalog(target),
-            interval,
-            first_due,
-            OriginSchedulerLane::Catalog,
-            0,
-            JobRegistrationMode::Recurring,
-            false,
+            JobRegistration {
+                interval,
+                first_due,
+                normal_lane: OriginSchedulerLane::Catalog,
+                active_watch_count: 0,
+                mode: JobRegistrationMode::Recurring,
+                generation_pending: false,
+            },
         )
     }
 
@@ -216,12 +228,14 @@ impl OriginEdfScheduler {
     ) -> Result<(), SchedulerError> {
         self.upsert(
             OriginJobKey::catalog(target),
-            interval,
-            first_due,
-            OriginSchedulerLane::Catalog,
-            active_watch_count,
-            JobRegistrationMode::Recurring,
-            true,
+            JobRegistration {
+                interval,
+                first_due,
+                normal_lane: OriginSchedulerLane::Catalog,
+                active_watch_count,
+                mode: JobRegistrationMode::Recurring,
+                generation_pending: true,
+            },
         )
     }
 
@@ -236,12 +250,14 @@ impl OriginEdfScheduler {
     ) -> Result<(), SchedulerError> {
         self.upsert(
             OriginJobKey::catalog(target),
-            CATALOG_ONE_SHOT_INTERVAL,
-            first_due,
-            OriginSchedulerLane::Catalog,
-            active_watch_count,
-            JobRegistrationMode::OneShot,
-            true,
+            JobRegistration {
+                interval: CATALOG_ONE_SHOT_INTERVAL,
+                first_due,
+                normal_lane: OriginSchedulerLane::Catalog,
+                active_watch_count,
+                mode: JobRegistrationMode::OneShot,
+                generation_pending: true,
+            },
         )
     }
 
@@ -318,16 +334,18 @@ impl OriginEdfScheduler {
         let existed = self.jobs.contains_key(&key);
         self.upsert(
             key.clone(),
-            intervals.effective(watched),
-            first_due,
-            normal_lane,
-            active_watch_count,
-            if recurring {
-                JobRegistrationMode::Recurring
-            } else {
-                JobRegistrationMode::OneShot
+            JobRegistration {
+                interval: intervals.effective(watched),
+                first_due,
+                normal_lane,
+                active_watch_count,
+                mode: if recurring {
+                    JobRegistrationMode::Recurring
+                } else {
+                    JobRegistrationMode::OneShot
+                },
+                generation_pending: !recurring,
             },
-            !recurring,
         )?;
         if existed {
             self.update_due_for_interval_change(&key, now);
@@ -338,13 +356,16 @@ impl OriginEdfScheduler {
     fn upsert(
         &mut self,
         key: OriginJobKey,
-        interval: Duration,
-        first_due: MonotonicTime,
-        normal_lane: OriginSchedulerLane,
-        active_watch_count: u64,
-        registration_mode: JobRegistrationMode,
-        generation_pending: bool,
+        registration: JobRegistration,
     ) -> Result<(), SchedulerError> {
+        let JobRegistration {
+            interval,
+            first_due,
+            normal_lane,
+            active_watch_count,
+            mode: registration_mode,
+            generation_pending,
+        } = registration;
         if interval.is_zero() {
             return Err(SchedulerError::ZeroInterval);
         }
@@ -604,6 +625,55 @@ impl OriginEdfScheduler {
             lane
         };
         Ok(())
+    }
+
+    /// Makes one idle target workflow due now for an explicit Local user retry.
+    ///
+    /// Automatic origin cooldowns remain authoritative. A fatal diagnostic circuit is different:
+    /// it deliberately has no automatic dispatch, so an explicit user retry authorizes exactly
+    /// the failed job and moves its minimum recheck time to this request. If there is no fatal
+    /// circuit, a fresh Catalog one-shot is scheduled. An in-flight workflow is never duplicated.
+    pub fn request_manual_target_retry(
+        &mut self,
+        target: &TermCampusKey,
+        now: MonotonicTime,
+    ) -> Result<Option<OriginJobKind>, SchedulerError> {
+        if self.in_flight.is_some() {
+            return Ok(None);
+        }
+
+        let key = match self.circuit.clone() {
+            OriginCircuit::Closed => OriginJobKey::catalog(target.clone()),
+            OriginCircuit::RetryAfter { until } if now < until => return Ok(None),
+            OriginCircuit::RetryAfter { .. } => {
+                self.circuit = OriginCircuit::Closed;
+                OriginJobKey::catalog(target.clone())
+            }
+            OriginCircuit::FatalDiagnostic { job, .. } if job.target == *target => {
+                self.circuit = OriginCircuit::FatalDiagnostic {
+                    job: job.clone(),
+                    recheck_after: now,
+                    authorized: true,
+                };
+                job
+            }
+            OriginCircuit::FatalDiagnostic { .. } => return Ok(None),
+        };
+
+        let schedule = self.jobs.get_mut(&key).ok_or(SchedulerError::UnknownJob)?;
+        schedule.active = true;
+        if !schedule.recurring {
+            schedule.one_shot_pending = true;
+        }
+        schedule.next_due = now;
+        schedule.lane = match key.kind {
+            OriginJobKind::Catalog => OriginSchedulerLane::Catalog,
+            OriginJobKind::Open if schedule.active_watch_count > 0 => {
+                OriginSchedulerLane::OpenActiveWatch
+            }
+            OriginJobKind::Open => OriginSchedulerLane::OpenManualRefresh,
+        };
+        Ok(Some(key.kind))
     }
 
     /// Completes the registered initial Open observation when the Catalog workflow already
@@ -1861,6 +1931,48 @@ mod tests {
                 .key,
             failed_key
         );
+    }
+
+    #[test]
+    fn explicit_manual_retry_restarts_a_terminal_target_now_and_dedupes_in_flight_work() {
+        let mut scheduler = OriginEdfScheduler::new();
+        let scope = target("NB");
+        let key = OriginJobKey::catalog(scope.clone());
+        scheduler
+            .register_catalog_one_shot(scope.clone(), 0, MonotonicTime::ZERO)
+            .expect("one-shot Catalog");
+        let failed = scheduler
+            .start_next(MonotonicTime::ZERO)
+            .expect("first Catalog attempt");
+        scheduler
+            .finish(
+                failed.token,
+                MonotonicTime::ZERO,
+                CompletionSchedule::Retry(legacy_fatal_directive(0)),
+            )
+            .expect("terminal failure");
+        assert!(scheduler.start_next(seconds(1)).is_none());
+
+        assert_eq!(
+            scheduler
+                .request_manual_target_retry(&scope, seconds(1))
+                .expect("explicit retry"),
+            Some(OriginJobKind::Catalog),
+        );
+        let retried = scheduler
+            .start_next(seconds(1))
+            .expect("terminal target restarts immediately");
+        assert_eq!(retried.key, key);
+        assert_eq!(
+            scheduler
+                .request_manual_target_retry(&scope, seconds(1))
+                .expect("active retry is coalesced"),
+            None,
+            "an active target never receives a second workflow",
+        );
+        scheduler
+            .finish(retried.token, seconds(2), CompletionSchedule::Success)
+            .expect("retry succeeds");
     }
 
     #[test]

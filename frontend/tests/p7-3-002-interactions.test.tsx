@@ -90,10 +90,11 @@ function renderSettings(overrides: Partial<ComponentProps<typeof SettingsPage>> 
 interface SavedHarnessProps {
   readonly deleteAll?: boolean;
   readonly deleteOne?: boolean;
+  readonly views?: readonly SavedViewDefinition[];
 }
 
-function SavedHarness({ deleteAll = false, deleteOne = false }: SavedHarnessProps) {
-  const [current, setCurrent] = useState(() => library());
+function SavedHarness({ deleteAll = false, deleteOne = false, views }: SavedHarnessProps) {
+  const [current, setCurrent] = useState(() => library(views));
   return (
     <BcspI18nProvider initialLocale="en-US">
       <AppRouterProvider initialPath="/saved-views">
@@ -222,6 +223,24 @@ describe('P7.3-002 local interaction lifecycle', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Confirm delete' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(document.activeElement).toBe(remove);
+  });
+
+  it('shows localized Saved-view migration fields while keeping stable IDs diagnostic-only', () => {
+    const reviewView = {
+      ...VIEW,
+      id: '10000000-0000-4000-8000-000000000002',
+      name: 'Legacy subject view',
+      content: {
+        status: 'REVIEW_REQUIRED',
+        rawSnapshot: { codecVersion: 2 },
+        reasons: [{ stableId: 'FLT-C03', code: 'DYNAMIC_VALUE_UNAVAILABLE' }],
+      },
+    } as SavedViewDefinition;
+    render(<SavedHarness views={[reviewView]} />);
+
+    const field = screen.getByText('Subject');
+    expect(field.getAttribute('title')).toBe('FLT-C03');
+    expect(document.body.textContent).not.toContain('FLT-C03');
   });
 
   it('lands on the stable library heading after delete and delete-all remove their triggers', async () => {

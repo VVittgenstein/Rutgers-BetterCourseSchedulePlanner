@@ -344,6 +344,22 @@ pub enum SavedViewIncompatibility {
     InvalidFieldData,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SavedViewReviewCode {
+    ActiveLegacyFilter,
+    UnsupportedCampus,
+    ScopeUnavailable,
+    DynamicValueUnavailable,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SavedViewReviewReason {
+    pub stable_id: String,
+    pub code: SavedViewReviewCode,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(
     tag = "status",
@@ -359,20 +375,31 @@ pub enum SavedViewContent {
         raw_snapshot: JsonValue,
         reason: SavedViewIncompatibility,
     },
+    ReviewRequired {
+        raw_snapshot: JsonValue,
+        reasons: Vec<SavedViewReviewReason>,
+    },
 }
 
 impl SavedViewContent {
     pub fn filters(&self) -> Option<&FilterRequestV1> {
         match self {
             Self::Compatible { filters } => Some(filters.as_ref()),
-            Self::Incompatible { .. } => None,
+            Self::Incompatible { .. } | Self::ReviewRequired { .. } => None,
         }
     }
 
     pub fn incompatibility(&self) -> Option<&SavedViewIncompatibility> {
         match self {
-            Self::Compatible { .. } => None,
+            Self::Compatible { .. } | Self::ReviewRequired { .. } => None,
             Self::Incompatible { reason, .. } => Some(reason),
+        }
+    }
+
+    pub fn review_reasons(&self) -> Option<&[SavedViewReviewReason]> {
+        match self {
+            Self::ReviewRequired { reasons, .. } => Some(reasons),
+            Self::Compatible { .. } | Self::Incompatible { .. } => None,
         }
     }
 }
@@ -404,12 +431,17 @@ pub enum SavedViewMatch {
     Clean,
     Modified,
     Incompatible,
+    ReviewRequired,
 }
 
 impl SavedViewDefinition {
     pub fn match_current(&self, current: &StoredCurrentFilters) -> SavedViewMatch {
         let Some(filters) = self.content.filters() else {
-            return SavedViewMatch::Incompatible;
+            return if matches!(self.content, SavedViewContent::ReviewRequired { .. }) {
+                SavedViewMatch::ReviewRequired
+            } else {
+                SavedViewMatch::Incompatible
+            };
         };
         let Some(current) = &current.value else {
             return SavedViewMatch::NotApplied;

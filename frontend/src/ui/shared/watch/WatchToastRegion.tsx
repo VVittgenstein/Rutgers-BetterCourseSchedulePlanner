@@ -17,7 +17,9 @@ function noticeText(
   const section = sectionLabel(notice.sectionKey);
   const detail = notice.detail === 'TERM_OUT_OF_RANGE'
     ? i18n.t('watch.term_out_of_range_detail')
-    : notice.detail;
+    : notice.detail === 'UNSUPPORTED_TARGET'
+      ? i18n.t('watch.unsupported_target_detail')
+      : notice.detail;
   const suffix = [section, detail].filter((value) => value !== null && value !== undefined).join(' · ');
   const title = {
     SELECTION_LIMIT: i18n.t('watch.toast.selection_limit'),

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::RwLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bcsp_catalog::{ProjectionError, to_catalog_discovery_response_v1};
 use bcsp_contracts::{
@@ -431,25 +431,57 @@ where
         storage: &mut OperationalStorage,
     ) -> Result<CatalogDiscoveryResponseV1, SharedRuntimeError> {
         let observed_at = self.clock.now();
+        let discovery_load_started = Instant::now();
         let published = storage
             .published_discovery_snapshot()
             .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?;
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "sqlite_discovery_snapshot_load",
+            elapsed_us = u64::try_from(discovery_load_started.elapsed().as_micros())
+                .unwrap_or(u64::MAX),
+        );
+        let selector_started = Instant::now();
         let selector = to_catalog_discovery_response_v1(&published, &[], observed_at)
             .map_err(SharedRuntimeError::CatalogDiscoveryProjection)?;
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "discovery_selector_projection",
+            elapsed_us = u64::try_from(selector_started.elapsed().as_micros())
+                .unwrap_or(u64::MAX),
+            targets = selector.targets.len(),
+        );
         let mut catalogs = Vec::new();
         for target in selector.targets.iter().map(|target| &target.key) {
+            let catalog_load_started = Instant::now();
             if let Some(catalog) = storage
                 .published_catalog_snapshot(target)
                 .map_err(SharedRuntimeError::CatalogDiscoveryStorage)?
             {
                 catalogs.push(catalog);
             }
+            tracing::debug!(
+                target: "bcsp_performance",
+                phase = "sqlite_discovery_catalog_load",
+                elapsed_us = u64::try_from(catalog_load_started.elapsed().as_micros())
+                    .unwrap_or(u64::MAX),
+                target_key = ?target,
+            );
         }
         // Round 3 exposes dictionaries target by target. The product route applies the strict
         // complete-snapshot gate to this merge, so an unrequested or failed Campus cannot leak
         // options while a READY Campus no longer waits for unrelated terms or Campuses.
-        to_catalog_discovery_response_v1(&published, &catalogs, observed_at)
-            .map_err(SharedRuntimeError::CatalogDiscoveryProjection)
+        let projection_started = Instant::now();
+        let response = to_catalog_discovery_response_v1(&published, &catalogs, observed_at)
+            .map_err(SharedRuntimeError::CatalogDiscoveryProjection)?;
+        tracing::debug!(
+            target: "bcsp_performance",
+            phase = "discovery_full_projection",
+            elapsed_us = u64::try_from(projection_started.elapsed().as_micros())
+                .unwrap_or(u64::MAX),
+            catalogs = catalogs.len(),
+        );
+        Ok(response)
     }
 
     fn ensure_catalogs_published(
@@ -487,12 +519,21 @@ where
         for target in targets {
             let snapshot = runtime_for(target);
             let runtime = self.projection_runtime_at(now, policy, &snapshot);
+            let projection_started = Instant::now();
             let projected = project_open_status(storage, target, &runtime).map_err(|source| {
                 SharedRuntimeError::OpenProjection {
                     target: target.clone(),
                     source,
                 }
             })?;
+            tracing::debug!(
+                target: "bcsp_performance",
+                phase = "open_projection",
+                elapsed_us = u64::try_from(projection_started.elapsed().as_micros())
+                    .unwrap_or(u64::MAX),
+                target_key = ?target,
+                sections = projected.sections.len(),
+            );
             evidence.extend(projected.sections.into_iter().map(open_evidence));
         }
         Ok((now, evidence))
@@ -526,7 +567,7 @@ where
     }
 }
 
-fn open_evidence(status: bcsp_contracts::OpenSectionStatusV1) -> OpenEvidence {
+pub(crate) fn open_evidence(status: bcsp_contracts::OpenSectionStatusV1) -> OpenEvidence {
     let state = match status.state {
         OpenState::Open => LiveOpenStateV1::Open,
         OpenState::Closed => LiveOpenStateV1::Closed,

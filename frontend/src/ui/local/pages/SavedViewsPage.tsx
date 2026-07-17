@@ -7,6 +7,7 @@ import {
 } from 'react';
 
 import { ActionButton } from '../../shared/design-system';
+import { isMessageKey } from '../../shared/i18n/contract';
 import { useBcspI18n } from '../../shared/i18n/runtime';
 import { useAppRouter } from '../../shared/routing';
 import { useLocalI18n } from '../i18n/runtime';
@@ -16,6 +17,7 @@ import type {
   SavedViewLibrary,
   SavedViewListItem,
   SavedViewMatch,
+  SavedViewReviewReason,
 } from '../personal/contracts';
 import {
   LocalPageFrame,
@@ -28,8 +30,45 @@ const MATCH_MESSAGE: Readonly<Record<SavedViewMatch, LocalMessageKey>> = {
   NOT_APPLIED: 'local.saved.match.not_applied',
   CLEAN: 'local.saved.match.clean',
   MODIFIED: 'local.saved.match.modified',
+  REVIEW_REQUIRED: 'local.saved.match.review_required',
   INCOMPATIBLE: 'local.saved.match.incompatible',
 };
+
+const REVIEW_REASON_MESSAGE: Readonly<Record<SavedViewReviewReason['code'], LocalMessageKey>> = {
+  ACTIVE_LEGACY_FILTER: 'local.saved.review.active_legacy_filter',
+  UNSUPPORTED_CAMPUS: 'local.saved.review.unsupported_campus',
+  SCOPE_UNAVAILABLE: 'local.saved.review.scope_unavailable',
+  DYNAMIC_VALUE_UNAVAILABLE: 'local.saved.review.dynamic_value_unavailable',
+};
+
+function SavedViewReviewNotice({
+  id,
+  reasons,
+}: {
+  readonly id: string;
+  readonly reasons: readonly SavedViewReviewReason[];
+}) {
+  const local = useLocalI18n();
+  const shared = useBcspI18n();
+  return (
+    <div className="local-personal__notice" id={id} role="status">
+      <p><strong>{local.t('local.saved.review.intro')}</strong></p>
+      <ul>
+        {reasons.map((reason, index) => {
+          const messageKey = `filter.${reason.stableId.toLowerCase()}`;
+          const fieldLabel = isMessageKey(messageKey)
+            ? shared.t(messageKey)
+            : shared.t('filter.form_label');
+          return (
+            <li key={`${reason.stableId}-${reason.code}-${index}`}>
+              <span title={reason.stableId}>{fieldLabel}</span> — {local.t(REVIEW_REASON_MESSAGE[reason.code])}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
 
 type EditorState =
   | { readonly kind: 'RENAME' | 'DUPLICATE'; readonly id: string; readonly value: string }
@@ -93,6 +132,7 @@ function SavedViewCard({
   const duplicateTriggerId = useId();
   const deleteTriggerId = useId();
   const deleteConfirmId = useId();
+  const reviewReasonId = useId();
   const focusReturnId = useRef<string | null>(null);
   const previousActiveKind = useRef<Exclude<EditorState, null>['kind'] | null>(null);
   const [working, setWorking] = useState(false);
@@ -102,6 +142,9 @@ function SavedViewCard({
   const editorOpen = editor !== null;
   const disabled = pending || working;
   const compatible = definition.content.status === 'COMPATIBLE';
+  const reviewReasons = definition.content.status === 'REVIEW_REQUIRED'
+    ? definition.content.reasons
+    : null;
 
   useEffect(() => {
     if (activeKind !== null) {
@@ -165,8 +208,11 @@ function SavedViewCard({
         </span>
       </div>
       <span className="local-personal__badge" data-state={compatible ? 'READY' : 'DANGER'}>
-        {local.t(compatible ? 'local.saved.compatible' : 'local.saved.incompatible')}
+        {local.t(compatible
+          ? 'local.saved.compatible'
+          : reviewReasons === null ? 'local.saved.incompatible' : 'local.saved.match.review_required')}
       </span>
+      {reviewReasons === null ? null : <SavedViewReviewNotice id={reviewReasonId} reasons={reviewReasons} />}
       <dl className="local-personal__facts">
         <div>
           <dt>{local.t('local.saved.created', { time: '' }).replace(/\s*$/u, '')}</dt>
@@ -179,6 +225,7 @@ function SavedViewCard({
       </dl>
       <div className="local-personal__actions">
         <ActionButton
+          aria-describedby={reviewReasons === null ? undefined : reviewReasonId}
           aria-label={`${local.t('local.saved.apply')}: ${definition.name}`}
           disabled={disabled || !compatible}
           onClick={() => void apply()}
@@ -207,6 +254,7 @@ function SavedViewCard({
           {local.t('local.saved.update')}
         </ActionButton>
         <ActionButton
+          aria-describedby={reviewReasons === null ? undefined : reviewReasonId}
           aria-label={`${local.t('local.saved.duplicate')}: ${definition.name}`}
           disabled={disabled || !compatible}
           id={duplicateTriggerId}
@@ -307,6 +355,7 @@ export function SavedViewsPage({
   const local = useLocalI18n();
   const shared = useBcspI18n();
   const createNameId = useId();
+  const currentReviewReasonId = useId();
   const deleteAllTriggerId = useId();
   const deleteAllConfirmId = useId();
   const [createName, setCreateName] = useState('');
@@ -316,6 +365,9 @@ export function SavedViewsPage({
   const [deletingAll, setDeletingAll] = useState(false);
   const previousDeleteAllConfirmation = useRef(false);
   const currentFiltersReady = library.currentFilters.value?.content.status === 'COMPATIBLE';
+  const currentReviewReasons = library.currentFilters.value?.content.status === 'REVIEW_REQUIRED'
+    ? library.currentFilters.value.content.reasons
+    : null;
 
   useEffect(() => {
     if (confirmDeleteAll) {
@@ -373,8 +425,13 @@ export function SavedViewsPage({
           </span>
         </header>
         <p className="local-personal__notice">
-          {local.t(currentFiltersReady ? 'local.saved.current_ready' : 'local.saved.current_empty')}
+          {local.t(currentFiltersReady
+            ? 'local.saved.current_ready'
+            : currentReviewReasons === null ? 'local.saved.current_empty' : 'local.saved.match.review_required')}
         </p>
+        {currentReviewReasons === null
+          ? null
+          : <SavedViewReviewNotice id={currentReviewReasonId} reasons={currentReviewReasons} />}
         <form className="local-personal__form" onSubmit={create}>
           <div className="local-personal__field">
             <label htmlFor={createNameId}>{local.t('local.saved.create_name')}</label>

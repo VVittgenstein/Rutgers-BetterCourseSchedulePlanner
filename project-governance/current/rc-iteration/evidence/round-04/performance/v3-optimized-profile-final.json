@@ -1,0 +1,1474 @@
+{
+  "buildProfile": "release",
+  "complexFilters": {
+    "contractVersion": 3,
+    "values": {
+      "availability": [],
+      "campuses": [
+        "CM",
+        "NB",
+        "NK"
+      ],
+      "core": {
+        "codes": [],
+        "mode": "ANY"
+      },
+      "courseNumberBands": [
+        100
+      ],
+      "credits": null,
+      "examCodes": [],
+      "includeIncomplete": {
+        "modality": false,
+        "prerequisite": false,
+        "synchronicity": false
+      },
+      "instructors": [],
+      "keywords": [],
+      "levels": [
+        "U"
+      ],
+      "meetingLocations": {
+        "locations": [],
+        "mode": "ANY_MEETING"
+      },
+      "modalities": [],
+      "openStatuses": [],
+      "permission": "ANY",
+      "prerequisite": "ANY",
+      "sectionIndexes": [
+        "10052"
+      ],
+      "subjects": [
+        "013"
+      ],
+      "synchronicities": [],
+      "term": "92026"
+    }
+  },
+  "courseDetail": {
+    "functionalOracleBinding": {
+      "kind": "IN_PROCESS_PREPARED_REFERENCE_JSON_PARITY_TEST",
+      "repeatAssertion": "BYTE_EXACT_WITHIN_FIXED_FIXTURE",
+      "test": "bcsp_application::query_service::tests::prepared_snapshot_matches_reference_options_validation_search_and_details",
+      "unoptimizedArtifactDetailHashAvailable": false
+    },
+    "key": {
+      "campus": "NB",
+      "courseString": "01:013:120",
+      "term": "92026"
+    },
+    "responseSha256": "c114a8f9912b7a0a6bf90a8d22ef9b3cc253ae59aabe957c9aab7de1b3ad3e87",
+    "runs": [
+      {
+        "elapsedMs": 0.0257,
+        "events": [
+          {
+            "dimensions": {
+              "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }]",
+              "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }]"
+            },
+            "elapsedUs": 0,
+            "phase": "prepared_snapshot_bind"
+          },
+          {
+            "dimensions": {
+              "response_bytes": 8433
+            },
+            "elapsedUs": 10,
+            "phase": "serialization"
+          }
+        ],
+        "nonDurationPerformancePhases": [],
+        "phaseTotalsMs": {
+          "prepared_snapshot_bind": 0.0,
+          "serialization": 0.01
+        },
+        "preparedMetrics": [
+          {
+            "capacity": 1,
+            "evictions": 0,
+            "hit": true,
+            "hits": 19,
+            "misses": 0,
+            "phase": "access",
+            "publishes": 1,
+            "replacements": 0
+          }
+        ],
+        "responseBytes": 8433,
+        "responseSha256": "c114a8f9912b7a0a6bf90a8d22ef9b3cc253ae59aabe957c9aab7de1b3ad3e87"
+      },
+      {
+        "elapsedMs": 0.020999999999999998,
+        "events": [
+          {
+            "dimensions": {
+              "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }]",
+              "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }]"
+            },
+            "elapsedUs": 0,
+            "phase": "prepared_snapshot_bind"
+          },
+          {
+            "dimensions": {
+              "response_bytes": 8433
+            },
+            "elapsedUs": 9,
+            "phase": "serialization"
+          }
+        ],
+        "nonDurationPerformancePhases": [],
+        "phaseTotalsMs": {
+          "prepared_snapshot_bind": 0.0,
+          "serialization": 0.009
+        },
+        "preparedMetrics": [
+          {
+            "capacity": 1,
+            "evictions": 0,
+            "hit": true,
+            "hits": 20,
+            "misses": 0,
+            "phase": "access",
+            "publishes": 1,
+            "replacements": 0
+          }
+        ],
+        "responseBytes": 8433,
+        "responseSha256": "c114a8f9912b7a0a6bf90a8d22ef9b3cc253ae59aabe957c9aab7de1b3ad3e87"
+      },
+      {
+        "elapsedMs": 0.0196,
+        "events": [
+          {
+            "dimensions": {
+              "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }]",
+              "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }]"
+            },
+            "elapsedUs": 0,
+            "phase": "prepared_snapshot_bind"
+          },
+          {
+            "dimensions": {
+              "response_bytes": 8433
+            },
+            "elapsedUs": 8,
+            "phase": "serialization"
+          }
+        ],
+        "nonDurationPerformancePhases": [],
+        "phaseTotalsMs": {
+          "prepared_snapshot_bind": 0.0,
+          "serialization": 0.008
+        },
+        "preparedMetrics": [
+          {
+            "capacity": 1,
+            "evictions": 0,
+            "hit": true,
+            "hits": 21,
+            "misses": 0,
+            "phase": "access",
+            "publishes": 1,
+            "replacements": 0
+          }
+        ],
+        "responseBytes": 8433,
+        "responseSha256": "c114a8f9912b7a0a6bf90a8d22ef9b3cc253ae59aabe957c9aab7de1b3ad3e87"
+      }
+    ]
+  },
+  "databaseBundle": [
+    {
+      "artifact": "rbcsp.sqlite",
+      "bytes": 26599424,
+      "sha256": "6394f1ee4b7e9abbbd5c5a5795eb156b887242063477a703755cb9ec7b3cf8b2"
+    },
+    {
+      "artifact": "rbcsp.sqlite-wal",
+      "bytes": 849927192,
+      "sha256": "eac6831e5425354f0c38e794d527b82a095e8627664370a95f1dffd2757c1236"
+    },
+    {
+      "artifact": "rbcsp.sqlite-shm",
+      "bytes": 1671168,
+      "sha256": "bab56016309382085a580db2f36c1c49e34b4ebd6fed181255883b51ece68d90"
+    }
+  ],
+  "databaseBundleLabel": "protected HumanTest DB/WAL/SHM copy",
+  "environment": {
+    "architecture": "x86_64",
+    "availableParallelism": 32,
+    "buildIdentity": "release-test-exe-sha256:563413edc4d5ab59fed74c6e1074fd67d89afe6c9ff2cb63d05e7ba436863db5",
+    "os": "windows",
+    "processorIdentifier": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel"
+  },
+  "exactDynamicFilterValidation": [
+    {
+      "elapsedMs": 0.0235,
+      "events": [
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, content_version: CatalogContentVersion(1) }]"
+          },
+          "elapsedUs": 0,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 271
+          },
+          "elapsedUs": 0,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "prepared_snapshot_bind": 0.0,
+        "serialization": 0.0
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 15,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 271,
+      "responseSha256": "8d5f5a45dc9a879a83010ec4f0673e6bb28d0d7bcf47f545722080b49661d7fb"
+    },
+    {
+      "elapsedMs": 0.012799999999999999,
+      "events": [
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, content_version: CatalogContentVersion(1) }]"
+          },
+          "elapsedUs": 0,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 271
+          },
+          "elapsedUs": 0,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "prepared_snapshot_bind": 0.0,
+        "serialization": 0.0
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 16,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 271,
+      "responseSha256": "8d5f5a45dc9a879a83010ec4f0673e6bb28d0d7bcf47f545722080b49661d7fb"
+    },
+    {
+      "elapsedMs": 0.0115,
+      "events": [
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, content_version: CatalogContentVersion(1) }]"
+          },
+          "elapsedUs": 0,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 271
+          },
+          "elapsedUs": 1,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "prepared_snapshot_bind": 0.0,
+        "serialization": 0.001
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 17,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 271,
+      "responseSha256": "8d5f5a45dc9a879a83010ec4f0673e6bb28d0d7bcf47f545722080b49661d7fb"
+    }
+  ],
+  "filterOptionsCourseNumberBands": [
+    {
+      "elapsedMs": 0.0189,
+      "events": [
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, content_version: CatalogContentVersion(1) }]"
+          },
+          "elapsedUs": 0,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 615
+          },
+          "elapsedUs": 1,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "prepared_snapshot_bind": 0.0,
+        "serialization": 0.001
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 3,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 615,
+      "responseSha256": "8ebb823789c853fe920cbde536b49d13b0951dde71b8760fbe17a6ab9c12e037"
+    },
+    {
+      "elapsedMs": 0.013,
+      "events": [
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, content_version: CatalogContentVersion(1) }]"
+          },
+          "elapsedUs": 0,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 615
+          },
+          "elapsedUs": 1,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "prepared_snapshot_bind": 0.0,
+        "serialization": 0.001
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 4,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 615,
+      "responseSha256": "8ebb823789c853fe920cbde536b49d13b0951dde71b8760fbe17a6ab9c12e037"
+    },
+    {
+      "elapsedMs": 0.013,
+      "events": [
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, content_version: CatalogContentVersion(1) }]"
+          },
+          "elapsedUs": 0,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 615
+          },
+          "elapsedUs": 1,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "prepared_snapshot_bind": 0.0,
+        "serialization": 0.001
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 5,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 615,
+      "responseSha256": "8ebb823789c853fe920cbde536b49d13b0951dde71b8760fbe17a6ab9c12e037"
+    }
+  ],
+  "fixedClock": "2026-07-17T12:00:00Z",
+  "oracle": {
+    "allOracleCoveredProfiledResponseHashesExact": true,
+    "artifact": "v3-unoptimized-reference-final.json",
+    "detailResponseHashesAvailable": false,
+    "sha256": "79e76b499675db5c09d62341ceb6719ec347d700a26bb6ca83a36d80b112e82b"
+  },
+  "preparedServingInitialBuild": [
+    {
+      "aggregate_resident_budget_bytes": 553648128,
+      "catalog_json_bytes": 114003117,
+      "dictionary_estimated_bytes": 5092078,
+      "elapsed_ms": 2564.4604,
+      "elapsed_us": 2564460,
+      "foundation_resident_estimated_bytes": 464847114,
+      "fts_document_bytes": 685382,
+      "fts_index_bytes": 2215936,
+      "fts_rows": 8456,
+      "open_index_estimated_bytes": 4211060,
+      "phase": "build",
+      "query_index_estimated_bytes": 3742568,
+      "ready_targets": 6,
+      "registry_capacity": 1,
+      "resident_budget_bytes": 536870912,
+      "resident_estimated_bytes": 469058174,
+      "resident_high_watermark": 469058174,
+      "sqlite_cache_kib": 16384
+    },
+    {
+      "aggregate_resident_budget_bytes": 553648128,
+      "capacity": 1,
+      "elapsed_us": 3,
+      "evictions": 0,
+      "foundation_resident_estimated_bytes": 464847114,
+      "fts_index_bytes": 2215936,
+      "phase": "publish",
+      "publishes": 1,
+      "replaced": false,
+      "replacements": 0,
+      "snapshot_resident_estimated_bytes": 469058174,
+      "sqlite_cache_budget_bytes": 16777216
+    }
+  ],
+  "preparedServingMetricsAvailability": {
+    "initialBuildAndBytes": "CAPTURED_FROM_WHITELISTED_TRACE",
+    "publishReplacementEviction": "CAPTURED_FROM_WHITELISTED_TRACE",
+    "requestHitMiss": "CAPTURED_FROM_WHITELISTED_TRACE"
+  },
+  "referenceKind": "OPTIMIZED_QUERY_V3_PROFILE",
+  "repetitions": 3,
+  "schemaVersion": 2,
+  "sectionDetail": {
+    "functionalOracleBinding": {
+      "kind": "IN_PROCESS_PREPARED_REFERENCE_JSON_PARITY_TEST",
+      "repeatAssertion": "BYTE_EXACT_WITHIN_FIXED_FIXTURE",
+      "test": "bcsp_application::query_service::tests::prepared_snapshot_matches_reference_options_validation_search_and_details",
+      "unoptimizedArtifactDetailHashAvailable": false
+    },
+    "key": {
+      "campus": "NB",
+      "index": "10052",
+      "term": "92026"
+    },
+    "responseSha256": "7d7561507ad96bd36fe56ddf017b9733e9df96198b38ecde7c51c24e87001d68",
+    "runs": [
+      {
+        "elapsedMs": 0.0191,
+        "events": [
+          {
+            "dimensions": {
+              "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }]",
+              "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }]"
+            },
+            "elapsedUs": 0,
+            "phase": "prepared_snapshot_bind"
+          },
+          {
+            "dimensions": {
+              "response_bytes": 8030
+            },
+            "elapsedUs": 8,
+            "phase": "serialization"
+          }
+        ],
+        "nonDurationPerformancePhases": [],
+        "phaseTotalsMs": {
+          "prepared_snapshot_bind": 0.0,
+          "serialization": 0.008
+        },
+        "preparedMetrics": [
+          {
+            "capacity": 1,
+            "evictions": 0,
+            "hit": true,
+            "hits": 23,
+            "misses": 0,
+            "phase": "access",
+            "publishes": 1,
+            "replacements": 0
+          }
+        ],
+        "responseBytes": 8030,
+        "responseSha256": "7d7561507ad96bd36fe56ddf017b9733e9df96198b38ecde7c51c24e87001d68"
+      },
+      {
+        "elapsedMs": 0.018000000000000002,
+        "events": [
+          {
+            "dimensions": {
+              "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }]",
+              "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }]"
+            },
+            "elapsedUs": 0,
+            "phase": "prepared_snapshot_bind"
+          },
+          {
+            "dimensions": {
+              "response_bytes": 8030
+            },
+            "elapsedUs": 8,
+            "phase": "serialization"
+          }
+        ],
+        "nonDurationPerformancePhases": [],
+        "phaseTotalsMs": {
+          "prepared_snapshot_bind": 0.0,
+          "serialization": 0.008
+        },
+        "preparedMetrics": [
+          {
+            "capacity": 1,
+            "evictions": 0,
+            "hit": true,
+            "hits": 24,
+            "misses": 0,
+            "phase": "access",
+            "publishes": 1,
+            "replacements": 0
+          }
+        ],
+        "responseBytes": 8030,
+        "responseSha256": "7d7561507ad96bd36fe56ddf017b9733e9df96198b38ecde7c51c24e87001d68"
+      },
+      {
+        "elapsedMs": 0.017499999999999998,
+        "events": [
+          {
+            "dimensions": {
+              "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }]",
+              "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }]"
+            },
+            "elapsedUs": 0,
+            "phase": "prepared_snapshot_bind"
+          },
+          {
+            "dimensions": {
+              "response_bytes": 8030
+            },
+            "elapsedUs": 7,
+            "phase": "serialization"
+          }
+        ],
+        "nonDurationPerformancePhases": [],
+        "phaseTotalsMs": {
+          "prepared_snapshot_bind": 0.0,
+          "serialization": 0.007
+        },
+        "preparedMetrics": [
+          {
+            "capacity": 1,
+            "evictions": 0,
+            "hit": true,
+            "hits": 25,
+            "misses": 0,
+            "phase": "access",
+            "publishes": 1,
+            "replacements": 0
+          }
+        ],
+        "responseBytes": 8030,
+        "responseSha256": "7d7561507ad96bd36fe56ddf017b9733e9df96198b38ecde7c51c24e87001d68"
+      }
+    ]
+  },
+  "servingVectorAfter": [
+    {
+      "campus": "CM",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 1,
+      "term": "92026"
+    },
+    {
+      "campus": "NB",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 82,
+      "term": "92026"
+    },
+    {
+      "campus": "NK",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 1,
+      "term": "92026"
+    }
+  ],
+  "servingVectorBefore": [
+    {
+      "campus": "CM",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 1,
+      "term": "92026"
+    },
+    {
+      "campus": "NB",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 82,
+      "term": "92026"
+    },
+    {
+      "campus": "NK",
+      "catalogContentVersion": 1,
+      "openCatalogContentVersion": 1,
+      "openObservationSequence": 1,
+      "term": "92026"
+    }
+  ],
+  "singleCampusNeutralSearch": [
+    {
+      "elapsedMs": 2.8265000000000002,
+      "events": [
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "target_selection"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 3,
+          "phase": "target_validation"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "refresh_request"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "ready_check"
+        },
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }]",
+            "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }]"
+          },
+          "elapsedUs": 2,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "candidates": 4432,
+            "query_kind": "course"
+          },
+          "elapsedUs": 2313,
+          "phase": "predicate"
+        },
+        {
+          "dimensions": {
+            "candidates": 4432,
+            "query_kind": "course"
+          },
+          "elapsedUs": 72,
+          "phase": "sort"
+        },
+        {
+          "dimensions": {
+            "page_items": 20,
+            "query_kind": "course"
+          },
+          "elapsedUs": 8,
+          "phase": "pagination"
+        },
+        {
+          "dimensions": {
+            "query_kind": "course"
+          },
+          "elapsedUs": 134,
+          "phase": "materialization"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 2561,
+          "phase": "query_runtime"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 242606
+          },
+          "elapsedUs": 235,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "materialization": 0.134,
+        "pagination": 0.008,
+        "predicate": 2.313,
+        "prepared_snapshot_bind": 0.002,
+        "query_runtime": 2.561,
+        "ready_check": 0.0,
+        "refresh_request": 0.0,
+        "serialization": 0.235,
+        "sort": 0.072,
+        "target_selection": 0.0,
+        "target_validation": 0.003
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 7,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 242606,
+      "responseSha256": "b15c709bd6010cdf1c8b9e010993f2d5bd2ca985187bc26d7384b00b7136dfe9"
+    },
+    {
+      "elapsedMs": 2.9315,
+      "events": [
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "target_selection"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 2,
+          "phase": "target_validation"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "refresh_request"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "ready_check"
+        },
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }]",
+            "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }]"
+          },
+          "elapsedUs": 0,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "candidates": 4432,
+            "query_kind": "course"
+          },
+          "elapsedUs": 2415,
+          "phase": "predicate"
+        },
+        {
+          "dimensions": {
+            "candidates": 4432,
+            "query_kind": "course"
+          },
+          "elapsedUs": 71,
+          "phase": "sort"
+        },
+        {
+          "dimensions": {
+            "page_items": 20,
+            "query_kind": "course"
+          },
+          "elapsedUs": 9,
+          "phase": "pagination"
+        },
+        {
+          "dimensions": {
+            "query_kind": "course"
+          },
+          "elapsedUs": 153,
+          "phase": "materialization"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 2668,
+          "phase": "query_runtime"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 242606
+          },
+          "elapsedUs": 243,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "materialization": 0.153,
+        "pagination": 0.009,
+        "predicate": 2.415,
+        "prepared_snapshot_bind": 0.0,
+        "query_runtime": 2.668,
+        "ready_check": 0.0,
+        "refresh_request": 0.0,
+        "serialization": 0.243,
+        "sort": 0.071,
+        "target_selection": 0.0,
+        "target_validation": 0.002
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 8,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 242606,
+      "responseSha256": "b15c709bd6010cdf1c8b9e010993f2d5bd2ca985187bc26d7384b00b7136dfe9"
+    },
+    {
+      "elapsedMs": 2.6486,
+      "events": [
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "target_selection"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 4,
+          "phase": "target_validation"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "refresh_request"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "ready_check"
+        },
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }]",
+            "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }]"
+          },
+          "elapsedUs": 2,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "candidates": 4432,
+            "query_kind": "course"
+          },
+          "elapsedUs": 2167,
+          "phase": "predicate"
+        },
+        {
+          "dimensions": {
+            "candidates": 4432,
+            "query_kind": "course"
+          },
+          "elapsedUs": 69,
+          "phase": "sort"
+        },
+        {
+          "dimensions": {
+            "page_items": 20,
+            "query_kind": "course"
+          },
+          "elapsedUs": 9,
+          "phase": "pagination"
+        },
+        {
+          "dimensions": {
+            "query_kind": "course"
+          },
+          "elapsedUs": 122,
+          "phase": "materialization"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 2388,
+          "phase": "query_runtime"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 242606
+          },
+          "elapsedUs": 234,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "materialization": 0.122,
+        "pagination": 0.009,
+        "predicate": 2.167,
+        "prepared_snapshot_bind": 0.002,
+        "query_runtime": 2.388,
+        "ready_check": 0.0,
+        "refresh_request": 0.0,
+        "serialization": 0.234,
+        "sort": 0.069,
+        "target_selection": 0.0,
+        "target_validation": 0.004
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 9,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 242606,
+      "responseSha256": "b15c709bd6010cdf1c8b9e010993f2d5bd2ca985187bc26d7384b00b7136dfe9"
+    }
+  ],
+  "status": [
+    {
+      "elapsedMs": 1.3684,
+      "events": [
+        {
+          "dimensions": {
+            "route": "service_status"
+          },
+          "elapsedUs": 0,
+          "phase": "storage_lock_wait"
+        },
+        {
+          "dimensions": {
+            "route": "service_status"
+          },
+          "elapsedUs": 1344,
+          "phase": "storage_lock_held"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 4796
+          },
+          "elapsedUs": 9,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "serialization": 0.009,
+        "storage_lock_held": 1.344,
+        "storage_lock_wait": 0.0
+      },
+      "preparedMetrics": [],
+      "responseBytes": 4796,
+      "responseSha256": "33fcd0d68d6246cab2d4573a26ac0629b2dc9b53c79614d0866984a360705cd0"
+    },
+    {
+      "elapsedMs": 1.4224999999999999,
+      "events": [
+        {
+          "dimensions": {
+            "route": "service_status"
+          },
+          "elapsedUs": 0,
+          "phase": "storage_lock_wait"
+        },
+        {
+          "dimensions": {
+            "route": "service_status"
+          },
+          "elapsedUs": 1404,
+          "phase": "storage_lock_held"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 4796
+          },
+          "elapsedUs": 9,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "serialization": 0.009,
+        "storage_lock_held": 1.404,
+        "storage_lock_wait": 0.0
+      },
+      "preparedMetrics": [],
+      "responseBytes": 4796,
+      "responseSha256": "33fcd0d68d6246cab2d4573a26ac0629b2dc9b53c79614d0866984a360705cd0"
+    },
+    {
+      "elapsedMs": 1.3492,
+      "events": [
+        {
+          "dimensions": {
+            "route": "service_status"
+          },
+          "elapsedUs": 0,
+          "phase": "storage_lock_wait"
+        },
+        {
+          "dimensions": {
+            "route": "service_status"
+          },
+          "elapsedUs": 1332,
+          "phase": "storage_lock_held"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 4796
+          },
+          "elapsedUs": 9,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "serialization": 0.009,
+        "storage_lock_held": 1.332,
+        "storage_lock_wait": 0.0
+      },
+      "preparedMetrics": [],
+      "responseBytes": 4796,
+      "responseSha256": "33fcd0d68d6246cab2d4573a26ac0629b2dc9b53c79614d0866984a360705cd0"
+    }
+  ],
+  "threeCampusComplexSearch": [
+    {
+      "elapsedMs": 28.4623,
+      "events": [
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "target_selection"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 7,
+          "phase": "target_validation"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "refresh_request"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "ready_check"
+        },
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, content_version: CatalogContentVersion(1) }]",
+            "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 1, attempt_sequence: 1 }, PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }, PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 1, attempt_sequence: 2 }]"
+          },
+          "elapsedUs": 3,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "candidates": 1,
+            "query_kind": "course"
+          },
+          "elapsedUs": 28311,
+          "phase": "predicate"
+        },
+        {
+          "dimensions": {
+            "candidates": 1,
+            "query_kind": "course"
+          },
+          "elapsedUs": 0,
+          "phase": "sort"
+        },
+        {
+          "dimensions": {
+            "page_items": 1,
+            "query_kind": "course"
+          },
+          "elapsedUs": 1,
+          "phase": "pagination"
+        },
+        {
+          "dimensions": {
+            "query_kind": "course"
+          },
+          "elapsedUs": 18,
+          "phase": "materialization"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 28379,
+          "phase": "query_runtime"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 9733
+          },
+          "elapsedUs": 32,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "materialization": 0.018,
+        "pagination": 0.001,
+        "predicate": 28.311,
+        "prepared_snapshot_bind": 0.003,
+        "query_runtime": 28.379,
+        "ready_check": 0.0,
+        "refresh_request": 0.0,
+        "serialization": 0.032,
+        "sort": 0.0,
+        "target_selection": 0.0,
+        "target_validation": 0.007
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 11,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 9733,
+      "responseSha256": "174d20efc52e62698db09f1ac18960eb906362362d9c114fc3b02b5e009ed17c"
+    },
+    {
+      "elapsedMs": 29.0763,
+      "events": [
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "target_selection"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 9,
+          "phase": "target_validation"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "refresh_request"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 1,
+          "phase": "ready_check"
+        },
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, content_version: CatalogContentVersion(1) }]",
+            "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 1, attempt_sequence: 1 }, PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }, PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 1, attempt_sequence: 2 }]"
+          },
+          "elapsedUs": 3,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "candidates": 1,
+            "query_kind": "course"
+          },
+          "elapsedUs": 28937,
+          "phase": "predicate"
+        },
+        {
+          "dimensions": {
+            "candidates": 1,
+            "query_kind": "course"
+          },
+          "elapsedUs": 0,
+          "phase": "sort"
+        },
+        {
+          "dimensions": {
+            "page_items": 1,
+            "query_kind": "course"
+          },
+          "elapsedUs": 0,
+          "phase": "pagination"
+        },
+        {
+          "dimensions": {
+            "query_kind": "course"
+          },
+          "elapsedUs": 15,
+          "phase": "materialization"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 28998,
+          "phase": "query_runtime"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 9733
+          },
+          "elapsedUs": 31,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "materialization": 0.015,
+        "pagination": 0.0,
+        "predicate": 28.937,
+        "prepared_snapshot_bind": 0.003,
+        "query_runtime": 28.998,
+        "ready_check": 0.001,
+        "refresh_request": 0.0,
+        "serialization": 0.031,
+        "sort": 0.0,
+        "target_selection": 0.0,
+        "target_validation": 0.009
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 12,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 9733,
+      "responseSha256": "174d20efc52e62698db09f1ac18960eb906362362d9c114fc3b02b5e009ed17c"
+    },
+    {
+      "elapsedMs": 29.1844,
+      "events": [
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "target_selection"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 9,
+          "phase": "target_validation"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "refresh_request"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 0,
+          "phase": "ready_check"
+        },
+        {
+          "dimensions": {
+            "catalog_vector": "[PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, content_version: CatalogContentVersion(1) }, PreparedCatalogVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, content_version: CatalogContentVersion(1) }]",
+            "open_vector": "[PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"CM\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 1, attempt_sequence: 1 }, PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NB\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 82, attempt_sequence: 83 }, PreparedOpenVectorEntry { target: TermCampusKey { term: TermId(\"92026\"), campus: CampusCode(\"NK\") }, catalog_content_version: CatalogContentVersion(1), observation_sequence: 1, attempt_sequence: 2 }]"
+          },
+          "elapsedUs": 3,
+          "phase": "prepared_snapshot_bind"
+        },
+        {
+          "dimensions": {
+            "candidates": 1,
+            "query_kind": "course"
+          },
+          "elapsedUs": 29042,
+          "phase": "predicate"
+        },
+        {
+          "dimensions": {
+            "candidates": 1,
+            "query_kind": "course"
+          },
+          "elapsedUs": 0,
+          "phase": "sort"
+        },
+        {
+          "dimensions": {
+            "page_items": 1,
+            "query_kind": "course"
+          },
+          "elapsedUs": 0,
+          "phase": "pagination"
+        },
+        {
+          "dimensions": {
+            "query_kind": "course"
+          },
+          "elapsedUs": 17,
+          "phase": "materialization"
+        },
+        {
+          "dimensions": {
+            "route": "course_search"
+          },
+          "elapsedUs": 29108,
+          "phase": "query_runtime"
+        },
+        {
+          "dimensions": {
+            "response_bytes": 9733
+          },
+          "elapsedUs": 35,
+          "phase": "serialization"
+        }
+      ],
+      "nonDurationPerformancePhases": [],
+      "phaseTotalsMs": {
+        "materialization": 0.017,
+        "pagination": 0.0,
+        "predicate": 29.042,
+        "prepared_snapshot_bind": 0.003,
+        "query_runtime": 29.108,
+        "ready_check": 0.0,
+        "refresh_request": 0.0,
+        "serialization": 0.035,
+        "sort": 0.0,
+        "target_selection": 0.0,
+        "target_validation": 0.009
+      },
+      "preparedMetrics": [
+        {
+          "capacity": 1,
+          "evictions": 0,
+          "hit": true,
+          "hits": 13,
+          "misses": 0,
+          "phase": "access",
+          "publishes": 1,
+          "replacements": 0
+        }
+      ],
+      "responseBytes": 9733,
+      "responseSha256": "174d20efc52e62698db09f1ac18960eb906362362d9c114fc3b02b5e009ed17c"
+    }
+  ],
+  "tracePolicy": {
+    "performanceDurations": "only bcsp_performance events carrying elapsed_us are aggregated",
+    "preparedMetrics": [
+      "prepared_snapshot_access",
+      "prepared_snapshot_build",
+      "prepared_snapshot_publish",
+      "prepared_open_overlay_rebuild"
+    ],
+    "rawTraceFieldsPersisted": false
+  }
+}

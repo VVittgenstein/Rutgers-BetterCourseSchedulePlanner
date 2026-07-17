@@ -525,5 +525,7 @@ describe('typed search result and detail views', () => {
     expect(screen.getByText('Ada Lovelace')).toBeTruthy();
     expect(screen.getByText(/Common final/u)).toBeTruthy();
     expect(screen.getByText('No permission required')).toBeTruthy();
+    expect(screen.getByText('No permission required').closest('.search-results__field')
+      ?.classList.contains('search-results__field--full-row')).toBe(true);
   });
 });

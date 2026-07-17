@@ -194,12 +194,28 @@ pub struct ServiceStatusV1 {
     pub issues: Vec<ServiceIssueV1>,
 }
 
+/// Publication evidence for one term in the product term window.
+///
+/// This is deliberately independent from per-target snapshot availability. A retained usable
+/// snapshot remains usable when discovery evidence becomes stale or otherwise indeterminate.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ServiceTermPublicationV2 {
+    Published,
+    Unpublished,
+    Unknown,
+}
+
+impl ServiceTermPublicationV2 {
+    pub const ALL: &'static [Self] = &[Self::Published, Self::Unpublished, Self::Unknown];
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceVisibleTermV2 {
     pub term: TermId,
     pub relative_offset: i8,
-    pub discovered: bool,
+    pub publication: ServiceTermPublicationV2,
     pub auto_managed: bool,
     pub manual_pull_allowed: bool,
     pub watchable: bool,

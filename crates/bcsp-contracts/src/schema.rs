@@ -15,9 +15,10 @@ use crate::{
     OpenRefreshClassification, OpenSchedulerLane, OpenState, OpenUncertaintyReason,
     RutgersDayTimezone, ServiceAvailabilityV1, ServiceIssueComponentV1, ServiceIssueRecoveryV1,
     ServiceIssueSeverityV1, ServiceLevelV1, ServiceOperationPhaseV1, ServiceOperationStageV2,
-    ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceWorkStateV2, WS_PROTOCOL_VERSION,
-    WatchAlertDisposition, WatchContinuousMixerStopReason, WatchCueCancellationReason,
-    WatchCueOutcome, WatchNotificationMode, WatchStartRejectionReason, WatchStopReason,
+    ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceTermPublicationV2, ServiceWorkStateV2,
+    WS_PROTOCOL_VERSION, WatchAlertDisposition, WatchContinuousMixerStopReason,
+    WatchCueCancellationReason, WatchCueOutcome, WatchNotificationMode, WatchStartRejectionReason,
+    WatchStopReason,
 };
 
 pub const CONTRACT_SCHEMA_VERSION: u16 = 1;
@@ -371,7 +372,21 @@ pub fn contract_manifest() -> ContractManifest {
                 exact_bytes: None,
                 max_bytes: None,
                 pattern: None,
-                semantic: Some("only integer 1 is accepted".to_owned()),
+                semantic: Some(
+                    "integers 1 through 3 are recognized; active product requests require 3"
+                        .to_owned(),
+                ),
+            },
+            ScalarConstraint {
+                id: "course-number-band".to_owned(),
+                wire_type: "u32".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some(
+                    "nonnegative multiple of 100 whose inclusive upper bound N+99 is representable"
+                        .to_owned(),
+                ),
             },
             ScalarConstraint {
                 id: "open-contract-version".to_owned(),
@@ -1573,7 +1588,7 @@ pub fn contract_manifest() -> ContractManifest {
                     "CAMPUS_CODE_SET",
                     "SUBJECT_CODE_SET",
                     "KEYWORD_SET",
-                    "COURSE_NUMBER_SET",
+                    "COURSE_NUMBER_BAND",
                     "LEVEL_SET",
                     "CREDIT_RANGE",
                     "CORE_CODE_SET",
@@ -1629,6 +1644,7 @@ pub fn contract_manifest() -> ContractManifest {
                     "MAX32_TEXT_TOKENS",
                     "MAX128_TOKEN_BYTES",
                     "TOKEN_CONTAINS_ALPHANUMERIC",
+                    "NONNEGATIVE_HUNDRED_BAND",
                 ]
                 .map(str::to_owned),
             ),
@@ -1704,15 +1720,22 @@ pub fn contract_manifest() -> ContractManifest {
                 ["OPEN", "CLOSED", "UNKNOWN"].map(str::to_owned),
             ),
             enum_schema(
-                "bcsp.query.modality-filter.v1",
-                [
-                    "ON_CAMPUS_OR_IN_PERSON",
-                    "ONLINE",
-                    "HYBRID",
-                    "OTHER",
-                    "UNKNOWN",
-                ]
-                .map(str::to_owned),
+                "bcsp.query.user-modality.v3",
+                ["ON_CAMPUS_OR_IN_PERSON", "ONLINE", "HYBRID"].map(str::to_owned),
+            ),
+            enum_schema(
+                "bcsp.query.user-synchronicity.v3",
+                ["SYNC", "ASYNC", "MIXED"].map(str::to_owned),
+            ),
+            schema(
+                "bcsp.query.include-incomplete.v3",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("prerequisite", "$primitive:bool"),
+                    ("modality", "$primitive:bool"),
+                    ("synchronicity", "$primitive:bool"),
+                ],
             ),
             enum_schema(
                 "bcsp.query.permission-filter.v1",
@@ -1784,7 +1807,7 @@ pub fn contract_manifest() -> ContractManifest {
                     ("campuses", "$array:$scalar:campus-code"),
                     ("subjects", "$array:$scalar:catalog-subject-code"),
                     ("keywords", "$array:$scalar:filter-token"),
-                    ("courseNumbers", "$array:$scalar:filter-token"),
+                    ("courseNumberBands", "$array:$scalar:course-number-band"),
                     ("levels", "$array:$scalar:filter-token"),
                     ("credits", "$optional:$schema:bcsp.query.credit-range.v1"),
                     ("core", "$schema:bcsp.query.core-filter.v1"),
@@ -1794,10 +1817,10 @@ pub fn contract_manifest() -> ContractManifest {
                         "openStatuses",
                         "$array:$schema:bcsp.query.live-open-state.v1",
                     ),
-                    ("modalities", "$array:$schema:bcsp.query.modality-filter.v1"),
+                    ("modalities", "$array:$schema:bcsp.query.user-modality.v3"),
                     (
                         "synchronicities",
-                        "$array:$schema:bcsp.catalog.synchronicity.v1",
+                        "$array:$schema:bcsp.query.user-synchronicity.v3",
                     ),
                     ("instructors", "$array:$scalar:filter-token"),
                     (
@@ -1810,6 +1833,10 @@ pub fn contract_manifest() -> ContractManifest {
                     ),
                     ("examCodes", "$array:$scalar:filter-token"),
                     ("permission", "$schema:bcsp.query.permission-filter.v1"),
+                    (
+                        "includeIncomplete",
+                        "$schema:bcsp.query.include-incomplete.v3",
+                    ),
                 ],
             ),
             schema(
@@ -1887,6 +1914,7 @@ pub fn contract_manifest() -> ContractManifest {
                 "bcsp.query.filter-options-field.v2",
                 [
                     "KEYWORD",
+                    "COURSE_NUMBER_BAND",
                     "COURSE_LEVEL",
                     "INSTRUCTOR",
                     "MEETING_LOCATION",
@@ -1938,6 +1966,37 @@ pub fn contract_manifest() -> ContractManifest {
                     ),
                     ("options", "$array:$schema:bcsp.query.filter-option.v2"),
                     ("truncated", "$primitive:bool"),
+                ],
+            ),
+            schema(
+                "bcsp.query.dynamic-filter-validation-request.v3",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[("filters", "$schema:bcsp.query.filter-request.v1")],
+            ),
+            schema(
+                "bcsp.query.invalid-dynamic-filter-value.v3",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("field", "$schema:bcsp.query.filter-field-id.v1"),
+                    ("value", "$primitive:string"),
+                ],
+            ),
+            schema(
+                "bcsp.query.dynamic-filter-validation-response.v3",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:query-contract-version"),
+                    (
+                        "targetVersions",
+                        "$array:$schema:bcsp.query.filter-option-target-version.v2",
+                    ),
+                    (
+                        "invalidValues",
+                        "$array:$schema:bcsp.query.invalid-dynamic-filter-value.v3",
+                    ),
                 ],
             ),
             schema(
@@ -2656,6 +2715,10 @@ pub fn contract_manifest() -> ContractManifest {
                 "bcsp.service.work-state.v2",
                 serialized_enum_values(ServiceWorkStateV2::ALL),
             ),
+            enum_schema(
+                "bcsp.service.term-publication.v2",
+                serialized_enum_values(ServiceTermPublicationV2::ALL),
+            ),
             schema(
                 "bcsp.service.visible-term.v2",
                 SchemaDirection::ServerToClient,
@@ -2663,7 +2726,7 @@ pub fn contract_manifest() -> ContractManifest {
                 &[
                     ("term", "$scalar:term-id"),
                     ("relativeOffset", "$primitive:i8"),
-                    ("discovered", "$primitive:bool"),
+                    ("publication", "$schema:bcsp.service.term-publication.v2"),
                     ("autoManaged", "$primitive:bool"),
                     ("manualPullAllowed", "$primitive:bool"),
                     ("watchable", "$primitive:bool"),

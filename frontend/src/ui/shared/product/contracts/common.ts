@@ -1,6 +1,6 @@
 export type ProtocolVersionV1 = 1;
 export type ContractVersionV1 = 1;
-export type QueryContractVersion = 1 | 2;
+export type QueryContractVersion = 1 | 2 | 3;
 export type TraceId = string;
 export type IsoDateTime = string;
 

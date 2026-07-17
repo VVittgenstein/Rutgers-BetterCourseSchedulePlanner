@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bcsp_application::{
     FixedRefreshPolicyProvider, NoopWatchDispatchSink, OpenRuntimeSnapshotRegistry,
     SharedProductStorage, SharedRuntimeContext, SharedWatchSocket, SystemApplicationClock,
-    WatchAdmissionSource,
+    WatchAdmissionSource, is_product_campus,
 };
 use bcsp_contracts::SectionKey;
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
@@ -21,6 +21,9 @@ struct PublicWatchAdmission {
 
 impl WatchAdmissionSource for PublicWatchAdmission {
     fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission {
+        if !self.target_supported(section) {
+            return WatchStartAdmission::UnsupportedTarget;
+        }
         if !self.term_in_range(section) {
             return WatchStartAdmission::TermOutOfRange;
         }
@@ -39,6 +42,10 @@ impl WatchAdmissionSource for PublicWatchAdmission {
             section,
             &runtime,
         ))
+    }
+
+    fn target_supported(&self, section: &SectionKey) -> bool {
+        is_product_campus(section.campus().as_str())
     }
 
     fn term_in_range(&self, section: &SectionKey) -> bool {

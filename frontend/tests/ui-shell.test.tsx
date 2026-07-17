@@ -9,6 +9,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PublicCompositionRoot } from '../src/ui/public/PublicCompositionRoot';
 import { BCSP_SHELL_CSS } from '../src/ui/shared/application';
 import { BCSP_DESIGN_SYSTEM_CSS } from '../src/ui/shared/design-system';
+import { FILTER_PANEL_CSS } from '../src/ui/shared/search/filters/FilterPanel';
+import { SEARCH_RESULTS_CSS } from '../src/ui/shared/search/results';
+import { WATCH_WORKSPACE_CSS } from '../src/ui/shared/watch';
 import type {
   CatalogDiscoveryResponseV1,
   FilterSchemaV1,
@@ -22,6 +25,8 @@ const BOOTSTRAP = {
   data: { sessionNonce: '10000000-0000-4000-8000-000000000001' },
 };
 const OBSERVED_AT = '2026-07-14T16:30:00.000Z';
+const TERM = '72026';
+const NEXT_TERM = '92026';
 
 const filterSchema = JSON.parse(readFileSync(
   resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
@@ -83,10 +88,10 @@ function discovery(
         : index === 1 ? 'Newark' : `Published campus ${index + 1}`),
       key: {
         campus: index === 0 ? 'NB' : index === 1 ? 'NK' : `C${String(index + 1).padStart(3, '0')}`,
-        term: '2026-9',
+        term: TERM,
       },
       provenance,
-      termLabel: known('Fall 2026'),
+      termLabel: known('Upstream term label must not render'),
     })),
   };
 }
@@ -127,16 +132,16 @@ function serviceStatus(
     }] : [],
     runtime: 'PUBLIC',
     termWindow: {
-      currentTerm: '2026-9',
-      nextTerm: '2027-0',
+      currentTerm: TERM,
+      nextTerm: NEXT_TERM,
       visibleTerms: [
-        { term: '2026-9', relativeOffset: 0, discovered: targetCount > 0, autoManaged: true, manualPullAllowed: false, watchable: true },
-        { term: '2027-0', relativeOffset: 1, discovered: false, autoManaged: true, manualPullAllowed: false, watchable: true },
+        { term: TERM, relativeOffset: 0, publication: targetCount > 0 ? 'PUBLISHED' : 'UNPUBLISHED', autoManaged: true, manualPullAllowed: false, watchable: true },
+        { term: NEXT_TERM, relativeOffset: 1, publication: 'UNPUBLISHED', autoManaged: true, manualPullAllowed: false, watchable: true },
       ],
     },
     automaticTermSummaries: [
-      { term: '2026-9', readyTargetCount, totalTargetCount: targetCount },
-      { term: '2027-0', readyTargetCount: 0, totalTargetCount: 0 },
+      { term: TERM, readyTargetCount, totalTargetCount: targetCount },
+      { term: NEXT_TERM, readyTargetCount: 0, totalTargetCount: 0 },
     ],
     targets,
   };
@@ -212,9 +217,9 @@ describe('P7.2 responsive product shell', () => {
   it('renders current metrics and lets native controls select published targets', async () => {
     const view = renderShell(runtimeWith(async () => discovery()));
 
-    const term = await screen.findByRole('radio', { name: /Fall 2026/u }) as HTMLInputElement;
-    const newark = screen.getByRole('checkbox', { name: /Newark \/ NK/i }) as HTMLInputElement;
-    const newBrunswick = screen.getByRole('checkbox', { name: /New Brunswick \/ NB/i }) as HTMLInputElement;
+    const term = await screen.findByRole('radio', { name: /Summer 2026/u }) as HTMLInputElement;
+    const newark = screen.getByRole('checkbox', { name: /NK/u }) as HTMLInputElement;
+    const newBrunswick = screen.getByRole('checkbox', { name: /NB/u }) as HTMLInputElement;
     expect(term.checked).toBe(true);
     expect(newBrunswick.checked).toBe(false);
     expect(newark.checked).toBe(false);
@@ -245,8 +250,8 @@ describe('P7.2 responsive product shell', () => {
     const partial: ServiceStatusV2 = {
       ...complete,
       automaticTermSummaries: [
-        { term: '2026-9', readyTargetCount: 1, totalTargetCount: 2 },
-        { term: '2027-0', readyTargetCount: 0, totalTargetCount: 0 },
+        { term: TERM, readyTargetCount: 1, totalTargetCount: 2 },
+        { term: NEXT_TERM, readyTargetCount: 0, totalTargetCount: 0 },
       ],
       targets: [complete.targets[0]!, {
         ...second,
@@ -310,8 +315,9 @@ describe('P7.2 responsive product shell', () => {
       async () => serviceStatus('INITIALIZING', 'UNAVAILABLE', 0),
     ));
     expect(await screen.findByRole('heading', { name: 'Search courses' })).toBeTruthy();
-    expect(screen.getAllByRole('radio')).toHaveLength(2);
-    expect(screen.getByText('Course targets have not been published for this term.')).toBeTruthy();
+    expect(screen.getAllByRole('radio', { name: /Summer 2026|Fall 2026/u })).toHaveLength(2);
+    expect(document.querySelector('.query-scope')?.textContent).toContain('Not loaded 0/3');
+    expect(screen.getByRole('button', { name: 'Apply' }).hasAttribute('disabled')).toBe(true);
     empty.unmount();
 
     const catalogDiscovery = vi.fn<ProductApiPort['catalogDiscovery']>()
@@ -320,13 +326,13 @@ describe('P7.2 responsive product shell', () => {
     renderShell(runtimeWith(catalogDiscovery));
     expect(await screen.findByRole('alert')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(screen.getByRole('radio', { name: /Fall 2026/u })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('radio', { name: /Summer 2026/u })).toBeTruthy());
     expect(catalogDiscovery.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('keeps the submitted Course result state while visiting Watch and returning', async () => {
     const searchCourses = vi.fn<ProductApiPort['searchCourses']>().mockResolvedValue({
-      contractVersion: 2,
+      contractVersion: 3,
       items: [],
       page: { page: 1, pageSize: 25, total: 0, totalPages: 0 },
     });
@@ -338,7 +344,7 @@ describe('P7.2 responsive product shell', () => {
     ));
 
     await screen.findByText('All course data is ready');
-    fireEvent.click(screen.getByRole('checkbox', { name: /New Brunswick \/ NB/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /NB/u }));
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     expect(await screen.findByRole('heading', { name: 'No matching records' })).toBeTruthy();
@@ -372,5 +378,21 @@ describe('P7.2 responsive product shell', () => {
     expect(BCSP_SHELL_CSS).toMatch(/\.bcsp-navigation\s*\{[\s\S]*?position:\s*sticky;/u);
     expect(BCSP_SHELL_CSS).toMatch(/\.bcsp-navigation\s*\{[\s\S]*?top:\s*0;/u);
     expect(BCSP_SHELL_CSS).toContain('scroll-margin-top: var(--bcsp-navigation-height');
+  });
+
+  it('keeps current product transitions explicit and reduced-motion aware', () => {
+    const productCss = [
+      BCSP_DESIGN_SYSTEM_CSS,
+      BCSP_SHELL_CSS,
+      FILTER_PANEL_CSS,
+      SEARCH_RESULTS_CSS,
+      WATCH_WORKSPACE_CSS,
+    ].join('\n');
+    expect(productCss).not.toMatch(/transition:\s*all\b/u);
+    expect(productCss).not.toMatch(/\bease-in(?!-out)\b/u);
+    expect(FILTER_PANEL_CSS).not.toContain('transition:');
+    expect(BCSP_SHELL_CSS).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(SEARCH_RESULTS_CSS).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(WATCH_WORKSPACE_CSS).toContain('@media (prefers-reduced-motion: reduce)');
   });
 });

@@ -4,7 +4,10 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use bcsp_contracts::{CourseGroupKey, CourseVariantKey, SectionKey, TermCampusKey, TraceId};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -12,12 +15,13 @@ use crate::migration::{apply_migrations, probe_fts5, read_migration_records, sha
 use crate::open::recover_interrupted_open_attempts;
 use crate::{
     BeginRefreshAttemptCommand, CatalogCandidateOpenSnapshot, CatalogCounts, CatalogFailureAudit,
-    CatalogRefreshCommand, CatalogSnapshot, CourseTextSearchTokens, CourseVariantSearchHit,
-    CourseVariantSearchResult, EmptySnapshotDecision, FinishRefreshFailureCommand, MigrationRecord,
-    ProvenanceEntityKind, PublishOutcome, PublishedCatalogSnapshot, RefreshFailureStage,
-    RefreshObservation, RefreshStatus, StorageError, StorageIntegrityReport, StorageResult,
-    StoredCanonicalFacts, StoredCourseGroup, StoredCourseVariant, StoredOccurrence,
-    StoredProvenance, StoredSection, TargetState,
+    CatalogRefreshCommand, CatalogSnapshot, CourseFtsCorpusSignature, CourseTextSearchTokens,
+    CourseVariantSearchHit, CourseVariantSearchResult, EmptySnapshotDecision,
+    FinishRefreshFailureCommand, MigrationRecord, ProvenanceEntityKind, PublishOutcome,
+    PublishedCatalogSnapshot, PublishedCourseFtsDocument, RefreshFailureStage, RefreshObservation,
+    RefreshStatus, StorageError, StorageIntegrityReport, StorageResult, StoredCanonicalFacts,
+    StoredCourseGroup, StoredCourseVariant, StoredOccurrence, StoredProvenance, StoredSection,
+    TargetState,
 };
 
 pub struct OperationalStorage {
@@ -76,6 +80,28 @@ impl OperationalStorage {
     pub fn open_in_memory() -> StorageResult<Self> {
         let connection = Connection::open_in_memory()?;
         Self::initialize(connection, true, None)
+    }
+
+    /// Opens an independent read-only connection to the same file-backed WAL.
+    ///
+    /// This is intentionally unavailable for in-memory fixtures. It exists for
+    /// offline/startup/post-publication prepared-snapshot construction, never as
+    /// a per-request serving path.
+    pub fn open_prepared_snapshot_reader(&self) -> StorageResult<Option<Self>> {
+        let Some(path) = self.recovery_key.as_ref() else {
+            return Ok(None);
+        };
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        probe_fts5(&connection)?;
+        Ok(Some(Self {
+            connection,
+            recovery_key: None,
+        }))
     }
 
     fn initialize(
@@ -805,6 +831,157 @@ impl OperationalStorage {
         })
     }
 
+    /// Exports the exact documents used by the published FTS5 projection for
+    /// one fixed Catalog version. The caller may use these rows only to build
+    /// an immutable prepared serving index with the same tokenizer/ranking
+    /// contract.
+    pub fn published_course_fts_documents(
+        &mut self,
+        target: &TermCampusKey,
+        content_version: u64,
+    ) -> StorageResult<Vec<PublishedCourseFtsDocument>> {
+        if content_version == 0 {
+            return Err(StorageError::InvalidCommand {
+                field: "content_version",
+                reason: "must identify a published catalog version",
+            });
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let current_version = transaction
+            .query_row(
+                "SELECT current_content_version FROM catalog_targets WHERE target_id = ?1",
+                [target_id(target)],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(i64_to_u64)
+            .transpose()?;
+        let Some(current_version) = current_version.filter(|version| *version > 0) else {
+            return Err(StorageError::CatalogTargetNotPublished);
+        };
+        if current_version != content_version {
+            return Err(StorageError::CatalogContentVersionMismatch {
+                requested: content_version,
+                current: current_version,
+            });
+        }
+
+        let documents = {
+            let mut statement = transaction.prepare(
+                "SELECT f.course_string, f.fingerprint, f.content_version, f.document
+                   FROM catalog_course_fts AS f
+                   JOIN catalog_course_variants AS v
+                     ON v.target_id = f.target_id
+                    AND v.course_string = f.course_string
+                    AND v.fingerprint = f.fingerprint
+                   JOIN catalog_targets AS t ON t.target_id = f.target_id
+                  WHERE f.target_id = ?1
+                    AND f.content_version = ?2
+                    AND v.content_version = ?2
+                    AND t.current_content_version = ?2
+                  ORDER BY f.course_string COLLATE BINARY,
+                           f.fingerprint COLLATE BINARY",
+            )?;
+            let rows = statement.query_map(
+                params![target_id(target), u64_to_i64(content_version)?],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )?;
+            rows.map(|row| {
+                let (course_string, fingerprint, version, document) = row?;
+                let group = CourseGroupKey::try_new(
+                    target.term().as_str(),
+                    target.campus().as_str(),
+                    &course_string,
+                )?;
+                Ok(PublishedCourseFtsDocument {
+                    key: CourseVariantKey::try_new(group, &fingerprint)?,
+                    content_version: i64_to_u64(version)?,
+                    document,
+                })
+            })
+            .collect::<StorageResult<Vec<_>>>()?
+        };
+        transaction.commit()?;
+        Ok(documents)
+    }
+
+    /// Exports the complete authoritative FTS5 corpus, including targets that
+    /// are not visible in the current product term window. FTS5 `bm25()` uses
+    /// table-wide corpus statistics before the target predicate is applied, so
+    /// a prepared index must contain every row to preserve ranking exactly.
+    pub fn visit_all_course_fts_documents(
+        &self,
+        mut visit: impl FnMut(PublishedCourseFtsDocument) -> StorageResult<()>,
+    ) -> StorageResult<CourseFtsCorpusSignature> {
+        let mut statement = self.connection.prepare(
+            "SELECT target_id, course_string, fingerprint, content_version, document
+               FROM catalog_course_fts
+              ORDER BY rowid",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        let mut hasher = Sha256::new();
+        let mut row_count = 0_u64;
+        let mut document_bytes = 0_u64;
+        for row in rows {
+            let (stored_target, course_string, fingerprint, version, document) = row?;
+            let (term, campus) =
+                stored_target
+                    .split_once('/')
+                    .ok_or(StorageError::InvalidStoredProjection {
+                        table: "catalog_course_fts",
+                        field: "target_id",
+                        reason: "expected term/campus identity",
+                    })?;
+            let group = CourseGroupKey::try_new(term, campus, &course_string)?;
+            let document = PublishedCourseFtsDocument {
+                key: CourseVariantKey::try_new(group, &fingerprint)?,
+                content_version: i64_to_u64(version)?,
+                document,
+            };
+            hash_fts_corpus_field(&mut hasher, stored_target.as_bytes())?;
+            hash_fts_corpus_field(&mut hasher, course_string.as_bytes())?;
+            hash_fts_corpus_field(&mut hasher, fingerprint.as_bytes())?;
+            hash_fts_corpus_field(&mut hasher, &document.content_version.to_le_bytes())?;
+            hash_fts_corpus_field(&mut hasher, document.document.as_bytes())?;
+            row_count = row_count
+                .checked_add(1)
+                .ok_or(StorageError::StoredIntegerOutOfRange)?;
+            document_bytes = document_bytes
+                .checked_add(
+                    u64::try_from(document.document.len())
+                        .map_err(|_| StorageError::StoredIntegerOutOfRange)?,
+                )
+                .ok_or(StorageError::StoredIntegerOutOfRange)?;
+            visit(document)?;
+        }
+        Ok(CourseFtsCorpusSignature {
+            row_count,
+            document_bytes,
+            sha256: format!("{:x}", hasher.finalize()),
+        })
+    }
+
+    pub fn course_fts_corpus_signature(&self) -> StorageResult<CourseFtsCorpusSignature> {
+        self.visit_all_course_fts_documents(|_| Ok(()))
+    }
+
     /// Returns literal terms produced by the exact unicode61 tokenizer that
     /// backs the currently published course FTS rows. The instance vocabulary
     /// retains rowid, allowing target/version scoping instead of leaking terms
@@ -876,6 +1053,65 @@ impl OperationalStorage {
         };
         transaction.commit()?;
         Ok(terms)
+    }
+
+    /// Tests one exact tokenizer term against a fixed published Catalog
+    /// content version. Unlike filter-option discovery, this lookup has no
+    /// result window whose ordering could hide a valid selected value.
+    pub fn published_course_fts_term_exists(
+        &mut self,
+        target: &TermCampusKey,
+        content_version: u64,
+        term: &str,
+    ) -> StorageResult<bool> {
+        if content_version == 0 || term.is_empty() {
+            return Err(StorageError::InvalidCommand {
+                field: "dynamic_filter_validation",
+                reason: "requires a published content version and nonempty exact term",
+            });
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let current_version = transaction
+            .query_row(
+                "SELECT current_content_version FROM catalog_targets WHERE target_id = ?1",
+                [target_id(target)],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(i64_to_u64)
+            .transpose()?;
+        let Some(current_version) = current_version.filter(|version| *version > 0) else {
+            return Err(StorageError::CatalogTargetNotPublished);
+        };
+        if current_version != content_version {
+            return Err(StorageError::CatalogContentVersionMismatch {
+                requested: content_version,
+                current: current_version,
+            });
+        }
+
+        transaction.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS temp.catalog_course_fts_vocab
+             USING fts5vocab(main, catalog_course_fts, instance);",
+        )?;
+        let found = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1
+                   FROM temp.catalog_course_fts_vocab AS vocab
+                   JOIN catalog_course_fts AS f ON f.rowid = vocab.doc
+                   JOIN catalog_targets AS t ON t.target_id = f.target_id
+                  WHERE f.target_id = ?1
+                    AND f.content_version = ?2
+                    AND t.current_content_version = ?2
+                    AND lower(vocab.term) = lower(?3)
+             )",
+            params![target_id(target), u64_to_i64(content_version)?, term],
+            |row| row.get::<_, bool>(0),
+        )?;
+        transaction.commit()?;
+        Ok(found)
     }
 
     pub fn integrity_report(
@@ -1009,6 +1245,13 @@ impl OperationalStorage {
             diagnostic_token: None,
         });
     }
+}
+
+fn hash_fts_corpus_field(hasher: &mut Sha256, field: &[u8]) -> StorageResult<()> {
+    let length = u64::try_from(field.len()).map_err(|_| StorageError::StoredIntegerOutOfRange)?;
+    hasher.update(length.to_le_bytes());
+    hasher.update(field);
+    Ok(())
 }
 
 impl Drop for OperationalStorage {

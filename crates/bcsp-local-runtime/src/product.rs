@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bcsp_application::{
     OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError, OpenRuntimeSnapshotRegistry,
-    ProductStorageAccess, ProductStorageLockError, ServiceStatusRegistry, SharedProductRoutes,
-    SharedProductStorage, SharedWatchSocket, SystemApplicationClock, TargetRefreshDemand,
+    PreparedServingRegistry, ProductStorageAccess, ProductStorageLockError, ServiceStatusRegistry,
+    SharedProductRoutes, SharedProductStorage, SharedWatchSocket, SystemApplicationClock,
+    TargetRefreshDemand,
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_operational_storage::OperationalStorage;
@@ -55,6 +56,14 @@ pub(crate) type LocalProductRoutes = SharedProductRoutes<
     LocalProductStorageAccess,
 >;
 
+pub(crate) struct LocalProductRefreshResources {
+    pub(crate) watch: Arc<SharedWatchSocket>,
+    pub(crate) open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
+    pub(crate) service_status: Arc<ServiceStatusRegistry>,
+    pub(crate) target_refresh_demand: TargetRefreshDemand,
+    pub(crate) prepared_serving: Arc<PreparedServingRegistry>,
+}
+
 pub(crate) fn create_local_product_routes(
     database: Arc<Mutex<LocalPrimaryDatabase>>,
     runtime: LocalRuntimeCore,
@@ -71,22 +80,20 @@ pub(crate) fn start_local_product_refresh(
     refresh_storage: SharedProductStorage,
     policy_database: Arc<Mutex<LocalPrimaryDatabase>>,
     runtime: &LocalRuntimeCore,
-    watch: Arc<SharedWatchSocket>,
-    open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
-    service_status: Arc<ServiceStatusRegistry>,
-    target_refresh_demand: TargetRefreshDemand,
+    resources: LocalProductRefreshResources,
 ) -> Result<OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError> {
     let OpenCounterAudience::Local { run_id } = runtime.counter_audience() else {
         unreachable!("local runtime always owns a local counter audience");
     };
-    OfficialRefreshRuntime::spawn_with_target_refresh_demand(
+    OfficialRefreshRuntime::spawn_with_target_refresh_demand_and_prepared(
         refresh_storage,
         LocalRefreshPolicyProvider::new(policy_database),
         run_id,
         runtime.counter_audience(),
-        watch,
-        open_runtime,
-        service_status,
-        target_refresh_demand,
+        resources.watch,
+        resources.open_runtime,
+        resources.service_status,
+        resources.target_refresh_demand,
+        resources.prepared_serving,
     )
 }

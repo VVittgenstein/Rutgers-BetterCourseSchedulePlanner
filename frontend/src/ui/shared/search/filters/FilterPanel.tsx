@@ -1,7 +1,6 @@
 import {
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -18,7 +17,6 @@ import { useBcspI18n, type BcspI18nRuntime } from '../../i18n/runtime';
 import type {
   CatalogDiscoveryResponseV1,
   CatalogFieldKnowledge,
-  CatalogSynchronicity,
   FilterFieldSchemaV1,
   FilterOptionsFieldV2,
   FilterOptionsResponseV2,
@@ -41,6 +39,7 @@ export interface FilterPanelProps {
   readonly value: FilterStateV1;
   readonly onChange: (next: FilterStateV1) => void;
   readonly onSubmit: () => void;
+  readonly formId?: string | undefined;
   readonly loadOptions?: (
     field: FilterOptionsFieldV2,
     query?: string,
@@ -72,24 +71,22 @@ const WEEKDAYS = [
   'SUNDAY',
 ] as const satisfies readonly WeekdayV1[];
 
-const OPEN_STATES = ['OPEN', 'CLOSED', 'UNKNOWN'] as const satisfies readonly LiveOpenStateV1[];
+// UNKNOWN stays available in raw detail evidence, but it is not an ordinary
+// HumanTest-facing filter choice.
+const OPEN_STATES = ['OPEN', 'CLOSED'] as const satisfies readonly LiveOpenStateV1[];
 const MODALITIES = [
   'ON_CAMPUS_OR_IN_PERSON',
   'ONLINE',
   'HYBRID',
-  'OTHER',
-  'UNKNOWN',
 ] as const satisfies readonly ModalityFilterV1[];
 const SYNCHRONICITIES = [
   'SYNC',
   'ASYNC',
   'MIXED',
-  'UNSPECIFIED',
-  'UNKNOWN',
-] as const satisfies readonly CatalogSynchronicity[];
+] as const satisfies FilterStateV1['synchronicities'];
 
 const ACTIVE_REQUEST_FIELDS = new Set<keyof FilterStateV1>([
-  'term', 'campuses', 'subjects', 'keywords', 'courseNumbers', 'levels', 'credits',
+  'term', 'campuses', 'subjects', 'keywords', 'courseNumberBands', 'levels', 'credits',
   'core', 'prerequisite', 'sectionIndexes', 'openStatuses', 'modalities',
   'synchronicities', 'instructors', 'availability', 'meetingLocations', 'examCodes',
   'permission',
@@ -136,6 +133,12 @@ function timeFromMinute(value: number): string {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
+function formatCourseNumberBand(band: number, i18n: BcspI18nRuntime): string {
+  return i18n.t('filter.course_number_band_option', {
+    band: String(band).padStart(3, '0'),
+  });
+}
+
 function fieldSummary(
   field: FilterFieldSchemaV1,
   state: FilterStateV1,
@@ -146,7 +149,9 @@ function fieldSummary(
     case 'campuses': return state.campuses.length > 0 ? state.campuses.join(', ') : null;
     case 'subjects': return state.subjects.length > 0 ? state.subjects.join(', ') : null;
     case 'keywords': return state.keywords.length > 0 ? state.keywords.join(', ') : null;
-    case 'courseNumbers': return state.courseNumbers.length > 0 ? state.courseNumbers.join(', ') : null;
+    case 'courseNumberBands': return state.courseNumberBands.length > 0
+      ? state.courseNumberBands.map((band) => formatCourseNumberBand(band, i18n)).join(', ')
+      : null;
     case 'levels': return state.levels.length > 0 ? state.levels.join(', ') : null;
     case 'credits': {
       if (state.credits === null) return null;
@@ -161,16 +166,25 @@ function fieldSummary(
     case 'core': return state.core.codes.length > 0
       ? `${state.core.mode}: ${state.core.codes.join(', ')}`
       : null;
-    case 'prerequisite': return state.prerequisite === 'ANY' ? null : optionText(state.prerequisite, i18n);
+    case 'prerequisite': return state.prerequisite === 'ANY' ? null : [
+      optionText(state.prerequisite, i18n),
+      state.includeIncomplete.prerequisite ? i18n.t('filter.include_incomplete_short') : null,
+    ].filter(Boolean).join(' / ');
     case 'sectionIndexes': return state.sectionIndexes.length > 0 ? state.sectionIndexes.join(', ') : null;
     case 'openStatuses': return state.openStatuses.length > 0
       ? state.openStatuses.map((entry) => optionText(entry, i18n)).join(', ')
       : null;
     case 'modalities': return state.modalities.length > 0
-      ? state.modalities.map((entry) => optionText(entry, i18n)).join(', ')
+      ? [
+        state.modalities.map((entry) => optionText(entry, i18n)).join(', '),
+        state.includeIncomplete.modality ? i18n.t('filter.include_incomplete_short') : null,
+      ].filter(Boolean).join(' / ')
       : null;
     case 'synchronicities': return state.synchronicities.length > 0
-      ? state.synchronicities.map((entry) => optionText(entry, i18n)).join(', ')
+      ? [
+        state.synchronicities.map((entry) => optionText(entry, i18n)).join(', '),
+        state.includeIncomplete.synchronicity ? i18n.t('filter.include_incomplete_short') : null,
+      ].filter(Boolean).join(' / ')
       : null;
     case 'instructors': return state.instructors.length > 0 ? state.instructors.join(', ') : null;
     case 'availability': return state.availability.length > 0
@@ -183,6 +197,7 @@ function fieldSummary(
       : null;
     case 'examCodes': return state.examCodes.length > 0 ? state.examCodes.join(', ') : null;
     case 'permission': return state.permission === 'ANY' ? null : optionText(state.permission, i18n);
+    case 'includeIncomplete': return null;
   }
 }
 
@@ -317,6 +332,12 @@ function DictionaryPicker({
 
   const options = response?.options ?? [];
   const optionLabel = (value: string, fallback: string) => {
+    if (field === 'COURSE_NUMBER_BAND') {
+      const band = Number(value);
+      return Number.isSafeInteger(band) && band >= 0 && band % 100 === 0
+        ? formatCourseNumberBand(band, i18n)
+        : fallback;
+    }
     if (field !== 'COURSE_LEVEL') return fallback;
     if (value === 'U') return i18n.t('filter.level_undergraduate');
     if (value === 'G') return i18n.t('filter.level_graduate');
@@ -364,6 +385,12 @@ function DictionaryPicker({
               } else if (event.key === 'ArrowUp') {
                 event.preventDefault();
                 setActiveIndex((index) => Math.max(0, index - 1));
+              } else if (event.key === 'Home' && open) {
+                event.preventDefault();
+                setActiveIndex(0);
+              } else if (event.key === 'End' && open) {
+                event.preventDefault();
+                setActiveIndex(Math.max(0, options.length - 1));
               } else if (event.key === 'Enter' && open && options[activeIndex] !== undefined) {
                 event.preventDefault();
                 choose(options[activeIndex].value);
@@ -410,6 +437,7 @@ function DictionaryPicker({
             {options.map((option) => (
               <label className="filter-panel__check" key={option.value}>
                 <input
+                  aria-label={optionLabel(option.value, option.label)}
                   checked={values.includes(option.value)}
                   disabled={disabled}
                   onChange={() => choose(option.value)}
@@ -466,6 +494,7 @@ function CheckboxSet<T extends string>({
       {options.map((option) => (
         <label className="filter-panel__check" key={option}>
           <input
+            aria-label={optionText(option, i18n)}
             type="checkbox"
             value={option}
             checked={values.includes(option)}
@@ -507,6 +536,84 @@ function EnumSelect<T extends string>({
         {options.map((option) => <option key={option} value={option}>{optionText(option, i18n)}</option>)}
       </select>
     </div>
+  );
+}
+
+function PrerequisiteControl({
+  disabled,
+  includeIncomplete,
+  onIncludeIncompleteChange,
+  onValueChange,
+  value,
+}: {
+  readonly disabled: boolean;
+  readonly includeIncomplete: boolean;
+  readonly onIncludeIncompleteChange: (checked: boolean) => void;
+  readonly onValueChange: (value: PrerequisiteFilterV1) => void;
+  readonly value: PrerequisiteFilterV1;
+}) {
+  const i18n = useBcspI18n();
+  const name = useId();
+  const options = ['HAS', 'NONE_REPORTED'] as const;
+  return (
+    <div className="filter-panel__control">
+      <div className="filter-panel__checks" role="radiogroup" aria-label={i18n.t('filter.flt-c09')}>
+        {options.map((option) => (
+          <label className="filter-panel__check" key={option}>
+            <input
+              checked={value === option}
+              disabled={disabled}
+              name={name}
+              onChange={() => onValueChange(option)}
+              type="radio"
+              value={option}
+            />
+            <span>{optionText(option, i18n)}</span>
+          </label>
+        ))}
+      </div>
+      {value === 'ANY' ? null : (
+        <button
+          className="filter-panel__minor-action filter-panel__clear-choice"
+          disabled={disabled}
+          onClick={() => onValueChange('ANY')}
+          type="button"
+        >
+          {i18n.t('filter.clear_choice')}
+        </button>
+      )}
+      <IncompleteToggle
+        checked={includeIncomplete}
+        disabled={disabled}
+        onChange={onIncludeIncompleteChange}
+      />
+    </div>
+  );
+}
+
+function IncompleteToggle({
+  checked,
+  disabled,
+  onChange,
+}: {
+  readonly checked: boolean;
+  readonly disabled: boolean;
+  readonly onChange: (checked: boolean) => void;
+}) {
+  const i18n = useBcspI18n();
+  return (
+    <label className="filter-panel__check filter-panel__incomplete">
+      <input
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        type="checkbox"
+      />
+      <span>
+        <strong>{i18n.t('filter.include_incomplete')}</strong>
+        <small>{i18n.t('filter.include_incomplete_help')}</small>
+      </span>
+    </label>
   );
 }
 
@@ -674,19 +781,6 @@ export const FILTER_PANEL_CSS = String.raw`
   color: var(--bcsp-ink);
 }
 
-.filter-panel__loading-mark {
-  width: 0.85rem;
-  height: 0.85rem;
-  flex: 0 0 auto;
-  border: 2px solid var(--bcsp-ink);
-  border-top-color: transparent;
-  animation: filter-panel-turn 900ms steps(8, end) infinite;
-}
-
-@keyframes filter-panel-turn {
-  to { transform: rotate(1turn); }
-}
-
 .filter-panel__active {
   display: grid;
   grid-template-columns: minmax(7rem, auto) minmax(0, 1fr) auto;
@@ -702,36 +796,12 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__chip, .filter-panel__token { display: inline-grid; min-height: 2.75rem; grid-auto-flow: column; align-items: stretch; border: 1px solid var(--bcsp-line); background: var(--bcsp-paper); font-family: var(--bcsp-font-data); font-size: 0.68rem; }
 .filter-panel__chip-label { display: flex; align-items: center; min-height: 2.75rem; padding: 0.45rem 0.55rem; overflow-wrap: anywhere; }
 .filter-panel__chip-label strong { margin-right: 0.4rem; text-transform: uppercase; }
-.filter-panel__chip button, .filter-panel__token button, .filter-panel__window-list button { min-width: 2.75rem; min-height: 2.75rem; border: 0; border-left: 1px solid var(--bcsp-line); border-radius: 0; color: inherit; background: transparent; cursor: pointer; transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1); }
-.filter-panel__chip button:active:not(:disabled), .filter-panel__token button:active:not(:disabled), .filter-panel__window-list button:active:not(:disabled) { transform: scale(0.97); }
+.filter-panel__chip button, .filter-panel__token button, .filter-panel__window-list button { min-width: 2.75rem; min-height: 2.75rem; border: 0; border-left: 1px solid var(--bcsp-line); border-radius: 0; color: inherit; background: transparent; cursor: pointer; }
 .filter-panel__chip--target { border-color: var(--bcsp-accent); }
 .filter-panel__chip-pin { padding: 0.45rem; color: var(--bcsp-ink); border-left: 1px solid var(--bcsp-accent); font-weight: 800; }
 .filter-panel__empty { margin: 0.3rem 0 0; color: var(--bcsp-ink-muted); font-size: 0.8rem; }
 
 .filter-panel__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.filter-panel__group { margin: 0; border: 0; border-bottom: 1px solid var(--bcsp-line); }
-.filter-panel__group[open] { border-bottom: 3px solid var(--bcsp-line); }
-.filter-panel__group-summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: var(--bcsp-space-2);
-  align-items: center;
-  min-height: 3.5rem;
-  padding: var(--bcsp-space-3) var(--bcsp-space-4);
-  color: var(--bcsp-paper-raised);
-  background: var(--bcsp-ink);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  list-style: none;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-.filter-panel__group-summary::-webkit-details-marker { display: none; }
-.filter-panel__group-summary::before { content: '+'; color: var(--bcsp-accent); font-size: 1rem; }
-.filter-panel__group[open] > .filter-panel__group-summary::before { content: '−'; }
-.filter-panel__group-count { color: var(--bcsp-paper-raised); font-variant-numeric: tabular-nums; }
 .filter-panel__row { min-width: 0; padding: var(--bcsp-space-3); margin: 0; border: 0; border-bottom: 1px solid var(--bcsp-line); }
 .filter-panel__row[data-filter-error='true'] {
   outline: 3px solid var(--bcsp-danger, #b42318);
@@ -773,9 +843,9 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__sub-label { display: block; margin-bottom: 0.35rem; color: var(--bcsp-ink-muted); }
 .filter-panel__input-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
 .filter-panel__input-action--pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
-.filter-panel__minor-action { min-height: 2.75rem; padding: 0.55rem 0.75rem; border: 1px solid var(--bcsp-line); border-left: 0; border-radius: 0; color: var(--bcsp-ink); background: var(--bcsp-paper); font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; cursor: pointer; transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1); }
-.filter-panel__minor-action:active:not(:disabled) { transform: scale(0.97); }
+.filter-panel__minor-action { min-height: 2.75rem; padding: 0.55rem 0.75rem; border: 1px solid var(--bcsp-line); border-left: 0; border-radius: 0; color: var(--bcsp-ink); background: var(--bcsp-paper); font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; cursor: pointer; }
 .filter-panel__minor-action:disabled { cursor: not-allowed; opacity: 0.5; }
+.filter-panel__clear-choice { justify-self: start; border-left: 1px solid var(--bcsp-line); }
 .filter-panel__token-control { display: grid; align-content: start; }
 .filter-panel__token-list { margin-top: 0.45rem; }
 .filter-panel__token samp { padding: 0.4rem 0.5rem; overflow-wrap: anywhere; }
@@ -786,18 +856,49 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__check:has(input:disabled) { color: var(--bcsp-ink-muted); cursor: not-allowed; }
 .filter-panel__subject-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--bcsp-space-2); align-items: end; }
 .filter-panel__subject-count { min-width: 7rem; padding: 0.8rem 0; color: var(--bcsp-ink-muted); font-family: var(--bcsp-font-data); font-size: 0.7rem; text-align: right; }
-.filter-panel__subject-list { max-height: 18rem; overflow: auto; border-top: 1px solid var(--bcsp-line); }
+.filter-panel__subject-list {
+  max-height: clamp(14rem, 42vh, 22rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-top: 1px solid var(--bcsp-line);
+  overscroll-behavior: contain;
+  scrollbar-color: var(--bcsp-ink-muted) var(--bcsp-paper-raised);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  touch-action: pan-y;
+}
 .filter-panel__subject-list .filter-panel__checks { border-top: 0; }
 .filter-panel__core-picker { display: grid; gap: var(--bcsp-space-2); }
 .filter-panel__dictionary { display: grid; gap: var(--bcsp-space-2); }
 .filter-panel__dictionary-input { display: grid; }
 .filter-panel__dictionary-options {
   display: none;
-  max-height: 15rem;
-  overflow: auto;
+  max-height: clamp(14rem, 42vh, 22rem);
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid var(--bcsp-line);
   background: var(--bcsp-paper-raised);
+  overscroll-behavior: contain;
+  scrollbar-color: var(--bcsp-ink-muted) var(--bcsp-paper-raised);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  touch-action: pan-y;
 }
+.filter-panel__subject-list::-webkit-scrollbar,
+.filter-panel__dictionary-options::-webkit-scrollbar { width: 10px; }
+.filter-panel__subject-list::-webkit-scrollbar-track,
+.filter-panel__dictionary-options::-webkit-scrollbar-track {
+  border-left: 1px solid var(--bcsp-line);
+  background: var(--bcsp-paper-raised);
+}
+.filter-panel__subject-list::-webkit-scrollbar-thumb,
+.filter-panel__dictionary-options::-webkit-scrollbar-thumb {
+  border: 2px solid var(--bcsp-paper-raised);
+  border-radius: 0;
+  background: var(--bcsp-ink-muted);
+}
+.filter-panel__subject-list::-webkit-scrollbar-thumb:hover,
+.filter-panel__dictionary-options::-webkit-scrollbar-thumb:hover { background: var(--bcsp-ink); }
 .filter-panel__dictionary-options[data-open='true'] { display: grid; }
 .filter-panel__dictionary-options > .bcsp-field__helper { padding: var(--bcsp-space-2); }
 .filter-panel__dictionary-option {
@@ -820,6 +921,9 @@ export const FILTER_PANEL_CSS = String.raw`
   outline: 2px solid var(--bcsp-accent);
   outline-offset: -2px;
 }
+.filter-panel__incomplete { border: 1px solid var(--bcsp-line); background: var(--bcsp-paper-raised); }
+.filter-panel__incomplete span { display: grid; gap: 0.2rem; }
+.filter-panel__incomplete small { color: var(--bcsp-ink-muted); font-size: 0.68rem; line-height: 1.4; }
 .filter-panel__incompatible { padding-top: var(--bcsp-space-2); border-top: 1px solid var(--bcsp-line); }
 .filter-panel__token--incompatible { border-color: var(--bcsp-accent); color: var(--bcsp-accent); }
 .filter-panel__credit-range, .filter-panel__building, .filter-panel__eligibility { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--bcsp-space-2); }
@@ -840,17 +944,6 @@ export const FILTER_PANEL_CSS = String.raw`
   .filter-panel__dictionary-option:hover { color: var(--bcsp-paper-raised); background: var(--bcsp-ink); }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .filter-panel__chip button,
-  .filter-panel__token button,
-  .filter-panel__window-list button,
-  .filter-panel__minor-action { transition: none; }
-  .filter-panel__chip button:active:not(:disabled),
-  .filter-panel__token button:active:not(:disabled),
-  .filter-panel__window-list button:active:not(:disabled),
-  .filter-panel__minor-action:active:not(:disabled) { transform: none; }
-  .filter-panel__loading-mark { animation: none; }
-}
 .filter-panel__window-list samp { padding: 0.65rem; }
 .filter-panel__window-list button { padding: 0.5rem 0.75rem; font-family: var(--bcsp-font-data); font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
 .filter-panel__footer { display: grid; gap: var(--bcsp-space-3); align-items: center; padding: var(--bcsp-space-4); border-top: 3px solid var(--bcsp-line); }
@@ -871,19 +964,6 @@ export const FILTER_PANEL_CSS = String.raw`
   .filter-panel__subject-count { padding: 0; text-align: left; }
 }
 
-@media (max-width: 47.999rem) {
-  .filter-panel__head { position: static; }
-  .filter-panel__head, .filter-panel__active, .filter-panel__footer { grid-template-columns: 1fr; }
-  .filter-panel__grid { grid-template-columns: minmax(0, 1fr); }
-  .filter-panel__row, .filter-panel__row:nth-child(odd) { grid-column: 1; border-right: 0; }
-  .filter-panel__credit-range, .filter-panel__building, .filter-panel__eligibility { grid-template-columns: minmax(0, 1fr); }
-  .filter-panel__unit-major { grid-column: 1; }
-  .filter-panel__availability-editor { grid-template-columns: minmax(0, 1fr); gap: var(--bcsp-space-2); }
-  .filter-panel__availability-add, .filter-panel__minor-action { border-left: 1px solid var(--bcsp-line); }
-  .filter-panel__input-action, .filter-panel__input-action--pair { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
-  .filter-panel__subject-search { grid-template-columns: 1fr; }
-  .filter-panel__subject-count { padding: 0; text-align: left; }
-}
 `;
 
 export function FilterPanel({
@@ -892,6 +972,7 @@ export function FilterPanel({
   value,
   onChange,
   onSubmit,
+  formId,
   loadOptions,
   disabled = false,
   searchAvailable = true,
@@ -899,12 +980,7 @@ export function FilterPanel({
 }: FilterPanelProps) {
   const i18n = useBcspI18n();
   const formRef = useRef<HTMLFormElement>(null);
-  const courseSummaryRef = useRef<HTMLElement>(null);
-  const sectionSummaryRef = useRef<HTMLElement>(null);
-  const pendingGroupFocus = useRef<'COURSE' | 'SECTION' | null>(null);
   const [subjectQuery, setSubjectQuery] = useState('');
-  const [courseOpen, setCourseOpen] = useState(true);
-  const [sectionOpen, setSectionOpen] = useState(false);
 
   const fields = useMemo(
     () => [...schema.fields]
@@ -917,38 +993,6 @@ export function FilterPanel({
     [schema.fields],
   );
 
-  useLayoutEffect(() => {
-    const pending = pendingGroupFocus.current;
-    if (pending === null) return;
-    pendingGroupFocus.current = null;
-    const summary = pending === 'COURSE' ? courseSummaryRef.current : sectionSummaryRef.current;
-    if (summary === null) return;
-
-    summary.focus({ preventScroll: true });
-    const filterRail = summary.closest<HTMLElement>('.bcsp-search-workspace__filters');
-    const railStyle = filterRail === null ? null : globalThis.getComputedStyle?.(filterRail);
-    const railScrolls = filterRail !== null
-      && filterRail.scrollHeight > filterRail.clientHeight
-      && railStyle !== null
-      && /(auto|scroll)/u.test(railStyle.overflowY);
-    if (railScrolls && filterRail !== null) {
-      const railTop = filterRail.getBoundingClientRect().top;
-      const summaryTop = summary.getBoundingClientRect().top;
-      const stickyHeaderHeight = formRef.current
-        ?.querySelector<HTMLElement>('.filter-panel__head')
-        ?.getBoundingClientRect().height ?? 0;
-      filterRail.scrollTop += summaryTop - railTop - stickyHeaderHeight;
-      return;
-    }
-
-    const root = globalThis.document?.documentElement;
-    const navigationHeight = Number.parseFloat(root === undefined
-      ? '0'
-      : globalThis.getComputedStyle(root).getPropertyValue('--bcsp-navigation-height'));
-    const top = summary.getBoundingClientRect().top + globalThis.scrollY
-      - (Number.isFinite(navigationHeight) ? navigationHeight : 0);
-    globalThis.scrollTo?.({ behavior: 'auto', top: Math.max(0, top) });
-  }, [courseOpen, sectionOpen]);
   const invalidField = useMemo(() => {
     if (validationIssue === undefined) return undefined;
     const requestField = VALIDATION_FIELD[validationIssue.issue];
@@ -958,14 +1002,6 @@ export function FilterPanel({
   }, [fields, validationIssue]);
 
   useEffect(() => {
-    if (invalidField?.scope === 'COURSE') {
-      setCourseOpen(true);
-      setSectionOpen(false);
-    } else if (invalidField?.scope === 'SECTION') {
-      setCourseOpen(false);
-      setSectionOpen(true);
-    }
-
     if (invalidField === undefined) return undefined;
     const timer = window.setTimeout(() => {
       const row = formRef.current?.querySelector<HTMLElement>(
@@ -1043,6 +1079,10 @@ export function FilterPanel({
   const update = <K extends keyof FilterStateV1>(key: K, next: FilterStateV1[K]) => {
     onChange({ ...value, [key]: next });
   };
+  const updateIncomplete = (
+    key: keyof FilterStateV1['includeIncomplete'],
+    checked: boolean,
+  ) => update('includeIncomplete', { ...value.includeIncomplete, [key]: checked });
   const clearField = (field: FilterFieldSchemaV1) => {
     if (field.requestField === 'term' || field.requestField === 'campuses') return;
     const neutral = createNeutralFilterState(value.term);
@@ -1105,9 +1145,13 @@ export function FilterPanel({
         return <DictionaryPicker disabled={disabled} field="KEYWORD" label={label}
           loadOptions={loadOptions} searchable values={value.keywords}
           onChange={(next) => update('keywords', next)} />;
-      case 'courseNumbers':
-        return <TokenListControl label={i18n.t('filter.course_numbers')} values={value.courseNumbers}
-          onChange={(next) => update('courseNumbers', next)} disabled={disabled} placeholder={i18n.t('filter.course_number_placeholder')} />;
+      case 'courseNumberBands':
+        return <DictionaryPicker disabled={disabled} field="COURSE_NUMBER_BAND" label={label}
+          loadOptions={loadOptions} values={value.courseNumberBands.map(String)}
+          onChange={(next) => update('courseNumberBands', next
+            .map((entry) => Number(entry))
+            .filter((entry) => Number.isSafeInteger(entry) && entry >= 0 && entry % 100 === 0)
+            .sort((left, right) => left - right))} />;
       case 'levels':
         return <DictionaryPicker disabled={disabled} field="COURSE_LEVEL" label={label}
           loadOptions={loadOptions} values={value.levels}
@@ -1196,9 +1240,13 @@ export function FilterPanel({
           </div>
         );
       case 'prerequisite':
-        return <EnumSelect<PrerequisiteFilterV1> label={label} value={value.prerequisite}
-          options={['ANY', 'HAS', 'NONE_REPORTED']} disabled={disabled}
-          onChange={(next) => update('prerequisite', next)} />;
+        return <PrerequisiteControl
+          disabled={disabled}
+          includeIncomplete={value.includeIncomplete.prerequisite}
+          onIncludeIncompleteChange={(checked) => updateIncomplete('prerequisite', checked)}
+          onValueChange={(next) => update('prerequisite', next)}
+          value={value.prerequisite}
+        />;
       case 'sectionIndexes':
         return <TokenListControl label={i18n.t('filter.section_indexes')} values={value.sectionIndexes}
           onChange={(next) => update('sectionIndexes', next)} disabled={disabled} placeholder={i18n.t('filter.five_digits')} />;
@@ -1206,11 +1254,19 @@ export function FilterPanel({
         return <CheckboxSet label={label} options={OPEN_STATES} values={value.openStatuses}
           onChange={(next) => update('openStatuses', next)} disabled={disabled} />;
       case 'modalities':
-        return <CheckboxSet label={label} options={MODALITIES} values={value.modalities}
-          onChange={(next) => update('modalities', next)} disabled={disabled} />;
+        return <div className="filter-panel__control">
+          <CheckboxSet label={label} options={MODALITIES} values={value.modalities}
+            onChange={(next) => update('modalities', next)} disabled={disabled} />
+          <IncompleteToggle checked={value.includeIncomplete.modality} disabled={disabled}
+            onChange={(checked) => updateIncomplete('modality', checked)} />
+        </div>;
       case 'synchronicities':
-        return <CheckboxSet label={label} options={SYNCHRONICITIES} values={value.synchronicities}
-          onChange={(next) => update('synchronicities', next)} disabled={disabled} />;
+        return <div className="filter-panel__control">
+          <CheckboxSet label={label} options={SYNCHRONICITIES} values={value.synchronicities}
+            onChange={(next) => update('synchronicities', next)} disabled={disabled} />
+          <IncompleteToggle checked={value.includeIncomplete.synchronicity} disabled={disabled}
+            onChange={(checked) => updateIncomplete('synchronicity', checked)} />
+        </div>;
       case 'instructors':
         return <DictionaryPicker disabled={disabled} field="INSTRUCTOR" label={label}
           loadOptions={loadOptions} searchable values={value.instructors}
@@ -1237,16 +1293,14 @@ export function FilterPanel({
         return <EnumSelect<PermissionFilterV1> label={label} value={value.permission}
           options={['ANY', 'REQUIRED', 'NOT_REQUIRED']} disabled={disabled}
           onChange={(next) => update('permission', next)} />;
+      case 'includeIncomplete':
+        return null;
     }
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (disabled || !searchAvailable || value.term === null || value.campuses.length === 0) return;
-    const scrollContainer = event.currentTarget.closest<HTMLElement>('.bcsp-search-workspace__filters');
-    if (scrollContainer !== null) scrollContainer.scrollTop = 0;
-    setCourseOpen(false);
-    setSectionOpen(false);
     onSubmit();
   };
 
@@ -1286,44 +1340,16 @@ export function FilterPanel({
     );
   };
 
-  const courseFields = fields.filter(({ requestField, scope }) =>
-    scope === 'COURSE' && requestField !== 'term' && requestField !== 'campuses');
-  const sectionFields = fields.filter(({ scope }) => scope === 'SECTION');
-
   return (
     <>
       <style data-bcsp-filter-panel="">{FILTER_PANEL_CSS}</style>
-      <form ref={formRef} className="filter-panel" aria-label={i18n.t('filter.form_label')} onSubmit={submit}>
+      <form ref={formRef} id={formId} className="filter-panel" aria-label={i18n.t('filter.form_label')} onSubmit={submit}>
         <fieldset
           aria-busy={disabled && searchAvailable ? true : undefined}
           className="filter-panel__gate"
           disabled={disabled || !searchAvailable}
         >
         <legend className="bcsp-visually-hidden">{i18n.t('filter.form_label')}</legend>
-        <header className="filter-panel__head">
-          <div>
-            <p className="filter-panel__kicker">
-              {i18n.t('filter.matrix_kicker', { count: i18n.formatNumber(fields.length) })}
-            </p>
-            <h2 className="filter-panel__title">{i18n.t('filter.matrix_title')}</h2>
-          </div>
-          <p className="filter-panel__head-note">
-            {i18n.t('filter.matrix_note')}
-          </p>
-          <button className="bcsp-action bcsp-action--accent" type="submit"
-            disabled={disabled || !searchAvailable || value.term === null || value.campuses.length === 0}>
-            {i18n.t('action.search')}
-          </button>
-          {!searchAvailable ? (
-            <div className="filter-panel__submit-status" role="status">
-              <span>
-                <strong>{i18n.t('filter.apply_scope_first')}</strong>
-                {i18n.t('filter.apply_scope_detail')}
-              </span>
-            </div>
-          ) : null}
-        </header>
-
         <section className="filter-panel__active" aria-labelledby="active-filter-title">
           <h3 className="filter-panel__active-title" id="active-filter-title">{i18n.t('filter.active_title')}</h3>
           {summaries.length === 0 ? <p className="filter-panel__empty">{i18n.t('filter.active_empty')}</p> : (
@@ -1353,38 +1379,7 @@ export function FilterPanel({
           </button>
         </section>
 
-        <details className="filter-panel__group" open={courseOpen}
-          onToggle={(event) => {
-            const next = event.currentTarget.open;
-            setCourseOpen(next);
-            if (next) {
-              pendingGroupFocus.current = 'COURSE';
-              setSectionOpen(false);
-            }
-          }}>
-          <summary className="filter-panel__group-summary" ref={courseSummaryRef}>
-            <span>03–09</span>
-            <span>{i18n.t('filter.course_constraints')}</span>
-            <span className="filter-panel__group-count">{courseFields.length}</span>
-          </summary>
-          <div className="filter-panel__grid">{courseFields.map(renderRow)}</div>
-        </details>
-        <details className="filter-panel__group" open={sectionOpen}
-          onToggle={(event) => {
-            const next = event.currentTarget.open;
-            setSectionOpen(next);
-            if (next) {
-              pendingGroupFocus.current = 'SECTION';
-              setCourseOpen(false);
-            }
-          }}>
-          <summary className="filter-panel__group-summary" ref={sectionSummaryRef}>
-            <span>10–18</span>
-            <span>{i18n.t('filter.section_constraints')}</span>
-            <span className="filter-panel__group-count">{sectionFields.length}</span>
-          </summary>
-          <div className="filter-panel__grid">{sectionFields.map(renderRow)}</div>
-        </details>
+        <div className="filter-panel__grid" data-filter-fields="03-18">{fields.map(renderRow)}</div>
 
         <footer className="filter-panel__footer">
           <p className="filter-panel__footer-note">

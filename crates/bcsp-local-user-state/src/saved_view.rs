@@ -5,7 +5,10 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 
-use crate::{PersonalStateError, PersonalStateResult, SavedViewContent, SavedViewIncompatibility};
+use crate::{
+    PersonalStateError, PersonalStateResult, SavedViewContent, SavedViewIncompatibility,
+    SavedViewReviewCode, SavedViewReviewReason,
+};
 
 pub(crate) const SAVED_VIEW_CODEC_VERSION: u64 = 1;
 pub(crate) const SAVED_VIEW_SCHEMA_VERSION: u64 = QUERY_CONTRACT_VERSION.as_u16() as u64;
@@ -18,11 +21,18 @@ pub(crate) struct EncodedFilterSnapshot {
 pub(crate) fn encode_filter_snapshot(
     filters: &FilterRequestV1,
 ) -> PersonalStateResult<EncodedFilterSnapshot> {
+    if filters.contract_version() != QUERY_CONTRACT_VERSION {
+        return Err(PersonalStateError::InvalidFilterSnapshot);
+    }
     let request = serde_json::to_value(filters)?;
     let mut values = request
         .get("values")
         .and_then(JsonValue::as_object)
         .cloned()
+        .ok_or(PersonalStateError::InvalidFilterSnapshot)?;
+    let include_incomplete = values
+        .remove("includeIncomplete")
+        .and_then(|value| value.as_object().cloned())
         .ok_or(PersonalStateError::InvalidFilterSnapshot)?;
     let schema = filter_schema_v1();
     let mut fields = JsonMap::new();
@@ -30,6 +40,24 @@ pub(crate) fn encode_filter_snapshot(
         let value = values
             .remove(&field.request_field)
             .ok_or(PersonalStateError::InvalidFilterSnapshot)?;
+        let value = match field.stable_id.wire_name() {
+            "FLT-C09" => json!({
+                "value": value,
+                "includeIncomplete": include_incomplete.get("prerequisite")
+                    .cloned().ok_or(PersonalStateError::InvalidFilterSnapshot)?,
+            }),
+            "FLT-S04a" => json!({
+                "value": value,
+                "includeIncomplete": include_incomplete.get("modality")
+                    .cloned().ok_or(PersonalStateError::InvalidFilterSnapshot)?,
+            }),
+            "FLT-S04b" => json!({
+                "value": value,
+                "includeIncomplete": include_incomplete.get("synchronicity")
+                    .cloned().ok_or(PersonalStateError::InvalidFilterSnapshot)?,
+            }),
+            _ => value,
+        };
         fields.insert(field.stable_id.wire_name().to_owned(), value);
     }
     if !values.is_empty() {
@@ -49,9 +77,11 @@ pub(crate) fn decode_filter_snapshot(
     raw: JsonValue,
     stored_schema_version: u64,
 ) -> SavedViewContent {
-    match decode_compatible_filter_snapshot(&raw, stored_schema_version) {
-        Ok(filters) => SavedViewContent::Compatible {
-            filters: Box::new(filters),
+    match decode_filter_snapshot_inner(&raw, stored_schema_version) {
+        Ok(DecodedSnapshot::Compatible(filters)) => SavedViewContent::Compatible { filters },
+        Ok(DecodedSnapshot::ReviewRequired(reasons)) => SavedViewContent::ReviewRequired {
+            raw_snapshot: raw,
+            reasons,
         },
         Err(reason) => SavedViewContent::Incompatible {
             raw_snapshot: raw,
@@ -60,10 +90,15 @@ pub(crate) fn decode_filter_snapshot(
     }
 }
 
-fn decode_compatible_filter_snapshot(
+enum DecodedSnapshot {
+    Compatible(Box<FilterRequestV1>),
+    ReviewRequired(Vec<SavedViewReviewReason>),
+}
+
+fn decode_filter_snapshot_inner(
     raw: &JsonValue,
     stored_schema_version: u64,
-) -> Result<FilterRequestV1, SavedViewIncompatibility> {
+) -> Result<DecodedSnapshot, SavedViewIncompatibility> {
     let envelope = raw
         .as_object()
         .ok_or(SavedViewIncompatibility::InvalidEnvelope)?;
@@ -96,6 +131,17 @@ fn decode_compatible_filter_snapshot(
     if schema_version == 1 {
         return decode_v1_filter_snapshot(envelope);
     }
+    if schema_version == 2 {
+        return decode_v2_filter_snapshot(envelope);
+    }
+    decode_v3_filter_snapshot(envelope)
+        .map(Box::new)
+        .map(DecodedSnapshot::Compatible)
+}
+
+fn decode_v3_filter_snapshot(
+    envelope: &JsonMap<String, JsonValue>,
+) -> Result<FilterRequestV1, SavedViewIncompatibility> {
     let fields = envelope
         .get("fields")
         .and_then(JsonValue::as_object)
@@ -113,17 +159,61 @@ fn decode_compatible_filter_snapshot(
     }
 
     let mut request_values = JsonMap::new();
+    let mut include_incomplete = JsonMap::new();
     for field in &schema.fields {
-        let value = match fields.get(field.stable_id.wire_name()) {
-            Some(value) => value.clone(),
-            None => field.canonical_neutral.json().cloned().ok_or_else(|| {
+        let stable_id = field.stable_id.wire_name();
+        let default_value = || {
+            field.canonical_neutral.json().cloned().ok_or_else(|| {
                 SavedViewIncompatibility::MissingRequiredField {
-                    stable_id: field.stable_id.wire_name().to_owned(),
+                    stable_id: stable_id.to_owned(),
                 }
-            })?,
+            })
+        };
+        let value = match fields.get(stable_id) {
+            Some(value) if matches!(stable_id, "FLT-C09" | "FLT-S04a" | "FLT-S04b") => {
+                let object = value
+                    .as_object()
+                    .filter(|object| {
+                        object.len() == 2
+                            && object.contains_key("value")
+                            && object.contains_key("includeIncomplete")
+                    })
+                    .ok_or(SavedViewIncompatibility::InvalidFieldData)?;
+                let include = object
+                    .get("includeIncomplete")
+                    .and_then(JsonValue::as_bool)
+                    .ok_or(SavedViewIncompatibility::InvalidFieldData)?;
+                let key = match stable_id {
+                    "FLT-C09" => "prerequisite",
+                    "FLT-S04a" => "modality",
+                    "FLT-S04b" => "synchronicity",
+                    _ => unreachable!(),
+                };
+                include_incomplete.insert(key.to_owned(), JsonValue::Bool(include));
+                object
+                    .get("value")
+                    .cloned()
+                    .ok_or(SavedViewIncompatibility::InvalidFieldData)?
+            }
+            Some(value) => value.clone(),
+            None => {
+                if let Some(key) = match stable_id {
+                    "FLT-C09" => Some("prerequisite"),
+                    "FLT-S04a" => Some("modality"),
+                    "FLT-S04b" => Some("synchronicity"),
+                    _ => None,
+                } {
+                    include_incomplete.insert(key.to_owned(), JsonValue::Bool(false));
+                }
+                default_value()?
+            }
         };
         request_values.insert(field.request_field.clone(), value);
     }
+    request_values.insert(
+        "includeIncomplete".to_owned(),
+        JsonValue::Object(include_incomplete),
+    );
     serde_json::from_value(json!({
         "contractVersion": QUERY_CONTRACT_VERSION.as_u16(),
         "values": request_values,
@@ -131,9 +221,105 @@ fn decode_compatible_filter_snapshot(
     .map_err(|_| SavedViewIncompatibility::InvalidFieldData)
 }
 
+fn decode_v2_filter_snapshot(
+    envelope: &JsonMap<String, JsonValue>,
+) -> Result<DecodedSnapshot, SavedViewIncompatibility> {
+    let fields = envelope
+        .get("fields")
+        .and_then(JsonValue::as_object)
+        .ok_or(SavedViewIncompatibility::InvalidEnvelope)?;
+    decode_v2_fields(fields)
+}
+
+fn decode_v2_fields(
+    fields: &JsonMap<String, JsonValue>,
+) -> Result<DecodedSnapshot, SavedViewIncompatibility> {
+    let schema = filter_schema_v1();
+    let known = schema
+        .fields
+        .iter()
+        .map(|field| field.stable_id.wire_name())
+        .collect::<BTreeSet<_>>();
+    if let Some(unknown) = fields.keys().find(|field| !known.contains(field.as_str())) {
+        return Err(SavedViewIncompatibility::UnknownField {
+            stable_id: unknown.clone(),
+        });
+    }
+
+    let mut reasons = Vec::new();
+    for (stable_id, neutral) in [
+        ("FLT-C05", json!([])),
+        ("FLT-C09", json!("ANY")),
+        ("FLT-S04a", json!([])),
+        ("FLT-S04b", json!([])),
+    ] {
+        if let Some(value) = fields.get(stable_id) {
+            let structurally_valid = match stable_id {
+                "FLT-C09" => value.is_string(),
+                _ => value.is_array(),
+            };
+            if !structurally_valid {
+                return Err(SavedViewIncompatibility::InvalidFieldData);
+            }
+            if value != &neutral {
+                reasons.push(SavedViewReviewReason {
+                    stable_id: stable_id.to_owned(),
+                    code: SavedViewReviewCode::ActiveLegacyFilter,
+                });
+            }
+        }
+    }
+    if let Some(campuses) = fields.get("FLT-C02") {
+        let campuses = campuses
+            .as_array()
+            .ok_or(SavedViewIncompatibility::InvalidFieldData)?;
+        if campuses.iter().any(|campus| {
+            campus
+                .as_str()
+                .is_none_or(|campus| !matches!(campus, "NB" | "NK" | "CM"))
+        }) {
+            reasons.push(SavedViewReviewReason {
+                stable_id: "FLT-C02".to_owned(),
+                code: SavedViewReviewCode::UnsupportedCampus,
+            });
+        }
+    }
+    if !reasons.is_empty() {
+        return Ok(DecodedSnapshot::ReviewRequired(reasons));
+    }
+
+    let mut request_values = JsonMap::new();
+    for field in &schema.fields {
+        let stable_id = field.stable_id.wire_name();
+        let value = if stable_id == "FLT-C05" {
+            json!([])
+        } else {
+            match fields.get(stable_id) {
+                Some(value) => value.clone(),
+                None => field.canonical_neutral.json().cloned().ok_or_else(|| {
+                    SavedViewIncompatibility::MissingRequiredField {
+                        stable_id: stable_id.to_owned(),
+                    }
+                })?,
+            }
+        };
+        request_values.insert(field.request_field.clone(), value);
+    }
+    request_values.insert(
+        "includeIncomplete".to_owned(),
+        json!({"prerequisite": false, "modality": false, "synchronicity": false}),
+    );
+    let filters = serde_json::from_value(json!({
+        "contractVersion": QUERY_CONTRACT_VERSION.as_u16(),
+        "values": request_values,
+    }))
+    .map_err(|_| SavedViewIncompatibility::InvalidFieldData)?;
+    Ok(DecodedSnapshot::Compatible(Box::new(filters)))
+}
+
 fn decode_v1_filter_snapshot(
     envelope: &JsonMap<String, JsonValue>,
-) -> Result<FilterRequestV1, SavedViewIncompatibility> {
+) -> Result<DecodedSnapshot, SavedViewIncompatibility> {
     let fields = envelope
         .get("fields")
         .and_then(JsonValue::as_object)
@@ -188,7 +374,7 @@ fn decode_v1_filter_snapshot(
         });
     }
 
-    let mut request_values = JsonMap::new();
+    let mut migrated_fields = JsonMap::new();
     for field in &schema.fields {
         let stable_id = field.stable_id.wire_name();
         let value = match fields.get(stable_id) {
@@ -212,13 +398,9 @@ fn decode_v1_filter_snapshot(
                 }
             })?,
         };
-        request_values.insert(field.request_field.clone(), value);
+        migrated_fields.insert(stable_id.to_owned(), value);
     }
-    serde_json::from_value(json!({
-        "contractVersion": QUERY_CONTRACT_VERSION.as_u16(),
-        "values": request_values,
-    }))
-    .map_err(|_| SavedViewIncompatibility::InvalidFieldData)
+    decode_v2_fields(&migrated_fields)
 }
 
 pub(crate) fn migrate_legacy_current_filters(
@@ -250,10 +432,10 @@ pub(crate) fn migrate_legacy_current_filters(
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     struct LegacyCurrentFilters {
         association: crate::FilterAssociation,
-        filters: FilterRequestV1,
+        filters: JsonValue,
     }
     let current = serde_json::from_value::<LegacyCurrentFilters>(legacy)?;
-    let encoded = encode_filter_snapshot(&current.filters)?;
+    let encoded = encode_legacy_request_snapshot(current.filters)?;
     transaction.execute(
         "INSERT INTO personal_current_filters_v1(
             singleton_id, revision, has_value, association_json, schema_version, snapshot_json
@@ -268,9 +450,83 @@ pub(crate) fn migrate_legacy_current_filters(
     Ok(())
 }
 
+/// Converts the pre-snapshot `settings.currentFilters.filters` request into
+/// the stable-field snapshot envelope used by the dedicated Local table.
+/// Query V1/V2 are accepted only here, as persisted-state migration input;
+/// every new Local mutation still goes through `encode_filter_snapshot` and
+/// therefore requires the active V3 request contract.
+fn encode_legacy_request_snapshot(raw: JsonValue) -> PersonalStateResult<EncodedFilterSnapshot> {
+    let object = raw
+        .as_object()
+        .filter(|object| {
+            object.len() == 2
+                && object.contains_key("contractVersion")
+                && object.contains_key("values")
+        })
+        .ok_or(PersonalStateError::InvalidFilterSnapshot)?;
+    let version = object
+        .get("contractVersion")
+        .and_then(JsonValue::as_u64)
+        .ok_or(PersonalStateError::InvalidFilterSnapshot)?;
+    if version == SAVED_VIEW_SCHEMA_VERSION {
+        let filters = serde_json::from_value::<FilterRequestV1>(raw)?;
+        return encode_filter_snapshot(&filters);
+    }
+    if !matches!(version, 1 | 2) {
+        return Err(PersonalStateError::InvalidFilterSnapshot);
+    }
+    let values = object
+        .get("values")
+        .and_then(JsonValue::as_object)
+        .ok_or(PersonalStateError::InvalidFilterSnapshot)?;
+    let mut fields = JsonMap::new();
+    for field in filter_schema_v1().fields {
+        let source = match (version, field.stable_id.wire_name()) {
+            (1, "FLT-C04") => "text",
+            (1 | 2, "FLT-C05") => "courseNumbers",
+            _ => field.request_field.as_str(),
+        };
+        let value = values
+            .get(source)
+            .cloned()
+            .ok_or(PersonalStateError::InvalidFilterSnapshot)?;
+        fields.insert(field.stable_id.wire_name().to_owned(), value);
+    }
+    if version == 1 {
+        for (stable_id, source) in [
+            ("FLT-C10", "courseLocations"),
+            ("FLT-S02", "sectionNumbers"),
+            ("FLT-S08", "buildingRoom"),
+            ("FLT-S11", "eligibility"),
+        ] {
+            fields.insert(
+                stable_id.to_owned(),
+                values
+                    .get(source)
+                    .cloned()
+                    .ok_or(PersonalStateError::InvalidFilterSnapshot)?,
+            );
+        }
+    }
+    let expected_field_count = if version == 1 { 22 } else { 18 };
+    if values.len() != expected_field_count {
+        return Err(PersonalStateError::InvalidFilterSnapshot);
+    }
+    Ok(EncodedFilterSnapshot {
+        schema_version: version,
+        raw: json!({
+            "codecVersion": SAVED_VIEW_CODEC_VERSION,
+            "schemaVersion": version,
+            "fields": fields,
+        }),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use bcsp_contracts::{MeetingLocationMatchModeV2, QueryContractVersion};
+    use bcsp_contracts::{
+        MeetingLocationMatchModeV2, NormalizedFilterValuesV1, QueryContractVersion,
+    };
 
     use super::*;
 
@@ -306,16 +562,152 @@ mod tests {
     }
 
     #[test]
-    fn neutral_v1_removed_fields_migrate_to_v2_without_broadening() {
+    fn neutral_v1_removed_fields_migrate_to_v3_without_broadening() {
         let content = decode_filter_snapshot(legacy_v1_snapshot(), 1);
         let filters = content.filters().expect("neutral V1 snapshot migrates");
-        assert_eq!(filters.contract_version(), QueryContractVersion::V2);
+        assert_eq!(filters.contract_version(), QueryContractVersion::V3);
         assert!(filters.values().keywords().is_none());
         assert!(filters.values().meeting_locations().locations.is_empty());
         assert_eq!(
             filters.values().meeting_locations().mode,
             MeetingLocationMatchModeV2::AnyMeeting
         );
+    }
+
+    fn neutral_v2_snapshot() -> JsonValue {
+        let mut fields = JsonMap::new();
+        for field in filter_schema_v1().fields {
+            let value = if field.stable_id.wire_name() == "FLT-C01" {
+                json!("92026")
+            } else if field.stable_id.wire_name() == "FLT-C02" {
+                json!(["NB"])
+            } else {
+                field.canonical_neutral.into_json().unwrap()
+            };
+            fields.insert(field.stable_id.wire_name().to_owned(), value);
+        }
+        json!({"codecVersion": 1, "schemaVersion": 2, "fields": fields})
+    }
+
+    fn neutral_v2_request() -> JsonValue {
+        let filters = FilterRequestV1::new(NormalizedFilterValuesV1::for_term(
+            bcsp_contracts::TermId::try_from("92026").unwrap(),
+        ));
+        let mut request = serde_json::to_value(filters).unwrap();
+        request["contractVersion"] = json!(2);
+        let values = request["values"].as_object_mut().unwrap();
+        values.remove("includeIncomplete").unwrap();
+        let bands = values.remove("courseNumberBands").unwrap();
+        values.insert("courseNumbers".to_owned(), bands);
+        request
+    }
+
+    #[test]
+    fn statically_safe_v2_snapshot_migrates_to_strict_v3_neutral_controls() {
+        let content = decode_filter_snapshot(neutral_v2_snapshot(), 2);
+        let filters = content.filters().expect("safe V2 snapshot migrates");
+        assert_eq!(filters.contract_version(), QueryContractVersion::V3);
+        assert!(filters.values().course_number_bands().is_empty());
+        assert_eq!(
+            filters.values().include_incomplete(),
+            bcsp_contracts::IncludeIncompleteV3::default()
+        );
+    }
+
+    #[test]
+    fn pre_snapshot_v2_request_is_only_adapted_by_local_persistence_migration() {
+        let encoded = encode_legacy_request_snapshot(neutral_v2_request()).unwrap();
+        assert_eq!(encoded.schema_version, 2);
+        let content = decode_filter_snapshot(encoded.raw, encoded.schema_version);
+        let filters = content.filters().expect("neutral V2 request migrates");
+        assert_eq!(filters.contract_version(), QueryContractVersion::V3);
+
+        let mut active = neutral_v2_request();
+        active["values"]["courseNumbers"] = json!(["198"]);
+        let encoded = encode_legacy_request_snapshot(active).unwrap();
+        assert!(matches!(
+            decode_filter_snapshot(encoded.raw, encoded.schema_version),
+            SavedViewContent::ReviewRequired { reasons, .. }
+                if reasons == vec![SavedViewReviewReason {
+                    stable_id: "FLT-C05".to_owned(),
+                    code: SavedViewReviewCode::ActiveLegacyFilter,
+                }]
+        ));
+    }
+
+    #[test]
+    fn active_v2_axes_and_removed_campus_preserve_raw_as_review_required() {
+        for (stable_id, value, code) in [
+            (
+                "FLT-C05",
+                json!(["111"]),
+                SavedViewReviewCode::ActiveLegacyFilter,
+            ),
+            (
+                "FLT-C09",
+                json!("HAS"),
+                SavedViewReviewCode::ActiveLegacyFilter,
+            ),
+            (
+                "FLT-S04a",
+                json!(["UNKNOWN"]),
+                SavedViewReviewCode::ActiveLegacyFilter,
+            ),
+            (
+                "FLT-S04b",
+                json!(["UNSPECIFIED"]),
+                SavedViewReviewCode::ActiveLegacyFilter,
+            ),
+            (
+                "FLT-C02",
+                json!(["NB", "ONLINE_NB"]),
+                SavedViewReviewCode::UnsupportedCampus,
+            ),
+        ] {
+            let mut raw = neutral_v2_snapshot();
+            raw["fields"][stable_id] = value;
+            let content = decode_filter_snapshot(raw.clone(), 2);
+            assert_eq!(
+                content,
+                SavedViewContent::ReviewRequired {
+                    raw_snapshot: raw,
+                    reasons: vec![SavedViewReviewReason {
+                        stable_id: stable_id.to_owned(),
+                        code,
+                    }],
+                },
+                "{stable_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn v3_snapshot_round_trip_keeps_each_incomplete_switch_independent() {
+        let mut input = bcsp_contracts::FilterValuesInputV1::for_term(
+            bcsp_contracts::TermId::try_from("92026").unwrap(),
+        );
+        input.include_incomplete.prerequisite = true;
+        input.include_incomplete.modality = false;
+        input.include_incomplete.synchronicity = true;
+        let filters =
+            FilterRequestV1::new(bcsp_contracts::NormalizedFilterValuesV1::try_new(input).unwrap());
+        let encoded = encode_filter_snapshot(&filters).unwrap();
+        let decoded = decode_filter_snapshot(encoded.raw, encoded.schema_version);
+        assert_eq!(decoded.filters(), Some(&filters));
+    }
+
+    #[test]
+    fn new_local_snapshots_reject_non_v3_request_envelopes() {
+        let filters = FilterRequestV1::new(bcsp_contracts::NormalizedFilterValuesV1::for_term(
+            bcsp_contracts::TermId::try_from("92026").unwrap(),
+        ));
+        let mut raw = serde_json::to_value(filters).unwrap();
+        raw["contractVersion"] = json!(2);
+        let legacy_shaped = serde_json::from_value::<FilterRequestV1>(raw).unwrap();
+        assert!(matches!(
+            encode_filter_snapshot(&legacy_shaped),
+            Err(PersonalStateError::InvalidFilterSnapshot)
+        ));
     }
 
     #[test]

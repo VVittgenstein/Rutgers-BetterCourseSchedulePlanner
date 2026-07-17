@@ -679,8 +679,9 @@ async fn typed_empty_open_for_nonempty_catalog_is_current_and_counted() {
 
 #[tokio::test]
 async fn long_full_first_load_sweep_reaches_all_current_without_recurring_every_target() {
-    const TARGET_COUNT: usize = 6;
-    const OPEN_ELAPSED: Duration = Duration::from_secs(20);
+    const CAMPUSES: [&str; 3] = ["NB", "NK", "CM"];
+    const TARGET_COUNT: usize = CAMPUSES.len();
+    const OPEN_ELAPSED: Duration = Duration::from_secs(30);
     assert!(
         OPEN_ELAPSED * u32::try_from(TARGET_COUNT).expect("bounded target count")
             > Duration::from_secs(75),
@@ -692,20 +693,22 @@ async fn long_full_first_load_sweep_reaches_all_current_without_recurring_every_
         OperationalStorage::open(directory.path().join("long-first-load.sqlite"))
             .expect("operational SQLite"),
     ));
-    let campuses = (0..TARGET_COUNT)
-        .map(|index| {
+    let campuses = CAMPUSES
+        .iter()
+        .map(|campus| {
             serde_json::json!({
-                "campusCode": format!("C{index:03}"),
-                "display": format!("Campus {index:03}"),
+                "campusCode": campus,
+                "display": format!("Campus {campus}"),
                 "enabled": true
             })
         })
         .collect::<Vec<_>>();
-    let targets = (0..TARGET_COUNT)
-        .map(|index| {
+    let targets = CAMPUSES
+        .iter()
+        .map(|campus| {
             serde_json::json!({
                 "termId": "92026",
-                "campusCode": format!("C{index:03}"),
+                "campusCode": campus,
                 "enabled": true
             })
         })
@@ -809,7 +812,13 @@ async fn long_full_first_load_sweep_reaches_all_current_without_recurring_every_
             unexpected => panic!("unexpected first-load outcome: {unexpected:?}"),
         }
     }
-    assert_eq!(clock.monotonic_now(), MonotonicTime::from_millis(120_000));
+    assert_eq!(
+        clock.monotonic_now(),
+        MonotonicTime::from_millis(
+            u64::try_from((OPEN_ELAPSED * u32::try_from(TARGET_COUNT).unwrap()).as_millis())
+                .expect("bounded first-load duration"),
+        )
+    );
 
     assert!(published.targets.iter().all(|registration| {
         storage
@@ -828,7 +837,11 @@ async fn long_full_first_load_sweep_reaches_all_current_without_recurring_every_
     );
     assert_eq!(
         first_open.freshness.observed_at,
-        Some(clock.expected_wall(20)),
+        Some(
+            clock.expected_wall(
+                i64::try_from(OPEN_ELAPSED.as_secs()).expect("bounded Open duration"),
+            ),
+        ),
         "the lease extends freshness without rewriting the real observation time"
     );
     assert_eq!(first_open.scheduler.requested_general_interval_seconds, 30);

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { ActionButton, StatePanel } from '../design-system';
+import { isMessageKey } from '../i18n/contract';
 import { filterSerializationIssueMessageKeys } from '../i18n/presenter';
 import { useBcspI18n } from '../i18n/runtime';
 import {
@@ -11,8 +12,10 @@ import {
   createNeutralFilterState,
   isServiceStatusV2,
   isSearchDataReady,
+  toFilterRequestV1,
   type CourseDetailResponseV1,
   type CourseGroupKey,
+  type DynamicFilterInvalidValueV3,
   type FilterSerializationIssue,
   type FilterOptionsFieldV2,
   type FilterStateV1,
@@ -71,6 +74,12 @@ interface CourseDetailReturnTarget {
 
 type PendingSearchFocus = 'OUTPUT' | 'COURSE_TRIGGER' | null;
 
+type ScopeValidationState =
+  | 'PENDING'
+  | 'ERROR'
+  | { readonly invalidValues: readonly DynamicFilterInvalidValueV3[]; readonly kind: 'INVALID' }
+  | null;
+
 export interface SearchWorkspaceProps {
   readonly initialFilters?: FilterStateV1 | undefined;
   readonly onFiltersChange?: ((filters: FilterStateV1) => void) | undefined;
@@ -116,74 +125,23 @@ function filtersForScope(filters: FilterStateV1, scope: SearchScope): FilterStat
 
 interface ScopeFilterRevalidation {
   readonly filters: FilterStateV1;
-  readonly removed: number;
-}
-
-function sameOption(left: string, right: string): boolean {
-  return left.localeCompare(right, 'en-US', { sensitivity: 'accent' }) === 0;
+  readonly invalidValues: readonly DynamicFilterInvalidValueV3[];
 }
 
 async function revalidateScopeFilters(
   filters: FilterStateV1,
   scope: SearchScope,
-  discovery: Extract<ShellDataState, { status: 'READY' }>['discovery'],
   runtime: ProductRuntimePort,
   signal: AbortSignal,
 ): Promise<ScopeFilterRevalidation> {
   if (scope.term === null) throw new Error('A term is required before applying a scope.');
   const scoped = filtersForScope(filters, scope);
-  const targetKeys = new Set(scope.campuses.map((campus) => `${scope.term}\u0000${campus}`));
-  const validSubjects = new Set(discovery.subjects
-    .filter(({ target }) => targetKeys.has(`${target.term}\u0000${target.campus}`))
-    .map(({ code }) => code));
-  const validCoreCodes = new Set(discovery.coreCodeDictionaries
-    .filter(({ target }) => targetKeys.has(`${target.term}\u0000${target.campus}`))
-    .flatMap(({ options }) => options.map(({ code }) => code)));
-  const subjects = scoped.subjects.filter((value) => validSubjects.has(value));
-  const coreCodes = scoped.core.codes.filter((value) => validCoreCodes.has(value));
-  let removed = scoped.subjects.length - subjects.length
-    + scoped.core.codes.length - coreCodes.length;
-
-  const validate = async (field: FilterOptionsFieldV2, values: readonly string[]) => {
-    if (values.length === 0) return [];
-    if (runtime.product.filterOptions === undefined) {
-      throw new Error('Filter option validation is unavailable.');
-    }
-    const checks = await Promise.all(values.map(async (value) => {
-      const response = await runtime.product.filterOptions?.({
-        contractVersion: 2,
-        term: scope.term as string,
-        campuses: scope.campuses,
-        field,
-        query: value,
-        limit: 100,
-      }, signal);
-      return response?.options.some((option) => sameOption(option.value, value)) === true;
-    }));
-    const kept = values.filter((_value, index) => checks[index] === true);
-    removed += values.length - kept.length;
-    return kept;
-  };
-
-  const [keywords, levels, instructors, locations, examCodes] = await Promise.all([
-    validate('KEYWORD', scoped.keywords),
-    validate('COURSE_LEVEL', scoped.levels),
-    validate('INSTRUCTOR', scoped.instructors),
-    validate('MEETING_LOCATION', scoped.meetingLocations.locations),
-    validate('EXAM_CODE', scoped.examCodes),
-  ]);
+  const response = await runtime.product.validateDynamicFilters({
+    filters: toFilterRequestV1(scoped),
+  }, signal);
   return {
-    filters: {
-      ...scoped,
-      subjects,
-      core: { ...scoped.core, codes: coreCodes },
-      keywords,
-      levels,
-      instructors,
-      meetingLocations: { ...scoped.meetingLocations, locations },
-      examCodes,
-    },
-    removed,
+    filters: scoped,
+    invalidValues: response.invalidValues,
   };
 }
 
@@ -222,30 +180,50 @@ function SearchState({
   readonly message?: string | undefined;
 }) {
   const { t } = useBcspI18n();
+  if (kind === 'IDLE' || kind === 'COURSES') return null;
+  const compact = (state: 'loading' | 'empty' | 'error', heading: string, detail: string) => (
+    <section
+      aria-busy={state === 'loading' || undefined}
+      aria-live={state === 'error' ? 'assertive' : 'polite'}
+      className={`bcsp-search-state bcsp-search-state--${state}`}
+      data-search-state={state}
+      role={state === 'error' ? 'alert' : 'status'}
+    >
+      <span aria-hidden="true" className="bcsp-search-state__marker">
+        {state === 'loading' ? '///' : state === 'error' ? '!' : 'Ø'}
+      </span>
+      <span className="bcsp-search-state__copy">
+        <h4>{heading}</h4>
+        <span>{detail}</span>
+      </span>
+    </section>
+  );
   if (kind === 'LOADING') {
-    return <StatePanel detail={t('search.loading_body')} heading={t('search.loading_title')} kind="loading" />;
+    return compact('loading', t('search.loading_title'), t('search.loading_body'));
   }
   if (kind === 'VALIDATION_ERROR') {
-    return (
-      <StatePanel
-        detail={message ?? t('search.validation_body')}
-        heading={t('search.validation_title')}
-        kind="error"
-      />
-    );
+    return compact('error', t('search.validation_title'), message ?? t('search.validation_body'));
   }
   if (kind === 'ERROR') {
-    return <StatePanel detail={t('search.error_body')} heading={t('search.error_title')} kind="error" />;
+    return compact('error', t('search.error_title'), t('search.error_body'));
   }
   if (kind === 'NOT_READY') {
-    return <StatePanel detail={t('service.search_not_ready')} heading={t('app.loading_title')} kind="loading" />;
+    return compact('loading', t('app.loading_title'), t('service.search_not_ready'));
   }
-  return <StatePanel detail={t('search.start_body')} heading={t('search.start_title')} kind="empty" />;
+  return null;
 }
 
 function EmptySearchState() {
   const { t } = useBcspI18n();
-  return <StatePanel detail={t('search.empty_body')} heading={t('search.empty_title')} kind="empty" />;
+  return (
+    <section aria-live="polite" className="bcsp-search-state bcsp-search-state--empty" data-search-state="empty" role="status">
+      <span aria-hidden="true" className="bcsp-search-state__marker">Ø</span>
+      <span className="bcsp-search-state__copy">
+        <h4>{t('search.empty_title')}</h4>
+        <span>{t('search.empty_body')}</span>
+      </span>
+    </section>
+  );
 }
 
 function DirectSectionRoute({
@@ -272,7 +250,7 @@ function DirectSectionRoute({
     const abort = new AbortController();
     setState({ kind: 'LOADING' });
     void runtime.product.sectionDetail(
-      { contractVersion: 2, key: sectionKey },
+      { contractVersion: 3, key: sectionKey },
       abort.signal,
     ).then((response) => {
       setState({ kind: 'READY', response });
@@ -326,6 +304,7 @@ function SearchWorkspaceController({
   shellState,
 }: SearchWorkspaceProps) {
   const i18n = useBcspI18n();
+  const filterFormId = useId();
   const { navigate, pathname } = useAppRouter();
   const session = useSearchSession();
   const directSection = useMemo(() => parseSectionRoute(pathname), [pathname]);
@@ -344,7 +323,6 @@ function SearchWorkspaceController({
   const searchAbort = useRef<AbortController | null>(null);
   const detailAbort = useRef<AbortController | null>(null);
   const scopeApplyAbort = useRef<AbortController | null>(null);
-  const filtersRef = useRef<HTMLElement | null>(null);
   const resultsRef = useRef<HTMLElement | null>(null);
   const resultsHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const pendingFocus = useRef<PendingSearchFocus>(null);
@@ -352,7 +330,7 @@ function SearchWorkspaceController({
   const externalFiltersSignature = useRef<string | null>(null);
   const observedInitialFilters = useRef(false);
   const [externalScopeRejected, setExternalScopeRejected] = useState(false);
-  const [scopeValidation, setScopeValidation] = useState<'PENDING' | 'REMOVED' | 'ERROR' | null>(null);
+  const [scopeValidation, setScopeValidation] = useState<ScopeValidationState>(null);
   const invalidateScopeBoundWork = useCallback(() => {
     searchAbort.current?.abort();
     searchAbort.current = null;
@@ -366,14 +344,14 @@ function SearchWorkspaceController({
   const searchDataReady = isSearchDataReady(serviceStatus, appliedScope ?? undefined);
   const searchAvailable = searchDataReady
     && appliedScope !== null;
-
-  useLayoutEffect(() => {
-    if (filtersRef.current !== null) {
-      filtersRef.current.scrollTop = session.restoreFilterScrollTop();
-    }
-  }, [session.restoreFilterScrollTop]);
+  const previousSearchAvailable = useRef(searchAvailable);
 
   useEffect(() => () => invalidateScopeBoundWork(), [invalidateScopeBoundWork]);
+
+  useEffect(() => {
+    session.restorePageScroll();
+    return session.savePageScroll;
+  }, [session.restorePageScroll, session.savePageScroll]);
 
   useEffect(() => {
     session.initializeScope(
@@ -414,7 +392,9 @@ function SearchWorkspaceController({
   ]);
 
   useEffect(() => {
-    if (query.kind === 'NOT_READY' && searchAvailable) setQuery({ kind: 'IDLE' });
+    const becameAvailable = !previousSearchAvailable.current && searchAvailable;
+    previousSearchAvailable.current = searchAvailable;
+    if (query.kind === 'NOT_READY' && becameAvailable) setQuery({ kind: 'IDLE' });
   }, [query.kind, searchAvailable]);
 
   useEffect(() => {
@@ -518,7 +498,7 @@ function SearchWorkspaceController({
     pendingFocus.current = 'OUTPUT';
     setCourseDetail({ kind: 'LOADING' });
     void runtime.product.courseDetail(
-      { contractVersion: 2, key },
+      { contractVersion: 3, key },
       abort.signal,
     ).then((response) => {
       if (!abort.signal.aborted) setCourseDetail({ kind: 'READY', response });
@@ -536,31 +516,31 @@ function SearchWorkspaceController({
       return Promise.reject(new Error('Filter options require a selected target.'));
     }
     const response = runtime.product.filterOptions?.({
-      contractVersion: 2,
+      contractVersion: 3,
       term: filters.term,
       campuses: filters.campuses,
       field,
       ...(optionQuery === undefined || optionQuery.trim() === '' ? {} : { query: optionQuery }),
-      limit: 50,
+      ...(field === 'COURSE_NUMBER_BAND' ? {} : { limit: 50 }),
     }, signal);
     return response ?? Promise.reject(new Error('Filter options are unavailable.'));
   }, [filters.campuses, filters.term, runtime]);
 
   const applyScope = useCallback((scope: SearchScope) => {
-    invalidateScopeBoundWork();
+    scopeApplyAbort.current?.abort();
     const abort = new AbortController();
     scopeApplyAbort.current = abort;
-    pendingFocus.current = null;
-    courseDetailReturnTarget.current = null;
     const scoped = filtersForScope(filters, scope);
     const targetBoundSelectionCount = scoped.subjects.length
       + scoped.keywords.length
+      + scoped.courseNumberBands.length
       + scoped.levels.length
       + scoped.core.codes.length
       + scoped.instructors.length
       + scoped.meetingLocations.locations.length
       + scoped.examCodes.length;
     if (targetBoundSelectionCount === 0) {
+      invalidateScopeBoundWork();
       session.applyScope(scope, scoped);
       onFiltersChange?.(scoped);
       setScopeValidation(null);
@@ -569,12 +549,17 @@ function SearchWorkspaceController({
       return;
     }
     setScopeValidation('PENDING');
-    void revalidateScopeFilters(filters, scope, shellState.discovery, runtime, abort.signal)
-      .then(({ filters: next, removed }) => {
+    void revalidateScopeFilters(filters, scope, runtime, abort.signal)
+      .then(({ filters: next, invalidValues }) => {
         if (abort.signal.aborted) return;
+        if (invalidValues.length > 0) {
+          setScopeValidation({ invalidValues, kind: 'INVALID' });
+          return;
+        }
+        invalidateScopeBoundWork();
         session.applyScope(scope, next);
         onFiltersChange?.(next);
-        setScopeValidation(removed > 0 ? 'REMOVED' : null);
+        setScopeValidation(null);
         setQuery({ kind: 'IDLE' });
         setCourseDetail({ kind: 'CLOSED' });
       })
@@ -587,7 +572,6 @@ function SearchWorkspaceController({
     onFiltersChange,
     runtime,
     session.applyScope,
-    shellState.discovery,
   ]);
 
   const changeCandidateScope = useCallback((scope: SearchScope) => {
@@ -664,30 +648,37 @@ function SearchWorkspaceController({
       </>
     );
   }
+  const showResultsSurface = retainedResponse !== null
+    || query.kind !== 'IDLE'
+    || courseDetail.kind !== 'CLOSED';
 
   return (
     <>
     {directSection === null ? null : <DirectSectionRoute runtime={runtime} sectionKey={directSection} />}
-    <div className="bcsp-search-workspace" data-search-mode="courses" hidden={directSection !== null}>
+    <div
+      className="bcsp-search-workspace"
+      data-results-visible={showResultsSurface ? 'true' : 'false'}
+      data-search-mode="courses"
+      hidden={directSection !== null}
+    >
       <SearchWorkspaceStyles />
-      <section
-        aria-labelledby="bcsp-search-filter-title"
-        className="bcsp-search-workspace__filters"
-        onScroll={(event) => session.saveFilterScrollTop(event.currentTarget.scrollTop)}
-        ref={filtersRef}
-      >
-        <header className="bcsp-search-workspace__header">
-          <h3 id="bcsp-search-filter-title">{i18n.t('search.filters_title')}</h3>
-          <p>{i18n.t('search.course_intro')}</p>
-        </header>
+      <div className="bcsp-search-workspace__scope">
         {externalScopeRejected ? (
           <p className="bcsp-search-workspace__scope-error" role="alert">
             {i18n.t('scope.external_definition_unavailable')}
           </p>
         ) : null}
-        {scopeValidation === 'REMOVED' ? (
-          <p className="bcsp-search-workspace__scope-error" role="status">
-            {i18n.t('scope.invalid_options_removed')}
+        {typeof scopeValidation === 'object' && scopeValidation?.kind === 'INVALID' ? (
+          <p className="bcsp-search-workspace__scope-error" role="alert">
+            {i18n.t('scope.invalid_options_blocked', {
+              values: scopeValidation.invalidValues.map(({ field, value }) => {
+                const definition = shellState.filterSchema.fields.find(({ stableId }) => stableId === field);
+                const label = definition !== undefined && isMessageKey(definition.i18nKey)
+                  ? i18n.t(definition.i18nKey)
+                  : i18n.t('filter.form_label');
+                return `${label}: ${value}`;
+              }).join(', '),
+            })}
           </p>
         ) : null}
         {scopeValidation === 'ERROR' ? (
@@ -703,11 +694,24 @@ function SearchWorkspaceController({
           onApply={applyScope}
           onCandidateChange={changeCandidateScope}
           renderUnavailableAction={renderUnavailableScopeAction}
+          searchAvailable={searchAvailable}
+          searchFormId={filterFormId}
+          searchPending={query.kind === 'LOADING'}
           status={serviceStatus ?? null}
         />
+      </div>
+      <section
+        aria-labelledby="bcsp-search-filter-title"
+        className="bcsp-search-workspace__filters"
+      >
+        <header className="bcsp-search-workspace__header">
+          <h3 id="bcsp-search-filter-title">{i18n.t('search.filters_title')}</h3>
+          <p>{i18n.t('search.course_intro')}</p>
+        </header>
         <FilterPanel
           disabled={query.kind === 'LOADING' || !searchAvailable}
           discovery={shellState.discovery}
+          formId={filterFormId}
           loadOptions={loadFilterOptions}
           onChange={(next) => {
             session.setDraftFilters(next, true);
@@ -730,6 +734,7 @@ function SearchWorkspaceController({
       <section
         aria-labelledby="bcsp-search-results-title"
         className="bcsp-search-workspace__results"
+        hidden={!showResultsSurface}
         ref={resultsRef}
       >
         <h3

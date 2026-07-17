@@ -28,5 +28,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+bcsp-catalog = { version = "=0.1.0", path = "../bcsp-catalog" }
+bcsp-rutgers-client = { version = "=0.1.0", path = "../bcsp-rutgers-client" }
 rusqlite.workspace = true
 tempfile.workspace = true

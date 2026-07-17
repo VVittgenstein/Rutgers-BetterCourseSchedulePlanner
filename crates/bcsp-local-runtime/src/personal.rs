@@ -2,18 +2,21 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bcsp_application::{
-    SessionNonce, SharedQueryError, SharedQueryService, SharedWatchSocket, TargetRefreshDemand,
+    PreparedQueryService, PreparedServingBinding, PreparedServingRegistry, PreparedServingSnapshot,
+    ServiceStatusRegistry, SessionNonce, SharedQueryService, SharedWatchSocket,
+    TargetRefreshDemand, is_product_campus, product_target_keys, product_term_publication,
 };
 use bcsp_contracts::{
-    ContractDecodeError, FilterRequestV1, HttpRequestEnvelope, HttpSuccessEnvelope, SectionKey,
+    ContractDecodeError, FilterFieldId, FilterRequestV1, HttpRequestEnvelope, HttpSuccessEnvelope,
+    InvalidDynamicFilterValueV3, SectionKey, ServiceTermPublicationV2, ServiceWorkStateV2,
     SystemTraceIdSource, TermCampusKey, TermId, TraceId, TraceIdSource,
     decode_versioned_envelope_json,
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_user_state::{
     CurrentFiltersRevision, HistoryFilter, LocalSettings, PageRequest, PersonalStateError,
-    PersonalStateStore, SavedViewContent, SavedViewDefinition, SavedViewIncompatibility,
-    SavedViewMatch, SavedViewRevision, SettingsRevision, UnixMillis, UserStateRevision,
+    PersonalStateStore, SavedViewContent, SavedViewDefinition, SavedViewMatch, SavedViewReviewCode,
+    SavedViewReviewReason, SavedViewRevision, SettingsRevision, UnixMillis, UserStateRevision,
 };
 use bcsp_operational_storage::OperationalStorage;
 use serde::{Deserialize, Serialize};
@@ -36,6 +39,8 @@ pub struct PersonalSurface {
     watch: Arc<SharedWatchSocket>,
     pending_reset: Mutex<Option<PendingLocalUserDataReset>>,
     target_refresh_demand: TargetRefreshDemand,
+    service_status: Option<Arc<ServiceStatusRegistry>>,
+    prepared_serving: Option<Arc<PreparedServingRegistry>>,
 }
 
 impl PersonalSurface {
@@ -50,6 +55,8 @@ impl PersonalSurface {
             watch,
             pending_reset: Mutex::new(None),
             target_refresh_demand: TargetRefreshDemand::default(),
+            service_status: None,
+            prepared_serving: None,
         }
     }
 
@@ -59,6 +66,31 @@ impl PersonalSurface {
     ) -> Self {
         self.target_refresh_demand = target_refresh_demand;
         self
+    }
+
+    pub fn with_service_status(mut self, service_status: Arc<ServiceStatusRegistry>) -> Self {
+        self.service_status = Some(service_status);
+        self
+    }
+
+    pub fn with_prepared_serving(mut self, prepared: Arc<PreparedServingRegistry>) -> Self {
+        self.prepared_serving = Some(prepared);
+        self
+    }
+
+    fn prepared_snapshot(&self) -> Result<Option<PreparedServingBinding>, LocalSurfaceFailure> {
+        match self.prepared_serving.as_ref() {
+            // Legacy projection remains available only to isolated fixtures
+            // that deliberately construct PersonalSurface without the
+            // production prepared-serving registry.
+            None => Ok(None),
+            Some(registry) => registry.snapshot().map(Some).map_err(|_| {
+                // A configured-but-rebuilding registry must never silently
+                // fall back to a full Catalog projection while holding the
+                // LocalPrimaryDatabase mutex.
+                LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError)
+            }),
+        }
     }
 
     fn with_store<T>(
@@ -102,19 +134,43 @@ impl LocalSurfaceState for PersonalSurface {
             state: T,
         }
 
+        let prepared = self.prepared_snapshot()?;
         let mut database = self.lock_database()?;
         let mut state = database
             .personal()
             .snapshot(PageRequest::DEFAULT)
             .map_err(map_personal_error)?;
+        let current_raw = database
+            .personal()
+            .current_filters_raw_snapshot()
+            .map_err(map_personal_error)?;
         let raw_snapshots = load_saved_view_raw_snapshots(database.personal(), &state.saved_views)
             .map_err(map_personal_error)?;
-        project_legacy_saved_view_dynamic_compatibility(
-            database.operational_mut(),
-            &mut state.saved_views,
-            &raw_snapshots,
-        );
-        drop(database);
+        if let Some(prepared) = prepared.as_deref() {
+            drop(database);
+            project_prepared_current_filter_compatibility(
+                prepared,
+                &mut state.current_filters,
+                current_raw.as_ref(),
+            );
+            project_prepared_saved_view_dynamic_compatibility(
+                prepared,
+                &mut state.saved_views,
+                &raw_snapshots,
+            );
+        } else {
+            project_legacy_current_filter_compatibility(
+                database.operational_mut(),
+                &mut state.current_filters,
+                current_raw.as_ref(),
+            );
+            project_legacy_saved_view_dynamic_compatibility(
+                database.operational_mut(),
+                &mut state.saved_views,
+                &raw_snapshots,
+            );
+            drop(database);
+        }
         state.active_watch_count = u8::try_from(self.watch.total_active_watch_count())
             .unwrap_or(bcsp_contracts::MAX_ACTIVE_WATCHES);
         encode(&Bootstrap {
@@ -180,11 +236,9 @@ impl LocalSurfaceState for PersonalSurface {
                 LocalApiErrorCode::UnsupportedProtocolVersion,
             ));
         }
-        let window =
-            RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Local)
-                .map_err(|_| {
-                    LocalSurfaceFailure::unprocessable(LocalApiErrorCode::TermOutOfRange)
-                })?;
+        let now = OffsetDateTime::now_utc();
+        let window = RutgersTermWindow::at(now, RutgersTermWindowScope::Local)
+            .map_err(|_| LocalSurfaceFailure::unprocessable(LocalApiErrorCode::TermOutOfRange))?;
         let visible = window
             .visible_terms()
             .iter()
@@ -196,42 +250,76 @@ impl LocalSurfaceState for PersonalSurface {
             .operational_mut()
             .published_discovery_snapshot()
             .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?;
-        let targets = published
-            .snapshot
-            .campuses
-            .into_iter()
-            .map(|campus| campus.target)
-            .filter(|target| target.term() == visible.term())
-            .filter(|target| !is_online_alias(target.campus().as_str()))
-            .collect::<Vec<_>>();
-        if targets.is_empty() {
+        if product_term_publication(&published, visible.term(), now)
+            != ServiceTermPublicationV2::Published
+        {
             return Err(LocalSurfaceFailure::unprocessable(
                 LocalApiErrorCode::TermNotPublished,
             ));
         }
-        let ready = targets.iter().all(|target| {
-            database
-                .operational_mut()
-                .complete_target_snapshot_state(target)
-                .is_ok_and(|state| state.ready)
-        });
+        let targets = product_target_keys(visible.term());
+        let missing_targets = targets
+            .iter()
+            .filter(|target| {
+                !database
+                    .operational_mut()
+                    .complete_target_snapshot_state(target)
+                    .is_ok_and(|state| state.ready)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         drop(database);
-        let disposition = if ready {
+        let active_targets = self
+            .service_status
+            .as_ref()
+            .map(|status| {
+                status
+                    .snapshot()
+                    .map(|snapshot| {
+                        snapshot
+                            .target_activities
+                            .into_iter()
+                            .filter(|activity| {
+                                matches!(
+                                    activity.work_state,
+                                    ServiceWorkStateV2::Queued | ServiceWorkStateV2::Running
+                                ) || (activity.work_state == ServiceWorkStateV2::RetryWait
+                                    && activity.next_retry_at.is_some())
+                            })
+                            .map(|activity| activity.target)
+                            .collect::<std::collections::BTreeSet<_>>()
+                    })
+                    .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let pullable_targets = missing_targets
+            .iter()
+            .filter(|target| !active_targets.contains(*target))
+            .cloned()
+            .collect::<Vec<_>>();
+        let disposition = if missing_targets.is_empty() {
             Disposition::AlreadyReady
-        } else if self
-            .target_refresh_demand
-            .request_manual_term(request.term.clone())
-            .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?
-        {
-            Disposition::Enqueued
         } else {
-            Disposition::AlreadyRequested
+            let term_enqueued = self
+                .target_refresh_demand
+                .request_manual_term(request.term.clone())
+                .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?;
+            let target_retries = self
+                .target_refresh_demand
+                .request_manual_target_retries(&pullable_targets)
+                .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))?;
+            if term_enqueued || target_retries > 0 {
+                Disposition::Enqueued
+            } else {
+                Disposition::AlreadyRequested
+            }
         };
         encode(&Response {
             contract_version: 1,
             term: request.term,
             disposition,
-            target_count: targets.len() as u64,
+            target_count: pullable_targets.len() as u64,
         })
     }
 
@@ -259,6 +347,13 @@ impl LocalSurfaceState for PersonalSurface {
                     LocalSurfaceFailure::unprocessable(LocalApiErrorCode::TermOutOfRange)
                 })?;
         if update.sections.iter().any(|section| {
+            !existing.contains(section) && !is_product_campus(section.campus().as_str())
+        }) {
+            return Err(LocalSurfaceFailure::unprocessable(
+                LocalApiErrorCode::InvalidLocalState,
+            ));
+        }
+        if update.sections.iter().any(|section| {
             !existing.contains(section)
                 && section.term() != window.current_term()
                 && section.term() != window.next_term()
@@ -283,7 +378,27 @@ impl LocalSurfaceState for PersonalSurface {
     }
 
     fn current_filters(&self) -> Result<Vec<u8>, LocalSurfaceFailure> {
-        let current = self.with_store(|store| store.current_filters())?;
+        let prepared = self.prepared_snapshot()?;
+        let mut database = self.lock_database()?;
+        let (mut current, raw) = database
+            .personal()
+            .consistent_read(|store| {
+                Ok((
+                    store.current_filters()?,
+                    store.current_filters_raw_snapshot()?,
+                ))
+            })
+            .map_err(map_personal_error)?;
+        if let Some(prepared) = prepared.as_deref() {
+            drop(database);
+            project_prepared_current_filter_compatibility(prepared, &mut current, raw.as_ref());
+        } else {
+            project_legacy_current_filter_compatibility(
+                database.operational_mut(),
+                &mut current,
+                raw.as_ref(),
+            );
+        }
         encode(&current)
     }
 
@@ -323,22 +438,43 @@ impl LocalSurfaceState for PersonalSurface {
             views: Vec<SavedViewListItem>,
         }
 
+        let prepared = self.prepared_snapshot()?;
         let mut database = self.lock_database()?;
-        let (current_filters, mut definitions, raw_snapshots) = database
+        let (mut current_filters, current_raw, mut definitions, raw_snapshots) = database
             .personal()
             .consistent_read(|store| {
                 let current_filters = store.current_filters()?;
+                let current_raw = store.current_filters_raw_snapshot()?;
                 let definitions = store.saved_views()?;
                 let raw_snapshots = load_saved_view_raw_snapshots(store, &definitions)?;
-                Ok((current_filters, definitions, raw_snapshots))
+                Ok((current_filters, current_raw, definitions, raw_snapshots))
             })
             .map_err(map_personal_error)?;
-        project_legacy_saved_view_dynamic_compatibility(
-            database.operational_mut(),
-            &mut definitions,
-            &raw_snapshots,
-        );
-        drop(database);
+        if let Some(prepared) = prepared.as_deref() {
+            drop(database);
+            project_prepared_current_filter_compatibility(
+                prepared,
+                &mut current_filters,
+                current_raw.as_ref(),
+            );
+            project_prepared_saved_view_dynamic_compatibility(
+                prepared,
+                &mut definitions,
+                &raw_snapshots,
+            );
+        } else {
+            project_legacy_current_filter_compatibility(
+                database.operational_mut(),
+                &mut current_filters,
+                current_raw.as_ref(),
+            );
+            project_legacy_saved_view_dynamic_compatibility(
+                database.operational_mut(),
+                &mut definitions,
+                &raw_snapshots,
+            );
+            drop(database);
+        }
         let views = definitions
             .into_iter()
             .map(|definition| SavedViewListItem {
@@ -380,9 +516,10 @@ impl LocalSurfaceState for PersonalSurface {
 
     fn apply_saved_view(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure> {
         let command: SavedViewCommand = decode_payload(body)?;
-        let dynamically_incompatible = {
-            let mut database = self.lock_database()?;
-            let definition = {
+        let prepared = self.prepared_snapshot()?;
+        let definition_and_raw_revision = {
+            let database = self.lock_database()?;
+            {
                 let store = database.personal();
                 let state_revision = store.user_state_revision().map_err(map_personal_error)?;
                 let current_filters = store.current_filters().map_err(map_personal_error)?;
@@ -391,20 +528,35 @@ impl LocalSurfaceState for PersonalSurface {
                 {
                     None
                 } else {
-                    store.saved_view(command.id).map_err(map_personal_error)?
+                    let definition = store.saved_view(command.id).map_err(map_personal_error)?;
+                    let raw_revision = store
+                        .saved_view_raw_snapshot(command.id)
+                        .map_err(map_personal_error)?
+                        .map(|(revision, _)| revision);
+                    definition.map(|definition| (definition, raw_revision))
                 }
-            };
-            definition.is_some_and(|definition| {
+            }
+        };
+        let dynamically_incompatible =
+            definition_and_raw_revision.is_some_and(|(definition, raw_revision)| {
                 definition.revision == command.expected_view_revision
-                    && definition.content.filters().is_some_and(|filters| {
-                        !saved_view_scope_is_applicable(database.operational_mut(), filters)
-                            || saved_view_has_invalid_dynamic_option(
+                    && if let Some(prepared) = prepared.as_deref() {
+                        saved_view_apply_is_incompatible_prepared(
+                            prepared,
+                            &definition,
+                            raw_revision,
+                        )
+                    } else {
+                        match self.lock_database() {
+                            Ok(mut database) => saved_view_apply_is_incompatible(
                                 database.operational_mut(),
                                 &definition,
-                            )
-                    })
-            })
-        };
+                                raw_revision,
+                            ),
+                            Err(_) => true,
+                        }
+                    }
+            });
         if dynamically_incompatible {
             return Err(LocalSurfaceFailure::unprocessable(
                 LocalApiErrorCode::SavedViewIncompatible,
@@ -622,7 +774,7 @@ fn load_saved_view_raw_snapshots(
 ) -> Result<SavedViewRawSnapshots, PersonalStateError> {
     let mut snapshots = Vec::with_capacity(definitions.len());
     for definition in definitions {
-        if definition.schema_version != 1 || definition.content.filters().is_none() {
+        if definition.schema_version > 2 || definition.content.filters().is_none() {
             continue;
         }
         if let Some((revision, raw)) = store.saved_view_raw_snapshot(definition.id)? {
@@ -630,6 +782,126 @@ fn load_saved_view_raw_snapshots(
         }
     }
     Ok(snapshots)
+}
+
+fn project_prepared_saved_view_dynamic_compatibility(
+    snapshot: &PreparedServingSnapshot,
+    definitions: &mut [SavedViewDefinition],
+    raw_snapshots: &SavedViewRawSnapshots,
+) {
+    project_legacy_saved_view_dynamic_compatibility_with(
+        definitions,
+        raw_snapshots,
+        |definition| {
+            prepared_review_reasons(
+                snapshot,
+                definition.content.filters(),
+                OffsetDateTime::now_utc(),
+            )
+        },
+    );
+}
+
+fn project_prepared_current_filter_compatibility(
+    snapshot: &PreparedServingSnapshot,
+    current: &mut bcsp_local_user_state::StoredCurrentFilters,
+    raw: Option<&(CurrentFiltersRevision, u64, JsonValue)>,
+) {
+    project_legacy_current_filter_compatibility_with(current, raw, |filters| {
+        prepared_review_reasons(snapshot, Some(filters), OffsetDateTime::now_utc())
+    });
+}
+
+fn saved_view_apply_is_incompatible_prepared(
+    snapshot: &PreparedServingSnapshot,
+    definition: &SavedViewDefinition,
+    raw_revision: Option<SavedViewRevision>,
+) -> bool {
+    saved_view_apply_is_incompatible_with(definition, raw_revision, |filters| {
+        prepared_review_reasons(snapshot, Some(filters), OffsetDateTime::now_utc())
+    })
+}
+
+fn prepared_review_reasons(
+    snapshot: &PreparedServingSnapshot,
+    filters: Option<&FilterRequestV1>,
+    now: OffsetDateTime,
+) -> Vec<SavedViewReviewReason> {
+    let Some(filters) = filters else {
+        return Vec::new();
+    };
+    if let Some(reason) = prepared_scope_unavailable_reason(snapshot, filters, now) {
+        return vec![reason];
+    }
+    let values = filters.values();
+    if values.subjects().is_empty()
+        && values.keywords().is_none()
+        && values.course_number_bands().is_empty()
+        && values.levels().is_empty()
+        && values.core().codes.is_empty()
+        && values.instructors().is_empty()
+        && values.meeting_locations().locations.is_empty()
+        && values.exam_codes().is_empty()
+    {
+        return Vec::new();
+    }
+    let Some(targets) = prepared_saved_view_search_targets(snapshot, filters) else {
+        return vec![scope_unavailable_reason(FilterFieldId::CourseCampus)];
+    };
+    PreparedQueryService::new(snapshot)
+        .dynamic_filter_validation(&targets, values)
+        .map(|response| dynamic_value_review_reasons(response.invalid_values))
+        .unwrap_or_else(|_| vec![scope_unavailable_reason(FilterFieldId::CourseCampus)])
+}
+
+fn prepared_scope_unavailable_reason(
+    snapshot: &PreparedServingSnapshot,
+    filters: &FilterRequestV1,
+    now: OffsetDateTime,
+) -> Option<SavedViewReviewReason> {
+    let Ok(window) = RutgersTermWindow::at(now, RutgersTermWindowScope::Local) else {
+        return Some(scope_unavailable_reason(FilterFieldId::CourseTerm));
+    };
+    let values = filters.values();
+    if !window
+        .visible_terms()
+        .iter()
+        .any(|term| term.term() == values.term())
+    {
+        return Some(scope_unavailable_reason(FilterFieldId::CourseTerm));
+    }
+    let Some(targets) = prepared_saved_view_search_targets(snapshot, filters) else {
+        return Some(scope_unavailable_reason(FilterFieldId::CourseCampus));
+    };
+    let applicable = targets
+        .iter()
+        .all(|target| snapshot.is_discovered(target) && snapshot.is_ready(target));
+    (!applicable).then(|| scope_unavailable_reason(FilterFieldId::CourseCampus))
+}
+
+fn prepared_saved_view_search_targets(
+    snapshot: &PreparedServingSnapshot,
+    filters: &FilterRequestV1,
+) -> Option<Vec<TermCampusKey>> {
+    let values = filters.values();
+    let targets = if values.campuses().is_empty() {
+        snapshot
+            .discovery()
+            .targets
+            .iter()
+            .map(|target| target.key.clone())
+            .filter(|target| target.term() == values.term())
+            .filter(|target| is_product_campus(target.campus().as_str()))
+            .collect::<Vec<_>>()
+    } else {
+        values
+            .campuses()
+            .iter()
+            .cloned()
+            .map(|campus| TermCampusKey::new(values.term().clone(), campus))
+            .collect::<Vec<_>>()
+    };
+    (!targets.is_empty()).then_some(targets)
 }
 
 fn project_legacy_saved_view_dynamic_compatibility(
@@ -640,71 +912,206 @@ fn project_legacy_saved_view_dynamic_compatibility(
     project_legacy_saved_view_dynamic_compatibility_with(
         definitions,
         raw_snapshots,
-        |definition| saved_view_has_invalid_dynamic_option(storage, definition),
+        |definition| legacy_review_reasons(storage, definition.content.filters()),
     );
 }
 
 fn project_legacy_saved_view_dynamic_compatibility_with(
     definitions: &mut [SavedViewDefinition],
     raw_snapshots: &SavedViewRawSnapshots,
-    mut is_invalid: impl FnMut(&SavedViewDefinition) -> bool,
+    mut review_reasons: impl FnMut(&SavedViewDefinition) -> Vec<SavedViewReviewReason>,
 ) {
     for definition in definitions {
-        if !is_invalid(definition) {
+        if definition.content.filters().is_none() {
             continue;
         }
-        let Some((_, _, raw_snapshot)) = raw_snapshots
+        let reasons = review_reasons(definition);
+        let raw_snapshot = raw_snapshots
             .iter()
             .find(|(id, revision, _)| *id == definition.id && *revision == definition.revision)
-        else {
-            // A concurrent update can make a separately read raw snapshot
-            // ambiguous. Leaving the view compatible for this response is
-            // safer than attaching the wrong original snapshot; apply-time
-            // validation and the next library read still fail closed.
+            .map(|(_, _, raw_snapshot)| raw_snapshot);
+        if raw_snapshot.is_none() && definition.schema_version <= 2 {
+            definition.content = SavedViewContent::ReviewRequired {
+                // Never attach another revision's raw JSON. `null` truthfully means that the
+                // matching legacy snapshot was unavailable during this response.
+                raw_snapshot: JsonValue::Null,
+                reasons: vec![scope_unavailable_reason(FilterFieldId::CourseTerm)],
+            };
             continue;
-        };
-        definition.content = SavedViewContent::Incompatible {
-            raw_snapshot: raw_snapshot.clone(),
-            reason: SavedViewIncompatibility::InvalidFieldData,
-        };
+        }
+        if !reasons.is_empty() {
+            definition.content = SavedViewContent::ReviewRequired {
+                // A current-schema row can also lack a matching raw sidecar
+                // (for example a recovered or reset database). Preserve that
+                // fact as JSON null instead of panicking or borrowing a
+                // different revision's payload.
+                raw_snapshot: raw_snapshot.cloned().unwrap_or(JsonValue::Null),
+                reasons,
+            };
+        }
     }
 }
 
-fn saved_view_has_invalid_dynamic_option(
+fn project_legacy_current_filter_compatibility(
+    storage: &mut OperationalStorage,
+    current: &mut bcsp_local_user_state::StoredCurrentFilters,
+    raw: Option<&(CurrentFiltersRevision, u64, JsonValue)>,
+) {
+    project_legacy_current_filter_compatibility_with(current, raw, |filters| {
+        legacy_review_reasons(storage, Some(filters))
+    });
+}
+
+fn project_legacy_current_filter_compatibility_with(
+    current: &mut bcsp_local_user_state::StoredCurrentFilters,
+    raw: Option<&(CurrentFiltersRevision, u64, JsonValue)>,
+    review_reasons: impl FnOnce(&FilterRequestV1) -> Vec<SavedViewReviewReason>,
+) {
+    let Some(value) = current.value.as_mut() else {
+        return;
+    };
+    if value.content.filters().is_none() {
+        return;
+    }
+    let Some((raw_revision, schema_version, raw_snapshot)) = raw else {
+        value.content = SavedViewContent::ReviewRequired {
+            raw_snapshot: JsonValue::Null,
+            reasons: vec![scope_unavailable_reason(FilterFieldId::CourseTerm)],
+        };
+        return;
+    };
+    if *schema_version > 2 {
+        return;
+    }
+    if *raw_revision != current.revision {
+        value.content = SavedViewContent::ReviewRequired {
+            raw_snapshot: JsonValue::Null,
+            reasons: vec![scope_unavailable_reason(FilterFieldId::CourseTerm)],
+        };
+        return;
+    }
+    let reasons = review_reasons(
+        value
+            .content
+            .filters()
+            .expect("compatible content was checked above"),
+    );
+    if reasons.is_empty() {
+        return;
+    }
+    value.content = SavedViewContent::ReviewRequired {
+        raw_snapshot: raw_snapshot.clone(),
+        reasons,
+    };
+}
+
+fn saved_view_apply_is_incompatible(
     storage: &mut OperationalStorage,
     definition: &SavedViewDefinition,
+    raw_revision: Option<SavedViewRevision>,
 ) -> bool {
-    let Some(filters) = definition.content.filters() else {
-        return false;
+    saved_view_apply_is_incompatible_with(definition, raw_revision, |filters| {
+        legacy_review_reasons(storage, Some(filters))
+    })
+}
+
+fn saved_view_apply_is_incompatible_with(
+    definition: &SavedViewDefinition,
+    raw_revision: Option<SavedViewRevision>,
+    review_reasons: impl FnOnce(&FilterRequestV1) -> Vec<SavedViewReviewReason>,
+) -> bool {
+    (definition.schema_version <= 2 && raw_revision != Some(definition.revision))
+        || definition
+            .content
+            .filters()
+            .is_none_or(|filters| !review_reasons(filters).is_empty())
+}
+
+fn legacy_review_reasons(
+    storage: &mut OperationalStorage,
+    filters: Option<&FilterRequestV1>,
+) -> Vec<SavedViewReviewReason> {
+    legacy_review_reasons_at(storage, filters, OffsetDateTime::now_utc())
+}
+
+fn legacy_review_reasons_at(
+    storage: &mut OperationalStorage,
+    filters: Option<&FilterRequestV1>,
+    now: OffsetDateTime,
+) -> Vec<SavedViewReviewReason> {
+    let Some(filters) = filters else {
+        return Vec::new();
     };
+    if let Some(reason) = saved_view_scope_unavailable_reason_at(storage, filters, now) {
+        return vec![reason];
+    }
+    saved_view_invalid_dynamic_reasons(storage, filters)
+}
+
+fn saved_view_invalid_dynamic_reasons(
+    storage: &mut OperationalStorage,
+    filters: &FilterRequestV1,
+) -> Vec<SavedViewReviewReason> {
+    saved_view_invalid_dynamic_reasons_with(storage, filters, |storage, targets, values| {
+        SharedQueryService::new(storage)
+            .dynamic_filter_validation(targets, values)
+            .map(|response| response.invalid_values)
+            .map_err(|_| ())
+    })
+}
+
+fn saved_view_invalid_dynamic_reasons_with<E>(
+    storage: &mut OperationalStorage,
+    filters: &FilterRequestV1,
+    validate: impl FnOnce(
+        &mut OperationalStorage,
+        &[TermCampusKey],
+        &bcsp_contracts::NormalizedFilterValuesV1,
+    ) -> Result<Vec<InvalidDynamicFilterValueV3>, E>,
+) -> Vec<SavedViewReviewReason> {
     let values = filters.values();
-    if values.keywords().is_none()
+    if values.subjects().is_empty()
+        && values.keywords().is_none()
+        && values.course_number_bands().is_empty()
         && values.levels().is_empty()
+        && values.core().codes.is_empty()
         && values.instructors().is_empty()
         && values.meeting_locations().locations.is_empty()
         && values.exam_codes().is_empty()
     {
-        return false;
+        return Vec::new();
     }
     let Some(targets) = saved_view_search_targets(storage, filters) else {
-        // Missing discovery/publication is transient and cannot prove that a
-        // migrated dictionary value is invalid.
-        return false;
+        return vec![scope_unavailable_reason(FilterFieldId::CourseCampus)];
     };
-    matches!(
-        SharedQueryService::new(storage).validate_dynamic_filter_options(&targets, values),
-        Err(SharedQueryError::InvalidFilterOption { .. })
-    )
+    match validate(storage, &targets, values) {
+        Ok(invalid_values) => dynamic_value_review_reasons(invalid_values),
+        Err(_) => vec![scope_unavailable_reason(FilterFieldId::CourseCampus)],
+    }
 }
 
-fn saved_view_scope_is_applicable(
+fn dynamic_value_review_reasons(
+    invalid_values: impl IntoIterator<Item = InvalidDynamicFilterValueV3>,
+) -> Vec<SavedViewReviewReason> {
+    invalid_values
+        .into_iter()
+        .map(|invalid| invalid.field)
+        .collect::<std::collections::BTreeSet<FilterFieldId>>()
+        .into_iter()
+        .map(|field| SavedViewReviewReason {
+            stable_id: field.wire_name().to_owned(),
+            code: SavedViewReviewCode::DynamicValueUnavailable,
+        })
+        .collect()
+}
+
+fn saved_view_scope_unavailable_reason_at(
     storage: &mut OperationalStorage,
     filters: &FilterRequestV1,
-) -> bool {
-    let Ok(window) =
-        RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Local)
-    else {
-        return false;
+    now: OffsetDateTime,
+) -> Option<SavedViewReviewReason> {
+    let Ok(window) = RutgersTermWindow::at(now, RutgersTermWindowScope::Local) else {
+        return Some(scope_unavailable_reason(FilterFieldId::CourseTerm));
     };
     let values = filters.values();
     if !window
@@ -712,15 +1119,15 @@ fn saved_view_scope_is_applicable(
         .iter()
         .any(|term| term.term() == values.term())
     {
-        return false;
+        return Some(scope_unavailable_reason(FilterFieldId::CourseTerm));
     }
     let Ok(discovered) = storage.discovered_targets() else {
-        return false;
+        return Some(scope_unavailable_reason(FilterFieldId::CourseCampus));
     };
     let published = discovered
         .into_iter()
         .filter(|target| target.term() == values.term())
-        .filter(|target| !is_online_alias(target.campus().as_str()))
+        .filter(|target| is_product_campus(target.campus().as_str()))
         .collect::<std::collections::BTreeSet<_>>();
     let targets = if values.campuses().is_empty() {
         published.iter().cloned().collect::<Vec<_>>()
@@ -732,13 +1139,21 @@ fn saved_view_scope_is_applicable(
             .map(|campus| TermCampusKey::new(values.term().clone(), campus))
             .collect::<Vec<_>>()
     };
-    !targets.is_empty()
+    let applicable = !targets.is_empty()
         && targets.iter().all(|target| published.contains(target))
         && targets.iter().all(|target| {
             storage
                 .complete_target_snapshot_state(target)
                 .is_ok_and(|state| state.ready)
-        })
+        });
+    (!applicable).then(|| scope_unavailable_reason(FilterFieldId::CourseCampus))
+}
+
+fn scope_unavailable_reason(field: FilterFieldId) -> SavedViewReviewReason {
+    SavedViewReviewReason {
+        stable_id: field.wire_name().to_owned(),
+        code: SavedViewReviewCode::ScopeUnavailable,
+    }
 }
 
 fn saved_view_search_targets(
@@ -752,7 +1167,7 @@ fn saved_view_search_targets(
             .ok()?
             .into_iter()
             .filter(|target| target.term() == values.term())
-            .filter(|target| !is_online_alias(target.campus().as_str()))
+            .filter(|target| is_product_campus(target.campus().as_str()))
             .collect()
     } else {
         values
@@ -830,10 +1245,6 @@ where
                 LocalSurfaceFailure::bad_request(LocalApiErrorCode::MalformedRequest)
             }
         })
-}
-
-fn is_online_alias(campus: &str) -> bool {
-    matches!(campus, "ONLINE_NB" | "ONLINE_NK" | "ONLINE_CM")
 }
 
 fn encode<T>(value: &T) -> Result<Vec<u8>, LocalSurfaceFailure>
@@ -956,7 +1367,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_legacy_dynamic_option_projects_original_snapshot_as_incompatible() {
+    fn invalid_legacy_dynamic_options_project_every_reason_with_the_original_snapshot() {
         let id = trace(4);
         let revision = SavedViewRevision::try_from(3).unwrap();
         let mut input =
@@ -986,13 +1397,33 @@ mod tests {
         project_legacy_saved_view_dynamic_compatibility_with(
             &mut definitions,
             &vec![(id, revision, raw.clone())],
-            |_| true,
+            |_| {
+                vec![
+                    SavedViewReviewReason {
+                        stable_id: "FLT-C03".to_owned(),
+                        code: SavedViewReviewCode::DynamicValueUnavailable,
+                    },
+                    SavedViewReviewReason {
+                        stable_id: "FLT-S05".to_owned(),
+                        code: SavedViewReviewCode::DynamicValueUnavailable,
+                    },
+                ]
+            },
         );
         assert_eq!(
             definitions[0].content,
-            SavedViewContent::Incompatible {
+            SavedViewContent::ReviewRequired {
                 raw_snapshot: raw,
-                reason: SavedViewIncompatibility::InvalidFieldData,
+                reasons: vec![
+                    SavedViewReviewReason {
+                        stable_id: "FLT-C03".to_owned(),
+                        code: SavedViewReviewCode::DynamicValueUnavailable,
+                    },
+                    SavedViewReviewReason {
+                        stable_id: "FLT-S05".to_owned(),
+                        code: SavedViewReviewCode::DynamicValueUnavailable,
+                    },
+                ],
             }
         );
 
@@ -1004,11 +1435,232 @@ mod tests {
                 SavedViewRevision::try_from(4).unwrap(),
                 json!({"wrongRevision": true}),
             )],
-            |_| true,
+            |_| {
+                vec![SavedViewReviewReason {
+                    stable_id: "FLT-S05".to_owned(),
+                    code: SavedViewReviewCode::DynamicValueUnavailable,
+                }]
+            },
         );
         assert_eq!(
-            raced[0], definition,
-            "a raw snapshot from another revision must never be attached"
+            raced[0].content,
+            SavedViewContent::ReviewRequired {
+                raw_snapshot: JsonValue::Null,
+                reasons: vec![scope_unavailable_reason(FilterFieldId::CourseTerm)],
+            },
+            "a raw snapshot from another revision is never attached and the view fails closed"
+        );
+
+        let mut missing = vec![definition];
+        project_legacy_saved_view_dynamic_compatibility_with(&mut missing, &Vec::new(), |_| {
+            Vec::new()
+        });
+        assert_eq!(
+            missing[0].content,
+            SavedViewContent::ReviewRequired {
+                raw_snapshot: JsonValue::Null,
+                reasons: vec![scope_unavailable_reason(FilterFieldId::CourseTerm)],
+            },
+            "a missing legacy raw snapshot cannot leave a temporarily compatible view",
+        );
+    }
+
+    #[test]
+    fn exact_validation_invalid_values_become_stably_sorted_unique_field_reasons() {
+        let reasons = dynamic_value_review_reasons([
+            InvalidDynamicFilterValueV3 {
+                field: FilterFieldId::SectionInstructor,
+                value: "Removed A".to_owned(),
+            },
+            InvalidDynamicFilterValueV3 {
+                field: FilterFieldId::CourseSubject,
+                value: "999".to_owned(),
+            },
+            InvalidDynamicFilterValueV3 {
+                field: FilterFieldId::SectionInstructor,
+                value: "Removed B".to_owned(),
+            },
+            InvalidDynamicFilterValueV3 {
+                field: FilterFieldId::SectionExam,
+                value: "X".to_owned(),
+            },
+        ]);
+        assert_eq!(
+            reasons,
+            vec![
+                SavedViewReviewReason {
+                    stable_id: "FLT-C03".to_owned(),
+                    code: SavedViewReviewCode::DynamicValueUnavailable,
+                },
+                SavedViewReviewReason {
+                    stable_id: "FLT-S05".to_owned(),
+                    code: SavedViewReviewCode::DynamicValueUnavailable,
+                },
+                SavedViewReviewReason {
+                    stable_id: "FLT-S09".to_owned(),
+                    code: SavedViewReviewCode::DynamicValueUnavailable,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_scope_reasons_distinguish_term_from_campus_readiness() {
+        const RC4_FIXED_NOW_UNIX: i64 = 1_784_289_600;
+        let now = OffsetDateTime::from_unix_timestamp(RC4_FIXED_NOW_UNIX)
+            .expect("2026-07-17T12:00:00Z fixed clock");
+        let mut storage = OperationalStorage::open_in_memory().expect("storage");
+        let out_of_window = FilterRequestV1::new(
+            NormalizedFilterValuesV1::try_new(FilterValuesInputV1::for_term(
+                TermId::try_from("02025").expect("old term"),
+            ))
+            .expect("filters"),
+        );
+        assert_eq!(
+            legacy_review_reasons_at(&mut storage, Some(&out_of_window), now),
+            vec![scope_unavailable_reason(FilterFieldId::CourseTerm)],
+        );
+
+        let window = RutgersTermWindow::at(now, RutgersTermWindowScope::Local)
+            .expect("2026-07-17 bundled current window");
+        assert_eq!(window.current_term().as_str(), "72026");
+        let mut input = FilterValuesInputV1::for_term(window.current_term().clone());
+        input.campuses = vec![CampusCode::try_from("NB").expect("NB")];
+        let unavailable_target =
+            FilterRequestV1::new(NormalizedFilterValuesV1::try_new(input).expect("filters"));
+        assert_eq!(
+            legacy_review_reasons_at(&mut storage, Some(&unavailable_target), now),
+            vec![scope_unavailable_reason(FilterFieldId::CourseCampus)],
+            "a selected target that is unpublished or not READY belongs to FLT-C02",
+        );
+    }
+
+    #[test]
+    fn exact_validation_error_or_race_fails_closed_for_current_saved_and_apply_paths() {
+        let revision = SavedViewRevision::try_from(7).expect("view revision");
+        let current_revision = CurrentFiltersRevision::try_from(5).expect("current revision");
+        let mut input = FilterValuesInputV1::for_term(TermId::try_from("92026").expect("term"));
+        input.campuses = vec![CampusCode::try_from("NB").expect("NB")];
+        input.instructors = vec![FilterTokenV1::try_from("Grace Hopper").expect("instructor")];
+        let filters =
+            FilterRequestV1::new(NormalizedFilterValuesV1::try_new(input).expect("filters"));
+        let mut storage = OperationalStorage::open_in_memory().expect("storage");
+        let reasons = saved_view_invalid_dynamic_reasons_with(&mut storage, &filters, |_, _, _| {
+            Err::<Vec<InvalidDynamicFilterValueV3>, _>("CONTENT_VERSION_RACE")
+        });
+        assert_eq!(
+            reasons,
+            vec![scope_unavailable_reason(FilterFieldId::CourseCampus)],
+            "an unverified dynamic value is never labeled valid",
+        );
+        let raw = json!({"legacy": "original-and-preserved"});
+        let definition = SavedViewDefinition {
+            id: trace(8),
+            name: "Race".to_owned(),
+            schema_version: 2,
+            revision,
+            content: SavedViewContent::Compatible {
+                filters: Box::new(filters.clone()),
+            },
+            created_at: UnixMillis::try_from(1).unwrap(),
+            updated_at: UnixMillis::try_from(2).unwrap(),
+        };
+        let mut saved = vec![definition.clone()];
+        project_legacy_saved_view_dynamic_compatibility_with(
+            &mut saved,
+            &vec![(definition.id, revision, raw.clone())],
+            |_| reasons.clone(),
+        );
+        assert_eq!(
+            saved[0].content,
+            SavedViewContent::ReviewRequired {
+                raw_snapshot: raw.clone(),
+                reasons: reasons.clone(),
+            },
+            "the exact same-revision legacy JSON remains available for review",
+        );
+
+        let mut current = bcsp_local_user_state::StoredCurrentFilters {
+            state_revision: UserStateRevision::try_from(1).expect("state revision"),
+            revision: current_revision,
+            value: Some(bcsp_local_user_state::CurrentFilters {
+                association: bcsp_local_user_state::FilterAssociation::Custom,
+                content: SavedViewContent::Compatible {
+                    filters: Box::new(filters),
+                },
+            }),
+        };
+        let current_raw = (current_revision, 2, raw.clone());
+        project_legacy_current_filter_compatibility_with(&mut current, Some(&current_raw), |_| {
+            reasons.clone()
+        });
+        assert_eq!(
+            current.value.expect("current value").content,
+            SavedViewContent::ReviewRequired {
+                raw_snapshot: raw,
+                reasons: reasons.clone(),
+            },
+        );
+        assert!(
+            saved_view_apply_is_incompatible_with(&definition, Some(revision), |_| reasons),
+            "Apply independently rejects an exact validation error/race",
+        );
+    }
+
+    #[test]
+    fn missing_or_mismatched_legacy_raw_is_fail_closed_without_attaching_wrong_json() {
+        let revision = SavedViewRevision::try_from(3).expect("view revision");
+        let current_revision = CurrentFiltersRevision::try_from(4).expect("current revision");
+        let filters = FilterRequestV1::new(
+            NormalizedFilterValuesV1::try_new(FilterValuesInputV1::for_term(
+                TermId::try_from("92026").expect("term"),
+            ))
+            .expect("filters"),
+        );
+        let definition = SavedViewDefinition {
+            id: trace(9),
+            name: "Missing raw".to_owned(),
+            schema_version: 2,
+            revision,
+            content: SavedViewContent::Compatible {
+                filters: Box::new(filters.clone()),
+            },
+            created_at: UnixMillis::try_from(1).unwrap(),
+            updated_at: UnixMillis::try_from(2).unwrap(),
+        };
+        assert!(saved_view_apply_is_incompatible_with(
+            &definition,
+            None,
+            |_| Vec::new(),
+        ));
+        assert!(saved_view_apply_is_incompatible_with(
+            &definition,
+            Some(SavedViewRevision::try_from(2).expect("other revision")),
+            |_| Vec::new(),
+        ));
+        assert!(
+            !saved_view_apply_is_incompatible_with(&definition, Some(revision), |_| Vec::new()),
+            "only the exact raw revision plus successful validation may pass",
+        );
+
+        let mut current = bcsp_local_user_state::StoredCurrentFilters {
+            state_revision: UserStateRevision::try_from(1).expect("state revision"),
+            revision: current_revision,
+            value: Some(bcsp_local_user_state::CurrentFilters {
+                association: bcsp_local_user_state::FilterAssociation::Custom,
+                content: SavedViewContent::Compatible {
+                    filters: Box::new(filters),
+                },
+            }),
+        };
+        project_legacy_current_filter_compatibility_with(&mut current, None, |_| Vec::new());
+        assert_eq!(
+            current.value.expect("current value").content,
+            SavedViewContent::ReviewRequired {
+                raw_snapshot: JsonValue::Null,
+                reasons: vec![scope_unavailable_reason(FilterFieldId::CourseTerm)],
+            },
+            "missing current-filter raw cannot remain auto-applicable",
         );
     }
 }

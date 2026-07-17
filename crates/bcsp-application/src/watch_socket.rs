@@ -25,6 +25,10 @@ const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 pub trait WatchAdmissionSource: Send + Sync + 'static {
     fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission;
 
+    fn target_supported(&self, _section: &SectionKey) -> bool {
+        true
+    }
+
     fn term_in_range(&self, _section: &SectionKey) -> bool {
         true
     }
@@ -228,18 +232,23 @@ where
                             .into_iter()
                             .map(move |section| (connection_id, section))
                     })
-                    .filter(|(_, section)| !self.admission.term_in_range(section))
+                    .filter_map(|(connection_id, section)| {
+                        let reason = if !self.admission.target_supported(&section) {
+                            Some(WatchStopReason::UnsupportedTarget)
+                        } else if !self.admission.term_in_range(&section) {
+                            Some(WatchStopReason::TermOutOfRange)
+                        } else {
+                            None
+                        };
+                        reason.map(|reason| (connection_id, section, reason))
+                    })
                     .collect::<Vec<_>>();
                 let forced = candidates
                     .into_iter()
-                    .filter_map(|(connection_id, section)| {
+                    .filter_map(|(connection_id, section, reason)| {
                         state
                             .manager
-                            .stop_section_with_reason(
-                                connection_id,
-                                &section,
-                                WatchStopReason::TermOutOfRange,
-                            )
+                            .stop_section_with_reason(connection_id, &section, reason)
                             .ok()
                     })
                     .collect::<Vec<_>>();
@@ -558,6 +567,20 @@ mod tests {
         }
     }
 
+    struct MutableSupportAdmission {
+        supported: Arc<AtomicBool>,
+    }
+
+    impl WatchAdmissionSource for MutableSupportAdmission {
+        fn admission_for(&self, _section: &SectionKey) -> WatchStartAdmission {
+            WatchStartAdmission::admitted(None)
+        }
+
+        fn target_supported(&self, _section: &SectionKey) -> bool {
+            self.supported.load(Ordering::SeqCst)
+        }
+    }
+
     fn trace(value: u64) -> TraceId {
         TraceId::from_str(&format!("00000000-0000-4000-8000-{value:012x}"))
             .expect("synthetic trace ID")
@@ -808,6 +831,40 @@ mod tests {
     }
 
     #[test]
+    fn direct_start_watch_reports_an_unsupported_target() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::UnsupportedTarget),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let connection_id = trace(14);
+        let watched = section(14);
+        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(connection_id, outbound));
+
+        send(
+            &socket,
+            connection_id,
+            trace(15),
+            WatchClientCommandV1::StartWatch {
+                items: items([watched.clone()]),
+            },
+        );
+
+        let WatchServerEventV1::StartResult { result } = receive(&mut receiver).into_payload()
+        else {
+            panic!("START must produce START_RESULT");
+        };
+        assert_eq!(
+            result.items(),
+            &[WatchStartItemResultV1::Rejected {
+                section_key: watched,
+                reason: WatchStartRejectionReason::UnsupportedTarget,
+            }]
+        );
+        assert!(socket.connection_watches(connection_id).is_empty());
+    }
+
+    #[test]
     fn target_demand_deduplicates_the_same_section_across_connections() {
         let socket = socket(
             Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
@@ -1001,6 +1058,43 @@ mod tests {
         };
         assert_eq!(stopped.section_key, watched);
         assert_eq!(stopped.reason, WatchStopReason::TermOutOfRange);
+        assert!(socket.connection_watches(connection_id).is_empty());
+        assert_eq!(sink.dispatches.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn maintenance_tick_stops_an_active_watch_when_its_campus_becomes_unsupported() {
+        let supported = Arc::new(AtomicBool::new(true));
+        let sink = Arc::new(RecordingSink::default());
+        let socket = socket(
+            Arc::new(MutableSupportAdmission {
+                supported: supported.clone(),
+            }),
+            sink.clone(),
+        );
+        let connection_id = trace(45);
+        let watched = section(45);
+        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(connection_id, outbound));
+        send(
+            &socket,
+            connection_id,
+            trace(46),
+            WatchClientCommandV1::StartWatch {
+                items: items([watched.clone()]),
+            },
+        );
+        let _ = receive(&mut receiver);
+
+        supported.store(false, Ordering::SeqCst);
+        socket.tick();
+
+        let WatchServerEventV1::WatchStopped { stopped } = receive(&mut receiver).into_payload()
+        else {
+            panic!("unsupported Campus must emit WATCH_STOPPED");
+        };
+        assert_eq!(stopped.section_key, watched);
+        assert_eq!(stopped.reason, WatchStopReason::UnsupportedTarget);
         assert!(socket.connection_watches(connection_id).is_empty());
         assert_eq!(sink.dispatches.lock().unwrap().len(), 2);
     }

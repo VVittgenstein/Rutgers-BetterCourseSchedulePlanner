@@ -85,9 +85,27 @@ impl CourseTextSearchTokens {
         self.tokens.is_empty()
     }
 
-    pub(crate) fn as_slice(&self) -> &[String] {
+    pub fn as_slice(&self) -> &[String] {
         &self.tokens
     }
+}
+
+/// One immutable, version-bound source row for a prepared serving FTS index.
+///
+/// The document is exported only while constructing a serving snapshot. Product
+/// requests query the prepared index and never return this source text.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishedCourseFtsDocument {
+    pub key: CourseVariantKey,
+    pub content_version: u64,
+    pub document: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CourseFtsCorpusSignature {
+    pub row_count: u64,
+    pub document_bytes: u64,
+    pub sha256: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

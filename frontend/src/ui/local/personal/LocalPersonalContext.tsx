@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import type { FilterRequestV2, SectionKey, TraceId } from '../../shared/product';
+import type { FilterRequestV3, SectionKey, TraceId } from '../../shared/product';
 import type { LocalPersonalApiPort } from './LocalPersonalApi';
 import type {
   LocalBootstrapData,
@@ -35,6 +35,8 @@ function initialLibrary(bootstrap: LocalBootstrapData): SavedViewLibrary {
       definition,
       matchState: definition.content.status === 'INCOMPATIBLE'
         ? 'INCOMPATIBLE'
+        : definition.content.status === 'REVIEW_REQUIRED'
+          ? 'REVIEW_REQUIRED'
         : currentFilters.value?.association.kind === 'APPLIED'
           && currentFilters.value.association.viewId === definition.id
           ? currentFilters.value.association.revision === definition.revision ? 'CLEAN' : 'MODIFIED'
@@ -60,11 +62,11 @@ export interface LocalPersonalContextValue {
   readonly reload: () => Promise<void>;
   readonly updateSettings: (settings: LocalSettings) => Promise<void>;
   readonly replaceSelection: (sections: readonly SectionKey[]) => Promise<void>;
-  readonly replaceCurrentFilters: (filters: FilterRequestV2) => Promise<void>;
+  readonly replaceCurrentFilters: (filters: FilterRequestV3) => Promise<void>;
   readonly createSavedView: (name: string) => Promise<void>;
   readonly applySavedView: (id: TraceId) => Promise<void>;
   readonly renameSavedView: (id: TraceId, name: string) => Promise<void>;
-  readonly updateSavedView: (id: TraceId, filters: FilterRequestV2) => Promise<void>;
+  readonly updateSavedView: (id: TraceId, filters: FilterRequestV3) => Promise<void>;
   readonly duplicateSavedView: (id: TraceId, name: string) => Promise<void>;
   readonly deleteSavedView: (id: TraceId) => Promise<void>;
   readonly deleteAllSavedViews: () => Promise<void>;

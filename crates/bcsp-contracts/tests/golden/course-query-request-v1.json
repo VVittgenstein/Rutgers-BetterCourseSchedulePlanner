@@ -1,6 +1,6 @@
 {
   "filters": {
-    "contractVersion": 2,
+    "contractVersion": 3,
     "values": {
       "term": "T2026F",
       "campuses": [
@@ -13,8 +13,8 @@
         "data",
         "structures"
       ],
-      "courseNumbers": [
-        "01"
+      "courseNumberBands": [
+        0
       ],
       "levels": [
         "UG"
@@ -61,7 +61,12 @@
       "examCodes": [
         "A"
       ],
-      "permission": "REQUIRED"
+      "permission": "REQUIRED",
+      "includeIncomplete": {
+        "prerequisite": false,
+        "modality": false,
+        "synchronicity": false
+      }
     }
   },
   "page": {

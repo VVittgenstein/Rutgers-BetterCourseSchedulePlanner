@@ -6,12 +6,12 @@ use thiserror::Error;
 use time::OffsetDateTime;
 
 use crate::{
-    CatalogContentVersion, CatalogSubjectCode, CatalogSynchronicity, CourseGroupKey,
-    MatchExplanation, NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedOccurrenceV1,
+    CatalogContentVersion, CatalogSubjectCode, CourseGroupKey, MatchExplanation,
+    NormalizedCourseGroupV1, NormalizedCourseVariantV1, NormalizedOccurrenceV1,
     NormalizedSectionV1, SectionIndex, SectionKey, TermId,
 };
 
-pub const QUERY_CONTRACT_VERSION: QueryContractVersion = QueryContractVersion::V2;
+pub const QUERY_CONTRACT_VERSION: QueryContractVersion = QueryContractVersion::V3;
 pub const FILTER_FIELD_COUNT: usize = 18;
 pub const DEFAULT_PAGE_SIZE: u16 = 25;
 pub const MAX_PAGE_SIZE: u16 = 200;
@@ -25,6 +25,7 @@ pub const MAX_FILTER_OPTIONS_LIMIT: u16 = 100;
 pub enum QueryContractVersion {
     V1,
     V2,
+    V3,
 }
 
 impl QueryContractVersion {
@@ -32,6 +33,7 @@ impl QueryContractVersion {
         match self {
             Self::V1 => 1,
             Self::V2 => 2,
+            Self::V3 => 3,
         }
     }
 }
@@ -55,6 +57,7 @@ impl TryFrom<u16> for QueryContractVersion {
         match value {
             1 => Ok(Self::V1),
             2 => Ok(Self::V2),
+            3 => Ok(Self::V3),
             observed => Err(QueryContractVersionError { observed }),
         }
     }
@@ -91,7 +94,7 @@ pub enum FilterFieldId {
     #[serde(rename = "FLT-C04")]
     CourseText,
     #[serde(rename = "FLT-C05")]
-    CourseNumber,
+    CourseNumberBand,
     #[serde(rename = "FLT-C06")]
     CourseLevel,
     #[serde(rename = "FLT-C07")]
@@ -128,7 +131,7 @@ impl FilterFieldId {
         Self::CourseCampus,
         Self::CourseSubject,
         Self::CourseText,
-        Self::CourseNumber,
+        Self::CourseNumberBand,
         Self::CourseLevel,
         Self::CourseCredits,
         Self::CourseCoreCode,
@@ -150,7 +153,7 @@ impl FilterFieldId {
             Self::CourseCampus => "FLT-C02",
             Self::CourseSubject => "FLT-C03",
             Self::CourseText => "FLT-C04",
-            Self::CourseNumber => "FLT-C05",
+            Self::CourseNumberBand => "FLT-C05",
             Self::CourseLevel => "FLT-C06",
             Self::CourseCredits => "FLT-C07",
             Self::CourseCoreCode => "FLT-C08",
@@ -173,7 +176,7 @@ impl FilterFieldId {
             | Self::CourseCampus
             | Self::CourseSubject
             | Self::CourseText
-            | Self::CourseNumber
+            | Self::CourseNumberBand
             | Self::CourseLevel
             | Self::CourseCredits
             | Self::CourseCoreCode
@@ -203,7 +206,7 @@ pub enum FilterValueKindV1 {
     CampusCodeSet,
     SubjectCodeSet,
     KeywordSet,
-    CourseNumberSet,
+    CourseNumberBand,
     LevelSet,
     CreditRange,
     CoreCodeSet,
@@ -285,6 +288,7 @@ pub enum FilterValidationV1 {
     Max32TextTokens,
     Max128TokenBytes,
     TokenContainsAlphanumeric,
+    NonnegativeHundredBand,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -408,14 +412,14 @@ fn filter_field_schema(id: FilterFieldId, chip_order: u8) -> FilterFieldSchemaV1
             ],
             Q::KeywordTokenAndExactIdentifierPriority,
         ),
-        Id::CourseNumber => (
-            "courseNumbers",
-            K::CourseNumberSet,
+        Id::CourseNumberBand => (
+            "courseNumberBands",
+            K::CourseNumberBand,
             D::EmptySet,
             D::EmptySet,
             canonical_json(serde_json::json!([])),
-            vec![N::Trim, N::AsciiUppercase, N::SortDeduplicate],
-            vec![V::NonemptyWhenActive],
+            vec![N::SortDeduplicate],
+            vec![V::NonnegativeHundredBand],
             Q::ExactAny,
         ),
         Id::CourseLevel => (
@@ -826,14 +830,35 @@ pub enum LiveOpenStateV1 {
     Unknown,
 }
 
+/// Ordinary product-facing modality values accepted by Query V3.
+///
+/// Catalog `OTHER`, `UNKNOWN`, and `UNKNOWN_CONFLICT` remain available in raw
+/// detail data, but are deliberately not selectable filter values.  When the
+/// field is active they evaluate as uncertain and are admitted only through
+/// [`IncludeIncompleteV3::modality`].
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ModalityFilterV1 {
+pub enum UserModalityV3 {
     OnCampusOrInPerson,
     Online,
     Hybrid,
-    Other,
-    Unknown,
+}
+
+/// Ordinary product-facing synchronicity values accepted by Query V3.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum UserSynchronicityV3 {
+    Sync,
+    Async,
+    Mixed,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IncludeIncompleteV3 {
+    pub prerequisite: bool,
+    pub modality: bool,
+    pub synchronicity: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -870,6 +895,10 @@ pub enum FilterValueError {
     TooManyFieldValues,
     #[error("the normalized filter request exceeds its total value-count limit")]
     TooManyTotalValues,
+    #[error(
+        "course-number bands must be nonnegative multiples of 100 with an inclusive upper bound"
+    )]
+    InvalidCourseNumberBand,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1011,6 +1040,20 @@ fn canonicalize<T: Ord>(values: &mut Vec<T>) {
     values.dedup();
 }
 
+/// Returns the canonical hundred-level band for an ASCII-decimal Catalog
+/// course number. Non-decimal, empty, or out-of-range source values are not
+/// fabricated into a band.
+pub fn course_number_band(value: &str) -> Option<u32> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value
+        .parse::<u32>()
+        .ok()
+        .map(|number| number / 100 * 100)
+        .filter(|band| *band <= u32::MAX - 99)
+}
+
 fn uppercase_tokens(values: &mut [FilterTokenV1]) {
     values
         .iter_mut()
@@ -1028,20 +1071,21 @@ pub struct FilterValuesInputV1 {
     pub subjects: Vec<CatalogSubjectCode>,
     #[serde(rename = "keywords", with = "optional_keywords")]
     pub text: Option<FilterSearchTextV1>,
-    pub course_numbers: Vec<FilterTokenV1>,
+    pub course_number_bands: Vec<u32>,
     pub levels: Vec<FilterTokenV1>,
     pub credits: Option<CreditRangeV1>,
     pub core: CoreFilterV1,
     pub prerequisite: PrerequisiteFilterV1,
     pub section_indexes: Vec<SectionIndex>,
     pub open_statuses: Vec<LiveOpenStateV1>,
-    pub modalities: Vec<ModalityFilterV1>,
-    pub synchronicities: Vec<CatalogSynchronicity>,
+    pub modalities: Vec<UserModalityV3>,
+    pub synchronicities: Vec<UserSynchronicityV3>,
     pub instructors: Vec<FilterTokenV1>,
     pub availability: Vec<AvailabilityWindowV1>,
     pub meeting_locations: MeetingLocationFilterV2,
     pub exam_codes: Vec<FilterTokenV1>,
     pub permission: PermissionFilterV1,
+    pub include_incomplete: IncludeIncompleteV3,
 }
 
 impl FilterValuesInputV1 {
@@ -1051,7 +1095,7 @@ impl FilterValuesInputV1 {
             campuses: Vec::new(),
             subjects: Vec::new(),
             text: None,
-            course_numbers: Vec::new(),
+            course_number_bands: Vec::new(),
             levels: Vec::new(),
             credits: None,
             core: CoreFilterV1::default(),
@@ -1065,6 +1109,7 @@ impl FilterValuesInputV1 {
             meeting_locations: MeetingLocationFilterV2::default(),
             exam_codes: Vec::new(),
             permission: PermissionFilterV1::Any,
+            include_incomplete: IncludeIncompleteV3::default(),
         }
     }
 }
@@ -1077,20 +1122,21 @@ pub struct NormalizedFilterValuesV1 {
     subjects: Vec<CatalogSubjectCode>,
     #[serde(rename = "keywords", with = "optional_keywords")]
     text: Option<FilterSearchTextV1>,
-    course_numbers: Vec<FilterTokenV1>,
+    course_number_bands: Vec<u32>,
     levels: Vec<FilterTokenV1>,
     credits: Option<CreditRangeV1>,
     core: CoreFilterV1,
     prerequisite: PrerequisiteFilterV1,
     section_indexes: Vec<SectionIndex>,
     open_statuses: Vec<LiveOpenStateV1>,
-    modalities: Vec<ModalityFilterV1>,
-    synchronicities: Vec<CatalogSynchronicity>,
+    modalities: Vec<UserModalityV3>,
+    synchronicities: Vec<UserSynchronicityV3>,
     instructors: Vec<FilterTokenV1>,
     availability: Vec<AvailabilityWindowV1>,
     meeting_locations: MeetingLocationFilterV2,
     exam_codes: Vec<FilterTokenV1>,
     permission: PermissionFilterV1,
+    include_incomplete: IncludeIncompleteV3,
 }
 
 impl NormalizedFilterValuesV1 {
@@ -1100,7 +1146,6 @@ impl NormalizedFilterValuesV1 {
     }
 
     pub fn try_new(mut input: FilterValuesInputV1) -> Result<Self, FilterValueError> {
-        uppercase_tokens(&mut input.course_numbers);
         uppercase_tokens(&mut input.levels);
         uppercase_tokens(&mut input.core.codes);
         uppercase_tokens(&mut input.meeting_locations.locations);
@@ -1112,14 +1157,13 @@ impl NormalizedFilterValuesV1 {
 
         canonicalize(&mut input.campuses);
         canonicalize(&mut input.subjects);
-        canonicalize(&mut input.course_numbers);
+        canonicalize(&mut input.course_number_bands);
         canonicalize(&mut input.levels);
         canonicalize(&mut input.core.codes);
         canonicalize(&mut input.section_indexes);
         canonicalize(&mut input.open_statuses);
         canonicalize(&mut input.modalities);
-        input.synchronicities.sort_by_key(|value| value.wire_name());
-        input.synchronicities.dedup();
+        canonicalize(&mut input.synchronicities);
         canonicalize(&mut input.instructors);
         canonicalize(&mut input.availability);
         canonicalize(&mut input.meeting_locations.locations);
@@ -1128,7 +1172,7 @@ impl NormalizedFilterValuesV1 {
         let ordinary_lengths = [
             input.campuses.len(),
             input.subjects.len(),
-            input.course_numbers.len(),
+            input.course_number_bands.len(),
             input.levels.len(),
             input.core.codes.len(),
             input.section_indexes.len(),
@@ -1146,6 +1190,13 @@ impl NormalizedFilterValuesV1 {
         {
             return Err(FilterValueError::TooManyFieldValues);
         }
+        if input
+            .course_number_bands
+            .iter()
+            .any(|band| band % 100 != 0 || *band > u32::MAX - 99)
+        {
+            return Err(FilterValueError::InvalidCourseNumberBand);
+        }
         let total = ordinary_lengths.iter().sum::<usize>() + input.availability.len();
         if total > MAX_TOTAL_FILTER_VALUES {
             return Err(FilterValueError::TooManyTotalValues);
@@ -1156,7 +1207,7 @@ impl NormalizedFilterValuesV1 {
             campuses: input.campuses,
             subjects: input.subjects,
             text: input.text,
-            course_numbers: input.course_numbers,
+            course_number_bands: input.course_number_bands,
             levels: input.levels,
             credits: input.credits,
             core: input.core,
@@ -1170,6 +1221,7 @@ impl NormalizedFilterValuesV1 {
             meeting_locations: input.meeting_locations,
             exam_codes: input.exam_codes,
             permission: input.permission,
+            include_incomplete: input.include_incomplete,
         })
     }
 
@@ -1188,8 +1240,8 @@ impl NormalizedFilterValuesV1 {
     pub const fn keywords(&self) -> Option<&FilterSearchTextV1> {
         self.text.as_ref()
     }
-    pub fn course_numbers(&self) -> &[FilterTokenV1] {
-        &self.course_numbers
+    pub fn course_number_bands(&self) -> &[u32] {
+        &self.course_number_bands
     }
     pub fn levels(&self) -> &[FilterTokenV1] {
         &self.levels
@@ -1209,10 +1261,10 @@ impl NormalizedFilterValuesV1 {
     pub fn open_statuses(&self) -> &[LiveOpenStateV1] {
         &self.open_statuses
     }
-    pub fn modalities(&self) -> &[ModalityFilterV1] {
+    pub fn modalities(&self) -> &[UserModalityV3] {
         &self.modalities
     }
-    pub fn synchronicities(&self) -> &[CatalogSynchronicity] {
+    pub fn synchronicities(&self) -> &[UserSynchronicityV3] {
         &self.synchronicities
     }
     pub fn instructors(&self) -> &[FilterTokenV1] {
@@ -1229,6 +1281,9 @@ impl NormalizedFilterValuesV1 {
     }
     pub const fn permission(&self) -> PermissionFilterV1 {
         self.permission
+    }
+    pub const fn include_incomplete(&self) -> IncludeIncompleteV3 {
+        self.include_incomplete
     }
 }
 
@@ -1389,6 +1444,7 @@ pub struct SectionQueryRequestV1 {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FilterOptionsFieldV2 {
     Keyword,
+    CourseNumberBand,
     CourseLevel,
     Instructor,
     MeetingLocation,
@@ -1397,7 +1453,7 @@ pub enum FilterOptionsFieldV2 {
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum FilterOptionsRequestError {
-    #[error("filter options require query contract version 2")]
+    #[error("filter options require query contract version 3")]
     UnsupportedContractVersion,
     #[error("filter options require at least one campus")]
     EmptyCampusSet,
@@ -1420,7 +1476,7 @@ pub struct FilterOptionsRequestV2 {
 
 impl FilterOptionsRequestV2 {
     pub fn validate(&mut self) -> Result<(), FilterOptionsRequestError> {
-        if self.contract_version != QueryContractVersion::V2 {
+        if self.contract_version != QueryContractVersion::V3 {
             return Err(FilterOptionsRequestError::UnsupportedContractVersion);
         }
         canonicalize(&mut self.campuses);
@@ -1486,6 +1542,39 @@ pub struct FilterOptionsResponseV2 {
     pub target_versions: Vec<FilterOptionTargetVersionV2>,
     pub options: Vec<FilterOptionV2>,
     pub truncated: bool,
+}
+
+/// Exact, non-search validation of every target-bound dynamic filter value.
+///
+/// This is intentionally a separate product contract from filter-option
+/// discovery: validation must not depend on a typeahead query, result limit,
+/// or option ordering.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DynamicFilterValidationRequestV3 {
+    pub filters: FilterRequestV1,
+}
+
+impl DynamicFilterValidationRequestV3 {
+    pub const fn new(filters: FilterRequestV1) -> Self {
+        Self { filters }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvalidDynamicFilterValueV3 {
+    /// Stable filter identity (for example `FLT-C03` or `FLT-S07`).
+    pub field: FilterFieldId,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicFilterValidationResponseV3 {
+    pub contract_version: QueryContractVersion,
+    pub target_versions: Vec<FilterOptionTargetVersionV2>,
+    pub invalid_values: Vec<InvalidDynamicFilterValueV3>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1641,6 +1730,23 @@ pub type CourseQueryResponseV2 = CourseQueryResponseV1;
 pub type SectionQueryRequestV2 = SectionQueryRequestV1;
 pub type SectionQueryResponseV2 = SectionQueryResponseV1;
 
+// V3 changes the strict request values while preserving the established Rust
+// DTO names and additive result shape. These aliases make the active contract
+// explicit at call sites without creating parallel evaluation models.
+pub type FilterSchemaV3 = FilterSchemaV1;
+pub type FilterFieldSchemaV3 = FilterFieldSchemaV1;
+pub type FilterRequestV3 = FilterRequestV1;
+pub type FilterValuesInputV3 = FilterValuesInputV1;
+pub type NormalizedFilterValuesV3 = NormalizedFilterValuesV1;
+pub type CourseQueryRequestV3 = CourseQueryRequestV1;
+pub type CourseQueryResponseV3 = CourseQueryResponseV1;
+pub type SectionQueryRequestV3 = SectionQueryRequestV1;
+pub type SectionQueryResponseV3 = SectionQueryResponseV1;
+
 pub fn filter_schema_v2() -> FilterSchemaV2 {
+    filter_schema_v1()
+}
+
+pub fn filter_schema_v3() -> FilterSchemaV3 {
     filter_schema_v1()
 }

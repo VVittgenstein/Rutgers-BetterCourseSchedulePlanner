@@ -91,11 +91,12 @@ export type ServiceSnapshotAvailabilityV2 =
   | 'NO_COMPLETE_SNAPSHOT'
   | 'READY';
 export type ServiceWorkStateV2 = 'IDLE' | 'QUEUED' | 'RUNNING' | 'RETRY_WAIT';
+export type ServiceTermPublicationV2 = 'PUBLISHED' | 'UNPUBLISHED' | 'UNKNOWN';
 
 export interface ServiceVisibleTermV2 {
   readonly term: string;
   readonly relativeOffset: ServiceTermRelativeOffsetV2;
-  readonly discovered: boolean;
+  readonly publication: ServiceTermPublicationV2;
   readonly autoManaged: boolean;
   readonly manualPullAllowed: boolean;
   readonly watchable: boolean;

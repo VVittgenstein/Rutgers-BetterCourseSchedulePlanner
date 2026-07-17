@@ -111,7 +111,12 @@
     {
       "id": "query-contract-version",
       "wireType": "u16",
-      "semantic": "only integer 1 is accepted"
+      "semantic": "integers 1 through 3 are recognized; active product requests require 3"
+    },
+    {
+      "id": "course-number-band",
+      "wireType": "u32",
+      "semantic": "nonnegative multiple of 100 whose inclusive upper bound N+99 is representable"
     },
     {
       "id": "open-contract-version",
@@ -2627,7 +2632,7 @@
         "CAMPUS_CODE_SET",
         "SUBJECT_CODE_SET",
         "KEYWORD_SET",
-        "COURSE_NUMBER_SET",
+        "COURSE_NUMBER_BAND",
         "LEVEL_SET",
         "CREDIT_RANGE",
         "CORE_CODE_SET",
@@ -2688,7 +2693,8 @@
         "STRUCTURED_ONLY",
         "MAX32_TEXT_TOKENS",
         "MAX128_TOKEN_BYTES",
-        "TOKEN_CONTAINS_ALPHANUMERIC"
+        "TOKEN_CONTAINS_ALPHANUMERIC",
+        "NONNEGATIVE_HUNDRED_BAND"
       ]
     },
     {
@@ -2848,16 +2854,47 @@
       ]
     },
     {
-      "id": "bcsp.query.modality-filter.v1",
+      "id": "bcsp.query.user-modality.v3",
       "direction": "BIDIRECTIONAL",
       "unknownFields": "REJECT",
       "fields": [],
       "enumValues": [
         "ON_CAMPUS_OR_IN_PERSON",
         "ONLINE",
-        "HYBRID",
-        "OTHER",
-        "UNKNOWN"
+        "HYBRID"
+      ]
+    },
+    {
+      "id": "bcsp.query.user-synchronicity.v3",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "SYNC",
+        "ASYNC",
+        "MIXED"
+      ]
+    },
+    {
+      "id": "bcsp.query.include-incomplete.v3",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "prerequisite",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "modality",
+          "typeRef": "$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "synchronicity",
+          "typeRef": "$primitive:bool",
+          "required": true
+        }
       ]
     },
     {
@@ -2995,8 +3032,8 @@
           "required": true
         },
         {
-          "name": "courseNumbers",
-          "typeRef": "$array:$scalar:filter-token",
+          "name": "courseNumberBands",
+          "typeRef": "$array:$scalar:course-number-band",
           "required": true
         },
         {
@@ -3031,12 +3068,12 @@
         },
         {
           "name": "modalities",
-          "typeRef": "$array:$schema:bcsp.query.modality-filter.v1",
+          "typeRef": "$array:$schema:bcsp.query.user-modality.v3",
           "required": true
         },
         {
           "name": "synchronicities",
-          "typeRef": "$array:$schema:bcsp.catalog.synchronicity.v1",
+          "typeRef": "$array:$schema:bcsp.query.user-synchronicity.v3",
           "required": true
         },
         {
@@ -3062,6 +3099,11 @@
         {
           "name": "permission",
           "typeRef": "$schema:bcsp.query.permission-filter.v1",
+          "required": true
+        },
+        {
+          "name": "includeIncomplete",
+          "typeRef": "$schema:bcsp.query.include-incomplete.v3",
           "required": true
         }
       ]
@@ -3218,6 +3260,7 @@
       "fields": [],
       "enumValues": [
         "KEYWORD",
+        "COURSE_NUMBER_BAND",
         "COURSE_LEVEL",
         "INSTRUCTOR",
         "MEETING_LOCATION",
@@ -3323,6 +3366,57 @@
         {
           "name": "truncated",
           "typeRef": "$primitive:bool",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.dynamic-filter-validation-request.v3",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "filters",
+          "typeRef": "$schema:bcsp.query.filter-request.v1",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.invalid-dynamic-filter-value.v3",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "field",
+          "typeRef": "$schema:bcsp.query.filter-field-id.v1",
+          "required": true
+        },
+        {
+          "name": "value",
+          "typeRef": "$primitive:string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.query.dynamic-filter-validation-response.v3",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "contractVersion",
+          "typeRef": "$scalar:query-contract-version",
+          "required": true
+        },
+        {
+          "name": "targetVersions",
+          "typeRef": "$array:$schema:bcsp.query.filter-option-target-version.v2",
+          "required": true
+        },
+        {
+          "name": "invalidValues",
+          "typeRef": "$array:$schema:bcsp.query.invalid-dynamic-filter-value.v3",
           "required": true
         }
       ]
@@ -3935,6 +4029,7 @@
         "ALREADY_ACTIVE",
         "SECTION_NOT_FOUND",
         "TARGET_UNAVAILABLE",
+        "UNSUPPORTED_TARGET",
         "TERM_OUT_OF_RANGE",
         "CONNECTION_CLOSING"
       ]
@@ -4015,6 +4110,7 @@
         "CONNECTION_CLOSED",
         "HEARTBEAT_TIMEOUT",
         "SERVICE_STOPPING",
+        "UNSUPPORTED_TARGET",
         "TERM_OUT_OF_RANGE"
       ]
     },
@@ -4875,6 +4971,17 @@
       ]
     },
     {
+      "id": "bcsp.service.term-publication.v2",
+      "direction": "BIDIRECTIONAL",
+      "unknownFields": "REJECT",
+      "fields": [],
+      "enumValues": [
+        "PUBLISHED",
+        "UNPUBLISHED",
+        "UNKNOWN"
+      ]
+    },
+    {
       "id": "bcsp.service.visible-term.v2",
       "direction": "SERVER_TO_CLIENT",
       "unknownFields": "IGNORE",
@@ -4890,8 +4997,8 @@
           "required": true
         },
         {
-          "name": "discovered",
-          "typeRef": "$primitive:bool",
+          "name": "publication",
+          "typeRef": "$schema:bcsp.service.term-publication.v2",
           "required": true
         },
         {

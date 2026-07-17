@@ -31,6 +31,7 @@ pub(crate) enum CoreStartAdmission {
     },
     SectionNotFound,
     TargetUnavailable,
+    UnsupportedTarget,
     TermOutOfRange,
 }
 
@@ -222,6 +223,14 @@ where
                     }));
                     continue;
                 }
+                CoreStartAdmission::UnsupportedTarget => {
+                    events.push(CoreEvent::StartResult(CoreStartResult {
+                        section,
+                        disposition: CoreStartDisposition::RejectedUnsupportedTarget,
+                        watch_id: None,
+                    }));
+                    continue;
+                }
                 CoreStartAdmission::TermOutOfRange => {
                     events.push(CoreEvent::StartResult(CoreStartResult {
                         section,
@@ -286,6 +295,7 @@ where
                     | CoreStartDisposition::RejectedDuplicate
                     | CoreStartDisposition::RejectedSectionNotFound
                     | CoreStartDisposition::RejectedTargetUnavailable
+                    | CoreStartDisposition::RejectedUnsupportedTarget
                     | CoreStartDisposition::RejectedTermOutOfRange => unreachable!(),
                 },
                 Some(section.clone()),
