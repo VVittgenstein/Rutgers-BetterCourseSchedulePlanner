@@ -177,12 +177,8 @@ afterEach(() => {
 });
 
 describe('search focus continuity', () => {
-  it('restores only the session page scroll after the Course workspace remounts', async () => {
-    let pageScroll = 176;
-    vi.spyOn(globalThis, 'scrollY', 'get').mockImplementation(() => pageScroll);
-    const scrollTo = vi.spyOn(globalThis, 'scrollTo').mockImplementation((options) => {
-      if (typeof options === 'object' && options !== null) pageScroll = options.top ?? 0;
-    });
+  it('restores the independently scrolling filter rail after the Course workspace remounts', async () => {
+    const scrollTo = vi.spyOn(globalThis, 'scrollTo').mockImplementation(() => undefined);
     const runtime = runtimeWith({});
 
     function RemountHarness() {
@@ -209,23 +205,21 @@ describe('search focus continuity', () => {
       </BcspI18nProvider>,
     );
 
-    const firstInternalList = document.querySelector<HTMLElement>('.filter-panel__subject-list');
-    expect(firstInternalList).not.toBeNull();
-    if (firstInternalList === null) throw new Error('Expected the subject option list.');
-    firstInternalList.scrollTop = 731;
+    const firstFilterRail = document.querySelector<HTMLElement>('.bcsp-search-workspace__filters');
+    expect(firstFilterRail).not.toBeNull();
+    if (firstFilterRail === null) throw new Error('Expected the filter rail.');
+    firstFilterRail.scrollTop = 731;
+    fireEvent.scroll(firstFilterRail);
 
     fireEvent.click(screen.getByRole('button', { name: 'Leave Courses' }));
     expect(screen.getByText('Another workspace')).toBeTruthy();
-    pageScroll = 0;
     scrollTo.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Return to Courses' }));
 
-    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({
-      behavior: 'auto', left: 0, top: 176,
-    }));
-    const restoredInternalList = document.querySelector<HTMLElement>('.filter-panel__subject-list');
-    expect(restoredInternalList).not.toBe(firstInternalList);
-    expect(restoredInternalList?.scrollTop).toBe(0);
+    const restoredFilterRail = document.querySelector<HTMLElement>('.bcsp-search-workspace__filters');
+    expect(restoredFilterRail).not.toBe(firstFilterRail);
+    await waitFor(() => expect(restoredFilterRail?.scrollTop).toBe(731));
+    expect(scrollTo).not.toHaveBeenCalled();
   });
 
   it('moves through search, pagination, detail, and back without losing the output context', async () => {

@@ -12,7 +12,7 @@ const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
     ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
     : undefined);
 const outputDirectory = resolve(process.cwd(), process.env.BCSP_EVIDENCE_DIR
-  ?? '../project-governance/current/rc-iteration/evidence/round-04/stage-1/composition');
+  ?? '../project-governance/current/rc-iteration/evidence/round-05/stage-1/composition');
 const evidenceStage = process.env.BCSP_EVIDENCE_STAGE ?? 'Stage1';
 const installedApiDocuments = new WeakMap();
 const [filterSchema, axeSource] = await Promise.all([
@@ -419,17 +419,25 @@ async function assertQueryScope(page, scenario) {
   }
   const scopeGeometry = await page.locator('.bcsp-search-workspace').evaluate((workspace) => {
     const scopeElement = workspace.querySelector('.bcsp-search-workspace__scope');
-    if (!(scopeElement instanceof HTMLElement)) return null;
+    const filtersElement = workspace.querySelector('.bcsp-search-workspace__filters');
+    if (!(scopeElement instanceof HTMLElement) || !(filtersElement instanceof HTMLElement)) return null;
     const workspaceBox = workspace.getBoundingClientRect();
     const scopeBox = scopeElement.getBoundingClientRect();
-    return { scopeWidth: scopeBox.width, workspaceWidth: workspaceBox.width };
+    return {
+      insideFilters: filtersElement.contains(scopeElement),
+      scopeWidth: scopeBox.width,
+      workspaceWidth: workspaceBox.width,
+    };
   });
-  if (scopeGeometry === null || scopeGeometry.scopeWidth < scopeGeometry.workspaceWidth - 2) {
-    throw new Error(`${scenario.name}: QueryScope is not the full-width workspace matrix ${JSON.stringify(scopeGeometry)}`);
+  if (scopeGeometry === null || !scopeGeometry.insideFilters) {
+    throw new Error(`${scenario.name}: QueryScope is not a child of the filter rail ${JSON.stringify(scopeGeometry)}`);
   }
-  if (await page.locator('.bcsp-state-panel').count() !== 0
-    || await page.getByText(/Build a precise search|建立精确搜索/u).count() !== 0) {
-    throw new Error(`${scenario.name}: the removed initial Search hero is still visible`);
+  if (scenario.viewport.width >= 768
+    && scopeGeometry.scopeWidth >= scopeGeometry.workspaceWidth - 2) {
+    throw new Error(`${scenario.name}: QueryScope incorrectly spans the desktop workspace ${JSON.stringify(scopeGeometry)}`);
+  }
+  if (await page.locator('.bcsp-search-workspace__results .bcsp-state-panel').count() !== 1) {
+    throw new Error(`${scenario.name}: the RC3 idle StatePanel is not visible in the right workspace`);
   }
   if (await scope.locator('[data-scope-cell="search"] button[type="submit"]').count() !== 1
     || await page.getByRole('button', { name: /Search|搜索/u, exact: true }).count() !== 1) {
@@ -451,13 +459,94 @@ async function assertQueryScope(page, scenario) {
     return {
       clientHeight: element.clientHeight,
       overflowY: style.overflowY,
+      scrollbarColor: style.scrollbarColor,
+      scrollbarWidth: style.scrollbarWidth,
       scrollHeight: element.scrollHeight,
+      tabIndex: element.tabIndex,
     };
   });
-  if (/auto|scroll/u.test(filterScroll.overflowY)
-    || filterScroll.scrollHeight > filterScroll.clientHeight + 1) {
-    throw new Error(`${scenario.name}: filter rail remains an internal vertical scroller ${JSON.stringify(filterScroll)}`);
+  if (scenario.viewport.width >= 768) {
+    if (!/auto|scroll/u.test(filterScroll.overflowY)
+      || filterScroll.scrollHeight <= filterScroll.clientHeight + 1
+      || filterScroll.tabIndex !== 0
+      || filterScroll.scrollbarWidth !== 'thin'
+      || filterScroll.scrollbarColor === 'auto') {
+      throw new Error(`${scenario.name}: filter rail lost styled accessible scrolling ${JSON.stringify(filterScroll)}`);
+    }
+  } else if (/hidden|clip/u.test(filterScroll.overflowY)) {
+    throw new Error(`${scenario.name}: narrow filter rail clips content ${JSON.stringify(filterScroll)}`);
   }
+  if (scenario.locale === 'en-US' && scenario.viewport.width === 1440) {
+    await assertFilterRailInputs(page, scenario.name);
+  }
+}
+
+async function assertFilterRailInputs(page, name) {
+  const rail = page.locator('.bcsp-search-workspace__filters');
+  const metrics = await rail.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    touchAction: getComputedStyle(element).touchAction,
+  }));
+  if (metrics.touchAction !== 'pan-y' || metrics.scrollHeight <= metrics.clientHeight) {
+    throw new Error(`${name}: filter rail touch contract failed ${JSON.stringify(metrics)}`);
+  }
+
+  await rail.focus();
+  await rail.press('End');
+  await page.waitForTimeout(50);
+  const endScroll = await rail.evaluate((element) => element.scrollTop);
+  if (endScroll < metrics.scrollHeight - metrics.clientHeight - 2) {
+    throw new Error(`${name}: End did not reach the filter rail end (${endScroll})`);
+  }
+  await rail.press('Home');
+  await page.waitForTimeout(50);
+  if (await rail.evaluate((element) => element.scrollTop) > 1) {
+    throw new Error(`${name}: Home did not return to the filter rail start`);
+  }
+  await rail.press('PageDown');
+  await page.waitForTimeout(50);
+  if (await rail.evaluate((element) => element.scrollTop) <= 0) {
+    throw new Error(`${name}: PageDown did not move the filter rail`);
+  }
+  await rail.press('PageUp');
+  await page.waitForTimeout(50);
+  if (await rail.evaluate((element) => element.scrollTop) > 1) {
+    throw new Error(`${name}: PageUp did not return the filter rail to its start`);
+  }
+
+  await rail.hover();
+  await page.mouse.wheel(0, 420);
+  await page.waitForTimeout(50);
+  if (await rail.evaluate((element) => element.scrollTop) <= 0) {
+    throw new Error(`${name}: mouse wheel did not move the filter rail`);
+  }
+
+  await rail.evaluate((element) => { element.scrollTop = 0; });
+  const box = await rail.boundingBox();
+  const viewport = page.viewportSize();
+  if (box === null || viewport === null) throw new Error(`${name}: filter rail touch geometry unavailable`);
+  const cdp = await page.context().newCDPSession(page);
+  const x = box.x + 8;
+  const startY = Math.min(box.y + box.height - 16, viewport.height - 16);
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart', touchPoints: [{ x, y: startY }], modifiers: 0,
+  });
+  for (let step = 1; step <= 5; step += 1) {
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove', touchPoints: [{ x, y: startY - step * 35 }], modifiers: 0,
+    });
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [], modifiers: 0 });
+  await cdp.detach();
+  await page.waitForTimeout(100);
+  if (await rail.evaluate((element) => element.scrollTop) <= 0) {
+    throw new Error(`${name}: touch pan did not move the filter rail`);
+  }
+  await rail.evaluate((element) => {
+    element.scrollTop = 0;
+    element.blur();
+  });
 }
 
 async function captureQueryScope(page, path) {
@@ -650,6 +739,13 @@ async function exerciseLocal(page, scenario) {
   await page.locator('.bcsp-search-workspace').waitFor();
   await assertQueryScope(page, scenario);
   await captureQueryScope(page, resolve(outputDirectory, `${scenario.name}-query-scope.png`));
+  if (scenario.viewport.width === 1440) {
+    await page.screenshot({
+      animations: 'disabled',
+      fullPage: false,
+      path: resolve(outputDirectory, `${scenario.name}-search-idle.png`),
+    });
+  }
   if (scenario.viewport.width === 1440) await captureFigureOneStates(page, scenario);
 
   await page.locator('.bcsp-navigation a[href="/saved-views"]').click();
@@ -685,6 +781,13 @@ async function exercisePublic(page, scenario) {
   await page.locator('.bcsp-search-workspace').waitFor();
   await assertQueryScope(page, scenario);
   await captureQueryScope(page, resolve(outputDirectory, `${scenario.name}-query-scope.png`));
+  if (scenario.viewport.width === 1440) {
+    await page.screenshot({
+      animations: 'disabled',
+      fullPage: false,
+      path: resolve(outputDirectory, `${scenario.name}-search-idle.png`),
+    });
+  }
   await assertPublicBoundary(page, `${scenario.name}/search`);
   await assertAxe(page, `${scenario.name}/search`);
 
@@ -817,4 +920,4 @@ try {
 }
 
 const totalScenarios = scenarios.length + narrowScenarios.length;
-process.stdout.write(`RC4 ${evidenceStage} composition matrix: PASS (${totalScenarios}/${totalScenarios})\n`);
+process.stdout.write(`RC5 ${evidenceStage} composition matrix: PASS (${totalScenarios}/${totalScenarios})\n`);

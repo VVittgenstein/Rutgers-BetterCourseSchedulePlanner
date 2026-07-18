@@ -29,6 +29,19 @@ pub struct OperationalStorage {
     recovery_key: Option<PathBuf>,
 }
 
+/// Thread-safe cancellation handle for the single operational SQLite
+/// connection. Runtime owners capture this before starting blocking refresh
+/// work so shutdown does not need to acquire the storage mutex first.
+pub struct OperationalStorageInterruptHandle {
+    inner: rusqlite::InterruptHandle,
+}
+
+impl OperationalStorageInterruptHandle {
+    pub fn interrupt(&self) {
+        self.inner.interrupt();
+    }
+}
+
 static ACTIVE_DATABASES: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +64,12 @@ struct StagedMetadata {
 }
 
 impl OperationalStorage {
+    pub fn interrupt_handle(&self) -> OperationalStorageInterruptHandle {
+        OperationalStorageInterruptHandle {
+            inner: self.connection.get_interrupt_handle(),
+        }
+    }
+
     pub fn open(path: impl AsRef<Path>) -> StorageResult<Self> {
         let path = path.as_ref();
         let connection = Connection::open(path)?;
@@ -3483,9 +3502,44 @@ pub(crate) fn i64_to_u64(value: i64) -> StorageResult<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::ErrorCode;
     use tempfile::TempDir;
 
     const FTS_INTEGRITY_TARGET: &str = "TERM/CAMPUS";
+
+    #[test]
+    fn captured_interrupt_handle_cancels_an_active_operational_statement() {
+        let storage = OperationalStorage::open_in_memory().expect("operational storage");
+        let interrupt = storage.interrupt_handle();
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_sender.send(()).expect("announce query start");
+            storage.connection.query_row(
+                "WITH RECURSIVE counter(value) AS (
+                    VALUES(0)
+                    UNION ALL
+                    SELECT value + 1 FROM counter WHERE value < 1000000000
+                 )
+                 SELECT sum(value) FROM counter",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+        });
+
+        started_receiver.recv().expect("query start");
+        std::thread::sleep(Duration::from_millis(20));
+        interrupt.interrupt();
+        let error = worker
+            .join()
+            .expect("query worker")
+            .expect_err("interrupt must stop the active statement");
+
+        assert!(matches!(
+            error,
+            rusqlite::Error::SqliteFailure(sqlite, _)
+                if sqlite.code == ErrorCode::OperationInterrupted
+        ));
+    }
 
     fn fts_integrity_fixture() -> Connection {
         let connection = Connection::open_in_memory().expect("in-memory FTS integrity fixture");

@@ -428,8 +428,11 @@ describe('RC3 unified Course workspace controller', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Applied' })).toBeTruthy());
     expect(screen.queryByRole('heading', { name: 'No matching records' })).toBeNull();
-    expect(view.container.querySelector('.bcsp-search-workspace')?.getAttribute('data-results-visible')).toBe('false');
+    expect(view.container.querySelector('.bcsp-search-workspace')?.hasAttribute('data-results-visible')).toBe(false);
     expect(view.container.querySelector('[data-query-state="idle"]')).not.toBeNull();
+    expect(screen.getByRole('heading', { name: 'Build a precise search' })).toBeTruthy();
+    expect(view.container.querySelector('.bcsp-search-workspace__scope')
+      ?.closest('.bcsp-search-workspace__filters')).not.toBeNull();
     expect(searchCourses).toHaveBeenCalledTimes(1);
     expect(readSearchSessionProbe()).toMatchObject({
       appliedScope: { campuses: ['NB', 'NK'], term: TERM },

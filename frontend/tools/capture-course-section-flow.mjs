@@ -10,7 +10,7 @@ const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
     ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
     : undefined);
 const outputDirectory = resolve(process.cwd(), process.env.BCSP_EVIDENCE_DIR
-  ?? '../project-governance/current/rc-iteration/evidence/round-04/stage-1/course-section');
+  ?? '../project-governance/current/rc-iteration/evidence/round-05/stage-1/course-section');
 const evidenceStage = process.env.BCSP_EVIDENCE_STAGE ?? 'Stage1';
 const filterSchema = JSON.parse(await readFile(
   resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
@@ -586,4 +586,4 @@ try {
 }
 
 const flowSnapshotCount = flowViewports.length + 1;
-process.stdout.write(`RC4 ${evidenceStage} Course/Section V3 flow snapshots: PASS (${flowSnapshotCount}/${flowSnapshotCount})\n`);
+process.stdout.write(`RC5 ${evidenceStage} Course/Section V3 flow snapshots: PASS (${flowSnapshotCount}/${flowSnapshotCount})\n`);

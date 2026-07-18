@@ -12,7 +12,7 @@ use bcsp_contracts::{
     SystemTraceIdSource, TermCampusKey, TraceIdSource, decode_versioned_envelope_json,
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
-use bcsp_operational_storage::OperationalStorage;
+use bcsp_operational_storage::{OperationalStorage, OperationalStorageInterruptHandle};
 use bcsp_query::QueryError;
 use serde::Serialize;
 
@@ -63,6 +63,13 @@ pub trait ProductStorageAccess: Send + Sync + 'static {
         Self: 'a;
 
     fn lock_operational(&self) -> Result<Self::Guard<'_>, ProductStorageLockError>;
+
+    fn operational_interrupt_handle(
+        &self,
+    ) -> Result<OperationalStorageInterruptHandle, ProductStorageLockError> {
+        self.lock_operational()
+            .map(|storage| storage.interrupt_handle())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

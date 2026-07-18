@@ -57,6 +57,8 @@ enum IndexBucket {
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum CorpusError {
+    #[error("catalog corpus construction was cancelled")]
+    Cancelled,
     #[error("catalog corpus must contain at least one target snapshot")]
     Empty,
     #[error("all catalog target snapshots in a corpus must have one term")]
@@ -89,6 +91,16 @@ impl<'a> CatalogCorpus<'a> {
     }
 
     pub fn try_new_from_refs(catalogs: &[&'a NormalizedCatalogV1]) -> Result<Self, CorpusError> {
+        Self::try_new_from_refs_with_cancellation(catalogs, &mut || false)
+    }
+
+    fn try_new_from_refs_with_cancellation(
+        catalogs: &[&'a NormalizedCatalogV1],
+        cancellation: &mut impl FnMut() -> bool,
+    ) -> Result<Self, CorpusError> {
+        if cancellation() {
+            return Err(CorpusError::Cancelled);
+        }
         let Some(first) = catalogs.first().copied() else {
             return Err(CorpusError::Empty);
         };
@@ -107,11 +119,17 @@ impl<'a> CatalogCorpus<'a> {
         let mut targets = BTreeSet::new();
         let mut target_versions = BTreeMap::new();
         for &catalog in catalogs {
+            if cancellation() {
+                return Err(CorpusError::Cancelled);
+            }
             if !targets.insert(&catalog.target) {
                 return Err(CorpusError::DuplicateTarget);
             }
             target_versions.insert(&catalog.target, catalog.content_version);
             for group in &catalog.course_groups {
+                if cancellation() {
+                    return Err(CorpusError::Cancelled);
+                }
                 if group.key.target() != catalog.target {
                     return Err(CorpusError::TargetMismatch);
                 }
@@ -120,6 +138,9 @@ impl<'a> CatalogCorpus<'a> {
                 }
             }
             for variant in &catalog.course_variants {
+                if cancellation() {
+                    return Err(CorpusError::Cancelled);
+                }
                 if variant.key.group().target() != catalog.target {
                     return Err(CorpusError::TargetMismatch);
                 }
@@ -128,6 +149,9 @@ impl<'a> CatalogCorpus<'a> {
                 }
             }
             for section in &catalog.sections {
+                if cancellation() {
+                    return Err(CorpusError::Cancelled);
+                }
                 if section.key.target() != catalog.target
                     || section.variant_key.group().target() != catalog.target
                 {
@@ -138,6 +162,9 @@ impl<'a> CatalogCorpus<'a> {
                 }
             }
             for occurrence in &catalog.occurrences {
+                if cancellation() {
+                    return Err(CorpusError::Cancelled);
+                }
                 if occurrence.key.section.target() != catalog.target {
                     return Err(CorpusError::TargetMismatch);
                 }
@@ -148,17 +175,26 @@ impl<'a> CatalogCorpus<'a> {
         }
 
         for group in groups.values() {
+            if cancellation() {
+                return Err(CorpusError::Cancelled);
+            }
             if group.variant_keys.is_empty() {
                 return Err(CorpusError::InvalidGroupVariantReference);
             }
             let mut seen = BTreeSet::new();
             for key in &group.variant_keys {
+                if cancellation() {
+                    return Err(CorpusError::Cancelled);
+                }
                 if key.group() != &group.key || !seen.insert(key) || !variants.contains_key(key) {
                     return Err(CorpusError::InvalidGroupVariantReference);
                 }
             }
         }
         for variant in variants.values() {
+            if cancellation() {
+                return Err(CorpusError::Cancelled);
+            }
             let Some(group) = groups.get(variant.key.group()) else {
                 return Err(CorpusError::InvalidGroupVariantReference);
             };
@@ -167,6 +203,9 @@ impl<'a> CatalogCorpus<'a> {
             }
             let mut seen = BTreeSet::new();
             for key in &variant.section_keys {
+                if cancellation() {
+                    return Err(CorpusError::Cancelled);
+                }
                 let Some(section) = sections.get(key) else {
                     return Err(CorpusError::InvalidVariantSectionReference);
                 };
@@ -176,6 +215,9 @@ impl<'a> CatalogCorpus<'a> {
             }
         }
         for section in sections.values() {
+            if cancellation() {
+                return Err(CorpusError::Cancelled);
+            }
             let Some(variant) = variants.get(&section.variant_key) else {
                 return Err(CorpusError::InvalidVariantSectionReference);
             };
@@ -188,6 +230,9 @@ impl<'a> CatalogCorpus<'a> {
             {
                 let mut seen = BTreeSet::new();
                 for key in keys {
+                    if cancellation() {
+                        return Err(CorpusError::Cancelled);
+                    }
                     if key.section != section.key
                         || !seen.insert(key)
                         || !occurrences.contains_key(key)
@@ -198,6 +243,9 @@ impl<'a> CatalogCorpus<'a> {
             }
         }
         for occurrence in occurrences.values() {
+            if cancellation() {
+                return Err(CorpusError::Cancelled);
+            }
             let Some(section) = sections.get(&occurrence.key.section) else {
                 return Err(CorpusError::OrphanOccurrence);
             };
@@ -298,11 +346,21 @@ impl PreparedCatalogCorpus {
     pub fn try_new(
         catalogs: impl IntoIterator<Item = Arc<NormalizedCatalogV1>>,
     ) -> Result<Self, CorpusError> {
+        Self::try_new_with_cancellation(catalogs, || false)
+    }
+
+    pub fn try_new_with_cancellation(
+        catalogs: impl IntoIterator<Item = Arc<NormalizedCatalogV1>>,
+        mut cancellation: impl FnMut() -> bool,
+    ) -> Result<Self, CorpusError> {
+        if cancellation() {
+            return Err(CorpusError::Cancelled);
+        }
         let catalogs = catalogs.into_iter().collect::<Vec<_>>();
         let catalog_refs = catalogs.iter().map(Arc::as_ref).collect::<Vec<_>>();
         // Reuse the reference oracle's complete identity and relationship
         // validation once, before publishing the owned indexes.
-        CatalogCorpus::try_new_from_refs(&catalog_refs)?;
+        CatalogCorpus::try_new_from_refs_with_cancellation(&catalog_refs, &mut cancellation)?;
 
         let term = catalogs
             .first()
@@ -314,6 +372,9 @@ impl PreparedCatalogCorpus {
         let mut target_versions = BTreeMap::new();
         let mut targets = BTreeMap::new();
         for (catalog_index, catalog) in catalogs.iter().enumerate() {
+            if cancellation() {
+                return Err(CorpusError::Cancelled);
+            }
             let target = catalog.target.clone();
             target_versions.insert(target.clone(), catalog.content_version);
             let mut group_order = (0..catalog.course_groups.len()).collect::<Vec<_>>();
@@ -328,20 +389,31 @@ impl PreparedCatalogCorpus {
                     .key
                     .cmp(&catalog.sections[*right].key)
             });
+            if cancellation() {
+                return Err(CorpusError::Cancelled);
+            }
             targets.insert(
                 target,
                 PreparedTargetIndex {
                     catalog: catalog_index,
                     group_order,
                     section_order,
-                    groups: build_index(catalog.course_groups.iter().map(|group| &group.key)),
-                    variants: build_index(
+                    groups: build_index_with_cancellation(
+                        catalog.course_groups.iter().map(|group| &group.key),
+                        &mut cancellation,
+                    )?,
+                    variants: build_index_with_cancellation(
                         catalog.course_variants.iter().map(|variant| &variant.key),
-                    ),
-                    sections: build_index(catalog.sections.iter().map(|section| &section.key)),
-                    occurrences: build_index(
+                        &mut cancellation,
+                    )?,
+                    sections: build_index_with_cancellation(
+                        catalog.sections.iter().map(|section| &section.key),
+                        &mut cancellation,
+                    )?,
+                    occurrences: build_index_with_cancellation(
                         catalog.occurrences.iter().map(|occurrence| &occurrence.key),
-                    ),
+                        &mut cancellation,
+                    )?,
                 },
             );
         }
@@ -551,31 +623,44 @@ impl PreparedCatalogCorpus {
     }
 }
 
-fn build_index<'key, K: Hash + 'key>(
+fn build_index_with_cancellation<'key, K: Hash + 'key>(
     keys: impl IntoIterator<Item = &'key K>,
-) -> BTreeMap<u64, IndexBucket> {
-    build_index_with_hasher(keys, key_hash)
+    cancellation: &mut impl FnMut() -> bool,
+) -> Result<BTreeMap<u64, IndexBucket>, CorpusError> {
+    let mut buckets = BTreeMap::new();
+    for (index, key) in keys.into_iter().enumerate() {
+        if cancellation() {
+            return Err(CorpusError::Cancelled);
+        }
+        insert_index_bucket(&mut buckets, key_hash(key), index);
+    }
+    Ok(buckets)
 }
 
+#[cfg(test)]
 fn build_index_with_hasher<'key, K: 'key>(
     keys: impl IntoIterator<Item = &'key K>,
     hash: impl Fn(&K) -> u64,
 ) -> BTreeMap<u64, IndexBucket> {
     let mut buckets = BTreeMap::new();
     for (index, key) in keys.into_iter().enumerate() {
-        match buckets.entry(hash(key)) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(IndexBucket::One(index));
-            }
-            std::collections::btree_map::Entry::Occupied(mut entry) => match entry.get_mut() {
-                IndexBucket::One(first) => {
-                    *entry.get_mut() = IndexBucket::Many(vec![*first, index]);
-                }
-                IndexBucket::Many(indices) => indices.push(index),
-            },
-        }
+        insert_index_bucket(&mut buckets, hash(key), index);
     }
     buckets
+}
+
+fn insert_index_bucket(buckets: &mut BTreeMap<u64, IndexBucket>, hash: u64, index: usize) {
+    match buckets.entry(hash) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(IndexBucket::One(index));
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => match entry.get_mut() {
+            IndexBucket::One(first) => {
+                *entry.get_mut() = IndexBucket::Many(vec![*first, index]);
+            }
+            IndexBucket::Many(indices) => indices.push(index),
+        },
+    }
 }
 
 fn lookup_index<T, K: Eq + Hash>(
@@ -639,6 +724,17 @@ mod prepared_index_tests {
 
     fn constant_hash(_: &String) -> u64 {
         7
+    }
+
+    #[test]
+    fn prepared_corpus_honors_cancellation_before_validation() {
+        assert!(matches!(
+            PreparedCatalogCorpus::try_new_with_cancellation(
+                Vec::<Arc<NormalizedCatalogV1>>::new(),
+                || true,
+            ),
+            Err(CorpusError::Cancelled)
+        ));
     }
 
     #[test]

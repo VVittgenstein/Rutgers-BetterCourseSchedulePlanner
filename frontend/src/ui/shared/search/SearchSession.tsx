@@ -173,8 +173,8 @@ export interface SearchSessionRuntime {
     request: CourseQueryRequestV1,
     response: CourseQueryResponseV1,
   ) => void;
-  readonly restorePageScroll: () => void;
-  readonly savePageScroll: () => void;
+  readonly restoreFilterScrollTop: () => number;
+  readonly saveFilterScrollTop: (scrollTop: number) => void;
   readonly setDraftFilters: (filters: FilterStateV1, edited: boolean) => void;
   readonly setCandidateScope: (scope: SearchScope) => void;
   readonly setSectionDisclosureExpanded: (disclosureId: string, expanded: boolean) => void;
@@ -184,7 +184,7 @@ const SearchSessionContext = createContext<SearchSessionRuntime | null>(null);
 
 export function SearchSessionProvider({ children }: { readonly children: ReactNode }) {
   const [state, dispatch] = useReducer(reduceSearchSession, INITIAL_SEARCH_SESSION);
-  const pageScroll = useRef<number | null>(null);
+  const filterScrollTop = useRef(0);
   const initializeScope = useCallback((
     candidate: SearchScope,
     applied: SearchScope | null,
@@ -216,21 +216,17 @@ export function SearchSessionProvider({ children }: { readonly children: ReactNo
   ) => {
     dispatch({ type: 'SET_SECTION_DISCLOSURE', disclosureId, expanded });
   }, []);
-  const savePageScroll = useCallback(() => {
-    pageScroll.current = Math.max(0, globalThis.scrollY ?? 0);
+  const saveFilterScrollTop = useCallback((scrollTop: number) => {
+    filterScrollTop.current = Math.max(0, scrollTop);
   }, []);
-  const restorePageScroll = useCallback(() => {
-    if (pageScroll.current === null) return;
-    if ((globalThis.scrollY ?? 0) === pageScroll.current) return;
-    globalThis.scrollTo?.({ behavior: 'auto', left: 0, top: pageScroll.current });
-  }, []);
+  const restoreFilterScrollTop = useCallback(() => filterScrollTop.current, []);
   const value = useMemo<SearchSessionRuntime>(() => ({
     applyScope,
     initializeScope,
     recordSubmission,
     recordSuccess,
-    restorePageScroll,
-    savePageScroll,
+    restoreFilterScrollTop,
+    saveFilterScrollTop,
     setDraftFilters,
     setCandidateScope,
     setSectionDisclosureExpanded,
@@ -240,8 +236,8 @@ export function SearchSessionProvider({ children }: { readonly children: ReactNo
     initializeScope,
     recordSubmission,
     recordSuccess,
-    restorePageScroll,
-    savePageScroll,
+    restoreFilterScrollTop,
+    saveFilterScrollTop,
     setDraftFilters,
     setCandidateScope,
     setSectionDisclosureExpanded,

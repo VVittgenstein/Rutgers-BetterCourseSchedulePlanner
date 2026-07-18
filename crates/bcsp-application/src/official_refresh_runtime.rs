@@ -8,6 +8,7 @@ use bcsp_contracts::{
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowError, RutgersTermWindowScope};
 use bcsp_open::OpenCounterAudience;
+use bcsp_operational_storage::OperationalStorageInterruptHandle;
 use bcsp_rutgers_client::{
     DiscoveryClientBuildError, DiscoveryFailure, DiscoveryTransportError, RutgersDiscoveryClient,
 };
@@ -33,6 +34,7 @@ use crate::{
 /// Discovery is deliberately lower frequency than Catalog and Open polling.
 pub const DISCOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TARGET_DEMAND_SCAN_INTERVAL: Duration = Duration::from_millis(250);
+const OFFICIAL_REFRESH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const CI_NO_RUTGERS_ENVIRONMENT: &str = "BCSP_CI_NO_RUTGERS";
 
 /// Production lifecycle for dynamic discovery plus the shared Catalog/Open coordinator.
@@ -40,6 +42,7 @@ pub struct OfficialRefreshRuntime {
     shutdown: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
     prepared_rebuild: Option<PreparedServingRebuildRuntime>,
+    storage_interrupt: Option<OperationalStorageInterruptHandle>,
 }
 
 impl OfficialRefreshRuntime {
@@ -149,8 +152,12 @@ impl OfficialRefreshRuntime {
                 shutdown,
                 task: None,
                 prepared_rebuild: None,
+                storage_interrupt: None,
             });
         }
+        let storage_interrupt = storage
+            .operational_interrupt_handle()
+            .map_err(|_| OfficialRefreshRuntimeBuildError::StorageAccess)?;
         let discovery = RutgersDiscoveryClient::new_official()
             .map_err(OfficialRefreshRuntimeBuildError::Discovery)?;
         let membership = Arc::new(SelectorTargetMembership::new());
@@ -515,18 +522,36 @@ impl OfficialRefreshRuntime {
             shutdown,
             task: Some(task),
             prepared_rebuild,
+            storage_interrupt: Some(storage_interrupt),
         })
     }
 
     pub async fn shutdown(mut self) {
         self.shutdown.send_replace(true);
-        if let Some(task) = self.task.take() {
-            let _ = task.await;
+        if let Some(storage_interrupt) = self.storage_interrupt.take() {
+            storage_interrupt.interrupt();
         }
         if let Some(prepared_rebuild) = self.prepared_rebuild.take() {
             prepared_rebuild.shutdown().await;
         }
+        if let Some(task) = self.task.take()
+            && !drain_refresh_supervisor(task, OFFICIAL_REFRESH_SHUTDOWN_TIMEOUT).await
+        {
+            tracing::warn!(
+                target: "bcsp_official_refresh",
+                "official refresh supervisor exceeded the bounded shutdown window and was aborted",
+            );
+        }
     }
+}
+
+async fn drain_refresh_supervisor(mut task: JoinHandle<()>, timeout: Duration) -> bool {
+    if tokio::time::timeout(timeout, &mut task).await.is_ok() {
+        return true;
+    }
+    task.abort();
+    let _ = task.await;
+    false
 }
 
 fn ci_network_disabled() -> bool {
@@ -537,6 +562,9 @@ fn ci_network_disabled() -> bool {
 impl Drop for OfficialRefreshRuntime {
     fn drop(&mut self) {
         self.shutdown.send_replace(true);
+        if let Some(storage_interrupt) = self.storage_interrupt.take() {
+            storage_interrupt.interrupt();
+        }
         if let Some(task) = self.task.take() {
             task.abort();
         }
@@ -773,6 +801,8 @@ fn discovery_failure_code(failure: &DiscoveryFailure) -> &'static str {
 
 #[derive(Debug, Error)]
 pub enum OfficialRefreshRuntimeBuildError {
+    #[error("the operational database could not expose its shutdown interrupt handle")]
+    StorageAccess,
     #[error("the official Rutgers discovery client could not be built")]
     Discovery(#[source] DiscoveryClientBuildError),
     #[error("the official Rutgers refresh clients could not be built")]
@@ -782,7 +812,7 @@ pub enum OfficialRefreshRuntimeBuildError {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use bcsp_contracts::{ServiceOperationPhaseV1, ServiceRuntimeV1, TermCampusKey};
     use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
@@ -791,13 +821,23 @@ mod tests {
     use time::format_description::well_known::Rfc3339;
 
     use super::{
-        authoritative_refresh_targets, is_automatically_managed_target, publish_discovering,
-        publish_retry_wait, retain_authoritative_refresh_targets, selected_refresh_targets,
+        authoritative_refresh_targets, drain_refresh_supervisor, is_automatically_managed_target,
+        publish_discovering, publish_retry_wait, retain_authoritative_refresh_targets,
+        selected_refresh_targets,
     };
     use crate::{ScheduledRefreshTarget, ServiceStatusRegistry};
 
     const SOURCE: &str =
         "selector:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[tokio::test]
+    async fn non_cooperative_refresh_supervisor_has_a_bounded_shutdown() {
+        let task = tokio::spawn(std::future::pending::<()>());
+        let started = Instant::now();
+
+        assert!(!drain_refresh_supervisor(task, Duration::from_millis(10)).await);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 
     fn registration(
         term: &str,

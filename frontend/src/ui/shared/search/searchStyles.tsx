@@ -15,7 +15,6 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
 }
 
 .bcsp-search-workspace__scope {
-  grid-column: 1 / -1;
   min-width: 0;
 }
 
@@ -25,14 +24,37 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
 
 .bcsp-search-workspace__filters {
   container-type: inline-size;
+  position: sticky;
+  top: var(--bcsp-navigation-height, 3.5rem);
   align-self: start;
+  max-height: calc(100vh - var(--bcsp-navigation-height, 3.5rem));
+  max-height: calc(100dvh - var(--bcsp-navigation-height, 3.5rem));
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   border-right: 1px solid var(--bcsp-line);
   background: var(--bcsp-paper-raised);
+  scrollbar-color: var(--bcsp-ink-muted) var(--bcsp-paper-raised);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
 }
 
-.bcsp-search-workspace[data-results-visible='false'] .bcsp-search-workspace__filters {
-  grid-column: 1 / -1;
-  border-right: 0;
+.bcsp-search-workspace__filters::-webkit-scrollbar { width: 0.625rem; }
+.bcsp-search-workspace__filters::-webkit-scrollbar-track {
+  border-left: 1px solid var(--bcsp-line);
+  background: var(--bcsp-paper-raised);
+}
+.bcsp-search-workspace__filters::-webkit-scrollbar-thumb {
+  border: 2px solid var(--bcsp-paper-raised);
+  border-radius: 0;
+  background: var(--bcsp-ink-muted);
+}
+.bcsp-search-workspace__filters::-webkit-scrollbar-thumb:hover {
+  background: var(--bcsp-ink);
+}
+.bcsp-search-workspace__filters:focus-visible {
+  outline: 2px solid var(--bcsp-accent);
+  outline-offset: -2px;
 }
 
 .bcsp-search-workspace__results {
@@ -77,7 +99,8 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
 
 .bcsp-search-workspace__state {
   display: grid;
-  align-content: start;
+  align-content: center;
+  min-height: 26rem;
 }
 
 .bcsp-search-state {
@@ -149,13 +172,17 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
   }
 }
 
-/* 24rem controls + 26rem useful result measure + structural borders. */
-@media (max-width: 51.999rem) {
+/* RC3 workspace boundary: below this point the two work areas become one flow. */
+@media (max-width: 47.999rem) {
   .bcsp-search-workspace {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .bcsp-search-workspace__filters {
+    position: static;
+    top: auto;
+    max-height: none;
+    overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--bcsp-line);
   }
@@ -164,6 +191,9 @@ export const SEARCH_WORKSPACE_CSS = String.raw`
     padding: var(--bcsp-space-3);
   }
 
+  .bcsp-search-workspace__state {
+    min-height: 18rem;
+  }
 }
 `;
 

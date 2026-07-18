@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Instant;
 
@@ -53,6 +53,29 @@ struct PublicationLifecycleState {
 }
 
 const PREPARED_SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[derive(Clone, Default)]
+struct PreparedRebuildCancellation {
+    requested: Arc<AtomicBool>,
+}
+
+impl PreparedRebuildCancellation {
+    fn request(&self) {
+        self.requested.store(true, Ordering::Release);
+    }
+
+    fn check(&self) -> Result<(), PreparedServingError> {
+        if self.requested.load(Ordering::Acquire) {
+            Err(PreparedServingError::RebuildCancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn requested(&self) -> bool {
+        self.requested.load(Ordering::Acquire)
+    }
+}
 
 impl Default for PublicationLifecycle {
     fn default() -> Self {
@@ -319,6 +342,7 @@ enum PreparedRebuildRequest {
 /// another pass before the worker becomes idle.
 pub struct PreparedServingRebuildRuntime {
     demand: PreparedServingRebuildDemand,
+    cancellation: PreparedRebuildCancellation,
     task: Option<JoinHandle<()>>,
 }
 
@@ -349,6 +373,8 @@ impl PreparedServingRebuildRuntime {
             registry: Arc::clone(&registry),
             lifecycle: lifecycle.clone(),
         };
+        let cancellation = PreparedRebuildCancellation::default();
+        let worker_cancellation = cancellation.clone();
         let task = tokio::spawn(async move {
             let _worker_guard = PublicationWorkerGuard(lifecycle);
             let service_runtime = match counter_audience {
@@ -385,6 +411,7 @@ impl PreparedServingRebuildRuntime {
                     let policy = policy.clone();
                     let open_runtime = Arc::clone(&open_runtime);
                     let build_registry = Arc::clone(&registry);
+                    let build_cancellation = worker_cancellation.clone();
                     let result = tokio::task::spawn_blocking(move || {
                         let runtime = SharedRuntimeContext::new(
                             counter_audience,
@@ -392,20 +419,22 @@ impl PreparedServingRebuildRuntime {
                             policy,
                         );
                         if execute_full {
-                            rebuild_prepared_serving_from_access(
+                            rebuild_prepared_serving_from_access_with_cancellation(
                                 &build_storage,
                                 &runtime,
                                 &open_runtime,
                                 service_runtime,
                                 &build_registry,
+                                &build_cancellation,
                             )
                         } else {
-                            rebuild_prepared_open_from_access(
+                            rebuild_prepared_open_from_access_with_cancellation(
                                 &build_storage,
                                 &runtime,
                                 &open_runtime,
                                 &targets,
                                 &build_registry,
+                                &build_cancellation,
                             )
                         }
                     })
@@ -436,6 +465,10 @@ impl PreparedServingRebuildRuntime {
                                 requeue_open_tickets(&mut open_targets, &executed_open_epochs);
                             }
                             tokio::task::yield_now().await;
+                        }
+                        Ok(Err(PreparedServingError::RebuildCancelled)) => {
+                            // Shutdown requested cancellation before this build completed. The
+                            // exact dirty tickets remain fail-closed while the surface drains.
                         }
                         Ok(Err(
                             PreparedServingError::TargetNotPrepared(_)
@@ -531,6 +564,7 @@ impl PreparedServingRebuildRuntime {
         });
         Self {
             demand,
+            cancellation,
             task: Some(task),
         }
     }
@@ -540,6 +574,8 @@ impl PreparedServingRebuildRuntime {
     }
 
     pub async fn shutdown(mut self) {
+        self.cancellation.request();
+        let _ = self.demand.sender.send(PreparedRebuildRequest::Shutdown);
         let drained = self
             .demand
             .lifecycle
@@ -550,7 +586,6 @@ impl PreparedServingRebuildRuntime {
                 "prepared publication admissions did not drain before bounded shutdown",
             );
         }
-        let _ = self.demand.sender.send(PreparedRebuildRequest::Shutdown);
         if let Some(task) = self.task.take() {
             let mut task = task;
             if tokio::time::timeout(PREPARED_SHUTDOWN_DRAIN_TIMEOUT, &mut task)
@@ -566,6 +601,7 @@ impl PreparedServingRebuildRuntime {
 
 impl Drop for PreparedServingRebuildRuntime {
     fn drop(&mut self) {
+        self.cancellation.request();
         self.demand.lifecycle.stop_accepting();
         let _ = self.demand.sender.send(PreparedRebuildRequest::Shutdown);
         if let Some(task) = self.task.take() {
@@ -1127,10 +1163,12 @@ fn build_prepared_dictionaries(
     catalogs: &BTreeMap<TermCampusKey, Arc<NormalizedCatalogV1>>,
     fts: &PreparedFtsIndex,
     catalog_estimated_bytes: u64,
+    cancellation: Option<&PreparedRebuildCancellation>,
 ) -> Result<(BTreeMap<TermCampusKey, PreparedTargetDictionary>, u64), PreparedServingError> {
     let mut dictionaries = BTreeMap::new();
     let mut estimated_bytes = 0_u64;
     for (target, catalog) in catalogs {
+        check_prepared_rebuild_cancellation(cancellation)?;
         let keyword_fts_values = fts.term_set(target, catalog.content_version.get())?;
         let keyword_identifier_values = catalog
             .course_groups
@@ -1146,6 +1184,7 @@ fn build_prepared_dictionaries(
             FilterOptionsFieldV2::MeetingLocation,
             FilterOptionsFieldV2::ExamCode,
         ] {
+            check_prepared_rebuild_cancellation(cancellation)?;
             let mut values = if field == FilterOptionsFieldV2::Keyword {
                 let mut values = BTreeMap::new();
                 for term in &keyword_fts_values {
@@ -1699,18 +1738,79 @@ where
     C: ApplicationClock,
     P: RefreshPolicyProvider,
 {
+    rebuild_prepared_serving_from_access_inner(
+        storage_access,
+        runtime,
+        open_runtime,
+        service_runtime,
+        registry,
+        None,
+    )
+}
+
+fn rebuild_prepared_serving_from_access_with_cancellation<S, C, P>(
+    storage_access: &S,
+    runtime: &SharedRuntimeContext<C, P>,
+    open_runtime: &OpenRuntimeSnapshotRegistry,
+    service_runtime: ServiceRuntimeV1,
+    registry: &PreparedServingRegistry,
+    cancellation: &PreparedRebuildCancellation,
+) -> Result<Arc<PreparedServingSnapshot>, PreparedServingError>
+where
+    S: crate::ProductStorageAccess,
+    C: ApplicationClock,
+    P: RefreshPolicyProvider,
+{
+    rebuild_prepared_serving_from_access_inner(
+        storage_access,
+        runtime,
+        open_runtime,
+        service_runtime,
+        registry,
+        Some(cancellation),
+    )
+}
+
+fn rebuild_prepared_serving_from_access_inner<S, C, P>(
+    storage_access: &S,
+    runtime: &SharedRuntimeContext<C, P>,
+    open_runtime: &OpenRuntimeSnapshotRegistry,
+    service_runtime: ServiceRuntimeV1,
+    registry: &PreparedServingRegistry,
+    cancellation: Option<&PreparedRebuildCancellation>,
+) -> Result<Arc<PreparedServingSnapshot>, PreparedServingError>
+where
+    S: crate::ProductStorageAccess,
+    C: ApplicationClock,
+    P: RefreshPolicyProvider,
+{
+    check_prepared_rebuild_cancellation(cancellation)?;
     let _rebuild = registry.rebuild_guard()?;
     let expected = registry.snapshot_for_rebuild().ok();
+    check_prepared_rebuild_cancellation(cancellation)?;
     let mut storage = storage_access
         .lock_operational()
         .map_err(|_| PreparedServingError::StorageAccessUnavailable)?;
     let reader = storage.open_prepared_snapshot_reader()?;
     let snapshot = if let Some(mut reader) = reader {
         drop(storage);
-        build_prepared_serving_snapshot(&mut reader, runtime, open_runtime, service_runtime)?
+        build_prepared_serving_snapshot_inner(
+            &mut reader,
+            runtime,
+            open_runtime,
+            service_runtime,
+            cancellation,
+        )?
     } else {
-        build_prepared_serving_snapshot(&mut storage, runtime, open_runtime, service_runtime)?
+        build_prepared_serving_snapshot_inner(
+            &mut storage,
+            runtime,
+            open_runtime,
+            service_runtime,
+            cancellation,
+        )?
     };
+    check_prepared_rebuild_cancellation(cancellation)?;
     registry.publish_if_unchanged(expected.as_ref(), snapshot)
 }
 
@@ -1728,8 +1828,56 @@ where
     C: ApplicationClock,
     P: RefreshPolicyProvider,
 {
+    rebuild_prepared_open_from_access_inner(
+        storage_access,
+        runtime,
+        open_runtime,
+        targets,
+        registry,
+        None,
+    )
+}
+
+fn rebuild_prepared_open_from_access_with_cancellation<S, C, P>(
+    storage_access: &S,
+    runtime: &SharedRuntimeContext<C, P>,
+    open_runtime: &OpenRuntimeSnapshotRegistry,
+    targets: &[TermCampusKey],
+    registry: &PreparedServingRegistry,
+    cancellation: &PreparedRebuildCancellation,
+) -> Result<Arc<PreparedServingSnapshot>, PreparedServingError>
+where
+    S: crate::ProductStorageAccess,
+    C: ApplicationClock,
+    P: RefreshPolicyProvider,
+{
+    rebuild_prepared_open_from_access_inner(
+        storage_access,
+        runtime,
+        open_runtime,
+        targets,
+        registry,
+        Some(cancellation),
+    )
+}
+
+fn rebuild_prepared_open_from_access_inner<S, C, P>(
+    storage_access: &S,
+    runtime: &SharedRuntimeContext<C, P>,
+    open_runtime: &OpenRuntimeSnapshotRegistry,
+    targets: &[TermCampusKey],
+    registry: &PreparedServingRegistry,
+    cancellation: Option<&PreparedRebuildCancellation>,
+) -> Result<Arc<PreparedServingSnapshot>, PreparedServingError>
+where
+    S: crate::ProductStorageAccess,
+    C: ApplicationClock,
+    P: RefreshPolicyProvider,
+{
+    check_prepared_rebuild_cancellation(cancellation)?;
     let _rebuild = registry.rebuild_guard()?;
     let expected = registry.snapshot_for_rebuild()?;
+    check_prepared_rebuild_cancellation(cancellation)?;
     let mut storage = storage_access
         .lock_operational()
         .map_err(|_| PreparedServingError::StorageAccessUnavailable)?;
@@ -1740,7 +1888,14 @@ where
     } else {
         rebuild_prepared_open_overlay(&mut storage, runtime, open_runtime, &expected, targets)?
     };
+    check_prepared_rebuild_cancellation(cancellation)?;
     registry.publish_if_unchanged(Some(&expected), snapshot)
+}
+
+fn check_prepared_rebuild_cancellation(
+    cancellation: Option<&PreparedRebuildCancellation>,
+) -> Result<(), PreparedServingError> {
+    cancellation.map_or(Ok(()), PreparedRebuildCancellation::check)
 }
 
 fn authoritative_foundation_matches_access<S>(
@@ -1776,6 +1931,21 @@ where
     C: ApplicationClock,
     P: RefreshPolicyProvider,
 {
+    build_prepared_serving_snapshot_inner(storage, runtime, open_runtime, service_runtime, None)
+}
+
+fn build_prepared_serving_snapshot_inner<C, P>(
+    storage: &mut OperationalStorage,
+    runtime: &SharedRuntimeContext<C, P>,
+    open_runtime: &OpenRuntimeSnapshotRegistry,
+    service_runtime: ServiceRuntimeV1,
+    cancellation: Option<&PreparedRebuildCancellation>,
+) -> Result<PreparedServingSnapshot, PreparedServingError>
+where
+    C: ApplicationClock,
+    P: RefreshPolicyProvider,
+{
+    check_prepared_rebuild_cancellation(cancellation)?;
     let build_started = Instant::now();
     let now = runtime.now();
     let policy = runtime.refresh_policy()?;
@@ -1832,9 +2002,11 @@ where
     // BM25 uses corpus-wide statistics before the target predicate is
     // applied. Stream every authoritative row into a bounded-cache temporary
     // SQLite index instead of retaining the history-sized corpus in memory.
-    let (fts, fts_signature) = PreparedFtsIndex::build_from_storage(storage)?;
+    let (fts, fts_signature) = PreparedFtsIndex::build_from_storage(storage, cancellation)?;
+    check_prepared_rebuild_cancellation(cancellation)?;
     let mut discovery_catalogs = Vec::new();
     for (target, generation) in &target_generations {
+        check_prepared_rebuild_cancellation(cancellation)?;
         if !generation.ready {
             continue;
         }
@@ -1846,8 +2018,9 @@ where
         discovery_catalogs.push(published);
         catalogs.insert(target.clone(), Arc::new(catalog));
     }
-    let query_corpora = build_prepared_query_corpora(&catalogs)?;
+    let query_corpora = build_prepared_query_corpora(&catalogs, cancellation)?;
     for (target, catalog) in &catalogs {
+        check_prepared_rebuild_cancellation(cancellation)?;
         let corpus = query_corpora
             .get(target.term().as_str())
             .ok_or_else(|| PreparedServingError::TargetNotPrepared(target.clone()))?;
@@ -1884,6 +2057,7 @@ where
         return Err(PreparedServingError::PublicationChanged);
     }
     for (target, expected) in &target_generations {
+        check_prepared_rebuild_cancellation(cancellation)?;
         let current = foundation_generation(&storage.complete_target_snapshot_state(target)?);
         if &current != expected {
             return Err(PreparedServingError::PublicationChanged);
@@ -1904,7 +2078,8 @@ where
         .checked_mul(4)
         .ok_or(PreparedServingError::StoredIntegerOutOfRange)?;
     let (dictionaries, dictionary_estimated_bytes) =
-        build_prepared_dictionaries(&catalogs, &fts, catalog_estimated_bytes)?;
+        build_prepared_dictionaries(&catalogs, &fts, catalog_estimated_bytes, cancellation)?;
+    check_prepared_rebuild_cancellation(cancellation)?;
     let query_index_estimated_bytes = prepared_query_index_estimated_bytes(&query_corpora);
     let open_index_estimated_bytes = prepared_open_index_estimated_bytes(&open);
     // Parsed Catalog structures are bounded using a deliberately conservative
@@ -1967,6 +2142,7 @@ where
 
 fn build_prepared_query_corpora(
     catalogs: &BTreeMap<TermCampusKey, Arc<NormalizedCatalogV1>>,
+    cancellation: Option<&PreparedRebuildCancellation>,
 ) -> Result<BTreeMap<String, Arc<PreparedCatalogCorpus>>, PreparedServingError> {
     let mut by_term = BTreeMap::<String, Vec<Arc<NormalizedCatalogV1>>>::new();
     for catalog in catalogs.values() {
@@ -1975,14 +2151,19 @@ fn build_prepared_query_corpora(
             .or_default()
             .push(Arc::clone(catalog));
     }
-    by_term
-        .into_iter()
-        .map(|(term, catalogs)| {
-            PreparedCatalogCorpus::try_new(catalogs)
-                .map(|corpus| (term, Arc::new(corpus)))
-                .map_err(PreparedServingError::Corpus)
+    let mut corpora = BTreeMap::new();
+    for (term, catalogs) in by_term {
+        check_prepared_rebuild_cancellation(cancellation)?;
+        let corpus = PreparedCatalogCorpus::try_new_with_cancellation(catalogs, || {
+            cancellation.is_some_and(PreparedRebuildCancellation::requested)
         })
-        .collect()
+        .map_err(|error| match error {
+            CorpusError::Cancelled => PreparedServingError::RebuildCancelled,
+            error => PreparedServingError::Corpus(error),
+        })?;
+        corpora.insert(term, Arc::new(corpus));
+    }
+    Ok(corpora)
 }
 
 fn prepared_query_index_estimated_bytes(
@@ -2225,16 +2406,25 @@ struct PreparedFtsIndex {
 impl PreparedFtsIndex {
     fn build_from_storage(
         storage: &OperationalStorage,
+        cancellation: Option<&PreparedRebuildCancellation>,
     ) -> Result<(Self, CourseFtsCorpusSignature), PreparedServingError> {
+        check_prepared_rebuild_cancellation(cancellation)?;
         let mut connection = prepared_fts_connection()?;
         let transaction = connection.transaction()?;
-        let signature = {
+        let mut cancellation_observed = false;
+        let signature_result = {
             let mut insert = transaction.prepare(
                 "INSERT INTO prepared_course_fts
                     (target_id, course_string, fingerprint, content_version, document)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
             storage.visit_all_course_fts_documents(|document| {
+                if cancellation.is_some_and(PreparedRebuildCancellation::requested) {
+                    cancellation_observed = true;
+                    return Err(StorageError::InjectedFault(
+                        "prepared serving rebuild cancelled",
+                    ));
+                }
                 insert.execute(params![
                     target_id(&document.key.group().target()),
                     document.key.group().course_string().as_str(),
@@ -2244,8 +2434,13 @@ impl PreparedFtsIndex {
                     &document.document,
                 ])?;
                 Ok(())
-            })?
+            })
         };
+        if cancellation_observed {
+            return Err(PreparedServingError::RebuildCancelled);
+        }
+        let signature = signature_result?;
+        check_prepared_rebuild_cancellation(cancellation)?;
         transaction.commit()?;
         let index_bytes = prepared_fts_index_bytes(&connection)?;
         Ok((
@@ -2547,6 +2742,8 @@ pub enum PreparedServingError {
     StorageAccessUnavailable,
     #[error("prepared serving build was superseded by a newer generation")]
     SupersededBuild,
+    #[error("prepared serving rebuild was cancelled during shutdown")]
+    RebuildCancelled,
     #[error("prepared FTS index is unavailable")]
     PreparedFtsUnavailable,
     #[error("prepared FTS input is invalid for {field}")]

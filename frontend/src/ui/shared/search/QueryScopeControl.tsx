@@ -18,8 +18,6 @@ export type TermPublicationState = ServiceTermPublicationV2;
 
 const QUERY_SCOPE_CSS = String.raw`
 .query-scope {
-  container-name: query-scope;
-  container-type: inline-size;
   border-bottom: 3px solid var(--bcsp-line);
   background: var(--bcsp-line);
 }
@@ -120,8 +118,8 @@ const QUERY_SCOPE_CSS = String.raw`
 @media (hover: hover) and (pointer: fine) {
   .query-scope__option:hover:not(:has(input:disabled)) { background: var(--bcsp-paper-raised); }
 }
-/* Two matrix cells need 21.75rem each for long zh-CN labels and 44px controls. */
-@container query-scope (max-width: 43.5rem) {
+/* Match the RC3 workspace collapse: desktop rails keep their internal matrix. */
+@media (max-width: 47.999rem) {
   .query-scope__matrix { grid-template-columns: minmax(0, 1fr); }
   .query-scope[data-scope-layout] [data-scope-cell] { grid-column: auto; grid-row: auto; }
 }

@@ -252,11 +252,20 @@ impl RunningLocalRuntime {
             server,
             refresh,
         } = self;
+        let database_path = prepared.paths().database().to_path_buf();
         refresh.shutdown().await;
         prepared.watch.seal_and_stop();
         prepared.watch.flush_dispatch_sink();
         server.shutdown().await?;
-        prepared.extension.checkpoint_wal()?;
+        // Drop every runtime-owned operational, policy, history, mutation and
+        // route connection before asking SQLite to truncate the WAL. Running
+        // the checkpoint through one of those still-live connections can wait
+        // for another internal reader until its full busy timeout.
+        drop(prepared);
+        PersonalStateStore::open(database_path)
+            .map_err(LocalBootstrapError::PersonalState)?
+            .checkpoint_wal()
+            .map_err(LocalBootstrapError::PersonalState)?;
         Ok(())
     }
 }

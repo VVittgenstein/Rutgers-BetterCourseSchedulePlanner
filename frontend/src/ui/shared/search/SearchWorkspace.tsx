@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { ActionButton, StatePanel } from '../design-system';
 import { isMessageKey } from '../i18n/contract';
@@ -180,7 +180,16 @@ function SearchState({
   readonly message?: string | undefined;
 }) {
   const { t } = useBcspI18n();
-  if (kind === 'IDLE' || kind === 'COURSES') return null;
+  if (kind === 'COURSES') return null;
+  if (kind === 'IDLE') {
+    return (
+      <StatePanel
+        detail={t('search.start_body')}
+        heading={t('search.start_title')}
+        kind="empty"
+      />
+    );
+  }
   const compact = (state: 'loading' | 'empty' | 'error', heading: string, detail: string) => (
     <section
       aria-busy={state === 'loading' || undefined}
@@ -323,6 +332,7 @@ function SearchWorkspaceController({
   const searchAbort = useRef<AbortController | null>(null);
   const detailAbort = useRef<AbortController | null>(null);
   const scopeApplyAbort = useRef<AbortController | null>(null);
+  const filtersRef = useRef<HTMLElement | null>(null);
   const resultsRef = useRef<HTMLElement | null>(null);
   const resultsHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const pendingFocus = useRef<PendingSearchFocus>(null);
@@ -348,10 +358,11 @@ function SearchWorkspaceController({
 
   useEffect(() => () => invalidateScopeBoundWork(), [invalidateScopeBoundWork]);
 
-  useEffect(() => {
-    session.restorePageScroll();
-    return session.savePageScroll;
-  }, [session.restorePageScroll, session.savePageScroll]);
+  useLayoutEffect(() => {
+    const filtersElement = filtersRef.current;
+    if (filtersElement === null) return;
+    filtersElement.scrollTop = session.restoreFilterScrollTop();
+  }, [session.restoreFilterScrollTop]);
 
   useEffect(() => {
     session.initializeScope(
@@ -648,66 +659,75 @@ function SearchWorkspaceController({
       </>
     );
   }
-  const showResultsSurface = retainedResponse !== null
-    || query.kind !== 'IDLE'
-    || courseDetail.kind !== 'CLOSED';
-
   return (
     <>
     {directSection === null ? null : <DirectSectionRoute runtime={runtime} sectionKey={directSection} />}
     <div
       className="bcsp-search-workspace"
-      data-results-visible={showResultsSurface ? 'true' : 'false'}
       data-search-mode="courses"
       hidden={directSection !== null}
     >
       <SearchWorkspaceStyles />
-      <div className="bcsp-search-workspace__scope">
-        {externalScopeRejected ? (
-          <p className="bcsp-search-workspace__scope-error" role="alert">
-            {i18n.t('scope.external_definition_unavailable')}
-          </p>
-        ) : null}
-        {typeof scopeValidation === 'object' && scopeValidation?.kind === 'INVALID' ? (
-          <p className="bcsp-search-workspace__scope-error" role="alert">
-            {i18n.t('scope.invalid_options_blocked', {
-              values: scopeValidation.invalidValues.map(({ field, value }) => {
-                const definition = shellState.filterSchema.fields.find(({ stableId }) => stableId === field);
-                const label = definition !== undefined && isMessageKey(definition.i18nKey)
-                  ? i18n.t(definition.i18nKey)
-                  : i18n.t('filter.form_label');
-                return `${label}: ${value}`;
-              }).join(', '),
-            })}
-          </p>
-        ) : null}
-        {scopeValidation === 'ERROR' ? (
-          <p className="bcsp-search-workspace__scope-error" role="alert">
-            {i18n.t('scope.validation_failed')}
-          </p>
-        ) : null}
-        <QueryScopeControl
-          actionPending={scopeValidation === 'PENDING'}
-          applied={appliedScope}
-          candidate={candidateScope}
-          discovery={shellState.discovery}
-          onApply={applyScope}
-          onCandidateChange={changeCandidateScope}
-          renderUnavailableAction={renderUnavailableScopeAction}
-          searchAvailable={searchAvailable}
-          searchFormId={filterFormId}
-          searchPending={query.kind === 'LOADING'}
-          status={serviceStatus ?? null}
-        />
-      </div>
       <section
         aria-labelledby="bcsp-search-filter-title"
         className="bcsp-search-workspace__filters"
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          const rail = event.currentTarget;
+          const pageStep = Math.max(44, Math.floor(rail.clientHeight * 0.9));
+          if (event.key === 'Home') rail.scrollTop = 0;
+          else if (event.key === 'End') rail.scrollTop = rail.scrollHeight;
+          else if (event.key === 'PageDown') rail.scrollTop += pageStep;
+          else if (event.key === 'PageUp') rail.scrollTop -= pageStep;
+          else return;
+          event.preventDefault();
+        }}
+        onScroll={(event) => session.saveFilterScrollTop(event.currentTarget.scrollTop)}
+        ref={filtersRef}
+        tabIndex={0}
       >
         <header className="bcsp-search-workspace__header">
           <h3 id="bcsp-search-filter-title">{i18n.t('search.filters_title')}</h3>
           <p>{i18n.t('search.course_intro')}</p>
         </header>
+        <div className="bcsp-search-workspace__scope">
+          {externalScopeRejected ? (
+            <p className="bcsp-search-workspace__scope-error" role="alert">
+              {i18n.t('scope.external_definition_unavailable')}
+            </p>
+          ) : null}
+          {typeof scopeValidation === 'object' && scopeValidation?.kind === 'INVALID' ? (
+            <p className="bcsp-search-workspace__scope-error" role="alert">
+              {i18n.t('scope.invalid_options_blocked', {
+                values: scopeValidation.invalidValues.map(({ field, value }) => {
+                  const definition = shellState.filterSchema.fields.find(({ stableId }) => stableId === field);
+                  const label = definition !== undefined && isMessageKey(definition.i18nKey)
+                    ? i18n.t(definition.i18nKey)
+                    : i18n.t('filter.form_label');
+                  return `${label}: ${value}`;
+                }).join(', '),
+              })}
+            </p>
+          ) : null}
+          {scopeValidation === 'ERROR' ? (
+            <p className="bcsp-search-workspace__scope-error" role="alert">
+              {i18n.t('scope.validation_failed')}
+            </p>
+          ) : null}
+          <QueryScopeControl
+            actionPending={scopeValidation === 'PENDING'}
+            applied={appliedScope}
+            candidate={candidateScope}
+            discovery={shellState.discovery}
+            onApply={applyScope}
+            onCandidateChange={changeCandidateScope}
+            renderUnavailableAction={renderUnavailableScopeAction}
+            searchAvailable={searchAvailable}
+            searchFormId={filterFormId}
+            searchPending={query.kind === 'LOADING'}
+            status={serviceStatus ?? null}
+          />
+        </div>
         <FilterPanel
           disabled={query.kind === 'LOADING' || !searchAvailable}
           discovery={shellState.discovery}
@@ -734,7 +754,6 @@ function SearchWorkspaceController({
       <section
         aria-labelledby="bcsp-search-results-title"
         className="bcsp-search-workspace__results"
-        hidden={!showResultsSurface}
         ref={resultsRef}
       >
         <h3
