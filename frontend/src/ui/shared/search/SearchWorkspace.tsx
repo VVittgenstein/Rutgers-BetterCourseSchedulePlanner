@@ -43,6 +43,7 @@ import {
   SectionDetailView,
 } from './results';
 import { SearchWorkspaceStyles } from './searchStyles';
+import { SearchControlPolishStyles } from './searchControlPolishStyles';
 
 type QueryState =
   | { readonly kind: 'IDLE' }
@@ -674,6 +675,7 @@ function SearchWorkspaceController({
         onKeyDown={(event) => {
           if (event.target !== event.currentTarget) return;
           const rail = event.currentTarget;
+          if (rail.scrollHeight <= rail.clientHeight + 1) return;
           const pageStep = Math.max(44, Math.floor(rail.clientHeight * 0.9));
           if (event.key === 'Home') rail.scrollTop = 0;
           else if (event.key === 'End') rail.scrollTop = rail.scrollHeight;
@@ -687,7 +689,13 @@ function SearchWorkspaceController({
         tabIndex={0}
       >
         <header className="bcsp-search-workspace__header">
-          <h3 id="bcsp-search-filter-title">{i18n.t('search.filters_title')}</h3>
+          <div className="bcsp-search-workspace__titleline">
+            <span className="bcsp-search-workspace__title-index" aria-hidden="true">01</span>
+            <div>
+              <p className="bcsp-search-workspace__title-kicker">RBCSP / QUERY</p>
+              <h3 id="bcsp-search-filter-title">{i18n.t('search.filters_title')}</h3>
+            </div>
+          </div>
           <p>{i18n.t('search.course_intro')}</p>
         </header>
         <div className="bcsp-search-workspace__scope">
@@ -768,6 +776,7 @@ function SearchWorkspaceController({
           {results}
         </div>
       </section>
+      <SearchControlPolishStyles />
     </div>
     </>
   );

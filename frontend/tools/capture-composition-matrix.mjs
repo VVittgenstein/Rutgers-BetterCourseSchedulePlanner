@@ -475,10 +475,52 @@ async function assertQueryScope(page, scenario) {
     }
   } else if (/hidden|clip/u.test(filterScroll.overflowY)) {
     throw new Error(`${scenario.name}: narrow filter rail clips content ${JSON.stringify(filterScroll)}`);
+  } else if (scenario.viewport.width <= 390) {
+    await assertNarrowDocumentKeyboard(page, scenario.name);
   }
   if (scenario.locale === 'en-US' && scenario.viewport.width === 1440) {
     await assertFilterRailInputs(page, scenario.name);
   }
+}
+
+async function assertNarrowDocumentKeyboard(page, name) {
+  const rail = page.locator('.bcsp-search-workspace__filters');
+  const initial = await rail.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    overflowY: getComputedStyle(element).overflowY,
+    scrollHeight: element.scrollHeight,
+  }));
+  if (/auto|scroll/u.test(initial.overflowY) && initial.scrollHeight > initial.clientHeight + 1) {
+    throw new Error(`${name}: narrow rail still owns an independent scrollport ${JSON.stringify(initial)}`);
+  }
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await rail.focus();
+  for (const key of ['Home', 'End', 'PageUp', 'PageDown']) {
+    const result = await rail.evaluate((element, pressedKey) => {
+      let prevented = false;
+      const listener = (event) => { prevented = event.defaultPrevented; };
+      element.addEventListener('keydown', listener, { once: true });
+      const dispatched = element.dispatchEvent(new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: pressedKey,
+      }));
+      return { dispatched, prevented };
+    }, key);
+    if (!result.dispatched || result.prevented) {
+      throw new Error(`${name}: narrow document-flow rail canceled ${key} ${JSON.stringify(result)}`);
+    }
+  }
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.keyboard.press('PageDown');
+  await page.waitForTimeout(50);
+  const documentScroll = await page.evaluate(() => window.scrollY);
+  if (documentScroll <= 0) {
+    throw new Error(`${name}: PageDown did not continue scrolling the document (${documentScroll})`);
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
 }
 
 async function assertFilterRailInputs(page, name) {

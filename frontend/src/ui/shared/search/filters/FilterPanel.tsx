@@ -734,20 +734,6 @@ export const FILTER_PANEL_CSS = String.raw`
   cursor: not-allowed;
 }
 
-.filter-panel__head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(12rem, auto) auto;
-  gap: var(--bcsp-space-3);
-  align-items: end;
-  padding: var(--bcsp-space-4);
-  border-bottom: 3px solid var(--bcsp-line);
-  background: var(--bcsp-paper);
-}
-
-.filter-panel__kicker,
 .filter-panel__ordinal,
 .filter-panel__scope,
 .filter-panel__sub-label {
@@ -756,29 +742,6 @@ export const FILTER_PANEL_CSS = String.raw`
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.filter-panel__kicker { margin: 0 0 var(--bcsp-space-1); color: var(--bcsp-ink-muted); }
-.filter-panel__title { margin: 0; font-size: clamp(1.75rem, 4vw, 3.75rem); letter-spacing: -0.055em; line-height: 0.9; text-transform: uppercase; }
-.filter-panel__head-note { max-width: 28ch; margin: 0; color: var(--bcsp-ink-muted); font-size: 0.8rem; }
-.filter-panel__submit-status {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  margin: 0;
-  padding: 0.55rem 0.65rem;
-  border-left: 3px solid var(--bcsp-accent);
-  color: var(--bcsp-ink-muted);
-  background: var(--bcsp-paper-raised);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.7rem;
-  line-height: 1.45;
-}
-
-.filter-panel__submit-status strong {
-  display: block;
-  color: var(--bcsp-ink);
 }
 
 .filter-panel__active {
@@ -842,7 +805,6 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__input:disabled, .filter-panel__select:disabled { cursor: not-allowed; opacity: 0.62; }
 .filter-panel__sub-label { display: block; margin-bottom: 0.35rem; color: var(--bcsp-ink-muted); }
 .filter-panel__input-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
-.filter-panel__input-action--pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
 .filter-panel__minor-action { min-height: 2.75rem; padding: 0.55rem 0.75rem; border: 1px solid var(--bcsp-line); border-left: 0; border-radius: 0; color: var(--bcsp-ink); background: var(--bcsp-paper); font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; cursor: pointer; }
 .filter-panel__minor-action:disabled { cursor: not-allowed; opacity: 0.5; }
 .filter-panel__clear-choice { justify-self: start; border-left: 1px solid var(--bcsp-line); }
@@ -926,9 +888,7 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__incomplete small { color: var(--bcsp-ink-muted); font-size: 0.68rem; line-height: 1.4; }
 .filter-panel__incompatible { padding-top: var(--bcsp-space-2); border-top: 1px solid var(--bcsp-line); }
 .filter-panel__token--incompatible { border-color: var(--bcsp-accent); color: var(--bcsp-accent); }
-.filter-panel__credit-range, .filter-panel__building, .filter-panel__eligibility { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--bcsp-space-2); }
-.filter-panel__eligibility { align-items: start; }
-.filter-panel__unit-major { grid-column: 1 / -1; }
+.filter-panel__credit-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--bcsp-space-2); }
 .filter-panel__availability { display: grid; gap: var(--bcsp-space-2); }
 .filter-panel__availability-editor { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; align-items: end; }
 .filter-panel__availability-add { border-left: 0; }
@@ -950,16 +910,13 @@ export const FILTER_PANEL_CSS = String.raw`
 .filter-panel__footer-note { max-width: 55ch; margin: 0; color: var(--bcsp-ink-muted); font-size: 0.78rem; }
 
 @container (max-width: 42rem) {
-  .filter-panel__head { grid-template-columns: minmax(0, 1fr) auto; }
-  .filter-panel__head-note { grid-column: 1 / -1; }
   .filter-panel__active, .filter-panel__footer { grid-template-columns: 1fr; }
   .filter-panel__grid { grid-template-columns: minmax(0, 1fr); }
   .filter-panel__row, .filter-panel__row:nth-child(odd) { grid-column: 1; border-right: 0; }
-  .filter-panel__credit-range, .filter-panel__building, .filter-panel__eligibility { grid-template-columns: minmax(0, 1fr); }
-  .filter-panel__unit-major { grid-column: 1; }
+  .filter-panel__credit-range { grid-template-columns: minmax(0, 1fr); }
   .filter-panel__availability-editor { grid-template-columns: minmax(0, 1fr); gap: var(--bcsp-space-2); }
   .filter-panel__availability-add, .filter-panel__minor-action { border-left: 1px solid var(--bcsp-line); }
-  .filter-panel__input-action, .filter-panel__input-action--pair { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
+  .filter-panel__input-action { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
   .filter-panel__subject-search { grid-template-columns: 1fr; }
   .filter-panel__subject-count { padding: 0; text-align: left; }
 }
@@ -1344,6 +1301,11 @@ export function FilterPanel({
     <>
       <style data-bcsp-filter-panel="">{FILTER_PANEL_CSS}</style>
       <form ref={formRef} id={formId} className="filter-panel" aria-label={i18n.t('filter.form_label')} onSubmit={submit}>
+        <header className="filter-panel__matrix-head">
+          <p>{i18n.t('filter.matrix_kicker', { count: fields.length })}</p>
+          <h3>{i18n.t('filter.form_label')}</h3>
+          <span>{i18n.t('filter.matrix_description')}</span>
+        </header>
         <fieldset
           aria-busy={disabled && searchAvailable ? true : undefined}
           className="filter-panel__gate"

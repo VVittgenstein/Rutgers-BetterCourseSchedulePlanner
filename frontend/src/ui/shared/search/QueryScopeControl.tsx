@@ -59,8 +59,7 @@ const QUERY_SCOPE_CSS = String.raw`
 .query-scope__term-meta,
 .query-scope__campus-state,
 .query-scope__campus-diagnostic,
-.query-scope__status,
-.query-scope__error {
+.query-scope__status {
   margin: 0;
   color: var(--bcsp-ink-muted);
   font-family: var(--bcsp-font-data);
@@ -113,7 +112,6 @@ const QUERY_SCOPE_CSS = String.raw`
 .query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='campus-CM'] { grid-column: 1; grid-row: 3; }
 .query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='scope-action'] { grid-column: 2; grid-row: 3; }
 .query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='search'] { grid-column: 1 / -1; grid-row: 4; }
-.query-scope__error { color: var(--bcsp-danger, #8f1d14); }
 .query-scope__empty { grid-column: 1 / -1; padding: 1rem; background: var(--bcsp-paper); }
 @media (hover: hover) and (pointer: fine) {
   .query-scope__option:hover:not(:has(input:disabled)) { background: var(--bcsp-paper-raised); }
@@ -400,7 +398,7 @@ export function QueryScopeControl({
           ? 'scope.term_state_terminal'
           : null;
     return (
-      <div className="query-scope__cell query-scope__term" data-readiness={readiness} data-scope-cell={`term-${term.relativeOffset}`} key={term.term}>
+      <div className="query-scope__cell query-scope__term" data-readiness={readiness} data-selected={candidate.term === term.term} data-scope-cell={`term-${term.relativeOffset}`} key={term.term}>
         <label className="query-scope__option">
           <input
             checked={candidate.term === term.term}
@@ -445,7 +443,7 @@ export function QueryScopeControl({
               : 'scope.target_unrequested';
     const detailId = `${baseId}-campus-${campus}-status`;
     return (
-      <div className="query-scope__cell" data-scope-cell={`campus-${campus}`} key={campus}>
+      <div className="query-scope__cell query-scope__campus" data-ready={usable} data-scope-cell={`campus-${campus}`} key={campus}>
         <label className="query-scope__option">
           <input
             aria-describedby={detailId}
@@ -459,8 +457,9 @@ export function QueryScopeControl({
             })}
             type="checkbox"
           />
-          <span className="query-scope__option-copy">
+          <span className="query-scope__option-copy query-scope__campus-copy">
             <strong><samp>{campus}</samp></strong>
+            <small>{i18n.t(`scope.campus_name.${campus}`)}</small>
           </span>
         </label>
         <span className="query-scope__campus-details" id={detailId}>
@@ -488,7 +487,7 @@ export function QueryScopeControl({
   };
 
   const actionCell = (
-    <div className="query-scope__cell query-scope__cell--action" data-scope-cell="scope-action" key="action">
+    <div className="query-scope__cell query-scope__cell--action query-scope__action" data-scope-cell="scope-action" key="action">
       {unavailableAction ?? (
         <button
           className="bcsp-action bcsp-action--accent"
@@ -521,7 +520,7 @@ export function QueryScopeControl({
 
   const searchCell = (
     <div
-      className="query-scope__cell query-scope__cell--search"
+      className="query-scope__cell query-scope__cell--search query-scope__search"
       data-scope-cell="search"
       data-span={runtime === 'PUBLIC' || undefined}
       key="search"

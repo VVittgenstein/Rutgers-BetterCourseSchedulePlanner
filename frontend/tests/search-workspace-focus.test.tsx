@@ -177,6 +177,65 @@ afterEach(() => {
 });
 
 describe('search focus continuity', () => {
+  it.each(['Home', 'End', 'PageUp', 'PageDown'] as const)(
+    'leaves %s to the document when the filter rail is not independently scrollable',
+    (key) => {
+      const runtime = runtimeWith({});
+      render(
+        <BcspI18nProvider initialLocale="en-US">
+          <AppRouterProvider initialPath="/">
+            <SearchSessionProvider>
+              <SearchWorkspace runtime={runtime} serviceStatus={readyStatus} shellState={shellState} />
+            </SearchSessionProvider>
+          </AppRouterProvider>
+        </BcspI18nProvider>,
+      );
+
+      const filterRail = document.querySelector<HTMLElement>('.bcsp-search-workspace__filters');
+      expect(filterRail).not.toBeNull();
+      if (filterRail === null) throw new Error('Expected the filter rail.');
+      Object.defineProperty(filterRail, 'clientHeight', { configurable: true, value: 900 });
+      Object.defineProperty(filterRail, 'scrollHeight', { configurable: true, value: 900 });
+
+      const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key });
+      filterRail.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    },
+  );
+
+  it.each([
+    { key: 'Home', start: 450, expected: 0 },
+    { key: 'End', start: 450, expected: 1200 },
+    { key: 'PageUp', start: 450, expected: 180 },
+    { key: 'PageDown', start: 450, expected: 720 },
+  ] as const)(
+    'handles $key inside the independently scrollable desktop filter rail',
+    ({ expected, key, start }) => {
+      const runtime = runtimeWith({});
+      render(
+        <BcspI18nProvider initialLocale="en-US">
+          <AppRouterProvider initialPath="/">
+            <SearchSessionProvider>
+              <SearchWorkspace runtime={runtime} serviceStatus={readyStatus} shellState={shellState} />
+            </SearchSessionProvider>
+          </AppRouterProvider>
+        </BcspI18nProvider>,
+      );
+
+      const filterRail = document.querySelector<HTMLElement>('.bcsp-search-workspace__filters');
+      expect(filterRail).not.toBeNull();
+      if (filterRail === null) throw new Error('Expected the filter rail.');
+      Object.defineProperty(filterRail, 'clientHeight', { configurable: true, value: 300 });
+      Object.defineProperty(filterRail, 'scrollHeight', { configurable: true, value: 1200 });
+      filterRail.scrollTop = start;
+
+      const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key });
+      filterRail.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(filterRail.scrollTop).toBe(expected);
+    },
+  );
+
   it('restores the independently scrolling filter rail after the Course workspace remounts', async () => {
     const scrollTo = vi.spyOn(globalThis, 'scrollTo').mockImplementation(() => undefined);
     const runtime = runtimeWith({});
