@@ -1,37 +1,168 @@
 # Rutgers Better Course Schedule Planner
 
-RBCSP is a course-centered Rutgers search, filtering, section-status, and live-watch application. The repository is currently in the P7 implementation phase; no end-user release candidate has been published yet.
+Rutgers Better Course Schedule Planner (RBCSP) is a course-centered search,
+filtering, section-status, and live-watch application for Rutgers University.
+It is built as a Rust workspace with a shared React frontend and supports two
+explicit product targets:
 
-## Delivery model
+- **Local desktop runtime** — starts a loopback-only web application, keeps
+  user state on the local machine, and opens the browser automatically.
+- **Public deployment runtime** — serves the public web application with
+  operational storage, refresh scheduling, and server-side watch services.
 
-The project has one shared implementation and two delivery targets:
+The project is independent and is not affiliated with or endorsed by Rutgers
+University.
 
-- `bcsp-local`: the Windows local composition root. A later P7 task packages it as `RBCSP.exe` with package-relative runtime data created on first start.
-- `bcsp-server`: the Linux public composition root. A later P7 task packages it with service-owned runtime state and public operations assets.
+## Release downloads
 
-Both entries consume the same shared Rust domain, Catalog, query, Open, watch, API, and operational-storage boundaries. Target-specific behavior is confined to narrow local or public adapters; it is not selected with a shared runtime mode or mutually exclusive business feature.
+Version `0.1.0` provides two verified x86-64 archives in the repository's
+[GitHub Releases](https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases):
 
-The frontend similarly has one shared React source graph with explicit local and public composition roots. Node.js and npm are pinned build/test tools only and are not part of either final runtime package.
+| Platform | Asset | Use case |
+| --- | --- | --- |
+| Windows x86-64 | `rbcsp-windows-x86_64-0.1.0.zip` | Local desktop runtime |
+| Linux x86-64 | `rbcsp-linux-x86_64-0.1.0.tar.gz` | Public deployment runtime |
 
-## Current engineering status
+Each archive includes `BUILD-PROVENANCE.json`, `MANIFEST.json`,
+`SBOM.cdx.json`, `SHA256SUMS`, the ISC license, and third-party notices.
 
-P7 tasks are delivered as individually validated commits. The current architecture work establishes:
+### Windows quick start
 
-- one Cargo workspace with explicit shared, local-only, public-only, and binary packages;
-- independent `bcsp-local` and `bcsp-server` dependency closures;
-- explicit local and public frontend entries;
-- fail-closed Rust and TypeScript import/reachability guards.
+1. Download and extract `rbcsp-windows-x86_64-0.1.0.zip`.
+2. Keep the extracted directory intact.
+3. Run `Start-RBCSP.cmd`.
+4. RBCSP opens in the default browser and stores writable state under
+   `%LOCALAPPDATA%\\RBCSP` by default.
 
-Product domain behavior, storage migrations, Rutgers adapters, the complete UI, packaging, and real-world E2E validation will be implemented and accepted by their later owner tasks. Until those gates pass, this branch should be treated as development source rather than an installable release.
+The Windows archive is intended for a real Windows x86-64 host and requires an
+installed Chrome browser for the packaged runtime workflow.
 
-## Legacy migration inputs
+### Linux deployment
 
-The older Node/Fastify backend, workers, launchers, and previous frontend source remain temporarily in the repository as frozen migration inputs. They are excluded from the active P7 target graph and are not supported release or runtime entrypoints. Their valuable contracts and tests are migrated by the responsible P7 tasks before final cleanup.
+1. Download and extract `rbcsp-linux-x86_64-0.1.0.tar.gz`.
+2. Review `docs/operator-runbook.md` and `config/bcsp.env.example` in the
+   archive.
+3. Configure the public origin, operational database path, mail delivery, and
+   reverse proxy/TLS for your environment.
+4. Install and run `bin/bcsp-server`; example `systemd` and Caddy files are
+   included.
 
-## Data and security boundary
+The Linux archive targets x86-64 Linux with glibc 2.31 or newer. It is a
+self-hosted deployment package, not a desktop installer.
 
-The repository and final packages must not contain credentials, `.secrets/`, personal information, prebuilt databases, SQLite sidecars, seeds, or real Rutgers Catalog/Open payloads. Runtime databases are created on first start by the target runtime; production deployment remains a separate post-P7 authorization.
+## Product capabilities
+
+RBCSP currently provides:
+
+- Rutgers term discovery and course-data refresh;
+- keyword search across course and section fields;
+- subject, campus, level, credit, meeting-time, day, instructor, and section
+  status filters;
+- course and section detail views;
+- open/closed section status and freshness metadata;
+- live-watch workflows for tracked sections;
+- English and Simplified Chinese interface copy;
+- separate local and public frontend capability boundaries.
+
+Rutgers remains the authoritative source for course and section data. Data can
+be delayed, incomplete, or unavailable, and users should confirm important
+registration decisions in official Rutgers systems.
+
+## Repository layout
+
+```text
+apps/        Rust entry points for the local and public runtimes
+crates/      Shared domain, query, storage, Rutgers client, and runtime crates
+frontend/    Shared React source with local and public build targets
+api/         TypeScript API and supporting services retained in the workspace
+packaging/   Release builders, validators, manifests, and deployment templates
+deploy/      Deployment configuration and operational assets
+configs/     Checked-in example and schema configuration
+```
+
+## Development
+
+### Prerequisites
+
+- Rust stable toolchain
+- Node.js `24.18.0` (see `.node-version`)
+- npm `11.16.0` for the frontend workspace
+- PowerShell 7 for the Windows packaging scripts
+
+### Frontend
+
+```bash
+cd frontend
+npm ci
+npm run verify
+```
+
+Useful target-specific commands:
+
+```bash
+npm run dev:local
+npm run dev:public
+npm run build:local
+npm run build:public
+npm run test:product
+```
+
+The local entry point is `frontend/src/entry.local.tsx`; the public entry point
+is `frontend/src/entry.public.tsx`. Import-boundary checks prevent one target
+from accidentally depending on the other target's private modules.
+
+### Rust workspace
+
+```bash
+cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+```
+
+Run the local product from source:
+
+```bash
+cargo run -p bcsp-local
+```
+
+The local runtime binds to loopback, opens the browser, and places its writable
+state in the platform-specific local data directory.
+
+Run the public server from source:
+
+```bash
+cargo run -p bcsp-server
+```
+
+A production public deployment also requires the operational database, mail,
+origin, TLS/reverse-proxy, and service configuration described by the Linux
+release runbook and the files under `packaging/linux/`.
+
+## Verification and release integrity
+
+Release tooling lives under `packaging/`. The release workflow validates
+archive structure, manifests, checksums, provenance, SBOMs, line endings,
+platform binaries, and product smoke tests before publication.
+
+After downloading an asset, compare it with the included checksum file:
+
+```powershell
+Get-FileHash .\rbcsp-windows-x86_64-0.1.0.zip -Algorithm SHA256
+```
+
+```bash
+sha256sum rbcsp-linux-x86_64-0.1.0.tar.gz
+```
+
+## Security and privacy
+
+Do not commit credentials, mail passwords, API tokens, production databases,
+or user data. Use the checked-in example configuration as a template and keep
+real values outside version control.
+
+The local target keeps personal watch state on the user's machine. Public
+deployments are operator-managed and must be configured with appropriate
+secrets, access controls, TLS, backups, and retention policies.
 
 ## License
 
-ISC — Copyright (c) 2026 VVittgenstein
+RBCSP is licensed under the [ISC License](LICENSE).
