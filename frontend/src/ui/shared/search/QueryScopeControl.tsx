@@ -491,6 +491,7 @@ export function QueryScopeControl({
       {unavailableAction ?? (
         <button
           className="bcsp-action bcsp-action--accent"
+          aria-busy={scopeAction.reason === 'VALIDATING' || undefined}
           aria-describedby={scopeAction.reason === 'VALIDATING'
             ? validationStatusId
             : scopeAction.kind === 'APPLIED'
@@ -527,6 +528,7 @@ export function QueryScopeControl({
     >
       <button
         className="bcsp-action bcsp-action--accent"
+        aria-busy={searchPending || undefined}
         aria-describedby={!effectiveSearchAvailable && !searchPending ? searchReasonId : undefined}
         disabled={!effectiveSearchAvailable || searchPending}
         form={searchFormId}

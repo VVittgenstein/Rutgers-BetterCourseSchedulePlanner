@@ -368,6 +368,48 @@ describe('RC3 query scope contract', () => {
       ...baseInput, status: status('PUBLIC', terms, []),
     }).kind).toBe('APPLY');
   });
+  it('exposes pending Apply and Search operations through aria-busy without changing button labels', () => {
+    const terms = [visible('72026', 0), visible('92026', 1)];
+    const serviceStatus = status('PUBLIC', terms, [
+      target('72026', 'NB'), target('72026', 'NK'), target('72026', 'CM'),
+    ]);
+    const view = render(
+      <BcspI18nProvider initialLocale="en-US">
+        <QueryScopeControl
+          actionPending
+          applied={null}
+          candidate={{ term: '72026', campuses: ['NB'] }}
+          discovery={discovery(terms.map(({ term }) => term))}
+          onApply={vi.fn()}
+          onCandidateChange={vi.fn()}
+          searchAvailable
+          searchFormId="test-filter-form"
+          status={serviceStatus}
+        />
+      </BcspI18nProvider>,
+    );
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    expect(apply.getAttribute('aria-busy')).toBe('true');
+
+    view.rerender(
+      <BcspI18nProvider initialLocale="en-US">
+        <QueryScopeControl
+          applied={{ term: '72026', campuses: ['NB'] }}
+          candidate={{ term: '72026', campuses: ['NB'] }}
+          discovery={discovery(terms.map(({ term }) => term))}
+          onApply={vi.fn()}
+          onCandidateChange={vi.fn()}
+          searchAvailable
+          searchFormId="test-filter-form"
+          searchPending
+          status={serviceStatus}
+        />
+      </BcspI18nProvider>,
+    );
+    const search = screen.getByRole('button', { name: 'Search' });
+    expect(search.getAttribute('aria-busy')).toBe('true');
+  });
+
   it('never falls back to the unbounded Discovery term list before Status V2 arrives', () => {
     render(
       <BcspI18nProvider initialLocale="en-US">
@@ -638,6 +680,8 @@ describe('RC3 query scope contract', () => {
     fireEvent.click(pull);
     expect(onPull).toHaveBeenCalledWith('12026');
     await waitFor(() => expect(pull.disabled).toBe(true));
+    expect(pull.textContent).toBe('Pull');
+    expect(pull.getAttribute('aria-busy')).toBe('true');
     expect(screen.queryByRole('button', { name: /Continue|Loading|Applied/u })).toBeNull();
 
     view.rerender(

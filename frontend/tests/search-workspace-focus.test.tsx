@@ -236,6 +236,47 @@ describe('search focus continuity', () => {
     },
   );
 
+  it('applies press displacement only to pointer input, never keyboard activation', () => {
+    const runtime = runtimeWith({});
+    render(
+      <BcspI18nProvider initialLocale="en-US">
+        <AppRouterProvider initialPath="/">
+          <SearchSessionProvider>
+            <SearchWorkspace runtime={runtime} serviceStatus={readyStatus} shellState={shellState} />
+          </SearchSessionProvider>
+        </AppRouterProvider>
+      </BcspI18nProvider>,
+    );
+
+    applyScope();
+    const filterRail = document.querySelector<HTMLElement>('.bcsp-search-workspace__filters');
+    const search = screen.getByRole('button', { name: 'Search' });
+    expect(filterRail).not.toBeNull();
+    if (filterRail === null) throw new Error('Expected the filter rail.');
+
+    search.focus();
+    for (const key of [' ', 'Enter']) {
+      fireEvent.keyDown(search, { key });
+      expect(search.hasAttribute('data-pointer-pressed')).toBe(false);
+      fireEvent.keyUp(search, { key });
+    }
+
+    fireEvent.pointerDown(search, { pointerId: 7, pointerType: 'mouse' });
+    expect(search.getAttribute('data-pointer-pressed')).toBe('true');
+    fireEvent.pointerCancel(search, { pointerId: 7, pointerType: 'mouse' });
+    expect(search.hasAttribute('data-pointer-pressed')).toBe(false);
+
+    fireEvent.pointerDown(search, { pointerId: 8, pointerType: 'mouse' });
+    expect(search.getAttribute('data-pointer-pressed')).toBe('true');
+    fireEvent.pointerLeave(filterRail, { pointerId: 8, pointerType: 'mouse' });
+    expect(search.hasAttribute('data-pointer-pressed')).toBe(false);
+
+    fireEvent.pointerDown(search, { pointerId: 9, pointerType: 'mouse' });
+    expect(search.getAttribute('data-pointer-pressed')).toBe('true');
+    fireEvent.pointerUp(search, { pointerId: 9, pointerType: 'mouse' });
+    expect(search.hasAttribute('data-pointer-pressed')).toBe(false);
+  });
+
   it('restores the independently scrolling filter rail after the Course workspace remounts', async () => {
     const scrollTo = vi.spyOn(globalThis, 'scrollTo').mockImplementation(() => undefined);
     const runtime = runtimeWith({});

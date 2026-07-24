@@ -44,6 +44,7 @@ import {
 } from './results';
 import { SearchWorkspaceStyles } from './searchStyles';
 import { SearchControlPolishStyles } from './searchControlPolishStyles';
+import { SearchControlMotionStyles } from './searchControlMotionStyles';
 
 type QueryState =
   | { readonly kind: 'IDLE' }
@@ -672,6 +673,28 @@ function SearchWorkspaceController({
       <section
         aria-labelledby="bcsp-search-filter-title"
         className="bcsp-search-workspace__filters"
+        onPointerDown={(event) => {
+          const target = event.target instanceof Element
+            ? event.target.closest<HTMLButtonElement>('button:not(:disabled)')
+            : null;
+          if (target === null) return;
+          target.dataset.pointerPressed = 'true';
+        }}
+        onPointerUp={(event) => {
+          for (const target of event.currentTarget.querySelectorAll<HTMLElement>('[data-pointer-pressed="true"]')) {
+            target.removeAttribute('data-pointer-pressed');
+          }
+        }}
+        onPointerCancel={(event) => {
+          for (const target of event.currentTarget.querySelectorAll<HTMLElement>('[data-pointer-pressed="true"]')) {
+            target.removeAttribute('data-pointer-pressed');
+          }
+        }}
+        onPointerLeave={(event) => {
+          for (const target of event.currentTarget.querySelectorAll<HTMLElement>('[data-pointer-pressed="true"]')) {
+            target.removeAttribute('data-pointer-pressed');
+          }
+        }}
         onKeyDown={(event) => {
           if (event.target !== event.currentTarget) return;
           const rail = event.currentTarget;
@@ -777,6 +800,7 @@ function SearchWorkspaceController({
         </div>
       </section>
       <SearchControlPolishStyles />
+      <SearchControlMotionStyles />
     </div>
     </>
   );

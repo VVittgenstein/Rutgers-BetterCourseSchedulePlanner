@@ -78,6 +78,7 @@ export function LocalTermPullAction({
   return (
     <>
       <button
+        aria-busy={requestPending || undefined}
         aria-describedby={[
           accessiblePublicationReason === null ? null : publicationReasonId,
           reason === null ? null : disabledReasonId,

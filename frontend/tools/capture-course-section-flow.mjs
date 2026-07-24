@@ -304,6 +304,70 @@ async function assertNoOverflow(page, name) {
   }
 }
 
+async function assertPointerOnlyPressFeedback(page, name, requests) {
+  const search = page.getByRole('button', { name: 'Search', exact: true });
+  const queriesBeforeGestures = requests.filter(({ path }) => path === '/api/v1/query/courses').length;
+  await search.scrollIntoViewIfNeeded();
+  const reducedBox = await search.boundingBox();
+  if (reducedBox === null) throw new Error(`${name}: Search button is not measurable in reduced motion`);
+  await page.mouse.move(reducedBox.x + reducedBox.width / 2, reducedBox.y + reducedBox.height / 2);
+  await page.mouse.down();
+  const reducedPointerState = await search.evaluate((element) => ({
+    pressed: element.getAttribute('data-pointer-pressed'),
+    transform: getComputedStyle(element).transform,
+  }));
+  await page.mouse.move(reducedBox.x + reducedBox.width + 24, reducedBox.y + reducedBox.height / 2);
+  await page.mouse.up();
+  if (reducedPointerState.pressed !== 'true' || reducedPointerState.transform !== 'none') {
+    throw new Error(`${name}: reduced-motion pointer press must retain zero transform ${JSON.stringify(reducedPointerState)}`);
+  }
+  if (await search.getAttribute('data-pointer-pressed') !== null) {
+    throw new Error(`${name}: reduced-motion pointer state did not clear after pointerup`);
+  }
+  if (requests.filter(({ path }) => path === '/api/v1/query/courses').length !== queriesBeforeGestures) {
+    throw new Error(`${name}: reduced-motion pointer cancellation unexpectedly submitted a query`);
+  }
+
+  await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
+  try {
+    for (const key of [' ', 'Enter']) {
+      await search.focus();
+      await search.evaluate((element) => {
+        element.addEventListener('click', (event) => event.preventDefault(), { once: true });
+      });
+      await page.keyboard.down(key);
+      const keyboardTransform = await search.evaluate((element) => getComputedStyle(element).transform);
+      await page.keyboard.up(key);
+      if (keyboardTransform !== 'none') {
+        throw new Error(`${name}: keyboard ${JSON.stringify(key)} triggered pointer displacement (${keyboardTransform})`);
+      }
+    }
+
+    await search.scrollIntoViewIfNeeded();
+    const box = await search.boundingBox();
+    if (box === null) throw new Error(`${name}: Search button is not measurable`);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    const pointerState = await search.evaluate((element) => ({
+      pressed: element.getAttribute('data-pointer-pressed'),
+      transform: getComputedStyle(element).transform,
+    }));
+    await page.mouse.move(box.x + box.width + 24, box.y + box.height / 2);
+    await page.mouse.up();
+    if (pointerState.pressed !== 'true' || pointerState.transform !== 'matrix(1, 0, 0, 1, 0, 1)') {
+      throw new Error(`${name}: pointer press feedback was not the required 1px translation ${JSON.stringify(pointerState)}`);
+    }
+    if (await search.getAttribute('data-pointer-pressed') !== null) {
+      throw new Error(`${name}: pointer press state did not clear after pointerup`);
+    }
+    if (requests.filter(({ path }) => path === '/api/v1/query/courses').length !== queriesBeforeGestures) {
+      throw new Error(`${name}: pointer or keyboard feedback gesture unexpectedly submitted a query`);
+    }
+  } finally {
+    await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });
+  }
+}
+
 async function assertStyledOptionScroll(page, name) {
   const bandGroup = page.locator('[role="group"][aria-label="Course number band"]');
   const scrollRegion = page.locator('.filter-panel__dictionary-options').filter({ has: bandGroup });
@@ -538,8 +602,14 @@ try {
     const bandGroup = page.locator('[role="group"][aria-label="Course number band"]');
     await bandGroup.getByRole('checkbox', { name: '200-level', exact: true }).check();
     await page.getByRole('group', { name: 'Open status' }).getByRole('checkbox', { name: 'Open' }).check();
+    if (viewport.width === 1440) await assertPointerOnlyPressFeedback(page, name, requests);
+    const queriesBeforeSearch = requests.filter(({ path }) => path === '/api/v1/query/courses').length;
     await page.getByRole('button', { name: 'Search', exact: true }).click();
     await page.getByRole('heading', { name: '01:198:211' }).waitFor();
+    const queriesAfterSearch = requests.filter(({ path }) => path === '/api/v1/query/courses').length;
+    if (queriesAfterSearch !== queriesBeforeSearch + 1) {
+      throw new Error(`${name}: explicit Search submitted ${queriesAfterSearch - queriesBeforeSearch} course queries instead of one`);
+    }
     const query = requests.find(({ path }) => path === '/api/v1/query/courses');
     if (query?.body?.payload?.filters?.contractVersion !== 3
       || query.body.payload.filters.values.courseNumberBands?.[0] !== 200
