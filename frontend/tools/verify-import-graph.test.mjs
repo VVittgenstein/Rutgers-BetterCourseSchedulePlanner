@@ -18,7 +18,7 @@ import {
 
 const toolsDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(toolsDirectory, '../..');
-const sharedDenyPath = resolve(repositoryRoot, 'tools/architecture/p4-public-source-deny.json');
+const sharedDenyPath = resolve(repositoryRoot, 'tools/architecture/public-source-deny.json');
 
 function denyInput() {
   return structuredClone(JSON.parse(readFileSync(sharedDenyPath, 'utf8')).capabilities);
@@ -61,7 +61,7 @@ function analyze(files = baselineFiles(), publicSourceDeny = denyInput()) {
   });
 }
 
-test('accepts the explicit dual-entry shared graph and frozen 18/212 deny input', () => {
+test('accepts the explicit dual-entry shared graph and 18/212 deny policy', () => {
   const report = analyze();
   assert.equal(report.state, 'PASS', report.errors.join('\n'));
   assert.equal(report.activeUniverse.fileCount, 5);
@@ -79,7 +79,7 @@ test('accepts the explicit dual-entry shared graph and frozen 18/212 deny input'
   ]);
 });
 
-test('accepts only the self-contained frozen deny snapshot identity', () => {
+test('accepts only the self-contained deny policy identity', () => {
   assert.deepEqual(validateDenyDocument(denyDocument()), []);
   const liveDependency = denyDocument();
   liveDependency.runtimeSourceRequired = true;
@@ -220,7 +220,7 @@ test('ignores deny-marker examples that exist only in comments', () => {
   assert.equal(report.state, 'PASS', report.errors.join('\n'));
 });
 
-test('rejects missing, substituted, and reordered frozen deny markers', async (t) => {
+test('rejects missing, substituted, and reordered deny-policy markers', async (t) => {
   const cases = [
     ['missing row', (rows) => rows.slice(0, -1)],
     [
@@ -251,7 +251,7 @@ test('rejects missing, substituted, and reordered frozen deny markers', async (t
       assert.equal(report.state, 'FAIL');
       assert.match(
         report.errors.join('\n'),
-        /exactly 18 capabilities|frozen P4 contract/u,
+        /exactly 18 capabilities|repository policy/u,
       );
     });
   }

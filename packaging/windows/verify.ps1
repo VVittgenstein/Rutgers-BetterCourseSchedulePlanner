@@ -311,10 +311,10 @@ if ($runBrowserSmoke) {
 }
 
 $tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
-$verificationRoot = Join-Path $tempBase ("rbcsp-p7-4-002-" + [Guid]::NewGuid().ToString('N'))
+$verificationRoot = Join-Path $tempBase ("rbcsp-package-verify-" + [Guid]::NewGuid().ToString('N'))
 $verificationRoot = [System.IO.Path]::GetFullPath($verificationRoot)
 Assert-Condition ($verificationRoot.StartsWith($tempBase + '\', [StringComparison]::OrdinalIgnoreCase)) 'Verification root escaped the system temp directory.'
-Assert-Condition ([System.IO.Path]::GetFileName($verificationRoot).StartsWith('rbcsp-p7-4-002-', [StringComparison]::Ordinal)) 'Unexpected verification root name.'
+Assert-Condition ([System.IO.Path]::GetFileName($verificationRoot).StartsWith('rbcsp-package-verify-', [StringComparison]::Ordinal)) 'Unexpected verification root name.'
 
 $unicodePath = 'RBCSP verify ' + [char]0x96ea + '\candidate ' + [char]0x5305
 $candidateRoot = Join-Path $verificationRoot $unicodePath
@@ -597,7 +597,7 @@ finally {
     if ($verificationSucceeded -and (Test-Path -LiteralPath $verificationRoot)) {
         $resolved = [System.IO.Path]::GetFullPath($verificationRoot)
         if ($resolved.StartsWith($tempBase + '\', [StringComparison]::OrdinalIgnoreCase) -and
-            [System.IO.Path]::GetFileName($resolved).StartsWith('rbcsp-p7-4-002-', [StringComparison]::Ordinal)) {
+            [System.IO.Path]::GetFileName($resolved).StartsWith('rbcsp-package-verify-', [StringComparison]::Ordinal)) {
             Remove-Item -LiteralPath $resolved -Recurse -Force
         }
     }

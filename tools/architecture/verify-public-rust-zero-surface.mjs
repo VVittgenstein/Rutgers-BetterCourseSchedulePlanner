@@ -27,7 +27,7 @@ export const PUBLIC_RUST_SURFACE_SCOPES = Object.freeze({
   STORAGE: 'FULL_PUBLIC_RUST_CLOSURE_PLUS_OPERATIONAL_MIGRATIONS',
   PACKAGE: 'PRE_PACKAGE_INPUTS',
 });
-const DENY_PATH = 'tools/architecture/p4-public-source-deny.json';
+const DENY_PATH = 'tools/architecture/public-source-deny.json';
 const EXPECTED_CAPABILITY_COUNT = 18;
 const LOCAL_ONLY_PACKAGES = Object.freeze(['bcsp-local-user-state', 'bcsp-local-runtime', 'bcsp-local']);
 const SUPPLEMENTAL_MARKERS = Object.freeze({

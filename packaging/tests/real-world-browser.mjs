@@ -603,5 +603,5 @@ if (failureCode !== null) {
   process.exit(1);
 }
 process.stdout.write(
-  'P7_5_LINUX_REAL_WORLD_BROWSER_PASS scenarios=2 tls=1 same_origin=1 websocket=2 audio_preview_ready=2 cadence_config=30/10\n',
+  'LINUX_REAL_WORLD_BROWSER_PASS scenarios=2 tls=1 same_origin=1 websocket=2 audio_preview_ready=2 cadence_config=30/10\n',
 );

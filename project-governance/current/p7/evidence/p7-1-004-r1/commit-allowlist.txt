@@ -1,9 +1,0 @@
-crates/bcsp-contracts/tests/wire_golden.rs
-project-governance/current/p7/04r1-p7-1-004-r1-windows-golden-line-ending-repair.md
-project-governance/current/p7/04r1a-p7-1-004-r1-windows-golden-line-ending-repair.json
-project-governance/current/p7/evidence/p7-1-004-r1/commit-allowlist.txt
-project-governance/current/p7/evidence/p7-1-004-r1/repair-quality.json
-project-governance/current/p7/records/p7-1-004-r1-completion.json
-project-governance/current/p7/records/p7-1-004-r1-completion.md
-project-governance/current/p7/tools/build-p7-1-004-r1-evidence.ps1
-project-governance/current/p7/tools/validate-p7-1-004-r1.ps1

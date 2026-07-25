@@ -11,7 +11,7 @@ const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
     : undefined);
 const outputDirectory = resolve(
   process.cwd(),
-  process.env.BCSP_VISUAL_OUTPUT ?? '../.cache/rc-iteration/round-02/visual-shell',
+  process.env.BCSP_VISUAL_OUTPUT ?? 'test-results/ui-shell',
 );
 const filterSchema = JSON.parse(await readFile(
   resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
@@ -286,4 +286,4 @@ try {
   await browser.close();
 }
 
-process.stdout.write(`RC Round 2 shell snapshots: PASS (${scenarios.length}/${scenarios.length})\n`);
+process.stdout.write(`UI shell snapshots: PASS (${scenarios.length}/${scenarios.length})\n`);

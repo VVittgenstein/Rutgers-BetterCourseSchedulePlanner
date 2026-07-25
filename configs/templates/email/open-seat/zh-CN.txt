@@ -1,1 +1,0 @@
-你的 {{indexNumber}}（{{courseTitle}}）现有空位。

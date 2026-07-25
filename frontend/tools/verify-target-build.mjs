@@ -431,7 +431,7 @@ export function verifyBuildDirectory(target, root = frontendRoot) {
   }
   const builtManifest = JSON.parse(builtManifestText);
   const denyDocument = JSON.parse(
-    readFileSync(resolve(repositoryRoot, 'tools/architecture/p4-public-source-deny.json'), 'utf8'),
+    readFileSync(resolve(repositoryRoot, 'tools/architecture/public-source-deny.json'), 'utf8'),
   );
   return verifyTargetArtifacts({
     target,
@@ -445,14 +445,14 @@ export function verifyBuildDirectory(target, root = frontendRoot) {
 function renderHumanReport(report) {
   if (report.state === 'FAIL') {
     return [
-      `P7.1-013 ${report.target} target build: FAIL`,
+      `${report.target} target build: FAIL`,
       ...report.errors.map((error) => `- ${error}`),
     ].join('\n');
   }
   const zeroSurface = report.target === 'public'
     ? `; public DOM/ROUTE/I18N/BUNDLE assertions: ${report.publicZeroSurface.assertionCount}`
     : '';
-  return `P7.1-013 ${report.target} target build: PASS; allowed capabilities: ${report.allowedCapabilityCount}${zeroSurface}`;
+  return `${report.target} target build: PASS; allowed capabilities: ${report.allowedCapabilityCount}${zeroSurface}`;
 }
 
 function isMainModule() {
@@ -473,11 +473,11 @@ if (isMainModule()) {
   } catch (error) {
     const failure = {
       schemaVersion: 1,
-      taskId: 'P7.1-013',
+      checkId: 'target-build',
       state: 'FAIL',
       errors: [error instanceof Error ? error.message : String(error)],
     };
-    process.stdout.write(`${jsonMode ? JSON.stringify(failure, null, 2) : `P7.1-013 target build: FAIL\n- ${failure.errors[0]}`}\n`);
+    process.stdout.write(`${jsonMode ? JSON.stringify(failure, null, 2) : `target build: FAIL\n- ${failure.errors[0]}`}\n`);
     process.exitCode = 1;
   }
 }

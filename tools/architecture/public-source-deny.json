@@ -1,0 +1,350 @@
+{
+  "schemaVersion": 2,
+  "markerSetVersion": 1,
+  "kind": "PUBLIC_SOURCE_DENY_POLICY",
+  "surface": "SOURCE",
+  "isCapabilityManifest": false,
+  "snapshotMode": "REPOSITORY_POLICY",
+  "sourceReference": "tools/architecture/public-source-deny.json",
+  "runtimeSourceRequired": false,
+  "capabilities": [
+    {
+      "denyId": "P4-D-SAVED_VIEWS-SOURCE",
+      "capability": "SAVED_VIEWS",
+      "validationId": "P4-Z-SAVED_VIEWS-SOURCE",
+      "markers": [
+        "saved_view",
+        "saved_view_cas",
+        "saved_view_crud",
+        "saved_view_definition",
+        "saved_view_library",
+        "saved_view_manager",
+        "saved_view_migration",
+        "saved_view_repository"
+      ]
+    },
+    {
+      "denyId": "P4-D-PERSISTENT_PREFS-SOURCE",
+      "capability": "PERSISTENT_PREFS",
+      "validationId": "P4-Z-PERSISTENT_PREFS-SOURCE",
+      "markers": [
+        "audio_preference_store",
+        "cookie_store",
+        "filter_preference_store",
+        "indexed_db",
+        "local_storage",
+        "locale_preference_store",
+        "persisted_filters",
+        "persisted_preferences",
+        "persistent_prefs",
+        "preference_storage",
+        "preferences_store",
+        "refresh_preference_store",
+        "restore_preferences",
+        "session_storage",
+        "user_preferences_store"
+      ]
+    },
+    {
+      "denyId": "P4-D-PERSISTENT_HISTORY-SOURCE",
+      "capability": "PERSISTENT_HISTORY",
+      "validationId": "P4-Z-PERSISTENT_HISTORY-SOURCE",
+      "markers": [
+        "action_history",
+        "durable_history",
+        "episode_history",
+        "notification_history",
+        "notification_history_repository",
+        "notification_history_store",
+        "persisted_history",
+        "persistent_history",
+        "restore_history",
+        "user_history",
+        "user_history_repository",
+        "watch_history",
+        "watch_history_store"
+      ]
+    },
+    {
+      "denyId": "P4-D-PERSISTENT_SELECTION-SOURCE",
+      "capability": "PERSISTENT_SELECTION",
+      "validationId": "P4-Z-PERSISTENT_SELECTION-SOURCE",
+      "markers": [
+        "chooser_state_storage",
+        "persisted_selection",
+        "persistent_selection",
+        "restore_selection",
+        "restored_chooser_state",
+        "restored_selection",
+        "saved_selection",
+        "section_key_selection_store",
+        "selected_section_keys_store",
+        "selection_repository",
+        "selection_storage"
+      ]
+    },
+    {
+      "denyId": "P4-D-PERSISTENT_ACTIVE_WATCH-SOURCE",
+      "capability": "PERSISTENT_ACTIVE_WATCH",
+      "validationId": "P4-Z-PERSISTENT_ACTIVE_WATCH-SOURCE",
+      "markers": [
+        "active_watch_persistence",
+        "active_watch_store",
+        "auto_rewatch",
+        "automatic_rewatch",
+        "persisted_active_watch",
+        "persistent_active_watch",
+        "restore_subscription",
+        "restore_watch",
+        "restored_watch",
+        "subscription_restoration",
+        "watch_rehydration",
+        "watch_repository",
+        "watch_storage"
+      ]
+    },
+    {
+      "denyId": "P4-D-EMAIL-SOURCE",
+      "capability": "EMAIL",
+      "validationId": "P4-Z-EMAIL-SOURCE",
+      "markers": [
+        "contact_verification",
+        "email",
+        "email_dispatcher",
+        "email_sender",
+        "email_template",
+        "email_verification",
+        "mail_dispatcher",
+        "mail_transport",
+        "mailer",
+        "mailgun",
+        "nodemailer",
+        "postmark",
+        "sendgrid",
+        "smtp",
+        "unsubscribe_token",
+        "verify_email"
+      ]
+    },
+    {
+      "denyId": "P4-D-DISCORD-SOURCE",
+      "capability": "DISCORD",
+      "validationId": "P4-Z-DISCORD-SOURCE",
+      "markers": [
+        "discord",
+        "discord_bot",
+        "discord_oauth",
+        "discord_webhook",
+        "discordapp"
+      ]
+    },
+    {
+      "denyId": "P4-D-SHARE_LINKS-SOURCE",
+      "capability": "SHARE_LINKS",
+      "validationId": "P4-Z-SHARE_LINKS-SOURCE",
+      "markers": [
+        "copy_share_link",
+        "encoded_filter_state",
+        "filter_query_codec",
+        "filter_state_url",
+        "filter_url_restore",
+        "filter_url_state",
+        "restore_filters_from_url",
+        "share_filters",
+        "share_link",
+        "share_workflow",
+        "shareable_filters",
+        "shared_filter_url"
+      ]
+    },
+    {
+      "denyId": "P4-D-WAITLIST-SOURCE",
+      "capability": "WAITLIST",
+      "validationId": "P4-Z-WAITLIST-SOURCE",
+      "markers": [
+        "canonical_waitlist_status",
+        "infer_waitlist",
+        "inferred_waitlist_state",
+        "is_waitlisted",
+        "waitlist_alert",
+        "waitlist_capability",
+        "waitlist_filter",
+        "waitlist_preference"
+      ]
+    },
+    {
+      "denyId": "P4-D-COMPACT-SOURCE",
+      "capability": "COMPACT",
+      "validationId": "P4-Z-COMPACT-SOURCE",
+      "markers": [
+        "compact_layout_contract",
+        "compact_mode",
+        "compact_preference",
+        "compact_route",
+        "compact_toggle",
+        "compact_view",
+        "enable_compact",
+        "is_compact_view"
+      ]
+    },
+    {
+      "denyId": "P4-D-MACOS-SOURCE",
+      "capability": "MACOS",
+      "validationId": "P4-Z-MACOS-SOURCE",
+      "markers": [
+        "darwin",
+        "darwin_branch",
+        "darwin_launcher",
+        "mac_launcher",
+        "macos",
+        "macos_launcher",
+        "macos_package",
+        "macos_support",
+        "osx",
+        "platform_darwin"
+      ]
+    },
+    {
+      "denyId": "P4-D-NATIVE_APP-SOURCE",
+      "capability": "NATIVE_APP",
+      "validationId": "P4-Z-NATIVE_APP-SOURCE",
+      "markers": [
+        "app_installer",
+        "capacitor",
+        "deep_link_channel",
+        "desktop_bridge",
+        "desktop_shell",
+        "electron",
+        "mobile_app",
+        "mobile_bridge",
+        "native_app",
+        "native_bridge",
+        "native_deep_link",
+        "native_installer",
+        "platform_shell",
+        "react_native",
+        "tauri"
+      ]
+    },
+    {
+      "denyId": "P4-D-SYSTEM_NOTIFICATIONS-SOURCE",
+      "capability": "SYSTEM_NOTIFICATIONS",
+      "validationId": "P4-Z-SYSTEM_NOTIFICATIONS-SOURCE",
+      "markers": [
+        "browser_notification_api",
+        "desktop_notification",
+        "native_alert",
+        "notification_permission",
+        "os_notification",
+        "service_worker_notification",
+        "show_notification",
+        "system_notification",
+        "tray_balloon"
+      ]
+    },
+    {
+      "denyId": "P4-D-WEB_PUSH-SOURCE",
+      "capability": "WEB_PUSH",
+      "validationId": "P4-Z-WEB_PUSH-SOURCE",
+      "markers": [
+        "application_server_key",
+        "push_endpoint",
+        "push_manager",
+        "push_service_worker",
+        "push_subscription",
+        "pushsubscriptionchange",
+        "service_worker_push",
+        "service_worker_push_event",
+        "subscribe_push",
+        "unsubscribe_push",
+        "vapid",
+        "vapid_private_key",
+        "vapid_public_key",
+        "web_push",
+        "worker_push"
+      ]
+    },
+    {
+      "denyId": "P4-D-CALENDAR-SOURCE",
+      "capability": "CALENDAR",
+      "validationId": "P4-Z-CALENDAR-SOURCE",
+      "markers": [
+        "calendar_capability",
+        "calendar_export",
+        "calendar_route",
+        "calendar_view",
+        "current_calendar",
+        "ical_export",
+        "ics_export",
+        "schedule_preview",
+        "timetable_preview",
+        "weekly_schedule_preview",
+        "weekly_timetable"
+      ]
+    },
+    {
+      "denyId": "P4-D-QUIET_SNOOZE-SOURCE",
+      "capability": "QUIET_SNOOZE",
+      "validationId": "P4-Z-QUIET_SNOOZE-SOURCE",
+      "markers": [
+        "dnd_schedule",
+        "do_not_disturb",
+        "mute_until",
+        "notification_suppression",
+        "personal_suppression",
+        "quiet_hours",
+        "quiet_schedule",
+        "snooze",
+        "snooze_state_machine",
+        "snooze_until",
+        "suppressed_until",
+        "suppression_schedule"
+      ]
+    },
+    {
+      "denyId": "P4-D-PERSISTENT_SUBSCRIPTION_IDENTITY-SOURCE",
+      "capability": "PERSISTENT_SUBSCRIPTION_IDENTITY",
+      "validationId": "P4-Z-PERSISTENT_SUBSCRIPTION_IDENTITY-SOURCE",
+      "markers": [
+        "active_subscription_crud",
+        "contact_identifier",
+        "contact_token",
+        "device_fingerprint",
+        "device_id",
+        "identity_token",
+        "persistent_subscription_identity",
+        "personal_identity",
+        "personal_subscription",
+        "server_side_active_crud",
+        "server_side_active_record",
+        "stable_device_id",
+        "stable_personal_id",
+        "subscriber_id",
+        "subscription_account",
+        "subscription_identity",
+        "user_account",
+        "user_identity"
+      ]
+    },
+    {
+      "denyId": "P4-D-LOCAL_RESET-SOURCE",
+      "capability": "LOCAL_RESET",
+      "validationId": "P4-Z-LOCAL_RESET-SOURCE",
+      "markers": [
+        "clear_local_data",
+        "delete_local_data",
+        "destructive_reset",
+        "factory_reset",
+        "local_confirmation_token",
+        "local_reset",
+        "reset_database",
+        "reset_endpoint",
+        "reset_local_user_data",
+        "reset_mutation",
+        "reset_route",
+        "reset_user_data",
+        "wipe_local_data"
+      ]
+    }
+  ]
+}

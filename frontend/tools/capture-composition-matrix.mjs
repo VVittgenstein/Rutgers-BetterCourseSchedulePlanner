@@ -11,9 +11,10 @@ const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
   ?? (process.platform === 'win32'
     ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
     : undefined);
-const outputDirectory = resolve(process.cwd(), process.env.BCSP_EVIDENCE_DIR
-  ?? '../project-governance/current/rc-iteration/evidence/round-05/stage-1/composition');
-const evidenceStage = process.env.BCSP_EVIDENCE_STAGE ?? 'Stage1';
+const outputDirectory = resolve(
+  process.cwd(),
+  process.env.BCSP_VISUAL_OUTPUT ?? 'test-results/composition',
+);
 const installedApiDocuments = new WeakMap();
 const [filterSchema, axeSource] = await Promise.all([
   readFile(resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'), 'utf8')
@@ -437,7 +438,7 @@ async function assertQueryScope(page, scenario) {
     throw new Error(`${scenario.name}: QueryScope incorrectly spans the desktop workspace ${JSON.stringify(scopeGeometry)}`);
   }
   if (await page.locator('.bcsp-search-workspace__results .bcsp-state-panel').count() !== 1) {
-    throw new Error(`${scenario.name}: the RC3 idle StatePanel is not visible in the right workspace`);
+    throw new Error(`${scenario.name}: the idle StatePanel is not visible in the right workspace`);
   }
   if (await scope.locator('[data-scope-cell="search"] button[type="submit"]').count() !== 1
     || await page.getByRole('button', { name: /Search|搜索/u, exact: true }).count() !== 1) {
@@ -962,4 +963,4 @@ try {
 }
 
 const totalScenarios = scenarios.length + narrowScenarios.length;
-process.stdout.write(`RC5 ${evidenceStage} composition matrix: PASS (${totalScenarios}/${totalScenarios})\n`);
+process.stdout.write(`Composition matrix: PASS (${totalScenarios}/${totalScenarios})\n`);

@@ -15,8 +15,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const NORMAL = 'normal';
 const DEV = 'dev';
 const CRATES_IO_SOURCE = 'registry+https://github.com/rust-lang/crates.io-index';
-const PUBLIC_SOURCE_DENY_PATH = 'tools/architecture/p4-public-source-deny.json';
-const PUBLIC_SOURCE_DENY_SEMANTIC_SHA256 = 'D0AAFC7B4EB7FF82859C9FA95F1D1EDB7C28BAC934DF751C6FB361A4DEC8CEB0';
+const PUBLIC_SOURCE_DENY_PATH = 'tools/architecture/public-source-deny.json';
+const PUBLIC_SOURCE_DENY_SEMANTIC_SHA256 = 'AB9DA4D89B9F0DFBDC1DEF4D07FEDC79231DF2175182D9BB167CDDDED30C88DB';
 const PUBLIC_SOURCE_MARKER_COUNT = 212;
 
 const external = (req, usesDefaultFeatures, features = []) => Object.freeze({
@@ -168,7 +168,7 @@ const ROOT_MANIFEST_SECTION_NAMES = Object.freeze([
   'workspace',
   'workspace.package',
   'workspace.dependencies',
-  'workspace.metadata.p7.tooling',
+  'workspace.metadata.release.tooling',
 ]);
 const MEMBER_SET = new Set(MEMBER_NAMES);
 const SHARED = new Set([
@@ -570,11 +570,11 @@ export function validatePublicSourceDenyDocument(document) {
     errors.push('public SOURCE deny document top-level keys or key order mismatch');
   }
   if (document.schemaVersion !== 2 || document.markerSetVersion !== 1) errors.push('public SOURCE deny document version mismatch');
-  if (document.kind !== 'P4_PUBLIC_SOURCE_DENY_FROZEN_SNAPSHOT') errors.push('public SOURCE deny document kind mismatch');
+  if (document.kind !== 'PUBLIC_SOURCE_DENY_POLICY') errors.push('public SOURCE deny document kind mismatch');
   if (document.surface !== 'SOURCE') errors.push('public SOURCE deny document surface mismatch');
   if (document.isCapabilityManifest !== false) errors.push('public SOURCE deny document must not be a capability manifest');
-  if (document.snapshotMode !== 'FROZEN_P7_1_003_NO_LIVE_SOURCE_DEPENDENCY') errors.push('public SOURCE deny snapshot mode mismatch');
-  if (document.sourceReference !== 'project-governance/current/p4/05-public-capability-deny-audit.tsv') errors.push('public SOURCE deny provenance reference mismatch');
+  if (document.snapshotMode !== 'REPOSITORY_POLICY') errors.push('public SOURCE deny policy mode mismatch');
+  if (document.sourceReference !== 'tools/architecture/public-source-deny.json') errors.push('public SOURCE deny policy reference mismatch');
   if (document.runtimeSourceRequired !== false) errors.push('public SOURCE deny snapshot must not require its provenance source at runtime');
   if (!Array.isArray(document.capabilities)) {
     errors.push('public SOURCE deny capabilities must be an array');

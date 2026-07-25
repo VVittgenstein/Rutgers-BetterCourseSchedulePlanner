@@ -1,9 +1,0 @@
-{
-    "schemaVersion":  1,
-    "task":  "P7.1-005",
-    "requiredCommit":  "b0eac56850f89fc1a2d0e3d4600bd988e97d748c",
-    "requiredMarker":  "P7_1_004_R1_PASS_POST_PUSH_CLEAN_REPLAY",
-    "result":  "PASS",
-    "replayedByThisBuilder":  false,
-    "recoveryProtocolRetained":  false
-}

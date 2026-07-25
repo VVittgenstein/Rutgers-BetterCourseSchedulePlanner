@@ -1,9 +1,0 @@
-{
-  "task": "P7.4-001-R2-PIN",
-  "status": "PASS",
-  "sourceCommit": "7d5debef005277e4d8f2ed2b9fb2f72c495e62f1",
-  "sourceDateEpoch": 1784109539,
-  "verifiers": ["WINDOWS", "LINUX"],
-  "productChanged": false,
-  "nextTask": "P7.4-HASH-DISCOVERY-R2"
-}

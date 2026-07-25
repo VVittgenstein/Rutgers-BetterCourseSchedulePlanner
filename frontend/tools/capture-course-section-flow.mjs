@@ -9,9 +9,10 @@ const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
   ?? (process.platform === 'win32'
     ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
     : undefined);
-const outputDirectory = resolve(process.cwd(), process.env.BCSP_EVIDENCE_DIR
-  ?? '../project-governance/current/rc-iteration/evidence/round-05/stage-1/course-section');
-const evidenceStage = process.env.BCSP_EVIDENCE_STAGE ?? 'Stage1';
+const outputDirectory = resolve(
+  process.cwd(),
+  process.env.BCSP_VISUAL_OUTPUT ?? 'test-results/course-section-flow',
+);
 const filterSchema = JSON.parse(await readFile(
   resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
   'utf8',
@@ -615,7 +616,7 @@ try {
       || query.body.payload.filters.values.courseNumberBands?.[0] !== 200
       || query.body.payload.filters.values.openStatuses?.[0] !== 'OPEN'
       || query.body.payload.filters.values.includeIncomplete?.modality !== false) {
-      throw new Error(`${name}: Course query did not preserve the V3 combined filters`);
+      throw new Error(`${name}: Course query did not preserve the combined filters`);
     }
     const disclosures = page.locator('details.search-results__section-disclosure');
     if (await disclosures.count() !== 1 || await disclosures.first().getAttribute('open') !== null) {
@@ -656,4 +657,4 @@ try {
 }
 
 const flowSnapshotCount = flowViewports.length + 1;
-process.stdout.write(`RC5 ${evidenceStage} Course/Section V3 flow snapshots: PASS (${flowSnapshotCount}/${flowSnapshotCount})\n`);
+process.stdout.write(`Course and section flow snapshots: PASS (${flowSnapshotCount}/${flowSnapshotCount})\n`);

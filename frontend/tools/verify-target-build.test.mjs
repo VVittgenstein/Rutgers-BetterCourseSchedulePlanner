@@ -12,7 +12,7 @@ import {
 const toolsDirectory = dirname(fileURLToPath(import.meta.url));
 const denyCapabilities = JSON.parse(
   readFileSync(
-    resolve(toolsDirectory, '../../tools/architecture/p4-public-source-deny.json'),
+    resolve(toolsDirectory, '../../tools/architecture/public-source-deny.json'),
     'utf8',
   ),
 ).capabilities;

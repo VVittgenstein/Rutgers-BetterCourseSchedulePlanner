@@ -7,7 +7,7 @@ param(
 
     [string]$OutputRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'release\0.1.0'),
 
-    [string]$BuildRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '.cache\p7-4-build\windows')
+    [string]$BuildRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '.cache\product-build\windows')
 )
 
 Set-StrictMode -Version Latest
@@ -274,11 +274,11 @@ if ($package.target -ne $Target -or $package.allowlist.Count -ne 12) {
     throw 'The Windows release target or twelve-file allowlist changed unexpectedly.'
 }
 
-$PinnedNodeRoot = Join-Path $RepositoryRoot '.cache\p7-1-002-node-24.18.0-win-x64\runtime\node-v24.18.0-win-x64'
+$PinnedNodeRoot = Join-Path $RepositoryRoot '.cache\release-tools\node-v24.18.0-win-x64'
 $Node = Resolve-ReleaseTool (Join-Path $PinnedNodeRoot 'node.exe') 'node.exe'
 $Npm = Resolve-ReleaseTool (Join-Path $PinnedNodeRoot 'npm.cmd') 'npm.cmd'
 $NodeRoot = Split-Path -Parent $Node
-$PinnedCargoHome = Join-Path $RepositoryRoot '.cache\p7-1-002\cargo'
+$PinnedCargoHome = Join-Path $RepositoryRoot '.cache\release-tools\cargo'
 $Cargo = Resolve-ReleaseTool (Join-Path $PinnedCargoHome 'bin\cargo.exe') 'cargo.exe'
 $CargoHome = if (Test-Path -LiteralPath (Join-Path $PinnedCargoHome 'bin\cargo.exe') -PathType Leaf) {
     $PinnedCargoHome
@@ -289,7 +289,7 @@ elseif (-not [string]::IsNullOrWhiteSpace($env:CARGO_HOME)) {
 else {
     Resolve-FullPath (Join-Path $env:USERPROFILE '.cargo')
 }
-$PinnedRustupHome = Join-Path $RepositoryRoot '.cache\p7-1-002\rustup'
+$PinnedRustupHome = Join-Path $RepositoryRoot '.cache\release-tools\rustup'
 $RustupHome = if (Test-Path -LiteralPath $PinnedRustupHome -PathType Container) {
     $PinnedRustupHome
 }
@@ -300,10 +300,10 @@ else {
     Resolve-FullPath (Join-Path $env:USERPROFILE '.rustup')
 }
 $CargoCycloneDx = Resolve-ReleaseTool `
-    (Join-Path $RepositoryRoot '.cache\p7-1-002\tools\cargo-cyclonedx\bin\cargo-cyclonedx.exe') `
+    (Join-Path $RepositoryRoot '.cache\release-tools\cargo-cyclonedx\bin\cargo-cyclonedx.exe') `
     'cargo-cyclonedx.exe'
 $CargoAbout = Resolve-ReleaseTool `
-    (Join-Path $RepositoryRoot '.cache\p7-1-002\tools\cargo-about\bin\cargo-about.exe') `
+    (Join-Path $RepositoryRoot '.cache\release-tools\cargo-about\bin\cargo-about.exe') `
     'cargo-about.exe'
 foreach ($tool in @($Node, $Npm, $Cargo, $CargoCycloneDx, $CargoAbout)) {
     Assert-File $tool
@@ -324,7 +324,7 @@ $env:CARGO_NET_OFFLINE = 'true'
 $env:SOURCE_DATE_EPOCH = (& git -C $SourceRoot show -s --format=%ct $sourceCommit).Trim()
 $env:TZ = 'UTC'
 
-$allowedBuildParent = Join-Path $RepositoryRoot '.cache\p7-4-build'
+$allowedBuildParent = Join-Path $RepositoryRoot '.cache\product-build'
 $BuildRoot = Reset-BuildDirectory $BuildRoot $allowedBuildParent
 $PackageRoot = Join-Path $BuildRoot 'package'
 $TargetRoot = Join-Path $BuildRoot 'cargo-target'

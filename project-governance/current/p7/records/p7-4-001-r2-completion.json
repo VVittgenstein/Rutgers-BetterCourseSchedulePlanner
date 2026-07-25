@@ -1,9 +1,0 @@
-{
-  "task": "P7.4-001-R2",
-  "status": "P7_4_REPAIRED_SOURCE_FROZEN_R2",
-  "sourceCommit": "7d5debef005277e4d8f2ed2b9fb2f72c495e62f1",
-  "sourceDateEpoch": 1784109539,
-  "packageCount": 2,
-  "oldCandidatesEligible": false,
-  "nextTask": "P7.4-HASH-DISCOVERY-R2"
-}

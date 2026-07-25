@@ -1,8 +1,0 @@
-metric	count	status
-root_string_values	302125	OBSERVED_TWO_ROUNDS
-root_non_string_values	0	NOT_OBSERVED
-string_length_5	302125	OBSERVED_TWO_ROUNDS
-string_length_not_5	0	NOT_OBSERVED
-raw_duplicate_values	0	NOT_OBSERVED
-official_matches_summed_non_distinct	33195	OBSERVED_TWO_ROUNDS
-orphan_audit_values_summed_non_distinct	268930	EXPECTED_SUPERSET_BEHAVIOR

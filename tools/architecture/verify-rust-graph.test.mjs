@@ -17,7 +17,7 @@ import {
 } from './verify-rust-graph.mjs';
 
 const REPO_ROOT = '/repo';
-const DENY_DOCUMENT = JSON.parse(readFileSync(new URL('./p4-public-source-deny.json', import.meta.url), 'utf8'));
+const DENY_DOCUMENT = JSON.parse(readFileSync(new URL('./public-source-deny.json', import.meta.url), 'utf8'));
 
 function internalDependency(name, kind = 'normal') {
   return {
@@ -195,7 +195,7 @@ expectFailure((metadata) => {
   metadata.workspace_default_members.pop();
 }, /workspace_default_members must exactly equal workspace_members/);
 
-const rootManifest = (workspaceBody) => `[workspace]\n${workspaceBody}\n[workspace.package]\n\n[workspace.dependencies]\n\n[workspace.metadata.p7.tooling]\n`;
+const rootManifest = (workspaceBody) => `[workspace]\n${workspaceBody}\n[workspace.package]\n\n[workspace.dependencies]\n\n[workspace.metadata.release.tooling]\n`;
 assert.deepEqual(validateRootCargoManifest(rootManifest('members = []\nresolver = "3"')), []);
 assert.ok(validateRootCargoManifest(rootManifest('resolver = "2"')).some((error) => /resolver must be exactly "3"/.test(error)));
 assert.ok(validateRootCargoManifest(rootManifest('members = []')).some((error) => /exactly one resolver assignment/.test(error)));
@@ -499,7 +499,7 @@ assert.deepEqual(JSON.parse(jsonText).rootManifestSections, [
   'workspace',
   'workspace.package',
   'workspace.dependencies',
-  'workspace.metadata.p7.tooling',
+  'workspace.metadata.release.tooling',
 ]);
 assert.equal(JSON.parse(jsonText).workspaceDefaultMembers, 15);
 assert.equal(jsonText.trim(), JSON.stringify(JSON.parse(jsonText)));

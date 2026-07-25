@@ -1,4 +1,0 @@
-Confirm your course alert request.
-Contact: {{contactValue}}
-Link expires in {{expirationMinutes}} minutes.
-Confirm: {{verificationUrl}}

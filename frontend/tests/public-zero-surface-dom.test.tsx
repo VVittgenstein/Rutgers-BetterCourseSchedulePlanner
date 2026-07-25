@@ -16,7 +16,7 @@ interface DenyCapability {
 
 const denyCapabilities = (JSON.parse(
   readFileSync(
-    resolve(process.cwd(), '../tools/architecture/p4-public-source-deny.json'),
+    resolve(process.cwd(), '../tools/architecture/public-source-deny.json'),
     'utf8',
   ),
 ) as { readonly capabilities: readonly DenyCapability[] }).capabilities;

@@ -13,7 +13,7 @@ import {
 } from './verify-public-rust-zero-surface.mjs';
 
 const DENY_DOCUMENT = JSON.parse(
-  readFileSync(new URL('./p4-public-source-deny.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('./public-source-deny.json', import.meta.url), 'utf8'),
 );
 
 const cleanFiles = Object.fromEntries(PUBLIC_RUST_ZERO_SURFACES.map((surface) => [

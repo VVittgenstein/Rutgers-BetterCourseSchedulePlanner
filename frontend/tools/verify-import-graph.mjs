@@ -827,7 +827,7 @@ export function validateDenyInput(publicSourceDeny) {
     );
   }
   if (canonicalRowsSha256(publicSourceDeny) !== EXPECTED_PUBLIC_SOURCE_ROWS_SHA256) {
-    errors.push('public SOURCE deny rows/marker sets do not match the frozen P4 contract');
+    errors.push('public SOURCE deny rows and marker sets do not match the repository policy');
   }
 
   return errors;
@@ -848,7 +848,7 @@ export function validateDenyDocument(denyDocument) {
   if (denyDocument.markerSetVersion !== 1) {
     errors.push('deny document markerSetVersion must be 1');
   }
-  if (denyDocument.kind !== 'P4_PUBLIC_SOURCE_DENY_FROZEN_SNAPSHOT') {
+  if (denyDocument.kind !== 'PUBLIC_SOURCE_DENY_POLICY') {
     errors.push('deny document kind is invalid');
   }
   if (denyDocument.surface !== 'SOURCE') errors.push('deny document surface must be SOURCE');
@@ -857,12 +857,12 @@ export function validateDenyDocument(denyDocument) {
   }
   if (
     denyDocument.sourceReference !==
-    'project-governance/current/p4/05-public-capability-deny-audit.tsv'
+    'tools/architecture/public-source-deny.json'
   ) {
-    errors.push('deny document provenance reference is invalid');
+    errors.push('deny document policy reference is invalid');
   }
-  if (denyDocument.snapshotMode !== 'FROZEN_P7_1_003_NO_LIVE_SOURCE_DEPENDENCY') {
-    errors.push('deny document snapshot mode is invalid');
+  if (denyDocument.snapshotMode !== 'REPOSITORY_POLICY') {
+    errors.push('deny document policy mode is invalid');
   }
   if (denyDocument.runtimeSourceRequired !== false) {
     errors.push('deny document must not require its provenance source at runtime');
@@ -1029,7 +1029,7 @@ export function analyzeImportGraph({ files, publicSourceDeny, allowedExternalPac
 
   return {
     schemaVersion: 1,
-    taskId: 'P7.1-003',
+    checkId: 'frontend-import-graph',
     state: errors.length === 0 ? 'PASS' : 'FAIL',
     activeUniverse: {
       fileCount: normalizedFiles.size,
@@ -1289,7 +1289,7 @@ function readRepositoryInputs(root) {
   const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
   const repositoryRoot = resolve(root, '..');
   const denyDocument = JSON.parse(
-    readFileSync(resolve(repositoryRoot, 'tools/architecture/p4-public-source-deny.json'), 'utf8'),
+    readFileSync(resolve(repositoryRoot, 'tools/architecture/public-source-deny.json'), 'utf8'),
   );
   const textFiles = repositoryStaticContractFixture(root);
   const staticUniverse = readRepositoryStaticUniverse(root);
@@ -1329,7 +1329,7 @@ export function verifyRepositoryImportGraph(root = frontendRoot) {
 function renderHumanReport(report) {
   if (report.state === 'PASS') {
     return [
-      'P7.1-003 frontend import graph: PASS',
+      'Frontend import graph: PASS',
       `active files: ${report.activeUniverse.fileCount}`,
       `internal edges: ${report.edges.length}`,
       `local closure: ${report.closures.local.length}`,
@@ -1356,7 +1356,7 @@ if (isMainModule()) {
     const report = unknownArguments.length > 0
       ? {
           schemaVersion: 1,
-          taskId: 'P7.1-003',
+          checkId: 'frontend-import-graph',
           state: 'FAIL',
           errors: [`unknown argument(s): ${unknownArguments.join(', ')}`],
         }
@@ -1368,7 +1368,7 @@ if (isMainModule()) {
   } catch (error) {
     const failure = {
       schemaVersion: 1,
-      taskId: 'P7.1-003',
+      checkId: 'frontend-import-graph',
       state: 'FAIL',
       errors: [error instanceof Error ? error.message : String(error)],
     };

@@ -1,168 +1,133 @@
 # Rutgers Better Course Schedule Planner
 
-Rutgers Better Course Schedule Planner (RBCSP) is a course-centered search,
-filtering, section-status, and live-watch application for Rutgers University.
-It is built as a Rust workspace with a shared React frontend and supports two
-explicit product targets:
+Rutgers Better Course Schedule Planner (RBCSP) is a course search, filtering,
+section-status, and live-watch application for Rutgers University.
 
-- **Local desktop runtime** — starts a loopback-only web application, keeps
-  user state on the local machine, and opens the browser automatically.
-- **Public deployment runtime** — serves the public web application with
-  operational storage, refresh scheduling, and server-side watch services.
+The repository contains two supported products built from one Rust workspace and
+one shared React frontend:
 
-The project is independent and is not affiliated with or endorsed by Rutgers
-University.
+- **Windows local application** — runs on the user's computer and stores personal
+  watch data locally.
+- **Linux public service** — runs as a centrally operated web service without
+  personal watch or notification features.
 
-## Release downloads
+## Download
 
-Version `0.1.0` provides two verified x86-64 archives in the repository's
-[GitHub Releases](https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases):
+Prebuilt version `0.1.0` packages are available from the
+[GitHub Release](https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.0):
 
-| Platform | Asset | Use case |
-| --- | --- | --- |
-| Windows x86-64 | `rbcsp-windows-x86_64-0.1.0.zip` | Local desktop runtime |
-| Linux x86-64 | `rbcsp-linux-x86_64-0.1.0.tar.gz` | Public deployment runtime |
+- `rbcsp-windows-x86_64-0.1.0.zip`
+- `rbcsp-linux-x86_64-0.1.0.tar.gz`
 
-Each archive includes `BUILD-PROVENANCE.json`, `MANIFEST.json`,
-`SBOM.cdx.json`, `SHA256SUMS`, the ISC license, and third-party notices.
+Windows users can extract the archive and run `Start-RBCSP.bat`. The Linux
+archive includes deployment configuration and an operator runbook.
 
-### Windows quick start
+## Features
 
-1. Download and extract `rbcsp-windows-x86_64-0.1.0.zip`.
-2. Keep the extracted directory intact.
-3. Run `Start-RBCSP.cmd`.
-4. RBCSP opens in the default browser and stores writable state under
-   `%LOCALAPPDATA%\\RBCSP` by default.
+- Search by course code, title, instructor, subject, campus, level, credits, and
+  meeting time.
+- Inspect sections, meeting details, and open/closed status.
+- Build a local watch list and monitor seat availability.
+- Run either as a local desktop-oriented service or as a public Linux service.
+- Serve the target-specific React application directly from the Rust binary.
 
-The Windows archive is intended for a real Windows x86-64 host and requires an
-installed Chrome browser for the packaged runtime workflow.
-
-### Linux deployment
-
-1. Download and extract `rbcsp-linux-x86_64-0.1.0.tar.gz`.
-2. Review `docs/operator-runbook.md` and `config/bcsp.env.example` in the
-   archive.
-3. Configure the public origin, operational database path, mail delivery, and
-   reverse proxy/TLS for your environment.
-4. Install and run `bin/bcsp-server`; example `systemd` and Caddy files are
-   included.
-
-The Linux archive targets x86-64 Linux with glibc 2.31 or newer. It is a
-self-hosted deployment package, not a desktop installer.
-
-## Product capabilities
-
-RBCSP currently provides:
-
-- Rutgers term discovery and course-data refresh;
-- keyword search across course and section fields;
-- subject, campus, level, credit, meeting-time, day, instructor, and section
-  status filters;
-- course and section detail views;
-- open/closed section status and freshness metadata;
-- live-watch workflows for tracked sections;
-- English and Simplified Chinese interface copy;
-- separate local and public frontend capability boundaries.
-
-Rutgers remains the authoritative source for course and section data. Data can
-be delayed, incomplete, or unavailable, and users should confirm important
-registration decisions in official Rutgers systems.
-
-## Repository layout
+## Source tree
 
 ```text
-apps/        Rust entry points for the local and public runtimes
-crates/      Shared domain, query, storage, Rutgers client, and runtime crates
-frontend/    Shared React source with local and public build targets
-api/         TypeScript API and supporting services retained in the workspace
-packaging/   Release builders, validators, manifests, and deployment templates
-deploy/      Deployment configuration and operational assets
-configs/     Checked-in example and schema configuration
+apps/               Rust binary entry points
+crates/             Application, domain, storage, Rutgers, watch, and runtime crates
+frontend/           Shared React frontend with local and public target builds
+deploy/public/      Linux service, Caddy, configuration, and operator files
+packaging/          Windows and Linux release builders and verifiers
+tools/architecture/ Product-boundary and public-surface checks
+.github/workflows/  Continuous-integration workflow
 ```
 
-## Development
+## Prerequisites
 
-### Prerequisites
+The pinned development toolchains are:
 
-- Rust stable toolchain
-- Node.js `24.18.0` (see `.node-version`)
-- npm `11.16.0` for the frontend workspace
-- PowerShell 7 for the Windows packaging scripts
+- Node.js: see `.node-version`
+- Rust: see `rust-toolchain.toml`
+- npm: see `frontend/package.json`
 
-### Frontend
+The Linux and Windows packaging scripts also require the platform tools listed
+in their respective scripts.
+
+## Build and test
+
+Install frontend dependencies:
 
 ```bash
-cd frontend
-npm ci
-npm run verify
+npm --prefix frontend ci
 ```
 
-Useful target-specific commands:
+Run the complete frontend verification suite:
 
 ```bash
-npm run dev:local
-npm run dev:public
-npm run build:local
-npm run build:public
-npm run test:product
+npm --prefix frontend run verify
 ```
 
-The local entry point is `frontend/src/entry.local.tsx`; the public entry point
-is `frontend/src/entry.public.tsx`. Import-boundary checks prevent one target
-from accidentally depending on the other target's private modules.
-
-### Rust workspace
+Build target-specific frontend assets:
 
 ```bash
+npm --prefix frontend run build:local
+npm --prefix frontend run build:public
+```
+
+Run the Rust checks:
+
+```bash
+cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-Run the local product from source:
+The Rust release binaries embed the corresponding frontend build:
 
 ```bash
-cargo run -p bcsp-local
+cargo build --release --locked --bin bcsp-local
+cargo build --release --locked --bin bcsp-server
 ```
 
-The local runtime binds to loopback, opens the browser, and places its writable
-state in the platform-specific local data directory.
+## Development
 
-Run the public server from source:
+Start either frontend target with Vite:
 
 ```bash
-cargo run -p bcsp-server
+npm --prefix frontend run dev:local
+npm --prefix frontend run dev:public
 ```
 
-A production public deployment also requires the operational database, mail,
-origin, TLS/reverse-proxy, and service configuration described by the Linux
-release runbook and the files under `packaging/linux/`.
+The local and public product compositions are intentionally separate. Boundary
+checks prevent personal-only code from entering the public build.
 
-## Verification and release integrity
+## Packaging
 
-Release tooling lives under `packaging/`. The release workflow validates
-archive structure, manifests, checksums, provenance, SBOMs, line endings,
-platform binaries, and product smoke tests before publication.
-
-After downloading an asset, compare it with the included checksum file:
+Windows package:
 
 ```powershell
-Get-FileHash .\rbcsp-windows-x86_64-0.1.0.zip -Algorithm SHA256
+pwsh ./packaging/windows/build.ps1 -SourceRoot .
 ```
 
+Linux package:
+
 ```bash
-sha256sum rbcsp-linux-x86_64-0.1.0.tar.gz
+bash ./packaging/linux/build.sh --source-root .
 ```
+
+The release contract and expected archive contents are defined in
+`packaging/release-inputs.json`. Package-specific verification scripts are kept
+next to each builder.
 
 ## Security and privacy
 
-Do not commit credentials, mail passwords, API tokens, production databases,
-or user data. Use the checked-in example configuration as a template and keep
-real values outside version control.
-
-The local target keeps personal watch state on the user's machine. Public
-deployments are operator-managed and must be configured with appropriate
-secrets, access controls, TLS, backups, and retention policies.
+- Personal watch data is limited to the local product.
+- The public product excludes personal watch and notification capabilities.
+- Public deployment configuration uses loopback binding, a reverse proxy, and
+  systemd sandboxing defaults.
+- Secrets and local runtime data must not be committed.
 
 ## License
 
-RBCSP is licensed under the [ISC License](LICENSE).
+RBCSP is released under the [ISC License](LICENSE).

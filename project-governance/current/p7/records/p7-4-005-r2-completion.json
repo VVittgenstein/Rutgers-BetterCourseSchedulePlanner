@@ -1,8 +1,0 @@
-{
-  "task": "P7.4-005-R2",
-  "status": "PASS_P7_5_ELIGIBLE",
-  "successfulRuns": [29408621103, 29409582329],
-  "twoIndependentRuns": true,
-  "byteIdenticalAcrossRuns": true,
-  "nextTask": "P7.5-001-R2"
-}

@@ -76,10 +76,10 @@ readonly REPOSITORY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && p
 require_command realpath
 SOURCE_ROOT="$(realpath -e -- "$SOURCE_ROOT")"
 OUTPUT_ROOT="$(realpath -m -- "${OUTPUT_ROOT:-$REPOSITORY_ROOT/release/0.1.0}")"
-BUILD_ROOT="$(realpath -m -- "${BUILD_ROOT:-$REPOSITORY_ROOT/.cache/p7-4-build/linux}")"
+BUILD_ROOT="$(realpath -m -- "${BUILD_ROOT:-$REPOSITORY_ROOT/.cache/product-build/linux}")"
 readonly SOURCE_ROOT OUTPUT_ROOT BUILD_ROOT
 
-readonly ALLOWED_BUILD_PARENT="$(realpath -m -- "$REPOSITORY_ROOT/.cache/p7-4-build")"
+readonly ALLOWED_BUILD_PARENT="$(realpath -m -- "$REPOSITORY_ROOT/.cache/product-build")"
 case "$BUILD_ROOT/" in
   "$ALLOWED_BUILD_PARENT"/*) ;;
   *) die "--build-root must remain below $ALLOWED_BUILD_PARENT" ;;

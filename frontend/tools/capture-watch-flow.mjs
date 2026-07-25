@@ -9,7 +9,10 @@ const executablePath = process.env.BCSP_BROWSER_EXECUTABLE
   ?? (process.platform === 'win32'
     ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
     : undefined);
-const outputDirectory = resolve(process.cwd(), '../project-governance/current/p7/evidence/p7-2-003');
+const outputDirectory = resolve(
+  process.cwd(),
+  process.env.BCSP_VISUAL_OUTPUT ?? 'test-results/watch-flow',
+);
 const filterSchema = JSON.parse(await readFile(
   resolve(process.cwd(), '../crates/bcsp-contracts/tests/golden/filter-schema-v1.json'),
   'utf8',
@@ -704,4 +707,4 @@ try {
   await browser.close();
 }
 
-process.stdout.write(`P7.2-003 Watch flow snapshots: PASS (${selectedScenarios.length}/${selectedScenarios.length})\n`);
+process.stdout.write(`Watch flow snapshots: PASS (${selectedScenarios.length}/${selectedScenarios.length})\n`);
