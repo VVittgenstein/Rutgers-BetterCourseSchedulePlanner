@@ -943,14 +943,19 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
         )),
         200
     );
-    let selection = r#"{"protocolVersion":1,"payload":{"expectedUserStateRevision":1,"sections":[{"term":"72026","campus":"NB","index":"12345"}]}}"#;
+    let window = RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Local)
+        .expect("test execution date is covered by the bundled calendar");
+    let in_window_term = window.current_term().as_str();
+    let selection = format!(
+        r#"{{"protocolVersion":1,"payload":{{"expectedUserStateRevision":1,"sections":[{{"term":"{in_window_term}","campus":"NB","index":"12345"}}]}}}}"#
+    );
     assert_eq!(
         status(&request(
             authority,
             "PUT /api/v1/local/selection",
             &origin,
             nonce,
-            selection,
+            &selection,
         )),
         200
     );
@@ -1670,9 +1675,11 @@ async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_
         )),
         200
     );
+    let window = RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Local)
+        .expect("test execution date is covered by the bundled calendar");
     let selection = serde_json::json!({
         "expectedUserStateRevision": 1,
-        "sections": [{"term": "72026", "campus": "NB", "index": "12345"}],
+        "sections": [{"term": window.current_term().as_str(), "campus": "NB", "index": "12345"}],
     });
     let selection = post_api(
         authority,
