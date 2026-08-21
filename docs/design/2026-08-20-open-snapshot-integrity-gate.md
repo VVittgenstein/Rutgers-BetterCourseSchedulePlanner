@@ -110,7 +110,15 @@ suspect = missing >= max(ceil(0.10 * baseline.value), 25)
 | catalog 世代变更 | window 清空；`value` 以 \|LKG open 集 ∩ 新 catalog\| 迁移播种；LKG 不可用 → baseline=None（Gate 暂停至首个 applied 播种） |
 | 硬拒绝/传输失败 | 状态不变 |
 
-### Quarantined 态转移（与 v2 相同，仅列差异）
+### Quarantined 态转移（与 v2 相同，仅列差异；恢复条件见 v5.1 修正）
+
+**v5.1（实现期修正，回放测试发现）——恢复出口加迟滞**：恢复条件从
+"缺口 < 入口阈值"收紧为 **`missing < max(ceil(reference/20), 25)`**（出口
+5%，入口 10% 的一半）。原因：入口与出口共用阈值时，评审 v1 反例
+`11423 → 8146 → 10300` 中的 10300（缺 9.83%）会被字面公式判为"恢复"并
+应用——v2 文档的工作示例文字与公式互相矛盾，五轮评审均未察觉，真实
+抓包回放测试第一次运行即暴露。缺口在 5%–10% 迟滞带内的样本继续扣住，
+直至完全恢复或满足确认条件。
 
 - **隔离专用探测节奏（v3 新增，替代 Transient 复用）**：隔离期间该 target
   的 Open 重试固定为 `QUARANTINE_PROBE_SECONDS = min(30, 正常 watch 间隔)`
@@ -247,6 +255,14 @@ v2 既有测试（回放、漏洞序列、确认边界、fork 共享、提交失
 不动 429/circuit/origin_pause；不做增量写 `open_section_current`。
 
 ---
+
+### v5 → v5.1 变更记录（2026-08-21 实现期修正，待评审追认）
+
+- 恢复出口加迟滞（出口阈值 = 入口的一半，新常量
+  `GATE_RECOVERY_THRESHOLD_DENOMINATOR = 20`）：修复"入口阈值兼作出口"
+  使 v1 反例中 9.83% 缺口样本被误判恢复的公式漏洞；由真实抓包回放测试
+  `v1_design_loophole_sequence_never_applies_the_drifting_partial` 发现并
+  钉死。文档工作示例与公式自此一致。
 
 ### v4 → v5 变更记录（2026-08-20 窄修，回应 Codex 四审设计阻断 1）
 

@@ -1677,6 +1677,7 @@
         "VALID_EMPTY_NO_ROWS",
         "UNSAFE_EMPTY",
         "UNSAFE_ZERO_INTERSECTION",
+        "SUSPECT_PARTIAL_SNAPSHOT",
         "STALE_CATALOG_RACE",
         "FAILED"
       ]
@@ -1709,7 +1710,10 @@
         "OVERSIZE",
         "SCHEMA_VIOLATION",
         "INVALID_VALUE",
-        "PERSIST"
+        "PERSIST",
+        "UNSAFE_EMPTY",
+        "UNSAFE_ZERO_INTERSECTION",
+        "SUSPECT_PARTIAL_SNAPSHOT"
       ]
     },
     {
@@ -1744,6 +1748,7 @@
         "STALE_LAST_KNOWN_GOOD",
         "LATEST_ATTEMPT_FAILED",
         "LATEST_ATTEMPT_UNSAFE",
+        "SUSPECT_PARTIAL_UPSTREAM",
         "STALE_CATALOG_RACE",
         "CATALOG_VERSION_UNAVAILABLE"
       ]

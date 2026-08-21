@@ -19,8 +19,10 @@ use bcsp_contracts::{
     CourseDetailResponseV1, CourseQueryRequestV1, CourseQueryResponseV1, CourseSortV1,
     FilterRequestV1, FilterSchemaV1, FilterSearchTextV1, FilterValuesInputV1, HttpRequestEnvelope,
     HttpSuccessEnvelope, LiveOpenStateV1, NormalizedFilterValuesV1, OpenBatchKey,
-    OpenFreshnessState, OpenRefreshStatusV1, OpenSchedulerLane, OpenSectionStatusRequestV1,
-    OpenSectionStatusV1, OpenState, OpenStatusRequestV1, PageRequestV1, SectionDetailRequestV1,
+    OpenFailureClass, OpenFreshnessState, OpenRefreshClassification, OpenRefreshStatusV1,
+    OpenSchedulerLane, OpenSectionStatusRequestV1,
+    OpenSectionStatusV1, OpenState, OpenStatusRequestV1, OpenUncertaintyReason, PageRequestV1,
+    SectionDetailRequestV1,
     SectionDetailResponseV1, SectionIndex, SectionKey, SectionQueryRequestV1,
     SectionQueryResponseV1, SectionSortV1, ServiceOperationPhaseV1, ServiceOperationStageV2,
     ServiceOperationV1, ServiceWorkStateV2, TermCampusKey, TermId, TraceId, TraceIdSource,
@@ -1422,5 +1424,253 @@ async fn first_open_failure_projects_unknown_without_mass_closing_sections() {
             .complete_target_snapshot_state(&fixture.target)
             .expect("complete target state")
             .ready
+    );
+}
+
+fn wide_catalog_body(section_count: u32) -> Vec<u8> {
+    let sections = (0..section_count)
+        .map(|ordinal| {
+            format!(
+                r#"{{"campusCode":"NB","index":"{:05}","number":"{:02}","sectionCourseType":"LECTURE","openStatus":false,"meetingTimes":[]}}"#,
+                10_001 + ordinal,
+                ordinal + 1,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        r#"[{{"campusCode":"NB","courseString":"01:198:111","subject":"198","subjectDescription":"Computer Science","courseNumber":"111","title":"Introduction to Computer Science","sections":[{sections}]}}]"#
+    )
+    .into_bytes()
+}
+
+fn wide_catalog_response(
+    fixture: &Fixture,
+    section_count: u32,
+) -> bcsp_application::CatalogPullResponse {
+    let body = wide_catalog_body(section_count);
+    bcsp_application::CatalogPullResponse {
+        target: fixture.target.clone(),
+        courses: decode_catalog_payload(&body).expect("wide synthetic Catalog"),
+        provenance: SourceProvenance::from_body(
+            "SYNTHETIC_CATALOG",
+            "2030-01-01T00:00:00Z",
+            &body,
+        ),
+        selector_confirms_target: true,
+    }
+}
+
+fn wide_indexes(count: u32) -> Vec<SectionIndex> {
+    (0..count)
+        .map(|ordinal| {
+            SectionIndex::try_from(format!("{:05}", 10_001 + ordinal).as_str())
+                .expect("synthetic index")
+        })
+        .collect()
+}
+
+/// S1 end-to-end acceptance: the snapshot integrity gate on a REAL
+/// coordinator over REAL SQLite storage, driven by a fake upstream.
+///
+/// Sequence: (1) catalog + full open snapshot applies and seeds the gate
+/// baseline through the candidate-route promotion; (2) an implausibly
+/// shrunken snapshot (20 of 60) is HELD -- persisted as
+/// SUSPECT_PARTIAL_SNAPSHOT, zero watch fanout, `/open/status` keeps
+/// projecting (uncertainty + failure class) and the per-Section LKG state
+/// stays visible; (3) the recovered full snapshot applies immediately;
+/// (4) after a process restart (new coordinator, same storage) a changed
+/// candidate catalog seeds its gate from the persisted LKG through the
+/// production persistence wrapper and still holds the partial, discarding
+/// the staged catalog instead of publishing a gutted snapshot.
+#[tokio::test]
+async fn snapshot_integrity_gate_holds_partials_end_to_end_and_across_restart() {
+    let fixture = fixture();
+    let clock = FakeClock::default();
+    let socket = create_socket();
+    let full = wide_indexes(60);
+    let partial: Vec<SectionIndex> = full[..20].to_vec();
+
+    let upstream_state = Arc::new(FakeUpstream::new(
+        Arc::clone(&fixture.storage),
+        [Ok(wide_catalog_response(&fixture, 60))],
+        [
+            FakeOpenResult::Success(full.clone()),
+            FakeOpenResult::Success(partial.clone()),
+            FakeOpenResult::Success(full.clone()),
+        ],
+    ));
+    let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
+    let fixed_policy = FixedRefreshPolicyProvider::new(policy(GeneralOpenInterval::public()));
+    let mut coordinator = SharedRefreshCoordinator::with_parts(
+        Arc::clone(&fixture.storage),
+        FakeUpstreamHandle(Arc::clone(&upstream_state)),
+        fixed_policy,
+        clock.clone(),
+        FakeIds(500),
+        trace(97),
+        OpenCounterAudience::Public,
+        Arc::clone(&socket),
+        Arc::clone(&open_runtime),
+        Arc::new(RecordingStatus::default()),
+    );
+    coordinator
+        .register_target(
+            ScheduledRefreshTarget::try_new(fixture.target.clone(), fixture.open_request.clone())
+                .expect("registration"),
+        )
+        .expect("register target");
+    let mut receiver = start_watch(&socket, fixture.section.clone());
+    let routes = SharedProductRoutes::new(
+        Arc::clone(&fixture.storage),
+        SharedRuntimeContext::new(OpenCounterAudience::Public, clock.clone(), fixed_policy),
+        Arc::clone(&open_runtime),
+    );
+    let batch_status = |routes: &ProductRoutes| -> OpenRefreshStatusV1 {
+        post(
+            routes,
+            PRODUCT_OPEN_STATUS_PATH,
+            OpenStatusRequestV1::new(OpenBatchKey::from(fixture.target.clone())),
+        )
+    };
+
+    // (1) Catalog + full snapshot: applies, seeds, promotes to serving.
+    assert!(matches!(
+        coordinator.run_next().await.expect("Catalog dispatch"),
+        Some(CoordinatorDispatchOutcome::CatalogPublished { .. })
+    ));
+    let events = watch_events(&mut receiver);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, WatchServerEventV1::OpenObservation { .. })),
+        "the applied full snapshot fans out to the active watch",
+    );
+
+    // (2) Partial 20 of 60 (missing 40 >= max(ceil(60/10), 25)): HELD.
+    clock.advance(Duration::from_secs(30));
+    assert!(matches!(
+        coordinator.run_next().await.expect("partial Open dispatch"),
+        Some(CoordinatorDispatchOutcome::OpenCompleted {
+            observation_count: 0,
+            ..
+        })
+    ));
+    assert!(
+        watch_events(&mut receiver).is_empty(),
+        "a held snapshot must fan out nothing",
+    );
+    let open = batch_status(&routes);
+    assert_eq!(
+        open.latest_attempt.expect("latest attempt").classification,
+        OpenRefreshClassification::SuspectPartialSnapshot,
+    );
+    assert_eq!(
+        open.latest_failure.expect("failure point").failure_class,
+        OpenFailureClass::SuspectPartialSnapshot,
+        "the suspect failure point must project, not break the status route",
+    );
+    assert_eq!(
+        open.freshness.uncertainty,
+        Some(OpenUncertaintyReason::SuspectPartialUpstream),
+    );
+    let open_section: OpenSectionStatusV1 = post(
+        &routes,
+        PRODUCT_OPEN_SECTION_STATUS_PATH,
+        OpenSectionStatusRequestV1::new(fixture.section.clone()),
+    );
+    assert_eq!(
+        open_section.state,
+        OpenState::Open,
+        "the last-known-good per-Section state survives the hold",
+    );
+
+    // (3) Recovery: the full snapshot applies immediately and fans out.
+    clock.advance(Duration::from_secs(30));
+    assert!(matches!(
+        coordinator.run_next().await.expect("recovery Open dispatch"),
+        Some(CoordinatorDispatchOutcome::OpenCompleted { .. })
+    ));
+    let events = watch_events(&mut receiver);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, WatchServerEventV1::OpenObservation { .. })),
+        "recovery resumes normal fanout",
+    );
+    let open = batch_status(&routes);
+    assert_eq!(
+        open.latest_attempt.expect("latest attempt").classification,
+        OpenRefreshClassification::ValidApplied,
+    );
+    assert_eq!(open.freshness.uncertainty, None);
+
+    // (4) Restart: a fresh coordinator (empty in-memory gate state) over the
+    // SAME storage. A changed candidate catalog (61 sections) forces the
+    // candidate route; its gate seed |persisted LKG ∩ candidate catalog| MUST
+    // flow through the production persistence wrapper -- a fail-open read
+    // would seed from the partial itself and publish the gutted snapshot.
+    drop(coordinator);
+    let restarted_upstream = Arc::new(FakeUpstream::new(
+        Arc::clone(&fixture.storage),
+        [Ok(wide_catalog_response(&fixture, 61))],
+        [FakeOpenResult::Success(partial.clone())],
+    ));
+    let mut restarted = SharedRefreshCoordinator::with_parts(
+        Arc::clone(&fixture.storage),
+        FakeUpstreamHandle(Arc::clone(&restarted_upstream)),
+        fixed_policy,
+        clock.clone(),
+        FakeIds(600),
+        trace(98),
+        OpenCounterAudience::Public,
+        Arc::clone(&socket),
+        Arc::clone(&open_runtime),
+        Arc::new(RecordingStatus::default()),
+    );
+    restarted
+        .register_target(
+            ScheduledRefreshTarget::try_new(fixture.target.clone(), fixture.open_request.clone())
+                .expect("registration"),
+        )
+        .expect("register restarted target");
+    clock.advance(Duration::from_secs(15));
+    let outcome = restarted
+        .run_next()
+        .await
+        .expect("restart Catalog dispatch");
+    assert!(
+        matches!(
+            outcome,
+            Some(CoordinatorDispatchOutcome::CompleteSnapshotOpenFailed {
+                error_code: "OPEN_RESPONSE_UNSAFE",
+                ..
+            })
+        ),
+        "the held candidate must discard the staged catalog, got {outcome:?}",
+    );
+    assert!(
+        watch_events(&mut receiver).is_empty(),
+        "the restart hold fans out nothing",
+    );
+    let open = batch_status(&routes);
+    assert_eq!(
+        open.latest_attempt.expect("latest attempt").classification,
+        OpenRefreshClassification::SuspectPartialSnapshot,
+    );
+    let open_section: OpenSectionStatusV1 = post(
+        &routes,
+        PRODUCT_OPEN_SECTION_STATUS_PATH,
+        OpenSectionStatusRequestV1::new(fixture.section.clone()),
+    );
+    assert_eq!(open_section.state, OpenState::Open);
+    let storage = fixture.storage.lock().expect("storage");
+    let state = storage
+        .complete_target_snapshot_state(&fixture.target)
+        .expect("complete state");
+    assert!(state.ready, "the previous complete pair stays serving");
+    assert_eq!(
+        state.catalog_content_version, 1,
+        "the 61-section candidate catalog must not have published",
     );
 }

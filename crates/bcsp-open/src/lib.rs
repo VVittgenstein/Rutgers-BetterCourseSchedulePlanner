@@ -4,6 +4,7 @@
 #![deny(warnings)]
 
 mod freshness;
+mod gate;
 mod policy;
 mod projection;
 mod reconcile;
@@ -13,6 +14,15 @@ mod service;
 pub use freshness::{
     LastValidOpenPoint, LatestOpenAttemptPoint, OPEN_FRESHNESS_GRACE_SECONDS, OpenFreshnessError,
     project_open_freshness,
+};
+pub use gate::{
+    BaselineEpoch, CandidateEpisode, CatalogSetIdentity, GATE_BASELINE_WINDOW,
+    GATE_CONFIRM_MIN_CONSISTENT, GATE_CONFIRM_MIN_SPAN_SECONDS, GATE_CONSISTENCY_DENOMINATOR,
+    GATE_DROP_THRESHOLD_DENOMINATOR, GATE_MAX_SAMPLE_GAP_SECONDS, GATE_MIN_ABSOLUTE_DROP,
+    GATE_QUARANTINE_PROBE_CAP_SECONDS, GATE_RECOVERY_THRESHOLD_DENOMINATOR, GateDecision,
+    GateDecisionKind, GateDisposition,
+    GateRuntime, GateSample, GateState, RestartAttemptSummary, TargetGateSet,
+    catalog_section_set_identity_v1, rebuild_after_restart,
 };
 pub use policy::{
     ACTIVE_WATCH_OPEN_INTERVAL_SECONDS, FATAL_DIAGNOSTIC_COOLDOWN_SECONDS, GeneralOpenInterval,
@@ -39,9 +49,9 @@ pub use scheduler::{
     restore_monotonic_due,
 };
 pub use service::{
-    OpenPullClock, OpenPullCommand, OpenPullExecution, OpenPullFailure, OpenPullPersistence,
-    OpenPullTerminal, SharedOpenService, SharedOpenServiceError, SystemOpenPullClock,
-    rutgers_day_at,
+    OpenGateRoute, OpenGateWiring, OpenPullClock, OpenPullCommand, OpenPullExecution,
+    OpenPullFailure, OpenPullPersistence, OpenPullTerminal, SharedOpenService,
+    SharedOpenServiceError, SystemOpenPullClock, rutgers_day_at,
 };
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-open";

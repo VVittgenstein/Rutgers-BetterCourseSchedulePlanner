@@ -34,6 +34,7 @@ pub use open::{
     BeginOpenPullAttemptCommand, CatalogCandidateOpenSnapshot, CompleteSnapshotCommitOutcome,
     CompleteTargetSnapshotState, FinishOpenPullFailureCommand, FinishOpenPullSuccessCommand,
     OpenAttemptClassification, OpenAttemptCounters, OpenAttemptRecord, OpenBatchObservation,
+    OpenGateAttemptSummary,
     OpenBatchState, OpenCacheStatus, OpenCatalogSnapshot, OpenCircuitState, OpenCommitOutcome,
     OpenHttpAuditMetadata, OpenObservationCommit, OpenOriginState, OpenRequestLane,
     OpenRetentionReport, OpenScheduleState, OpenSectionCurrent, OpenSectionEvent, OpenSectionState,

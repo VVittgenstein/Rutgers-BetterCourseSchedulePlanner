@@ -13,6 +13,7 @@ export type OpenUncertaintyReason =
   | 'STALE_LAST_KNOWN_GOOD'
   | 'LATEST_ATTEMPT_FAILED'
   | 'LATEST_ATTEMPT_UNSAFE'
+  | 'SUSPECT_PARTIAL_UPSTREAM'
   | 'STALE_CATALOG_RACE'
   | 'CATALOG_VERSION_UNAVAILABLE';
 export type OpenRefreshClassification =
@@ -21,6 +22,7 @@ export type OpenRefreshClassification =
   | 'VALID_EMPTY_NO_ROWS'
   | 'UNSAFE_EMPTY'
   | 'UNSAFE_ZERO_INTERSECTION'
+  | 'SUSPECT_PARTIAL_SNAPSHOT'
   | 'STALE_CATALOG_RACE'
   | 'FAILED';
 export type OpenFailureClass =
@@ -36,7 +38,10 @@ export type OpenFailureClass =
   | 'OVERSIZE'
   | 'SCHEMA_VIOLATION'
   | 'INVALID_VALUE'
-  | 'PERSIST';
+  | 'PERSIST'
+  | 'UNSAFE_EMPTY'
+  | 'UNSAFE_ZERO_INTERSECTION'
+  | 'SUSPECT_PARTIAL_SNAPSHOT';
 export type OpenSchedulerLane =
   | 'GENERAL'
   | 'ACTIVE_WATCH'

@@ -236,6 +236,8 @@ fn publish_open_with_suffix(
         .expect("begin synthetic Open pull");
     storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace(attempt_suffix),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section.clone()],

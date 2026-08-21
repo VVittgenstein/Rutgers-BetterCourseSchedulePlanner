@@ -199,8 +199,35 @@ pub enum OpenFailureKind {
     Transient,
     UnsafeEmpty,
     UnsafeZeroIntersection,
+    /// Integrity-gate hold: the target is quarantined and needs dense probe
+    /// samples to drive recovery/confirmation (gate design section 4).
+    SuspectPartial,
     RateLimited { retry_after: Option<Duration> },
     FatalProtocol,
+}
+
+/// Quarantine probe cadence: fixed `min(30s, effective interval)` for every
+/// campus, deliberately NOT a backoff ladder -- adjacent samples must stay
+/// well inside the gate's 120s max gap or confirmation would be unreachable
+/// (the NK/CM transient ladder exceeds it, per review).
+fn quarantine_probe_directive(
+    target: &TermCampusKey,
+    requested_effective: Duration,
+    current_failure_streak: u32,
+) -> RetryDirective {
+    let cap = Duration::from_secs(30);
+    let base = if requested_effective.is_zero() {
+        cap
+    } else {
+        requested_effective.min(cap)
+    };
+    let next_failure_streak = current_failure_streak.saturating_add(1);
+    RetryDirective {
+        delay: base + deterministic_jitter_v1(target, next_failure_streak, base),
+        mode: RetryMode::Automatic,
+        next_failure_streak,
+        clears_fatal_diagnostic: true,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -253,13 +280,16 @@ pub fn target_retry_directive(
 
 pub fn retry_directive(
     target: &TermCampusKey,
-    _requested_effective: Duration,
+    requested_effective: Duration,
     current_failure_streak: u32,
     failure: OpenFailureKind,
 ) -> RetryDirective {
     match failure {
         OpenFailureKind::Transient => {
             target_retry_directive(target, current_failure_streak, TargetRetryClass::Transient)
+        }
+        OpenFailureKind::SuspectPartial => {
+            quarantine_probe_directive(target, requested_effective, current_failure_streak)
         }
         OpenFailureKind::UnsafeEmpty | OpenFailureKind::UnsafeZeroIntersection => {
             let mut directive =

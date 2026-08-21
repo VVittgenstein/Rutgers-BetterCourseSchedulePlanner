@@ -391,6 +391,7 @@ pub enum OpenRefreshClassification {
     ValidEmptyNoRows,
     UnsafeEmpty,
     UnsafeZeroIntersection,
+    SuspectPartialSnapshot,
     StaleCatalogRace,
     Failed,
 }
@@ -402,6 +403,7 @@ impl OpenRefreshClassification {
         Self::ValidEmptyNoRows,
         Self::UnsafeEmpty,
         Self::UnsafeZeroIntersection,
+        Self::SuspectPartialSnapshot,
         Self::StaleCatalogRace,
         Self::Failed,
     ];
@@ -413,6 +415,7 @@ impl OpenRefreshClassification {
             Self::ValidEmptyNoRows => "VALID_EMPTY_NO_ROWS",
             Self::UnsafeEmpty => "UNSAFE_EMPTY",
             Self::UnsafeZeroIntersection => "UNSAFE_ZERO_INTERSECTION",
+            Self::SuspectPartialSnapshot => "SUSPECT_PARTIAL_SNAPSHOT",
             Self::StaleCatalogRace => "STALE_CATALOG_RACE",
             Self::Failed => "FAILED",
         }
@@ -458,6 +461,14 @@ pub enum OpenFailureClass {
     SchemaViolation,
     InvalidValue,
     Persist,
+    /// The response body was well-formed but withheld by the server: an empty
+    /// payload while the catalog has rows.
+    UnsafeEmpty,
+    /// The response set shared no section with the current catalog.
+    UnsafeZeroIntersection,
+    /// The snapshot integrity gate withheld an implausibly shrunken snapshot
+    /// (last-known-good retained; not a transport failure).
+    SuspectPartialSnapshot,
 }
 
 impl OpenFailureClass {
@@ -475,6 +486,9 @@ impl OpenFailureClass {
         Self::SchemaViolation,
         Self::InvalidValue,
         Self::Persist,
+        Self::UnsafeEmpty,
+        Self::UnsafeZeroIntersection,
+        Self::SuspectPartialSnapshot,
     ];
 
     pub const fn wire_name(self) -> &'static str {
@@ -492,6 +506,9 @@ impl OpenFailureClass {
             Self::SchemaViolation => "SCHEMA_VIOLATION",
             Self::InvalidValue => "INVALID_VALUE",
             Self::Persist => "PERSIST",
+            Self::UnsafeEmpty => "UNSAFE_EMPTY",
+            Self::UnsafeZeroIntersection => "UNSAFE_ZERO_INTERSECTION",
+            Self::SuspectPartialSnapshot => "SUSPECT_PARTIAL_SNAPSHOT",
         }
     }
 }
@@ -543,6 +560,7 @@ pub enum OpenUncertaintyReason {
     StaleLastKnownGood,
     LatestAttemptFailed,
     LatestAttemptUnsafe,
+    SuspectPartialUpstream,
     StaleCatalogRace,
     CatalogVersionUnavailable,
 }
@@ -553,6 +571,7 @@ impl OpenUncertaintyReason {
         Self::StaleLastKnownGood,
         Self::LatestAttemptFailed,
         Self::LatestAttemptUnsafe,
+        Self::SuspectPartialUpstream,
         Self::StaleCatalogRace,
         Self::CatalogVersionUnavailable,
     ];
@@ -563,6 +582,7 @@ impl OpenUncertaintyReason {
             Self::StaleLastKnownGood => "STALE_LAST_KNOWN_GOOD",
             Self::LatestAttemptFailed => "LATEST_ATTEMPT_FAILED",
             Self::LatestAttemptUnsafe => "LATEST_ATTEMPT_UNSAFE",
+            Self::SuspectPartialUpstream => "SUSPECT_PARTIAL_UPSTREAM",
             Self::StaleCatalogRace => "STALE_CATALOG_RACE",
             Self::CatalogVersionUnavailable => "CATALOG_VERSION_UNAVAILABLE",
         }

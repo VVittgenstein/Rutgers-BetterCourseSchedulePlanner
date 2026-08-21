@@ -102,6 +102,7 @@ export const openUncertaintyMessageKeys = {
   STALE_LAST_KNOWN_GOOD: 'open.uncertainty.stale_last_known_good',
   LATEST_ATTEMPT_FAILED: 'open.uncertainty.latest_attempt_failed',
   LATEST_ATTEMPT_UNSAFE: 'open.uncertainty.latest_attempt_unsafe',
+  SUSPECT_PARTIAL_UPSTREAM: 'open.uncertainty.suspect_partial_upstream',
   STALE_CATALOG_RACE: 'open.uncertainty.stale_catalog_race',
   CATALOG_VERSION_UNAVAILABLE: 'open.uncertainty.catalog_version_unavailable',
 } as const satisfies Readonly<Record<OpenUncertaintyReason, MessageKey>>;
@@ -112,6 +113,7 @@ export const refreshClassificationMessageKeys = {
   VALID_EMPTY_NO_ROWS: 'open.refresh.valid_empty',
   UNSAFE_EMPTY: 'open.refresh.unsafe_empty',
   UNSAFE_ZERO_INTERSECTION: 'open.refresh.unsafe_zero_intersection',
+  SUSPECT_PARTIAL_SNAPSHOT: 'open.refresh.suspect_partial_snapshot',
   STALE_CATALOG_RACE: 'open.refresh.stale_catalog_race',
   FAILED: 'open.refresh.failed',
 } as const satisfies Readonly<Record<OpenRefreshClassification, MessageKey>>;

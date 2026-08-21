@@ -90,6 +90,9 @@ const fn invalidation_reason(
         | OpenRefreshClassification::UnsafeZeroIntersection => {
             Some(OpenUncertaintyReason::LatestAttemptUnsafe)
         }
+        OpenRefreshClassification::SuspectPartialSnapshot => {
+            Some(OpenUncertaintyReason::SuspectPartialUpstream)
+        }
         OpenRefreshClassification::StaleCatalogRace => {
             Some(OpenUncertaintyReason::StaleCatalogRace)
         }

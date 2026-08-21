@@ -642,6 +642,9 @@ const fn map_classification(value: OpenAttemptClassification) -> OpenRefreshClas
         OpenAttemptClassification::UnsafeZeroIntersection => {
             OpenRefreshClassification::UnsafeZeroIntersection
         }
+        OpenAttemptClassification::SuspectPartialSnapshot => {
+            OpenRefreshClassification::SuspectPartialSnapshot
+        }
         OpenAttemptClassification::StaleCatalogRace => OpenRefreshClassification::StaleCatalogRace,
     }
 }
@@ -684,6 +687,13 @@ fn map_failure_code(
         "OPEN_REQUEST_CONSTRUCTION"
         | "OPEN_CATALOG_UNAVAILABLE_AFTER_FETCH"
         | "PROCESS_RESTARTED" => OpenFailureClass::Persist,
+        // Withheld-snapshot codes persisted by `finalize_non_applied_attempt`:
+        // these are legitimate durable states and must project (a lingering
+        // suspect or unsafe latest-failure would otherwise fail the whole
+        // status projection until the row is overwritten).
+        "UNSAFE_EMPTY_WITH_CATALOG_ROWS" => OpenFailureClass::UnsafeEmpty,
+        "UNSAFE_ZERO_INTERSECTION" => OpenFailureClass::UnsafeZeroIntersection,
+        "SUSPECT_PARTIAL_SNAPSHOT" => OpenFailureClass::SuspectPartialSnapshot,
         "OPEN_RESPONSE_URL_MISMATCH" | "OPEN_OFF_ORIGIN_REDIRECT" => {
             OpenFailureClass::OffOriginRedirect
         }
@@ -1062,6 +1072,33 @@ mod tests {
         assert_eq!(failure.attempt_sequence.get(), 2);
         assert_eq!(failure.failed_at, at(105));
         assert_eq!(failure.failure_class, OpenFailureClass::Network);
+    }
+
+    #[test]
+    fn withheld_snapshot_failure_codes_project_instead_of_failing_status() {
+        // A persisted gate Hold (and the pre-existing unsafe shapes) land in
+        // last_failure_error_code via finalize_non_applied_attempt; the
+        // projection must classify them, not error out -- an UnknownFailureCode
+        // here takes /open/status and watch START down until the row is
+        // overwritten, across later successful pulls.
+        for (code, expected) in [
+            ("SUSPECT_PARTIAL_SNAPSHOT", OpenFailureClass::SuspectPartialSnapshot),
+            ("UNSAFE_EMPTY_WITH_CATALOG_ROWS", OpenFailureClass::UnsafeEmpty),
+            ("UNSAFE_ZERO_INTERSECTION", OpenFailureClass::UnsafeZeroIntersection),
+        ] {
+            let mut state = batch(trace(3), 3);
+            state.last_attempt_at = Some(text(110));
+            state.last_success_at = Some(text(111));
+            state.last_failure_attempt_sequence = Some(2);
+            state.last_failure_at = Some(text(105));
+            state.last_failure_error_code = Some(code.to_owned());
+            state.last_failure_http_status = Some(200);
+
+            let failure = project_latest_failure(Some(&state))
+                .expect("withheld-snapshot codes must project")
+                .expect("latest failure");
+            assert_eq!(failure.failure_class, expected, "{code}");
+        }
     }
 
     fn base_store(with_failure: bool) -> FakeStore {

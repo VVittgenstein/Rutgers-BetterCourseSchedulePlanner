@@ -270,6 +270,8 @@ fn staged_catalog_and_open_publish_as_one_complete_snapshot() {
             catalog_observation,
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
             FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
                 attempt_id: open_attempt.attempt_id,
                 completed_at: "2026-07-14T00:00:02Z".to_owned(),
                 open_sections: vec![section(&scope, "00001")],
@@ -322,6 +324,8 @@ fn failed_candidate_open_retains_the_previous_complete_pair() {
             initial_catalog,
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
             FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
                 attempt_id: first_attempt.attempt_id,
                 completed_at: "2026-07-14T00:00:02Z".to_owned(),
                 open_sections: vec![section(&scope, "00001")],
@@ -416,7 +420,7 @@ fn existing_v1_database_migrates_to_open_storage_without_seed_rows() {
     drop(connection);
 
     let storage = OperationalStorage::open(&path).expect("migrate to current schema");
-    assert_eq!(storage.migration_records().expect("records").len(), 4);
+    assert_eq!(storage.migration_records().expect("records").len(), 6);
     let tables = storage.operational_table_names().expect("tables");
     assert!(tables.contains(&"open_pull_attempts".to_owned()));
     assert!(tables.contains(&"open_section_events".to_owned()));
@@ -456,6 +460,8 @@ fn applied_lkg_accepts_typed_empty_then_survives_zero_intersection_race_and_rest
     begin(&mut storage, &scope, "open-lkg-1", run, v1, "2026-07-14");
     let applied = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-lkg-1"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00001"), section(&scope, "99999")],
@@ -544,6 +550,8 @@ fn applied_lkg_accepts_typed_empty_then_survives_zero_intersection_race_and_rest
     begin(&mut storage, &scope, "open-lkg-3", run, v1, "2026-07-14");
     let valid_empty = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-lkg-3"),
             completed_at: COMPLETED.to_owned(),
             open_sections: Vec::new(),
@@ -570,6 +578,8 @@ fn applied_lkg_accepts_typed_empty_then_survives_zero_intersection_race_and_rest
     begin(&mut storage, &scope, "open-lkg-4", run, v1, "2026-07-14");
     let zero = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-lkg-4"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "99999")],
@@ -588,6 +598,8 @@ fn applied_lkg_accepts_typed_empty_then_survives_zero_intersection_race_and_rest
     assert_eq!(v2, v1 + 1);
     let race = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-lkg-5"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00002")],
@@ -730,6 +742,8 @@ fn http_audit_validation_rejects_incomplete_success_and_unsafe_header_text() {
     incomplete.content_type = None;
     assert!(matches!(
         storage.finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-http-validation"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00001")],
@@ -776,6 +790,8 @@ fn empty_catalog_accepts_nonempty_all_orphan_response_and_true_empty_response() 
     );
     let all_orphan = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-no-rows-1"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "99999")],
@@ -809,6 +825,8 @@ fn empty_catalog_accepts_nonempty_all_orphan_response_and_true_empty_response() 
     );
     let empty = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-no-rows-2"),
             completed_at: COMPLETED.to_owned(),
             open_sections: Vec::new(),
@@ -847,6 +865,8 @@ fn unchanged_valid_batch_still_emits_a_watched_section_event() {
         );
         let outcome = storage
             .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
                 attempt_id: trace(&attempt),
                 completed_at: COMPLETED.to_owned(),
                 open_sections: vec![section(&scope, "00001")],
@@ -918,6 +938,8 @@ fn target_single_flight_is_transactional_across_connections_and_old_finishes_are
 
     second_connection
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-single-flight-1"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00001")],
@@ -934,6 +956,8 @@ fn target_single_flight_is_transactional_across_connections_and_old_finishes_are
     );
     first_connection
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-single-flight-2"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00002")],
@@ -944,6 +968,8 @@ fn target_single_flight_is_transactional_across_connections_and_old_finishes_are
         .expect("finish later attempt");
     assert!(matches!(
         second_connection.finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-single-flight-1"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00001")],
@@ -1052,6 +1078,8 @@ fn metadata_only_catalog_version_bump_does_not_change_open_state_hash() {
     );
     storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-state-hash-1"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00001")],
@@ -1085,6 +1113,8 @@ fn metadata_only_catalog_version_bump_does_not_change_open_state_hash() {
     );
     let second = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-state-hash-2"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00001")],
@@ -1130,6 +1160,8 @@ fn catalog_race_counts_are_derived_from_the_captured_snapshot() {
     assert_eq!(v2, v1 + 1);
     let race = storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-race-counts"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00002"), section(&scope, "99999")],
@@ -1255,6 +1287,8 @@ fn open_commit_fault_rolls_back_and_failed_completion_keeps_lkg() {
     );
     storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
             attempt_id: trace("open-rollback-1"),
             completed_at: COMPLETED.to_owned(),
             open_sections: vec![section(&scope, "00001")],
@@ -1283,6 +1317,8 @@ fn open_commit_fault_rolls_back_and_failed_completion_keeps_lkg() {
     assert!(
         storage
             .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
                 attempt_id: trace("open-rollback-2"),
                 completed_at: COMPLETED.to_owned(),
                 open_sections: vec![section(&scope, "00002")],
@@ -1441,5 +1477,294 @@ fn restart_interrupts_started_attempt_and_retention_preserves_aggregates() {
             .open_day_counters(&scope, "2026-07-11")
             .expect("rolled aggregate"),
         old_counters
+    );
+}
+
+#[test]
+fn suspect_hold_retains_lkg_emits_nothing_and_recovery_applies() {
+    let temp = TempDir::new().expect("temp");
+    let path = temp.path().join("operational.sqlite");
+    let mut storage = OperationalStorage::open(&path).expect("open");
+    let scope = target("92026", "NB");
+    let version = publish_catalog(
+        &mut storage,
+        &scope,
+        "gate",
+        &["00001", "00002", "00003"],
+        HASH_A,
+    );
+
+    // Attempt 1: applied full snapshot establishes the LKG.
+    begin(&mut storage, &scope, "gate-a1", "gate-run", version, "2026-08-19");
+    let applied = storage
+        .finish_open_pull_success(FinishOpenPullSuccessCommand {
+            gate_hold: false,
+            gate_catalog_set_identity: None,
+            attempt_id: trace("gate-a1"),
+            completed_at: COMPLETED.to_owned(),
+            open_sections: vec![section(&scope, "00001"), section(&scope, "00002")],
+            source_value_count: 2,
+            watched_sections: vec![section(&scope, "00002")],
+            http: success_http(64),
+        })
+        .expect("applied baseline");
+    assert_eq!(applied.classification, OpenAttemptClassification::ValidApplied);
+    let baseline_events = storage.read_open_section_events(0, 10).expect("events").len();
+
+    // Attempt 2: an otherwise-applicable snapshot withheld by the gate.
+    begin(&mut storage, &scope, "gate-a2", "gate-run", version, "2026-08-19");
+    let held = storage
+        .finish_open_pull_success(FinishOpenPullSuccessCommand {
+            gate_hold: true,
+            gate_catalog_set_identity: None,
+            attempt_id: trace("gate-a2"),
+            completed_at: COMPLETED.to_owned(),
+            open_sections: vec![section(&scope, "00001")],
+            source_value_count: 1,
+            watched_sections: vec![section(&scope, "00002")],
+            http: success_http(32),
+        })
+        .expect("held commit succeeds as a non-applied attempt");
+    assert_eq!(
+        held.classification,
+        OpenAttemptClassification::SuspectPartialSnapshot
+    );
+    assert!(held.observation_commit.is_none(), "no observation for a held snapshot");
+    assert_eq!(held.retained_lkg_attempt_id, Some(trace("gate-a1")));
+    assert_eq!(held.intersection_count, 1, "true intersection still audited");
+
+    // LKG state mirror untouched: 00002 stays OPEN despite its absence from
+    // the held snapshot, and no new watch events were written.
+    let current = storage.open_section_current(&scope).expect("current");
+    assert_eq!(current.len(), 3);
+    assert_eq!(current[0].state, OpenSectionState::Open);
+    assert_eq!(current[1].state, OpenSectionState::Open);
+    assert_eq!(current[2].state, OpenSectionState::Closed);
+    assert_eq!(
+        storage.read_open_section_events(0, 10).expect("events").len(),
+        baseline_events,
+        "a held snapshot fans out zero section events",
+    );
+    let stored = storage
+        .open_attempt(&trace("gate-a2"))
+        .expect("attempt read")
+        .expect("present");
+    assert_eq!(stored.error_code.as_deref(), Some("SUSPECT_PARTIAL_SNAPSHOT"));
+
+    // Gate seeding reads: newest-first summaries and the LKG open set.
+    let summaries = storage
+        .recent_open_gate_attempt_summaries(&scope, 8)
+        .expect("summaries");
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(
+        summaries[0].classification,
+        OpenAttemptClassification::SuspectPartialSnapshot
+    );
+    assert!(summaries[0].canonical_set_sha256.is_some());
+    assert!(summaries[0].completed_at.is_some());
+    assert_eq!(summaries[1].classification, OpenAttemptClassification::ValidApplied);
+    let lkg = storage
+        .serving_lkg_open_index_set(&scope)
+        .expect("lkg read")
+        .expect("state exists");
+    assert_eq!(
+        lkg.into_iter().collect::<Vec<_>>(),
+        vec!["00001".to_owned(), "00002".to_owned()],
+    );
+
+    // Attempt 3: recovery applies normally through the same code path.
+    begin(&mut storage, &scope, "gate-a3", "gate-run", version, "2026-08-19");
+    let recovered = storage
+        .finish_open_pull_success(FinishOpenPullSuccessCommand {
+            gate_hold: false,
+            gate_catalog_set_identity: None,
+            attempt_id: trace("gate-a3"),
+            completed_at: COMPLETED.to_owned(),
+            open_sections: vec![section(&scope, "00001"), section(&scope, "00002")],
+            source_value_count: 2,
+            watched_sections: vec![section(&scope, "00002")],
+            http: success_http(64),
+        })
+        .expect("recovery applies");
+    assert_eq!(
+        recovered.classification,
+        OpenAttemptClassification::ValidApplied
+    );
+    assert!(recovered.observation_commit.is_some());
+}
+
+/// Reviewer merge-blocker pin: the restart summaries must round-trip the
+/// exact catalog section-set identity a gated attempt was decided against,
+/// and candidate attempts (decided by an independent runtime against an
+/// unpublished catalog) must never appear in them.
+#[test]
+fn gate_summaries_bind_identity_and_exclude_candidate_attempts() {
+    let scope = target("92026", "NB");
+    let mut storage = OperationalStorage::open_in_memory().expect("storage");
+    let version = publish_catalog(
+        &mut storage,
+        &scope,
+        "gate-summary",
+        &["00001", "00002"],
+        HASH_A,
+    );
+
+    // Serving attempt 1: applied, identity recorded.
+    begin(&mut storage, &scope, "sum-a1", "sum-run", version, "2026-08-19");
+    storage
+        .finish_open_pull_success(FinishOpenPullSuccessCommand {
+            gate_hold: false,
+            gate_catalog_set_identity: Some(HASH_B.to_owned()),
+            attempt_id: trace("sum-a1"),
+            completed_at: COMPLETED.to_owned(),
+            open_sections: vec![section(&scope, "00001"), section(&scope, "00002")],
+            source_value_count: 2,
+            watched_sections: Vec::new(),
+            http: success_http(64),
+        })
+        .expect("applied serving attempt");
+
+    // Serving attempt 2: gate hold, identity recorded on the suspect row.
+    begin(&mut storage, &scope, "sum-a2", "sum-run", version, "2026-08-19");
+    storage
+        .finish_open_pull_success(FinishOpenPullSuccessCommand {
+            gate_hold: true,
+            gate_catalog_set_identity: Some(HASH_B.to_owned()),
+            attempt_id: trace("sum-a2"),
+            completed_at: COMPLETED.to_owned(),
+            open_sections: vec![section(&scope, "00001")],
+            source_value_count: 1,
+            watched_sections: Vec::new(),
+            http: success_http(32),
+        })
+        .expect("held serving attempt");
+
+    // Candidate attempt: a suspect decided against a staged (never published)
+    // catalog. It is the newest row in the attempts table, yet it must not
+    // surface in the serving restart summaries.
+    let staged = stage_catalog(
+        &mut storage,
+        &scope,
+        "gate-summary-v2",
+        &["00001", "00003"],
+        HASH_C,
+    );
+    let candidate = storage
+        .candidate_open_catalog_snapshot(&staged, EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty)
+        .expect("candidate")
+        .expect("publishable candidate");
+    let candidate_attempt = begin_command(
+        &scope,
+        "sum-c1",
+        "sum-run",
+        candidate.catalog.content_version,
+        "2026-08-19",
+    );
+    storage
+        .begin_candidate_open_pull_attempt(&candidate, &candidate_attempt)
+        .expect("begin candidate attempt");
+    let outcome = storage
+        .finish_candidate_open_pull_success(
+            staged,
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            FinishOpenPullSuccessCommand {
+                gate_hold: true,
+                gate_catalog_set_identity: Some(HASH_A.to_owned()),
+                attempt_id: candidate_attempt.attempt_id,
+                completed_at: COMPLETED.to_owned(),
+                open_sections: vec![section(&scope, "00001")],
+                source_value_count: 1,
+                watched_sections: Vec::new(),
+                http: success_http(32),
+            },
+        )
+        .expect("candidate suspect finishes");
+    assert!(outcome.catalog.is_none(), "held candidate discards the staged catalog");
+    assert_eq!(
+        outcome.open.classification,
+        OpenAttemptClassification::SuspectPartialSnapshot
+    );
+
+    let summaries = storage
+        .recent_open_gate_attempt_summaries(&scope, 8)
+        .expect("summaries");
+    assert_eq!(summaries.len(), 2, "unpublished candidate attempts are excluded");
+    assert_eq!(
+        summaries[0].classification,
+        OpenAttemptClassification::SuspectPartialSnapshot
+    );
+    assert_eq!(summaries[0].catalog_set_identity.as_deref(), Some(HASH_B));
+    assert!(summaries[0].canonical_set_sha256.is_some());
+    assert!(summaries[0].completed_at.is_some());
+    assert_eq!(
+        summaries[1].classification,
+        OpenAttemptClassification::ValidApplied
+    );
+    assert_eq!(summaries[1].catalog_set_identity.as_deref(), Some(HASH_B));
+
+    // A SUCCESSFUL candidate publish promoted its runtime to serving and
+    // closed any live quarantine -- its row must therefore SURVIVE the
+    // candidate filter and stand in the stream as a non-suspect breaker
+    // (reviewer counterexample: filtering it would stitch the pre-publish
+    // suspects onto a post-publish episode the live runtime had reset).
+    let published = stage_catalog(
+        &mut storage,
+        &scope,
+        "gate-summary-v3",
+        &["00001", "00003"],
+        HASH_C,
+    );
+    let published_candidate = storage
+        .candidate_open_catalog_snapshot(&published, EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty)
+        .expect("candidate")
+        .expect("publishable candidate");
+    let published_attempt = begin_command(
+        &scope,
+        "sum-c2",
+        "sum-run",
+        published_candidate.catalog.content_version,
+        "2026-08-19",
+    );
+    storage
+        .begin_candidate_open_pull_attempt(&published_candidate, &published_attempt)
+        .expect("begin publishing candidate attempt");
+    let outcome = storage
+        .finish_candidate_open_pull_success(
+            published,
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: Some(HASH_C.to_owned()),
+                attempt_id: published_attempt.attempt_id,
+                completed_at: COMPLETED.to_owned(),
+                open_sections: vec![section(&scope, "00001"), section(&scope, "00003")],
+                source_value_count: 2,
+                watched_sections: Vec::new(),
+                http: success_http(64),
+            },
+        )
+        .expect("candidate publishes atomically");
+    assert!(outcome.catalog.is_some());
+    assert!(outcome.open.classification.is_success());
+
+    let summaries = storage
+        .recent_open_gate_attempt_summaries(&scope, 8)
+        .expect("summaries after publish");
+    assert_eq!(
+        summaries
+            .iter()
+            .map(|summary| summary.classification)
+            .collect::<Vec<_>>(),
+        vec![
+            OpenAttemptClassification::ValidApplied,
+            OpenAttemptClassification::SuspectPartialSnapshot,
+            OpenAttemptClassification::ValidApplied,
+        ],
+        "the published candidate is newest and present as a breaker; the held candidate stays invisible",
+    );
+    assert_eq!(
+        summaries[0].catalog_set_identity.as_deref(),
+        Some(HASH_C),
+        "the breaker row keeps its own decision identity",
     );
 }
