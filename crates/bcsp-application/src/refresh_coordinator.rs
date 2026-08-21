@@ -391,7 +391,15 @@ pub struct SharedRefreshCoordinator<S, U, P, C = SystemCoordinatorClock, I = Sys
     watch: Arc<SharedWatchSocket>,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
     status: Arc<dyn CoordinatorStatusSink>,
-    workflow_control: Option<Arc<TargetWorkflowControl>>,
+    /// Control supplied by the official runtimes (one per single-target
+    /// coordinator); newly registered targets adopt it when present.
+    attached_workflow_control: Option<Arc<TargetWorkflowControl>>,
+    /// Per-target workflow controls. Every registered target ALWAYS has one:
+    /// direct `with_parts` embedders get a default control per target, so the
+    /// snapshot integrity gate is never silently detached. `TargetGateSet`
+    /// is per-target state -- sharing one control across targets would let
+    /// one target's catalog identity wipe another's quarantine.
+    workflow_controls: BTreeMap<TermCampusKey, Arc<TargetWorkflowControl>>,
     prepared_rebuild: Option<PreparedServingRebuildDemand>,
     scheduler: OriginEdfScheduler,
     targets: BTreeMap<TermCampusKey, OpenSectionsRequest>,
@@ -485,7 +493,8 @@ where
             watch,
             open_runtime,
             status,
-            workflow_control: None,
+            attached_workflow_control: None,
+            workflow_controls: BTreeMap::new(),
             prepared_rebuild: None,
             scheduler: OriginEdfScheduler::new(),
             targets: BTreeMap::new(),
@@ -570,6 +579,12 @@ where
             self.scheduler
                 .complete_open_bootstrap(&registration.target, now)?;
         }
+        let control = self
+            .attached_workflow_control
+            .clone()
+            .unwrap_or_else(|| Arc::new(TargetWorkflowControl::default()));
+        self.workflow_controls
+            .insert(registration.target.clone(), control);
         self.targets
             .insert(registration.target.clone(), registration.open_request);
         if complete_snapshot_ready {
@@ -711,7 +726,10 @@ where
     }
 
     pub(crate) fn attach_workflow_control(&mut self, control: Arc<TargetWorkflowControl>) {
-        self.workflow_control = Some(control);
+        for value in self.workflow_controls.values_mut() {
+            *value = Arc::clone(&control);
+        }
+        self.attached_workflow_control = Some(control);
     }
 
     pub(crate) fn concurrent_open_schedule(
@@ -1093,7 +1111,7 @@ where
         ),
         CoordinatorError,
     > {
-        if let Some(control) = &self.workflow_control {
+        if let Some(control) = self.workflow_controls.get(&dispatch.key.target) {
             control.mark_catalog_fetch();
         }
         let attempt_id = self.ids.next_trace_id();
@@ -1162,7 +1180,7 @@ where
             Some(dispatch.key.target.clone()),
             None,
         );
-        if let Some(control) = &self.workflow_control {
+        if let Some(control) = self.workflow_controls.get(&dispatch.key.target) {
             control.mark_catalog_process();
         }
         self.publish_workflow_running(
@@ -1309,7 +1327,7 @@ where
             }
         };
 
-        let workflow_control = self.workflow_control.clone();
+        let workflow_control = self.workflow_controls.get(&dispatch.key.target).cloned();
         let _candidate_open_gate = if let Some(control) = &workflow_control {
             control.mark_candidate_open();
             Some(control.open_gate.lock().await)
@@ -1336,8 +1354,7 @@ where
             .effective_seconds(active_watch_count > 0);
         let open_attempt_id = self.ids.next_trace_id();
         let command = OpenPullCommand {
-            gate: self
-                .workflow_control
+            gate: workflow_control
                 .as_ref()
                 .map(|control| control.gate_wiring(OpenGateRoute::Candidate)),
             attempt_id: open_attempt_id,
@@ -1455,8 +1472,8 @@ where
         };
         let command = OpenPullCommand {
             gate: self
-                .workflow_control
-                .as_ref()
+                .workflow_controls
+                .get(&dispatch.key.target)
                 .map(|control| control.gate_wiring(OpenGateRoute::Serving)),
             attempt_id: self.ids.next_trace_id(),
             run_id: self.run_id,
@@ -1947,6 +1964,27 @@ where
             self.open_publication_barrier.take();
         }
         result
+    }
+
+    // Integrity-gate seeding reads: ALWAYS answered from durable storage,
+    // in candidate mode too -- the candidate seed is |serving LKG ∩ candidate
+    // catalog| and the restart rebuild consumes serving history, both of
+    // which live in the operational database, never in the staged candidate.
+    fn lkg_open_index_set(
+        &mut self,
+        target: &TermCampusKey,
+    ) -> StorageResult<Option<std::collections::BTreeSet<bcsp_contracts::SectionIndex>>> {
+        self.with_storage(|storage| {
+            bcsp_open::OpenPullPersistence::lkg_open_index_set(storage, target)
+        })
+    }
+
+    fn recent_open_gate_attempt_summaries(
+        &mut self,
+        target: &TermCampusKey,
+        limit: u32,
+    ) -> StorageResult<Vec<bcsp_operational_storage::OpenGateAttemptSummary>> {
+        self.with_storage(|storage| storage.recent_open_gate_attempt_summaries(target, limit))
     }
 }
 

@@ -3012,6 +3012,7 @@ mod tests {
         storage
             .finish_open_pull_success(FinishOpenPullSuccessCommand {
                 gate_hold: false,
+                gate_catalog_set_identity: None,
                 attempt_id: trace(suffix),
                 completed_at: "2026-07-18T00:00:03Z".to_owned(),
                 open_sections: open.then_some(section).into_iter().collect(),

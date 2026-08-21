@@ -62,25 +62,23 @@ pub trait OpenPullPersistence {
         command: &FinishOpenPullFailureCommand,
     ) -> StorageResult<OpenCommitOutcome>;
 
-    /// Integrity-gate seeding read: the last-applied OPEN index set. The
-    /// default keeps persistence fakes valid -- without LKG knowledge the
-    /// gate starts unseeded and passes until the first applied snapshot.
+    /// Integrity-gate seeding read: the last-applied OPEN index set.
+    /// REQUIRED, deliberately without a default: a fail-open default here
+    /// silently left the production wrapper returning `None` and the gate
+    /// permanently unseeded. Every implementation must decide explicitly.
     fn lkg_open_index_set(
         &mut self,
-        _target: &TermCampusKey,
-    ) -> StorageResult<Option<BTreeSet<SectionIndex>>> {
-        Ok(None)
-    }
+        target: &TermCampusKey,
+    ) -> StorageResult<Option<BTreeSet<SectionIndex>>>;
 
     /// Integrity-gate restart read: newest-first completed attempt summaries
-    /// for the restart rebuild rules. Default: no history.
+    /// for the restart rebuild rules. REQUIRED for the same reason as
+    /// [`Self::lkg_open_index_set`].
     fn recent_open_gate_attempt_summaries(
         &mut self,
-        _target: &TermCampusKey,
-        _limit: u32,
-    ) -> StorageResult<Vec<OpenGateAttemptSummary>> {
-        Ok(Vec::new())
-    }
+        target: &TermCampusKey,
+        limit: u32,
+    ) -> StorageResult<Vec<OpenGateAttemptSummary>>;
 }
 
 impl OpenPullPersistence for OperationalStorage {
@@ -560,6 +558,9 @@ where
             .persistence
             .finish_open_pull_success(FinishOpenPullSuccessCommand {
                 gate_hold,
+                gate_catalog_set_identity: gate_advance
+                    .as_ref()
+                    .map(|(_, identity, _, _)| identity.as_str().to_owned()),
                 attempt_id: command.attempt_id,
                 completed_at: completed_at_text,
                 open_sections,
@@ -1132,6 +1133,12 @@ fn gate_restart_summaries(rows: Vec<OpenGateAttemptSummary>) -> Vec<RestartAttem
                 .completed_at
                 .as_deref()
                 .and_then(|text| OffsetDateTime::parse(text, &Rfc3339).ok());
+            // An unparsable stored identity degrades to `None`, which the
+            // rebuild treats as a run breaker -- never as a match.
+            let catalog_set_identity = row
+                .catalog_set_identity
+                .as_deref()
+                .and_then(CatalogSetIdentity::from_sha256_hex);
             match (row.classification, row.canonical_set_sha256, completed_at) {
                 (
                     OpenAttemptClassification::SuspectPartialSnapshot,
@@ -1141,11 +1148,13 @@ fn gate_restart_summaries(rows: Vec<OpenGateAttemptSummary>) -> Vec<RestartAttem
                     is_suspect_partial: true,
                     canonical_set_sha256,
                     completed_at,
+                    catalog_set_identity,
                 },
                 (_, hash, at) => RestartAttemptSummary {
                     is_suspect_partial: false,
                     canonical_set_sha256: hash.unwrap_or_default(),
                     completed_at: at.unwrap_or(OffsetDateTime::UNIX_EPOCH),
+                    catalog_set_identity,
                 },
             }
         })
@@ -1394,6 +1403,21 @@ mod tests {
         ) -> StorageResult<OpenCommitOutcome> {
             self.failure = Some(command.clone());
             Ok(self.outcome(OpenAttemptClassification::Failed))
+        }
+
+        fn lkg_open_index_set(
+            &mut self,
+            _target: &TermCampusKey,
+        ) -> StorageResult<Option<BTreeSet<SectionIndex>>> {
+            Ok(None)
+        }
+
+        fn recent_open_gate_attempt_summaries(
+            &mut self,
+            _target: &TermCampusKey,
+            _limit: u32,
+        ) -> StorageResult<Vec<OpenGateAttemptSummary>> {
+            Ok(Vec::new())
         }
     }
 
@@ -2261,6 +2285,23 @@ mod tests {
             ) -> StorageResult<OpenCommitOutcome> {
                 unreachable!("probe pulls never fail")
             }
+
+            fn lkg_open_index_set(
+                &mut self,
+                _target: &TermCampusKey,
+            ) -> StorageResult<Option<BTreeSet<SectionIndex>>> {
+                // The probe pre-installs a seeded serving runtime, so the
+                // lazy-rebuild reads are never consulted.
+                Ok(None)
+            }
+
+            fn recent_open_gate_attempt_summaries(
+                &mut self,
+                _target: &TermCampusKey,
+                _limit: u32,
+            ) -> StorageResult<Vec<OpenGateAttemptSummary>> {
+                Ok(Vec::new())
+            }
         }
 
         let catalog: Vec<SectionKey> = (0..300)
@@ -2354,5 +2395,261 @@ mod tests {
                 .is_quarantined(),
             "A's recovery closed the quarantine",
         );
+    }
+
+    /// Reviewer merge-blocker pin: the serving lazy rebuild on first use MUST
+    /// consume the persisted LKG set and the persisted suspect history via
+    /// the persistence seam.
+    ///
+    /// Pull 1 (partial 200 of 300) proves the LKG read: a fail-open `None`
+    /// would leave the runtime unseeded and the partial would seed-and-apply;
+    /// with the read it must Hold against the LKG floor. Pull 2 proves the
+    /// history read: the persisted 3-suspect run makes the second live sample
+    /// the confirming one (count 5, span >= 300s), while ignored history
+    /// would leave count at 2 and keep holding.
+    #[tokio::test]
+    async fn serving_lazy_rebuild_consumes_persisted_lkg_and_history() {
+        use crate::gate::{TargetGateSet, catalog_section_set_identity_v1};
+
+        fn probe_index(value: usize) -> SectionIndex {
+            SectionIndex::try_from(format!("{value:05}").as_str()).expect("probe index")
+        }
+        fn probe_response(count: usize) -> OpenSectionsResponse {
+            let open_indexes: Vec<SectionIndex> = (0..count).map(probe_index).collect();
+            let canonical_set_sha256 = canonical_open_set_sha256(&open_indexes);
+            OpenSectionsResponse {
+                target: batch(),
+                classification: OpenPayloadClassification::Nonempty,
+                metadata: OpenResponseMetadata {
+                    http_status: 200,
+                    decoded_bytes: 64,
+                    decoded_body_sha256:
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_owned(),
+                    canonical_set_sha256,
+                    raw_value_count: count,
+                    unique_value_count: count,
+                    duplicate_value_count: 0,
+                    content_type: "application/json".to_owned(),
+                    etag: None,
+                    cache_control: None,
+                    date: None,
+                    age_seconds: None,
+                    last_modified: None,
+                },
+                open_indexes,
+            }
+        }
+
+        struct RebuildProbePersistence {
+            catalog: Vec<SectionKey>,
+            lkg: BTreeSet<SectionIndex>,
+            history: Vec<OpenGateAttemptSummary>,
+            committed: Vec<OpenAttemptClassification>,
+        }
+
+        impl OpenPullPersistence for RebuildProbePersistence {
+            fn serving_open_catalog_snapshot(
+                &mut self,
+                _target: &TermCampusKey,
+            ) -> StorageResult<Option<OpenCatalogSnapshot>> {
+                Ok(Some(OpenCatalogSnapshot {
+                    target: batch().target(),
+                    content_version: 7,
+                    sections: self.catalog.clone(),
+                }))
+            }
+
+            fn begin_open_pull_attempt(
+                &mut self,
+                _command: &BeginOpenPullAttemptCommand,
+            ) -> StorageResult<u64> {
+                Ok(1)
+            }
+
+            fn finish_open_pull_success(
+                &mut self,
+                command: FinishOpenPullSuccessCommand,
+            ) -> StorageResult<OpenCommitOutcome> {
+                let canonical: BTreeSet<SectionIndex> = command
+                    .open_sections
+                    .iter()
+                    .map(|section| section.index().clone())
+                    .collect();
+                let catalog_indices: BTreeSet<SectionIndex> = self
+                    .catalog
+                    .iter()
+                    .map(|section| section.index().clone())
+                    .collect();
+                let intersection_count = canonical.intersection(&catalog_indices).count() as u64;
+                let classification = if command.gate_hold {
+                    OpenAttemptClassification::SuspectPartialSnapshot
+                } else {
+                    OpenAttemptClassification::ValidApplied
+                };
+                self.committed.push(classification);
+                let unique = canonical.len() as u64;
+                Ok(OpenCommitOutcome {
+                    attempt_id: command.attempt_id,
+                    attempt_sequence: 1,
+                    classification,
+                    refresh_observation_id: classification.is_success().then_some(trace(10)),
+                    observation_sequence: classification.is_success().then_some(1),
+                    catalog_content_version: 7,
+                    source_value_count: command.source_value_count,
+                    catalog_section_count: self.catalog.len() as u64,
+                    intersection_count,
+                    orphan_count: unique.saturating_sub(intersection_count),
+                    duplicate_count: command.source_value_count.saturating_sub(unique),
+                    changed_section_count: 0,
+                    body_changed: true,
+                    state_changed: false,
+                    retained_lkg_attempt_id: None,
+                    observation_commit: classification.is_success().then(|| {
+                        OpenObservationCommit {
+                            rutgers_day: "2026-07-13".to_owned(),
+                            effective_interval_seconds: 10,
+                            run_counts: OpenAttemptCounters {
+                                attempted: 1,
+                                succeeded: 1,
+                                failed: 0,
+                                empty: 0,
+                            },
+                            target_day_counts: OpenAttemptCounters {
+                                attempted: 1,
+                                succeeded: 1,
+                                failed: 0,
+                                empty: 0,
+                            },
+                            service_day_counts: OpenAttemptCounters {
+                                attempted: 1,
+                                succeeded: 1,
+                                failed: 0,
+                                empty: 0,
+                            },
+                            section_events: Vec::new(),
+                        }
+                    }),
+                })
+            }
+
+            fn finish_open_pull_failure(
+                &mut self,
+                _command: &FinishOpenPullFailureCommand,
+            ) -> StorageResult<OpenCommitOutcome> {
+                unreachable!("rebuild probe pulls never fail")
+            }
+
+            fn lkg_open_index_set(
+                &mut self,
+                _target: &TermCampusKey,
+            ) -> StorageResult<Option<BTreeSet<SectionIndex>>> {
+                Ok(Some(self.lkg.clone()))
+            }
+
+            fn recent_open_gate_attempt_summaries(
+                &mut self,
+                _target: &TermCampusKey,
+                _limit: u32,
+            ) -> StorageResult<Vec<OpenGateAttemptSummary>> {
+                Ok(self.history.clone())
+            }
+        }
+
+        let catalog: Vec<SectionKey> = (0..300)
+            .map(|value| {
+                SectionKey::try_new("92026", "NB", format!("{value:05}").as_str())
+                    .expect("catalog section")
+            })
+            .collect();
+        let identity = catalog_section_set_identity_v1(
+            catalog
+                .iter()
+                .map(|section| section.index())
+                .collect::<BTreeSet<_>>()
+                .into_iter(),
+        );
+        let partial_hash = probe_response(200)
+            .metadata
+            .canonical_set_sha256
+            .as_str()
+            .to_owned();
+        // Persisted suspect run: 3 same-hash suspects at 90s spacing, newest
+        // 90s before the first live sample (04:00:00) -- all inside MAX_GAP.
+        let history: Vec<OpenGateAttemptSummary> = ["03:58:30", "03:57:00", "03:55:30"]
+            .iter()
+            .map(|time| OpenGateAttemptSummary {
+                classification: OpenAttemptClassification::SuspectPartialSnapshot,
+                canonical_set_sha256: Some(partial_hash.clone()),
+                completed_at: Some(format!("2026-07-14T{time}Z")),
+                catalog_set_identity: Some(identity.as_str().to_owned()),
+            })
+            .collect();
+
+        let mut persistence = RebuildProbePersistence {
+            catalog,
+            lkg: (0..300).map(probe_index).collect(),
+            history,
+            committed: Vec::new(),
+        };
+        let gates = Arc::new(Mutex::new(TargetGateSet::new()));
+
+        // Pull 1 at 04:00:00: partial 200 of 300, missing 100 >= 30 -> the
+        // rebuilt LKG floor (300) holds it; count 3 + 1, span 270s < 300s.
+        let mut command = command_for(31, 32, 0);
+        command.gate = Some(OpenGateWiring {
+            gates: Arc::clone(&gates),
+            route: OpenGateRoute::Serving,
+        });
+        let execution = SharedOpenService::new(&mut persistence)
+            .execute_with(
+                command,
+                &mut FixedClock(VecDeque::from([
+                    datetime!(2026-07-14 03:59:59 UTC),
+                    datetime!(2026-07-14 04:00:00 UTC),
+                ])),
+                |_| async { Ok(probe_response(200)) },
+                |_| Vec::new(),
+            )
+            .await
+            .expect("rebuild pull 1");
+        assert!(
+            matches!(execution.terminal, OpenPullTerminal::Unsafe(_)),
+            "persisted LKG floor must hold the partial (unseeded would apply it)",
+        );
+        assert!(gates.lock().expect("gate set").serving_mut().is_quarantined());
+
+        // Pull 2 at 04:01:30 (gap 90s): same set -> count 5, span 360s ->
+        // QuarantineConfirm applies. Ignored history would sit at count 2 and
+        // keep holding, so this pins that the persisted run was consumed.
+        let mut command = command_for(41, 42, 0);
+        command.gate = Some(OpenGateWiring {
+            gates: Arc::clone(&gates),
+            route: OpenGateRoute::Serving,
+        });
+        let execution = SharedOpenService::new(&mut persistence)
+            .execute_with(
+                command,
+                &mut FixedClock(VecDeque::from([
+                    datetime!(2026-07-14 04:01:29 UTC),
+                    datetime!(2026-07-14 04:01:30 UTC),
+                ])),
+                |_| async { Ok(probe_response(200)) },
+                |_| Vec::new(),
+            )
+            .await
+            .expect("rebuild pull 2");
+        assert!(
+            matches!(execution.terminal, OpenPullTerminal::Valid(_)),
+            "the persisted run + two live samples must confirm the new reality",
+        );
+        assert_eq!(
+            persistence.committed,
+            vec![
+                OpenAttemptClassification::SuspectPartialSnapshot,
+                OpenAttemptClassification::ValidApplied,
+            ],
+        );
+        assert!(!gates.lock().expect("gate set").serving_mut().is_quarantined());
     }
 }

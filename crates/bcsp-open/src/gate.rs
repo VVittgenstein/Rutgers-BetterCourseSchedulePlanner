@@ -69,6 +69,18 @@ impl CatalogSetIdentity {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Revives an identity persisted as its sha-256 hex form (the restart
+    /// summaries). Returns `None` for anything that is not exactly 64
+    /// lowercase hex characters, which the restart rules then treat as a
+    /// run breaker rather than a match.
+    pub fn from_sha256_hex(value: &str) -> Option<Self> {
+        let valid = value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        valid.then(|| Self(value.to_owned()))
+    }
 }
 
 /// Computes the semantic identity of a catalog section set.
@@ -323,11 +335,22 @@ impl GateRuntime {
 
         match &self.state {
             GateState::Healthy { baseline: None } => {
-                // No baseline: pass, and let the wiring decide when to seed.
+                // No baseline: the sample passes, and its own count becomes
+                // the baseline seed. The seed only takes effect through
+                // `advance` after the surrounding transaction commits, so a
+                // failed commit cannot install a baseline the durable state
+                // never saw. Without this, an unseeded runtime would pass
+                // forever and the first-full/second-partial sequence would
+                // apply the partial.
+                let mut seeded =
+                    BaselineEpoch::seeded(sample.catalog_identity.clone(), None);
+                seeded.push_applied(observed_count);
                 decision(
                     GateDecisionKind::Pass,
                     GateDisposition::Apply,
-                    GateState::Healthy { baseline: None },
+                    GateState::Healthy {
+                        baseline: Some(seeded),
+                    },
                 )
             }
             GateState::Healthy {
@@ -473,6 +496,12 @@ pub struct RestartAttemptSummary {
     pub is_suspect_partial: bool,
     pub canonical_set_sha256: String,
     pub completed_at: OffsetDateTime,
+    /// Exact catalog section-set identity the gated attempt was decided
+    /// against, when the attempt persisted one. A suspect run only resumes
+    /// across a restart when every member carries the identity the rebuilt
+    /// runtime is keyed by; `None` (pre-gate history, failures, unparsable
+    /// rows) breaks the run.
+    pub catalog_set_identity: Option<CatalogSetIdentity>,
 }
 
 /// Rebuilds a serving runtime after process restart.
@@ -496,7 +525,9 @@ pub fn rebuild_after_restart(
     let Some(newest) = attempts_newest_first.first() else {
         return healthy(lkg_reference);
     };
-    if !newest.is_suspect_partial {
+    if !newest.is_suspect_partial
+        || newest.catalog_set_identity.as_ref() != Some(&catalog_identity)
+    {
         return healthy(lkg_reference);
     }
     let Some(reference) = lkg_reference else {
@@ -507,7 +538,19 @@ pub fn rebuild_after_restart(
     }
     let mut run: Vec<&RestartAttemptSummary> = Vec::new();
     for attempt in attempts_newest_first {
-        if attempt.is_suspect_partial && attempt.canonical_set_sha256 == newest.canonical_set_sha256
+        // Run membership repeats the live episode rules: same classification,
+        // same canonical hash, same catalog identity, and adjacent samples no
+        // farther apart than the live MAX_GAP (checked pairwise -- the
+        // newest-to-now check above alone would stitch a historical run
+        // across a silence the live runtime would have re-anchored on).
+        let within_gap = run.last().is_none_or(|previous| {
+            let gap_seconds = (previous.completed_at - attempt.completed_at).whole_seconds();
+            (0..=GATE_MAX_SAMPLE_GAP_SECONDS).contains(&gap_seconds)
+        });
+        if attempt.is_suspect_partial
+            && attempt.canonical_set_sha256 == newest.canonical_set_sha256
+            && attempt.catalog_set_identity.as_ref() == Some(&catalog_identity)
+            && within_gap
         {
             run.push(attempt);
         } else {
@@ -563,11 +606,18 @@ impl TargetGateSet {
 
     /// Returns the candidate runtime for `identity`, creating it with the
     /// supplied seed (`|serving LKG ∩ candidate catalog|`) on first use.
+    ///
+    /// At most one candidate is retained: requesting a different identity
+    /// evicts every abandoned predecessor (bounded memory -- a stream of
+    /// never-published candidate catalogs must not accumulate anchor sets).
+    /// An evicted candidate that reappears restarts its episode from its
+    /// seed, which only delays confirmation -- the conservative direction.
     pub fn candidate_mut(
         &mut self,
         identity: &CatalogSetIdentity,
         seed: impl FnOnce() -> Option<u64>,
     ) -> &mut GateRuntime {
+        self.candidates.retain(|existing, _| existing == identity);
         self.candidates
             .entry(identity.clone())
             .or_insert_with(|| match seed() {
@@ -639,6 +689,43 @@ mod tests {
         let mut zero = GateRuntime::seeded(identity.clone(), 0);
         let d = apply(&mut zero, &sample(&identity, &empty, t0()));
         assert_eq!(d.kind, GateDecisionKind::Pass);
+    }
+
+    #[test]
+    fn first_applied_sample_seeds_the_baseline_and_guards_the_second() {
+        // The reviewer's first-pull/second-pull sequence: an unseeded runtime
+        // (fresh install, no LKG) applies the first full snapshot, and that
+        // snapshot's own count must become the baseline -- the immediate next
+        // partial must Hold, not pass through a still-unseeded gate.
+        let full = set(0..1000);
+        let partial = set(0..700);
+        let identity = identity_for(&full);
+        let mut runtime = GateRuntime::new_unseeded();
+
+        let d = apply(&mut runtime, &sample(&identity, &full, t0()));
+        assert_eq!(d.kind, GateDecisionKind::Pass);
+        assert_eq!(
+            runtime.catalog_identity(),
+            Some(&identity),
+            "the first applied sample must install a baseline",
+        );
+
+        let d = apply(&mut runtime, &sample(&identity, &partial, t0() + Duration::seconds(30)));
+        assert_eq!(d.kind, GateDecisionKind::Suspect);
+        assert_eq!(d.disposition, GateDisposition::Hold);
+        assert!(runtime.is_quarantined());
+    }
+
+    #[test]
+    fn unseeded_evaluate_without_commit_does_not_seed() {
+        // The seed rides the decision's next_state: if the surrounding
+        // transaction fails and `advance` never runs, the runtime must stay
+        // unseeded (commit-before-advance discipline).
+        let full = set(0..1000);
+        let identity = identity_for(&full);
+        let runtime = GateRuntime::new_unseeded();
+        let _discarded = runtime.evaluate(&sample(&identity, &full, t0()));
+        assert_eq!(runtime.catalog_identity(), None);
     }
 
     #[test]
@@ -781,6 +868,7 @@ mod tests {
             is_suspect_partial: suspect,
             canonical_set_sha256: hash.to_string(),
             completed_at: t0() - Duration::seconds(age),
+            catalog_set_identity: Some(identity.clone()),
         };
 
         // Contiguous same-hash suspect run, newest 60s old -> quarantined,
@@ -834,6 +922,130 @@ mod tests {
         let rebuilt =
             rebuild_after_restart(identity.clone(), None, &[attempt(true, &hash, 30)], t0());
         assert!(!rebuilt.is_quarantined());
+    }
+
+    #[test]
+    fn restart_rebuild_caps_the_run_at_historical_over_gaps() {
+        // Two persisted suspects 121s apart: the live runtime would have
+        // re-anchored between them, so the rebuilt episode must not stitch
+        // them either -- the run stops at the gap and inherits only the
+        // newest suspect.
+        let full = set(0..1000);
+        let partial = set(0..600);
+        let identity = identity_for(&full);
+        let hash = canonical_open_set_hash_v1(partial.iter());
+        let attempt = |age: i64| RestartAttemptSummary {
+            is_suspect_partial: true,
+            canonical_set_sha256: hash.clone(),
+            completed_at: t0() - Duration::seconds(age),
+            catalog_set_identity: Some(identity.clone()),
+        };
+
+        let rebuilt = rebuild_after_restart(
+            identity.clone(),
+            Some(1000),
+            &[attempt(30), attempt(151), attempt(181)],
+            t0(),
+        );
+        match rebuilt.state() {
+            GateState::Quarantined { episode, .. } => {
+                assert_eq!(episode.consistent_count, 1, "over-gap history must not stitch");
+                assert_eq!(episode.first_seen, t0() - Duration::seconds(30));
+            }
+            GateState::Healthy { .. } => panic!("newest suspect must still quarantine"),
+        }
+
+        // Contrast: gaps at exactly the bound keep the run intact.
+        let rebuilt = rebuild_after_restart(
+            identity.clone(),
+            Some(1000),
+            &[attempt(30), attempt(150), attempt(270)],
+            t0(),
+        );
+        match rebuilt.state() {
+            GateState::Quarantined { episode, .. } => {
+                assert_eq!(episode.consistent_count, 3);
+                assert_eq!(episode.first_seen, t0() - Duration::seconds(270));
+            }
+            GateState::Healthy { .. } => panic!("bounded-gap run must survive the restart"),
+        }
+    }
+
+    #[test]
+    fn restart_rebuild_requires_the_exact_catalog_identity() {
+        // Suspects recorded against a different (or unknown) catalog
+        // section-set identity are not evidence for this runtime: a foreign
+        // newest suspect rebuilds healthy, and a foreign row inside the run
+        // breaks contiguity.
+        let full = set(0..1000);
+        let partial = set(0..600);
+        let identity = identity_for(&full);
+        let foreign = identity_for(&set(0..999));
+        let hash = canonical_open_set_hash_v1(partial.iter());
+        let attempt = |age: i64, id: Option<CatalogSetIdentity>| RestartAttemptSummary {
+            is_suspect_partial: true,
+            canonical_set_sha256: hash.clone(),
+            completed_at: t0() - Duration::seconds(age),
+            catalog_set_identity: id,
+        };
+
+        let rebuilt = rebuild_after_restart(
+            identity.clone(),
+            Some(1000),
+            &[attempt(30, Some(foreign.clone()))],
+            t0(),
+        );
+        assert!(!rebuilt.is_quarantined(), "foreign-identity suspect is not our evidence");
+
+        let rebuilt = rebuild_after_restart(
+            identity.clone(),
+            Some(1000),
+            &[attempt(30, None)],
+            t0(),
+        );
+        assert!(!rebuilt.is_quarantined(), "pre-gate history carries no identity");
+
+        let rebuilt = rebuild_after_restart(
+            identity.clone(),
+            Some(1000),
+            &[
+                attempt(30, Some(identity.clone())),
+                attempt(60, Some(foreign)),
+                attempt(90, Some(identity.clone())),
+            ],
+            t0(),
+        );
+        match rebuilt.state() {
+            GateState::Quarantined { episode, .. } => {
+                assert_eq!(episode.consistent_count, 1, "foreign row breaks the run");
+            }
+            GateState::Healthy { .. } => panic!("matching newest suspect must quarantine"),
+        }
+    }
+
+    #[test]
+    fn abandoned_candidates_are_evicted_and_restart_from_their_seed() {
+        let identity_a = identity_for(&set(0..1000));
+        let identity_b = identity_for(&set(0..1001));
+        let partial = set(0..600);
+
+        let mut gates = TargetGateSet::new();
+        // Candidate A seeds with a real floor: a partial feed must Hold.
+        let d = gates
+            .candidate_mut(&identity_a, || Some(1000))
+            .evaluate(&sample(&identity_a, &partial, t0()));
+        assert_eq!(d.disposition, GateDisposition::Hold);
+
+        // A different candidate identity evicts A (bounded memory).
+        let _ = gates.candidate_mut(&identity_b, || Some(1000));
+
+        // A re-created later runs from its fresh seed, not retained state:
+        // with a None seed it starts unseeded and the same partial passes,
+        // proving the old runtime (floor 1000) is gone.
+        let d = gates
+            .candidate_mut(&identity_a, || None)
+            .evaluate(&sample(&identity_a, &partial, t0() + Duration::seconds(10)));
+        assert_eq!(d.disposition, GateDisposition::Apply);
     }
 
     #[test]

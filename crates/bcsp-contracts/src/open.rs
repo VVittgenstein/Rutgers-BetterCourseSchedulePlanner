@@ -461,6 +461,14 @@ pub enum OpenFailureClass {
     SchemaViolation,
     InvalidValue,
     Persist,
+    /// The response body was well-formed but withheld by the server: an empty
+    /// payload while the catalog has rows.
+    UnsafeEmpty,
+    /// The response set shared no section with the current catalog.
+    UnsafeZeroIntersection,
+    /// The snapshot integrity gate withheld an implausibly shrunken snapshot
+    /// (last-known-good retained; not a transport failure).
+    SuspectPartialSnapshot,
 }
 
 impl OpenFailureClass {
@@ -478,6 +486,9 @@ impl OpenFailureClass {
         Self::SchemaViolation,
         Self::InvalidValue,
         Self::Persist,
+        Self::UnsafeEmpty,
+        Self::UnsafeZeroIntersection,
+        Self::SuspectPartialSnapshot,
     ];
 
     pub const fn wire_name(self) -> &'static str {
@@ -495,6 +506,9 @@ impl OpenFailureClass {
             Self::SchemaViolation => "SCHEMA_VIOLATION",
             Self::InvalidValue => "INVALID_VALUE",
             Self::Persist => "PERSIST",
+            Self::UnsafeEmpty => "UNSAFE_EMPTY",
+            Self::UnsafeZeroIntersection => "UNSAFE_ZERO_INTERSECTION",
+            Self::SuspectPartialSnapshot => "SUSPECT_PARTIAL_SNAPSHOT",
         }
     }
 }

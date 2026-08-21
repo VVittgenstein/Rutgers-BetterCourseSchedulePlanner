@@ -198,6 +198,11 @@ pub struct FinishOpenPullSuccessCommand {
     /// SUSPECT_PARTIAL_SNAPSHOT instead (LKG retained, no events). Hard
     /// rejections ignore this flag.
     pub gate_hold: bool,
+    /// Exact catalog section-set identity (sha-256 hex) the gate decision was
+    /// computed against; `None` for ungated commits and hard rejections. The
+    /// restart rebuild only resumes a suspect run whose members carry the
+    /// identity of the current serving catalog.
+    pub gate_catalog_set_identity: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -241,12 +246,14 @@ pub struct OpenObservationCommit {
 }
 
 /// Newest-first attempt summary consumed by the integrity gate's restart
-/// rebuild (classification + canonical set hash + completion timestamp text).
+/// rebuild (classification + canonical set hash + completion timestamp text
+/// + the catalog section-set identity the gated attempt was decided against).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpenGateAttemptSummary {
     pub classification: OpenAttemptClassification,
     pub canonical_set_sha256: Option<String>,
     pub completed_at: Option<String>,
+    pub catalog_set_identity: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -796,6 +803,7 @@ impl OperationalStorage {
                 orphan_count,
                 "CATALOG_CONTENT_VERSION_CHANGED",
                 None,
+                None,
             )?;
             prune_open_diagnostics_transaction(
                 transaction,
@@ -863,6 +871,7 @@ impl OperationalStorage {
                 orphan_count,
                 error_code,
                 Some(&state_sha256),
+                command.gate_catalog_set_identity.as_deref(),
             )?;
             prune_open_diagnostics_transaction(
                 transaction,
@@ -1035,6 +1044,7 @@ impl OperationalStorage {
                  canonical_set_sha256 = ?16, state_sha256 = ?17,
                  source_value_count = ?18, catalog_section_count = ?19,
                  intersection_count = ?20, orphan_count = ?21, duplicate_count = ?22,
+                 gate_catalog_set_identity = ?23,
                  error_code = NULL, diagnostic_token = NULL
              WHERE attempt_id = ?1 AND classification = 'STARTED'",
             params![
@@ -1060,6 +1070,7 @@ impl OperationalStorage {
                 u64_to_i64(intersection_count)?,
                 u64_to_i64(orphan_count)?,
                 u64_to_i64(response.duplicate_count)?,
+                command.gate_catalog_set_identity,
             ],
         )?;
         if attempt_updated != 1 {
@@ -1372,6 +1383,7 @@ impl OperationalStorage {
             0,
             &command.error_code,
             None,
+            None,
         )?;
         transaction.execute(
             "UPDATE open_pull_attempts SET diagnostic_token = ?2 WHERE attempt_id = ?1",
@@ -1432,17 +1444,22 @@ impl OperationalStorage {
     }
 
     /// Integrity-gate restart read: newest-first completed attempt summaries
-    /// (classification, canonical set hash, completion time) for the restart
-    /// rebuild rules.
+    /// (classification, canonical set hash, completion time, gate catalog
+    /// identity) for the restart rebuild rules. Candidate attempts are
+    /// excluded: they were decided against an unpublished catalog by an
+    /// independent candidate runtime and must never pollute the rebuilt
+    /// serving state.
     pub fn recent_open_gate_attempt_summaries(
         &self,
         target: &TermCampusKey,
         limit: u32,
     ) -> StorageResult<Vec<OpenGateAttemptSummary>> {
         let mut statement = self.connection.prepare(
-            "SELECT classification, canonical_set_sha256, completed_at
+            "SELECT classification, canonical_set_sha256, completed_at,
+                    gate_catalog_set_identity
              FROM open_pull_attempts
              WHERE target_id = ?1 AND classification != 'STARTED'
+               AND candidate_catalog_observation_id IS NULL
              ORDER BY attempt_sequence DESC
              LIMIT ?2",
         )?;
@@ -1453,16 +1470,18 @@ impl OperationalStorage {
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             },
         )?;
         let mut summaries = Vec::new();
         for row in rows {
-            let (classification, canonical_set_sha256, completed_at) = row?;
+            let (classification, canonical_set_sha256, completed_at, catalog_set_identity) = row?;
             summaries.push(OpenGateAttemptSummary {
                 classification: OpenAttemptClassification::parse(&classification)?,
                 canonical_set_sha256,
                 completed_at,
+                catalog_set_identity,
             });
         }
         Ok(summaries)
@@ -2469,6 +2488,7 @@ fn finalize_non_applied_attempt(
     orphan_count: u64,
     error_code: &str,
     state_sha256: Option<&str>,
+    gate_catalog_set_identity: Option<&str>,
 ) -> StorageResult<()> {
     validate_safe_code("error_code", error_code)?;
     validate_open_http_audit(http, false)?;
@@ -2484,7 +2504,7 @@ fn finalize_non_applied_attempt(
              canonical_set_sha256 = ?16, state_sha256 = ?17,
              source_value_count = ?18, catalog_section_count = ?19,
              intersection_count = ?20, orphan_count = ?21, duplicate_count = ?22,
-             error_code = ?23, diagnostic_token = NULL
+             error_code = ?23, gate_catalog_set_identity = ?24, diagnostic_token = NULL
          WHERE attempt_id = ?1 AND classification = 'STARTED'",
         params![
             attempt_id.to_string(),
@@ -2510,6 +2530,7 @@ fn finalize_non_applied_attempt(
             u64_to_i64(orphan_count)?,
             u64_to_i64(duplicate_count)?,
             error_code,
+            gate_catalog_set_identity,
         ],
     )?;
     if updated != 1 {

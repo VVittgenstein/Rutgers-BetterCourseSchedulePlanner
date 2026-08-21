@@ -1710,7 +1710,10 @@
         "OVERSIZE",
         "SCHEMA_VIOLATION",
         "INVALID_VALUE",
-        "PERSIST"
+        "PERSIST",
+        "UNSAFE_EMPTY",
+        "UNSAFE_ZERO_INTERSECTION",
+        "SUSPECT_PARTIAL_SNAPSHOT"
       ]
     },
     {

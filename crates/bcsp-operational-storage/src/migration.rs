@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn embedded_migration_ids_are_contiguous_and_checksums_are_lower_hex() {
         let migrations = embedded_migrations().expect("valid embedded migrations");
-        assert_eq!(migrations.len(), 5);
+        assert_eq!(migrations.len(), 6);
         for (index, migration) in migrations.iter().enumerate() {
             assert_eq!(migration.id, (index + 1) as u32);
         }
@@ -262,7 +262,14 @@ mod tests {
             migrations
                 .iter()
                 .map(|migration| (migration.id, migration.requires_foreign_keys_off))
-                .eq([(1, false), (2, false), (3, false), (4, false), (5, true)])
+                .eq([
+                    (1, false),
+                    (2, false),
+                    (3, false),
+                    (4, false),
+                    (5, true),
+                    (6, false),
+                ])
         );
     }
 
@@ -346,7 +353,7 @@ mod tests {
 
         apply_migrations(&mut connection).expect("v4 -> v5 upgrade");
 
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM bcsp_operational_migrations"), 5);
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM bcsp_operational_migrations"), 6);
         assert_eq!(count(&connection, "SELECT COUNT(*) FROM open_pull_attempts"), 1);
         // Cascade preservation: both child tables keep their rows.
         assert_eq!(
@@ -446,7 +453,7 @@ mod tests {
             )
             .expect("repair orphan");
         apply_migrations(&mut connection).expect("retry succeeds after repair");
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM bcsp_operational_migrations"), 5);
+        assert_eq!(count(&connection, "SELECT COUNT(*) FROM bcsp_operational_migrations"), 6);
         assert_eq!(
             count(&connection, "SELECT COUNT(*) FROM open_attempt_catalog_sections"),
             2
