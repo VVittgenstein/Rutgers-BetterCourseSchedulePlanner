@@ -1688,7 +1688,7 @@ fn gate_summaries_bind_identity_and_exclude_candidate_attempts() {
     let summaries = storage
         .recent_open_gate_attempt_summaries(&scope, 8)
         .expect("summaries");
-    assert_eq!(summaries.len(), 2, "candidate attempts are excluded");
+    assert_eq!(summaries.len(), 2, "unpublished candidate attempts are excluded");
     assert_eq!(
         summaries[0].classification,
         OpenAttemptClassification::SuspectPartialSnapshot
@@ -1701,4 +1701,70 @@ fn gate_summaries_bind_identity_and_exclude_candidate_attempts() {
         OpenAttemptClassification::ValidApplied
     );
     assert_eq!(summaries[1].catalog_set_identity.as_deref(), Some(HASH_B));
+
+    // A SUCCESSFUL candidate publish promoted its runtime to serving and
+    // closed any live quarantine -- its row must therefore SURVIVE the
+    // candidate filter and stand in the stream as a non-suspect breaker
+    // (reviewer counterexample: filtering it would stitch the pre-publish
+    // suspects onto a post-publish episode the live runtime had reset).
+    let published = stage_catalog(
+        &mut storage,
+        &scope,
+        "gate-summary-v3",
+        &["00001", "00003"],
+        HASH_C,
+    );
+    let published_candidate = storage
+        .candidate_open_catalog_snapshot(&published, EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty)
+        .expect("candidate")
+        .expect("publishable candidate");
+    let published_attempt = begin_command(
+        &scope,
+        "sum-c2",
+        "sum-run",
+        published_candidate.catalog.content_version,
+        "2026-08-19",
+    );
+    storage
+        .begin_candidate_open_pull_attempt(&published_candidate, &published_attempt)
+        .expect("begin publishing candidate attempt");
+    let outcome = storage
+        .finish_candidate_open_pull_success(
+            published,
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: Some(HASH_C.to_owned()),
+                attempt_id: published_attempt.attempt_id,
+                completed_at: COMPLETED.to_owned(),
+                open_sections: vec![section(&scope, "00001"), section(&scope, "00003")],
+                source_value_count: 2,
+                watched_sections: Vec::new(),
+                http: success_http(64),
+            },
+        )
+        .expect("candidate publishes atomically");
+    assert!(outcome.catalog.is_some());
+    assert!(outcome.open.classification.is_success());
+
+    let summaries = storage
+        .recent_open_gate_attempt_summaries(&scope, 8)
+        .expect("summaries after publish");
+    assert_eq!(
+        summaries
+            .iter()
+            .map(|summary| summary.classification)
+            .collect::<Vec<_>>(),
+        vec![
+            OpenAttemptClassification::ValidApplied,
+            OpenAttemptClassification::SuspectPartialSnapshot,
+            OpenAttemptClassification::ValidApplied,
+        ],
+        "the published candidate is newest and present as a breaker; the held candidate stays invisible",
+    );
+    assert_eq!(
+        summaries[0].catalog_set_identity.as_deref(),
+        Some(HASH_C),
+        "the breaker row keeps its own decision identity",
+    );
 }

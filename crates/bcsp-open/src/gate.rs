@@ -403,7 +403,10 @@ impl GateRuntime {
                     );
                 }
                 let gap_seconds = (sample.observed_at - episode.last_seen).whole_seconds();
-                if gap_seconds > GATE_MAX_SAMPLE_GAP_SECONDS
+                // Out-of-range includes NEGATIVE gaps: a sample timestamped
+                // before the episode's last one (wall-clock rollback, VM
+                // resume) is not evidence of a sustained feed and re-anchors.
+                if !(0..=GATE_MAX_SAMPLE_GAP_SECONDS).contains(&gap_seconds)
                     || !Self::consistent_with_anchor(episode, sample, &sample_hash)
                 {
                     // Over-gap or divergent content: void the candidate and
@@ -533,7 +536,11 @@ pub fn rebuild_after_restart(
     let Some(reference) = lkg_reference else {
         return healthy(None);
     };
-    if (now - newest.completed_at).whole_seconds() > GATE_MAX_SAMPLE_GAP_SECONDS {
+    // Same 0..=MAX window as every other episode edge: a newest suspect
+    // "from the future" (wall-clock rollback across the restart) is not
+    // trustworthy continuation evidence -- rebuild healthy on the LKG floor,
+    // which still guards the next sample.
+    if !(0..=GATE_MAX_SAMPLE_GAP_SECONDS).contains(&(now - newest.completed_at).whole_seconds()) {
         return healthy(Some(reference));
     }
     let mut run: Vec<&RestartAttemptSummary> = Vec::new();
@@ -969,6 +976,84 @@ mod tests {
             }
             GateState::Healthy { .. } => panic!("bounded-gap run must survive the restart"),
         }
+    }
+
+    #[test]
+    fn restart_rebuild_stops_at_a_published_candidate_breaker() {
+        // The reviewer's counterexample: a suspect run against identity I,
+        // interrupted by a successfully published candidate whose catalog
+        // only changed metadata -- SAME section-set identity, and (made
+        // maximally adversarial here) even the same canonical hash. The
+        // publish promoted a healthy runtime and closed the live episode, so
+        // the rebuild must inherit ONLY the post-publish suspect. Neither
+        // identity binding nor gap checks can catch this row; it breaks the
+        // run purely by not being a suspect.
+        let full = set(0..1000);
+        let partial = set(0..600);
+        let identity = identity_for(&full);
+        let hash = canonical_open_set_hash_v1(partial.iter());
+        let row = |suspect: bool, age: i64| RestartAttemptSummary {
+            is_suspect_partial: suspect,
+            canonical_set_sha256: hash.clone(),
+            completed_at: t0() - Duration::seconds(age),
+            catalog_set_identity: Some(identity.clone()),
+        };
+
+        let rebuilt = rebuild_after_restart(
+            identity.clone(),
+            Some(1000),
+            &[row(true, 30), row(false, 60), row(true, 90), row(true, 120)],
+            t0(),
+        );
+        match rebuilt.state() {
+            GateState::Quarantined { episode, .. } => {
+                assert_eq!(
+                    episode.consistent_count, 1,
+                    "pre-publish suspects must not stitch across the promotion",
+                );
+                assert_eq!(episode.first_seen, t0() - Duration::seconds(30));
+            }
+            GateState::Healthy { .. } => panic!("the post-publish suspect must quarantine"),
+        }
+    }
+
+    #[test]
+    fn negative_gaps_reanchor_live_and_deny_restart_continuation() {
+        let full = set(0..1000);
+        let partial = set(0..600);
+        let identity = identity_for(&full);
+        let hash = canonical_open_set_hash_v1(partial.iter());
+
+        // Live: a sample timestamped BEFORE the episode's last sample
+        // (wall-clock rollback) must re-anchor, not continue the episode.
+        let mut runtime = GateRuntime::seeded(identity.clone(), 1000);
+        apply(&mut runtime, &sample(&identity, &partial, t0()));
+        let d = apply(&mut runtime, &sample(&identity, &partial, t0() - Duration::seconds(30)));
+        assert_eq!(d.kind, GateDecisionKind::Suspect);
+        match runtime.state() {
+            GateState::Quarantined { episode, .. } => {
+                assert_eq!(episode.consistent_count, 1, "rollback sample re-anchors");
+                assert_eq!(episode.first_seen, t0() - Duration::seconds(30));
+            }
+            GateState::Healthy { .. } => panic!("must remain quarantined"),
+        }
+
+        // Restart: a newest suspect "from the future" is not continuation
+        // evidence -- rebuild healthy on the LKG floor (which still guards).
+        let rebuilt = rebuild_after_restart(
+            identity.clone(),
+            Some(1000),
+            &[RestartAttemptSummary {
+                is_suspect_partial: true,
+                canonical_set_sha256: hash,
+                completed_at: t0() + Duration::seconds(30),
+                catalog_set_identity: Some(identity.clone()),
+            }],
+            t0(),
+        );
+        assert!(!rebuilt.is_quarantined());
+        let d = rebuilt.evaluate(&sample(&identity, &partial, t0()));
+        assert_eq!(d.kind, GateDecisionKind::Suspect, "the floor still guards the next sample");
     }
 
     #[test]

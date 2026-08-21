@@ -1445,10 +1445,17 @@ impl OperationalStorage {
 
     /// Integrity-gate restart read: newest-first completed attempt summaries
     /// (classification, canonical set hash, completion time, gate catalog
-    /// identity) for the restart rebuild rules. Candidate attempts are
-    /// excluded: they were decided against an unpublished catalog by an
-    /// independent candidate runtime and must never pollute the rebuilt
-    /// serving state.
+    /// identity) for the restart rebuild rules.
+    ///
+    /// Candidate attempt rows are split by what they did to the serving
+    /// state: UNPUBLISHED candidates (Hold / unsafe / failed / interrupted)
+    /// were decided by an independent runtime against a catalog that never
+    /// served, so they are invisible to the serving history. A SUCCESSFUL
+    /// candidate, however, atomically published its catalog and promoted its
+    /// runtime to serving -- that closed any live quarantine, so its row
+    /// MUST remain in the stream as a non-suspect run breaker. Filtering it
+    /// out would stitch pre-publish suspects onto a post-publish episode
+    /// that the live runtime had already reset.
     pub fn recent_open_gate_attempt_summaries(
         &self,
         target: &TermCampusKey,
@@ -1459,7 +1466,8 @@ impl OperationalStorage {
                     gate_catalog_set_identity
              FROM open_pull_attempts
              WHERE target_id = ?1 AND classification != 'STARTED'
-               AND candidate_catalog_observation_id IS NULL
+               AND (candidate_catalog_observation_id IS NULL
+                    OR classification IN ('VALID_APPLIED', 'VALID_EMPTY_NO_ROWS'))
              ORDER BY attempt_sequence DESC
              LIMIT ?2",
         )?;

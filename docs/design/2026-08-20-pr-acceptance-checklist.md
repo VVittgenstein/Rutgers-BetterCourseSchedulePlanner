@@ -63,11 +63,23 @@ N5（原非阻断直连 API）：`with_parts` 改为**每 target 默认自带**
     `TargetWorkflowControl`（官方 runtime 的 attach 覆盖之）——直连
     coordinator 不再存在 gate 静默脱钩；这也使集成测试线束真实带 gate。
 
+B5b（PR3.1 复审残留，PR3.2 修复）：已发布 candidate 的 breaker 语义——
+    summaries 查询按"对 serving 状态做了什么"区分 candidate 行：未发布
+    （Hold/unsafe/失败/中断）继续隐藏；成功发布（VALID_APPLIED /
+    VALID_EMPTY_NO_ROWS，发布与提交同事务，行存在即已提升）保留为
+    非-suspect breaker。评审者反例（同 identity、发布前后同 hash、
+    全 gap≤120s）在 gate 单元 + 存储层双钉死：重建只继承发布后的
+    一个 suspect。
+N6（原非阻断负 gap）：episode 全部时间边统一 `(0..=120s).contains`——
+    活跃续用负 gap 重新锚定；重启 newest 来自未来则拒绝续用（LKG 地板
+    仍设防）。单元钉死。
+
 ## 进度
 
 - [x] S1-PR1（gate 决策核心，8e83ee4）——**Codex 已批准 v5.1 迟滞追认**
 - [x] S1-PR2（迁移 runner + 0005，0b80b7a）——**Codex 复核通过**
-- [ ] S1-PR3（接线，93f88d7）——Codex 驳回 5 项 P1；修复见 PR3.1，待复审
-- [ ] S1-PR3.1（阻断修复 B1-B5 + N4/N5 + 端到端验收测试）——待 Codex 复审
+- [ ] S1-PR3（接线，93f88d7）——Codex 驳回 5 项 P1；修复见 PR3.1
+- [ ] S1-PR3.1（58d3ba1）——B1-B4 已获批；B5 余 1 项 P1，见 PR3.2
+- [ ] S1-PR3.2（B5b 已发布 candidate breaker + N6 负 gap）——待 Codex 复审
 - [ ] S1-PR4（前端展示；新增映射面：SUSPECT_PARTIAL_SNAPSHOT /
       SUSPECT_PARTIAL_UPSTREAM + OpenFailureClass 3 个新值的 union/i18n）
