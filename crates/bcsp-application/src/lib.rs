@@ -27,8 +27,9 @@ pub use discovery_runtime::{
 };
 pub use host::{
     ExtensionRequest, ExtensionResponse, ExtensionRoute, LoopbackServer, LoopbackServerError,
-    RequestMethod, RouteExtension, SHARED_WATCH_SUBPROTOCOL, SessionNonce, WebSocketExtension,
-    serve_websocket, spawn_loopback_server, spawn_loopback_server_with_socket,
+    RequestMethod, RouteExtension, SHARED_WATCH_SUBPROTOCOL, SecondaryWebSocketRoute, SessionNonce,
+    WebSocketExtension, serve_websocket, spawn_loopback_server, spawn_loopback_server_with_socket,
+    spawn_loopback_server_with_sockets,
 };
 pub use official_refresh_runtime::{
     DISCOVERY_RETRY_INTERVAL, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,

@@ -311,13 +311,30 @@ struct HostState {
     nonce: SessionNonce,
     extension: Arc<dyn RouteExtension>,
     socket: Option<Arc<dyn WebSocketExtension>>,
+    secondary_socket: Option<Arc<dyn WebSocketExtension>>,
+}
+
+/// A target-injected additional WebSocket route. The shared host registers it
+/// only when the target supplies one at spawn time; without injection the
+/// path does not exist in the route table and falls through to the extension
+/// fallback (404). Admission (Host/Origin/session nonce/subprotocol) is the
+/// host's standard WebSocket policy, identical to the built-in watch route.
+pub struct SecondaryWebSocketRoute {
+    path: &'static str,
+    socket: Arc<dyn WebSocketExtension>,
+}
+
+impl SecondaryWebSocketRoute {
+    pub fn new(path: &'static str, socket: Arc<dyn WebSocketExtension>) -> Self {
+        Self { path, socket }
+    }
 }
 
 pub async fn spawn_loopback_server(
     extension: Arc<dyn RouteExtension>,
     nonce: SessionNonce,
 ) -> Result<LoopbackServer, LoopbackServerError> {
-    spawn_loopback_server_internal(extension, None, nonce).await
+    spawn_loopback_server_internal(extension, None, None, nonce).await
 }
 
 pub async fn spawn_loopback_server_with_socket(
@@ -325,12 +342,22 @@ pub async fn spawn_loopback_server_with_socket(
     socket: Arc<dyn WebSocketExtension>,
     nonce: SessionNonce,
 ) -> Result<LoopbackServer, LoopbackServerError> {
-    spawn_loopback_server_internal(extension, Some(socket), nonce).await
+    spawn_loopback_server_internal(extension, Some(socket), None, nonce).await
+}
+
+pub async fn spawn_loopback_server_with_sockets(
+    extension: Arc<dyn RouteExtension>,
+    socket: Arc<dyn WebSocketExtension>,
+    secondary: SecondaryWebSocketRoute,
+    nonce: SessionNonce,
+) -> Result<LoopbackServer, LoopbackServerError> {
+    spawn_loopback_server_internal(extension, Some(socket), Some(secondary), nonce).await
 }
 
 async fn spawn_loopback_server_internal(
     extension: Arc<dyn RouteExtension>,
     socket: Option<Arc<dyn WebSocketExtension>>,
+    secondary: Option<SecondaryWebSocketRoute>,
     nonce: SessionNonce,
 ) -> Result<LoopbackServer, LoopbackServerError> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -339,17 +366,31 @@ async fn spawn_loopback_server_internal(
     let address = listener.local_addr().map_err(LoopbackServerError::Bind)?;
     let authority = format!("127.0.0.1:{}", address.port());
     let origin = format!("http://{authority}");
-    let socket_maintenance = socket.as_ref().map(|socket| {
-        let socket = Arc::clone(socket);
+    let (secondary_path, secondary_socket) = match secondary {
+        Some(route) => (Some(route.path), Some(route.socket)),
+        None => (None, None),
+    };
+    // One maintenance task drives every injected socket extension on the
+    // shared cadence; a socket with the default no-op tick costs nothing.
+    let tick_sockets: Vec<Arc<dyn WebSocketExtension>> = socket
+        .iter()
+        .chain(secondary_socket.iter())
+        .map(Arc::clone)
+        .collect();
+    let socket_maintenance = (!tick_sockets.is_empty()).then(|| {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(SOCKET_PRODUCT_TICK_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                let tick_socket = Arc::clone(&socket);
-                if tokio::task::spawn_blocking(move || tick_socket.tick())
-                    .await
-                    .is_err()
+                let tick_targets = tick_sockets.clone();
+                if tokio::task::spawn_blocking(move || {
+                    for target in &tick_targets {
+                        target.tick();
+                    }
+                })
+                .await
+                .is_err()
                 {
                     break;
                 }
@@ -362,11 +403,13 @@ async fn spawn_loopback_server_internal(
         nonce: nonce.clone(),
         extension,
         socket,
+        secondary_socket,
     };
-    let router = Router::new()
-        .route("/api/v1/watch", get(handle_watch_socket))
-        .fallback(any(handle_extension))
-        .with_state(state);
+    let mut router = Router::new().route("/api/v1/watch", get(handle_watch_socket));
+    if let Some(path) = secondary_path {
+        router = router.route(path, get(handle_secondary_socket));
+    }
+    let router = router.fallback(any(handle_extension)).with_state(state);
     let (shutdown, receiver) = oneshot::channel();
     let task = tokio::spawn(async move {
         axum::serve(listener, router)
@@ -384,19 +427,46 @@ async fn spawn_loopback_server_internal(
     })
 }
 
+/// The host's single WebSocket admission policy: exact loopback authority,
+/// exact origin, exactly one matching session nonce, and the shared
+/// subprotocol. Every WebSocket route (built-in watch and any injected
+/// secondary route) admits through this one check.
+fn websocket_admission_denied(state: &HostState, request: &Request) -> bool {
+    header_text(request.headers(), HOST).as_deref() != Some(state.authority.as_str())
+        || header_text(request.headers(), ORIGIN).as_deref() != Some(state.origin.as_str())
+        || session_query(request.uri().query()) != Some(state.nonce.as_str())
+        || !requested_subprotocol(request.headers())
+}
+
 async fn handle_watch_socket(
     State(state): State<HostState>,
     upgrade: WebSocketUpgrade,
     request: Request,
 ) -> Response {
-    if header_text(request.headers(), HOST).as_deref() != Some(state.authority.as_str())
-        || header_text(request.headers(), ORIGIN).as_deref() != Some(state.origin.as_str())
-        || session_query(request.uri().query()) != Some(state.nonce.as_str())
-        || !requested_subprotocol(request.headers())
-    {
+    if websocket_admission_denied(&state, &request) {
         return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
     }
     let Some(extension) = state.socket else {
+        return extension_response(ExtensionResponse::not_found());
+    };
+    let mut source = SystemTraceIdSource;
+    let connection_id = source.next_trace_id();
+    upgrade
+        .protocols([SHARED_WATCH_SUBPROTOCOL])
+        .on_upgrade(move |socket| serve_websocket(socket, extension, connection_id))
+}
+
+async fn handle_secondary_socket(
+    State(state): State<HostState>,
+    upgrade: WebSocketUpgrade,
+    request: Request,
+) -> Response {
+    if websocket_admission_denied(&state, &request) {
+        return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
+    }
+    let Some(extension) = state.secondary_socket else {
+        // Unreachable while the route is only registered alongside the
+        // injected socket; kept as a fail-closed guard rather than a panic.
         return extension_response(ExtensionResponse::not_found());
     };
     let mut source = SystemTraceIdSource;
@@ -731,11 +801,13 @@ mod tests {
                 nonce: "00000000-0000-4000-8000-000000000001".parse().unwrap(),
                 extension,
                 socket: None,
+                secondary_socket: None,
             })
     }
 
     fn websocket_handshake(
         address: SocketAddr,
+        path: &str,
         authority: &str,
         origin: &str,
         nonce: &str,
@@ -750,7 +822,7 @@ mod tests {
             return false;
         }
         let request = format!(
-            "GET /api/v1/watch?session={nonce} HTTP/1.1\r\n\
+            "GET {path}?session={nonce} HTTP/1.1\r\n\
              Host: {authority}\r\n\
              Origin: {origin}\r\n\
              Upgrade: websocket\r\n\
@@ -932,12 +1004,19 @@ mod tests {
         let watchdog_socket = socket.clone();
 
         let watchdog = std::thread::spawn(move || {
-            let first =
-                websocket_handshake(address, &authority, &origin, &nonce, Duration::from_secs(2));
+            let first = websocket_handshake(
+                address,
+                "/api/v1/watch",
+                &authority,
+                &origin,
+                &nonce,
+                Duration::from_secs(2),
+            );
             let blocked = first && watchdog_socket.wait_until_blocked(Duration::from_secs(2));
             let second = blocked
                 && websocket_handshake(
                     address,
+                    "/api/v1/watch",
                     &authority,
                     &origin,
                     &nonce,
@@ -960,6 +1039,134 @@ mod tests {
             second,
             "a blocked extension connect must not starve the async handshake worker"
         );
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn injected_secondary_websocket_route_admits_with_the_standard_policy() {
+        let extension = Arc::new(CountingExtension {
+            calls: AtomicUsize::new(0),
+        });
+        let watch = Arc::new(CountingSocket::default());
+        let secondary = Arc::new(CountingSocket::default());
+        let server = spawn_loopback_server_with_sockets(
+            extension.clone(),
+            watch,
+            SecondaryWebSocketRoute::new("/api/v1/second-socket", secondary),
+            SessionNonce::generate(),
+        )
+        .await
+        .unwrap();
+        let origin = server.origin().to_owned();
+        let authority = origin.strip_prefix("http://").unwrap().to_owned();
+        let address = authority.parse::<SocketAddr>().unwrap();
+        let nonce = server.nonce().as_str().to_owned();
+
+        let (secondary_ok, wrong_nonce_ok, watch_ok) =
+            tokio::task::spawn_blocking(move || {
+                (
+                    websocket_handshake(
+                        address,
+                        "/api/v1/second-socket",
+                        &authority,
+                        &origin,
+                        &nonce,
+                        Duration::from_secs(2),
+                    ),
+                    websocket_handshake(
+                        address,
+                        "/api/v1/second-socket",
+                        &authority,
+                        &origin,
+                        "00000000-0000-4000-8000-0000000000ff",
+                        Duration::from_secs(2),
+                    ),
+                    websocket_handshake(
+                        address,
+                        "/api/v1/watch",
+                        &authority,
+                        &origin,
+                        &nonce,
+                        Duration::from_secs(2),
+                    ),
+                )
+            })
+            .await
+            .unwrap();
+
+        assert!(secondary_ok, "the injected route must upgrade with valid admission");
+        assert!(!wrong_nonce_ok, "the injected route shares the exact nonce admission");
+        assert!(watch_ok, "the built-in watch route is untouched by the injection");
+        assert_eq!(
+            extension.calls.load(Ordering::SeqCst),
+            0,
+            "WebSocket paths never reach the extension fallback while registered",
+        );
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn absent_secondary_route_falls_through_to_the_extension_fallback() {
+        let extension = Arc::new(CountingExtension {
+            calls: AtomicUsize::new(0),
+        });
+        let watch = Arc::new(CountingSocket::default());
+        let server =
+            spawn_loopback_server_with_socket(extension.clone(), watch, SessionNonce::generate())
+                .await
+                .unwrap();
+        let origin = server.origin().to_owned();
+        let authority = origin.strip_prefix("http://").unwrap().to_owned();
+        let address = authority.parse::<SocketAddr>().unwrap();
+        let nonce = server.nonce().as_str().to_owned();
+
+        let upgraded = tokio::task::spawn_blocking(move || {
+            websocket_handshake(
+                address,
+                "/api/v1/second-socket",
+                &authority,
+                &origin,
+                &nonce,
+                Duration::from_secs(2),
+            )
+        })
+        .await
+        .unwrap();
+
+        assert!(!upgraded, "without injection the path must not exist as a WebSocket route");
+        assert_eq!(
+            extension.calls.load(Ordering::SeqCst),
+            1,
+            "the un-injected path falls through to the extension fallback",
+        );
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_maintenance_task_ticks_primary_and_secondary_sockets() {
+        let extension = Arc::new(CountingExtension {
+            calls: AtomicUsize::new(0),
+        });
+        let watch = Arc::new(CountingSocket::default());
+        let secondary = Arc::new(CountingSocket::default());
+        let server = spawn_loopback_server_with_sockets(
+            extension,
+            watch.clone(),
+            SecondaryWebSocketRoute::new("/api/v1/second-socket", secondary.clone()),
+            SessionNonce::generate(),
+        )
+        .await
+        .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while watch.ticks.load(Ordering::SeqCst) == 0
+                || secondary.ticks.load(Ordering::SeqCst) == 0
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both injected sockets share the maintenance cadence");
         server.shutdown().await.unwrap();
     }
 }
