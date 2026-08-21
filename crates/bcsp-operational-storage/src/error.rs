@@ -34,6 +34,14 @@ pub enum StorageError {
     MigrationNameMismatch { migration_id: u32 },
     #[error("operational migration {migration_id} checksum differs from the embedded migration")]
     MigrationChecksumMismatch { migration_id: u32 },
+    #[error(
+        "operational migration {migration_id} left {violation_count} foreign key violation(s), first in table {first_table}"
+    )]
+    MigrationForeignKeyViolations {
+        migration_id: u32,
+        violation_count: u64,
+        first_table: String,
+    },
     #[error("refresh observation {0} does not exist")]
     ObservationNotFound(TraceId),
     #[error("refresh observation {0} is not staged")]

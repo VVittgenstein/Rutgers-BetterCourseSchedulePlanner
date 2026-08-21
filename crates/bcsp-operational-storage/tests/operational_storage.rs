@@ -240,7 +240,7 @@ fn fresh_schema_has_no_catalog_seed_and_migration_checksum_is_strict() {
     let temp = TempDir::new().expect("temp dir");
     let path = db_path(&temp);
     let storage = OperationalStorage::open(&path).expect("initialize schema");
-    assert_eq!(storage.migration_records().expect("migrations").len(), 4);
+    assert_eq!(storage.migration_records().expect("migrations").len(), 5);
     assert!(storage.discovered_targets().expect("targets").is_empty());
     let discovery = storage.discovery_state().expect("discovery state");
     assert_eq!((discovery.term_count, discovery.campus_count), (0, 0));
@@ -309,7 +309,7 @@ fn catalog_variant_fk_child_indexes_cover_fresh_and_v2_upgraded_databases() {
 
     let storage = OperationalStorage::open(&upgraded_path).expect("upgrade v2 database");
     let migrations = storage.migration_records().expect("upgraded migrations");
-    assert_eq!(migrations.len(), 4);
+    assert_eq!(migrations.len(), 5);
     assert_eq!(migrations[2].name, "catalog_variant_fk_indexes");
     drop(storage);
     assert_catalog_variant_fk_indexes(&upgraded_path);
@@ -400,7 +400,7 @@ fn v3_upgrade_closes_legacy_fatal_origin_without_deleting_online_history() {
     drop(connection);
 
     let storage = OperationalStorage::open(&path).expect("upgrade v3 database");
-    assert_eq!(storage.migration_records().expect("migrations").len(), 4);
+    assert_eq!(storage.migration_records().expect("migrations").len(), 5);
     let origin = storage
         .open_origin_state("rutgers")
         .expect("origin state")
@@ -466,7 +466,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
         .execute(
             "INSERT INTO bcsp_operational_migrations
                 (migration_id, name, sha256, applied_at)
-             VALUES (5, 'future', ?1, ?2)",
+             VALUES (6, 'future', ?1, ?2)",
             [HASH_A, COMPLETED],
         )
         .expect("future migration");
@@ -474,7 +474,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
     assert!(matches!(
         OperationalStorage::open(&future_path),
         Err(StorageError::UnknownMigration {
-            migration_id: 5,
+            migration_id: 6,
             ..
         })
     ));

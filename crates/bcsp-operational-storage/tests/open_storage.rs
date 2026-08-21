@@ -416,7 +416,7 @@ fn existing_v1_database_migrates_to_open_storage_without_seed_rows() {
     drop(connection);
 
     let storage = OperationalStorage::open(&path).expect("migrate to current schema");
-    assert_eq!(storage.migration_records().expect("records").len(), 4);
+    assert_eq!(storage.migration_records().expect("records").len(), 5);
     let tables = storage.operational_table_names().expect("tables");
     assert!(tables.contains(&"open_pull_attempts".to_owned()));
     assert!(tables.contains(&"open_section_events".to_owned()));
