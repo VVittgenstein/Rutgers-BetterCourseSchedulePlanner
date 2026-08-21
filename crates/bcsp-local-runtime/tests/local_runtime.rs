@@ -256,6 +256,7 @@ fn seed_ready_query_scope(prepared: &PreparedLocalRuntime, terms: &[&str]) {
         database
             .operational_mut()
             .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
                 attempt_id,
                 completed_at: completed.clone(),
                 open_sections: vec![section.clone()],

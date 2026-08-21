@@ -21,6 +21,7 @@ pub enum OpenAttemptClassification {
     Failed,
     UnsafeEmpty,
     UnsafeZeroIntersection,
+    SuspectPartialSnapshot,
     StaleCatalogRace,
     Interrupted,
 }
@@ -34,6 +35,7 @@ impl OpenAttemptClassification {
             Self::Failed => "FAILED",
             Self::UnsafeEmpty => "UNSAFE_EMPTY",
             Self::UnsafeZeroIntersection => "UNSAFE_ZERO_INTERSECTION",
+            Self::SuspectPartialSnapshot => "SUSPECT_PARTIAL_SNAPSHOT",
             Self::StaleCatalogRace => "STALE_CATALOG_RACE",
             Self::Interrupted => "INTERRUPTED",
         }
@@ -47,6 +49,7 @@ impl OpenAttemptClassification {
             "FAILED" => Ok(Self::Failed),
             "UNSAFE_EMPTY" => Ok(Self::UnsafeEmpty),
             "UNSAFE_ZERO_INTERSECTION" => Ok(Self::UnsafeZeroIntersection),
+            "SUSPECT_PARTIAL_SNAPSHOT" => Ok(Self::SuspectPartialSnapshot),
             "STALE_CATALOG_RACE" => Ok(Self::StaleCatalogRace),
             "INTERRUPTED" => Ok(Self::Interrupted),
             _ => Err(invalid_stored("open_pull_attempts", "classification")),
@@ -190,6 +193,11 @@ pub struct FinishOpenPullSuccessCommand {
     /// Current watched sections that require one observation event for this valid batch.
     pub watched_sections: Vec<SectionKey>,
     pub http: OpenHttpAuditMetadata,
+    /// Integrity-gate directive computed under the per-target gate lock: when
+    /// true, a would-be-applicable snapshot is withheld and classified
+    /// SUSPECT_PARTIAL_SNAPSHOT instead (LKG retained, no events). Hard
+    /// rejections ignore this flag.
+    pub gate_hold: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -230,6 +238,15 @@ pub struct OpenObservationCommit {
     pub target_day_counts: OpenAttemptCounters,
     pub service_day_counts: OpenAttemptCounters,
     pub section_events: Vec<OpenSectionEvent>,
+}
+
+/// Newest-first attempt summary consumed by the integrity gate's restart
+/// rebuild (classification + canonical set hash + completion timestamp text).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenGateAttemptSummary {
+    pub classification: OpenAttemptClassification,
+    pub canonical_set_sha256: Option<String>,
+    pub completed_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -810,6 +827,7 @@ impl OperationalStorage {
             &response.canonical_indices,
             &catalog_indices,
             intersection_count,
+            command.gate_hold,
         );
         let intended_states = catalog_indices
             .iter()
@@ -829,6 +847,7 @@ impl OperationalStorage {
             let error_code = match classification {
                 OpenAttemptClassification::UnsafeEmpty => "UNSAFE_EMPTY_WITH_CATALOG_ROWS",
                 OpenAttemptClassification::UnsafeZeroIntersection => "UNSAFE_ZERO_INTERSECTION",
+                OpenAttemptClassification::SuspectPartialSnapshot => "SUSPECT_PARTIAL_SNAPSHOT",
                 _ => unreachable!("only unsafe response classifications reach this branch"),
             };
             finalize_non_applied_attempt(
@@ -1184,6 +1203,7 @@ impl OperationalStorage {
             &response.canonical_indices,
             &catalog_indices,
             intersection_count,
+            command.gate_hold,
         );
 
         if !classification.is_success() {
@@ -1381,6 +1401,71 @@ impl OperationalStorage {
             retained_lkg_attempt_id,
             observation_commit: None,
         })
+    }
+
+    /// Integrity-gate seeding read: the last-applied OPEN index set for a
+    /// target from the serving current-state mirror. `None` when no state
+    /// was ever applied (distinct from an applied state with zero opens).
+    pub fn serving_lkg_open_index_set(
+        &self,
+        target: &TermCampusKey,
+    ) -> StorageResult<Option<std::collections::BTreeSet<String>>> {
+        let target_id = open_target_id(target);
+        let any_state: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM open_section_current WHERE target_id = ?1)",
+            [&target_id],
+            |row| row.get(0),
+        )?;
+        if !any_state {
+            return Ok(None);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT section_index FROM open_section_current
+             WHERE target_id = ?1 AND state = 'OPEN'",
+        )?;
+        let rows = statement.query_map([&target_id], |row| row.get::<_, String>(0))?;
+        let mut open_set = std::collections::BTreeSet::new();
+        for row in rows {
+            open_set.insert(row?);
+        }
+        Ok(Some(open_set))
+    }
+
+    /// Integrity-gate restart read: newest-first completed attempt summaries
+    /// (classification, canonical set hash, completion time) for the restart
+    /// rebuild rules.
+    pub fn recent_open_gate_attempt_summaries(
+        &self,
+        target: &TermCampusKey,
+        limit: u32,
+    ) -> StorageResult<Vec<OpenGateAttemptSummary>> {
+        let mut statement = self.connection.prepare(
+            "SELECT classification, canonical_set_sha256, completed_at
+             FROM open_pull_attempts
+             WHERE target_id = ?1 AND classification != 'STARTED'
+             ORDER BY attempt_sequence DESC
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(
+            params![open_target_id(target), limit],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?;
+        let mut summaries = Vec::new();
+        for row in rows {
+            let (classification, canonical_set_sha256, completed_at) = row?;
+            summaries.push(OpenGateAttemptSummary {
+                classification: OpenAttemptClassification::parse(&classification)?,
+                canonical_set_sha256,
+                completed_at,
+            });
+        }
+        Ok(summaries)
     }
 
     pub fn open_attempt(&self, attempt_id: &TraceId) -> StorageResult<Option<OpenAttemptRecord>> {
@@ -2179,15 +2264,23 @@ fn classify_open_response(
     canonical_indices: &BTreeSet<String>,
     catalog_indices: &BTreeSet<String>,
     intersection_count: u64,
+    gate_hold: bool,
 ) -> OpenAttemptClassification {
+    // Hard rejections always win and never consult the gate; the gate only
+    // withholds snapshots that would otherwise be applicable (integrity gate
+    // design, section 3).
     if canonical_indices.is_empty() {
         if catalog_indices.is_empty() {
             OpenAttemptClassification::ValidEmptyNoRows
+        } else if gate_hold {
+            OpenAttemptClassification::SuspectPartialSnapshot
         } else {
             OpenAttemptClassification::ValidApplied
         }
     } else if !catalog_indices.is_empty() && intersection_count == 0 {
         OpenAttemptClassification::UnsafeZeroIntersection
+    } else if gate_hold {
+        OpenAttemptClassification::SuspectPartialSnapshot
     } else {
         OpenAttemptClassification::ValidApplied
     }

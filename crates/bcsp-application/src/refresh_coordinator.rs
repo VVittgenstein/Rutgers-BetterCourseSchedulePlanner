@@ -12,11 +12,12 @@ use bcsp_contracts::{
     SystemTraceIdSource, TermCampusKey, TraceId, TraceIdSource,
 };
 use bcsp_open::{
-    CompletionSchedule, MonotonicTime, OpenCounterAudience, OpenFailureKind, OpenPullClock,
-    OpenPullCommand, OpenPullPersistence, OpenPullTerminal, OriginCircuit, OriginDispatch,
-    OriginDispatchHint, OriginEdfScheduler, OriginJobKey, OriginJobKind, OriginSchedulerLane,
-    RetryDirective, RetryMode, SchedulerError, SharedOpenService, SharedOpenServiceError,
-    TargetRetryClass, retry_directive, target_retry_directive,
+    CompletionSchedule, MonotonicTime, OpenCounterAudience, OpenFailureKind, OpenGateRoute,
+    OpenGateWiring, OpenPullClock, OpenPullCommand, OpenPullPersistence, OpenPullTerminal,
+    OriginCircuit, OriginDispatch, OriginDispatchHint, OriginEdfScheduler, OriginJobKey,
+    OriginJobKind, OriginSchedulerLane, RetryDirective, RetryMode, SchedulerError,
+    SharedOpenService, SharedOpenServiceError, TargetGateSet, TargetRetryClass, retry_directive,
+    target_retry_directive,
 };
 use bcsp_operational_storage::{
     BeginOpenPullAttemptCommand, BeginRefreshAttemptCommand, CatalogCandidateOpenSnapshot,
@@ -177,9 +178,21 @@ const WORKFLOW_CANDIDATE_OPEN: u8 = 3;
 pub(crate) struct TargetWorkflowControl {
     phase: AtomicU8,
     open_gate: AsyncMutex<()>,
+    /// Snapshot-integrity gate runtimes for this target. The control is the
+    /// stable per-target object shared by every execution path (primary,
+    /// concurrent-serving, candidate), which is what gives the gate its
+    /// per-target serial-lock property.
+    integrity_gates: Arc<std::sync::Mutex<TargetGateSet>>,
 }
 
 impl TargetWorkflowControl {
+    pub(crate) fn gate_wiring(&self, route: OpenGateRoute) -> OpenGateWiring {
+        OpenGateWiring {
+            gates: Arc::clone(&self.integrity_gates),
+            route,
+        }
+    }
+
     pub(crate) fn allows_parallel_serving_open(&self) -> bool {
         matches!(
             self.phase.load(Ordering::Acquire),
@@ -762,6 +775,7 @@ where
         self.publish_workflow_running(&operation_id, ServiceOperationStageV2::OpenFetch);
         let execution = async {
             let command = OpenPullCommand {
+                gate: Some(control.gate_wiring(OpenGateRoute::Serving)),
                 attempt_id,
                 run_id: self.run_id,
                 source_request: registration.open_request,
@@ -1322,6 +1336,10 @@ where
             .effective_seconds(active_watch_count > 0);
         let open_attempt_id = self.ids.next_trace_id();
         let command = OpenPullCommand {
+            gate: self
+                .workflow_control
+                .as_ref()
+                .map(|control| control.gate_wiring(OpenGateRoute::Candidate)),
             attempt_id: open_attempt_id,
             run_id: self.run_id,
             source_request,
@@ -1436,6 +1454,10 @@ where
                 .effective_seconds(active_watch_count > 0)
         };
         let command = OpenPullCommand {
+            gate: self
+                .workflow_control
+                .as_ref()
+                .map(|control| control.gate_wiring(OpenGateRoute::Serving)),
             attempt_id: self.ids.next_trace_id(),
             run_id: self.run_id,
             source_request,

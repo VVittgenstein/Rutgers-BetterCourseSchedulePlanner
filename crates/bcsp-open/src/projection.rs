@@ -642,6 +642,9 @@ const fn map_classification(value: OpenAttemptClassification) -> OpenRefreshClas
         OpenAttemptClassification::UnsafeZeroIntersection => {
             OpenRefreshClassification::UnsafeZeroIntersection
         }
+        OpenAttemptClassification::SuspectPartialSnapshot => {
+            OpenRefreshClassification::SuspectPartialSnapshot
+        }
         OpenAttemptClassification::StaleCatalogRace => OpenRefreshClassification::StaleCatalogRace,
     }
 }

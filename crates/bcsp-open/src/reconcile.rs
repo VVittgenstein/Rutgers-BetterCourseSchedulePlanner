@@ -70,6 +70,14 @@ impl CatalogOpenBatch {
     pub fn section_count(&self) -> usize {
         self.sections.len()
     }
+
+    pub fn section_indexes(&self) -> impl ExactSizeIterator<Item = &SectionIndex> {
+        self.sections.keys()
+    }
+
+    pub fn contains_index(&self, index: &SectionIndex) -> bool {
+        self.sections.contains_key(index)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -133,6 +141,9 @@ pub enum OpenReconcileClassification {
     ValidEmptyNoRows,
     UnsafeEmpty,
     UnsafeZeroIntersection,
+    /// A would-be-applicable snapshot withheld by the integrity gate: no
+    /// updates are produced and last-known-good state is retained.
+    SuspectPartialSnapshot,
     StaleCatalogRace,
 }
 
@@ -163,6 +174,10 @@ pub struct OpenReconcilePlan {
     pub orphan_count: u64,
     pub open_count: u64,
     pub closed_count: u64,
+    /// |response ∩ catalog|, computed from the inputs and independent of
+    /// `updates` -- a withheld (suspect) plan carries no updates but still
+    /// reports the actual intersection so the storage cross-check can agree.
+    pub observed_intersection_count: u64,
     pub updates: Vec<SectionOpenUpdate>,
 }
 
@@ -170,10 +185,17 @@ pub fn reconcile_open_set(
     captured_catalog_content_version: CatalogContentVersion,
     current_catalog: &CatalogOpenBatch,
     open_set: &OpenSetEvidence,
+    gate_hold: bool,
 ) -> Result<OpenReconcilePlan, ReconcileInputError> {
     if open_set.target != current_catalog.target {
         return Err(ReconcileInputError::ForeignOpenBatch);
     }
+    // Independent of the update list so a withheld plan still reports it.
+    let observed_intersection_count = open_set
+        .indexes
+        .iter()
+        .filter(|index| current_catalog.sections.contains_key(*index))
+        .count();
     let base = |classification: OpenReconcileClassification,
                 orphan_count: usize,
                 updates: Vec<SectionOpenUpdate>| {
@@ -200,6 +222,8 @@ pub fn reconcile_open_set(
             orphan_count: u64::try_from(orphan_count).unwrap_or(u64::MAX),
             open_count: u64::try_from(open_count).unwrap_or(u64::MAX),
             closed_count: u64::try_from(closed_count).unwrap_or(u64::MAX),
+            observed_intersection_count: u64::try_from(observed_intersection_count)
+                .unwrap_or(u64::MAX),
             updates,
         }
     };
@@ -215,6 +239,15 @@ pub fn reconcile_open_set(
     if open_set.indexes.is_empty() {
         return Ok(if current_catalog.sections.is_empty() {
             base(OpenReconcileClassification::ValidEmptyNoRows, 0, Vec::new())
+        } else if gate_hold {
+            // The gate withheld a typed-empty snapshot against a large
+            // baseline: retain LKG, produce no updates. Hard rejections above
+            // and below never consult the flag (gate design section 3).
+            base(
+                OpenReconcileClassification::SuspectPartialSnapshot,
+                0,
+                Vec::new(),
+            )
         } else {
             let updates = current_catalog
                 .sections
@@ -229,15 +262,20 @@ pub fn reconcile_open_set(
         });
     }
 
-    let intersection_count = open_set
+    let orphan_count = open_set
         .indexes
-        .iter()
-        .filter(|index| current_catalog.sections.contains_key(*index))
-        .count();
-    let orphan_count = open_set.indexes.len().saturating_sub(intersection_count);
-    if !current_catalog.sections.is_empty() && intersection_count == 0 {
+        .len()
+        .saturating_sub(observed_intersection_count);
+    if !current_catalog.sections.is_empty() && observed_intersection_count == 0 {
         return Ok(base(
             OpenReconcileClassification::UnsafeZeroIntersection,
+            orphan_count,
+            Vec::new(),
+        ));
+    }
+    if gate_hold {
+        return Ok(base(
+            OpenReconcileClassification::SuspectPartialSnapshot,
             orphan_count,
             Vec::new(),
         ));
@@ -322,7 +360,7 @@ mod tests {
             3,
         )
         .expect("Open set");
-        let plan = reconcile_open_set(version(7), &catalog, &set).expect("same target");
+        let plan = reconcile_open_set(version(7), &catalog, &set, false).expect("same target");
 
         assert_eq!(
             plan.classification,
@@ -347,7 +385,7 @@ mod tests {
         let catalog = CatalogOpenBatch::try_new(target("NB"), version(1), [section("NB", "00001")])
             .expect("catalog");
         let empty = OpenSetEvidence::try_new(target("NB"), [], 0).expect("empty set");
-        let plan = reconcile_open_set(version(1), &catalog, &empty).expect("same target");
+        let plan = reconcile_open_set(version(1), &catalog, &empty, false).expect("same target");
         assert_eq!(
             plan.classification,
             OpenReconcileClassification::ValidApplied
@@ -359,7 +397,7 @@ mod tests {
 
         let foreign =
             OpenSetEvidence::try_new(target("NB"), [index("99999")], 1).expect("foreign set");
-        let plan = reconcile_open_set(version(1), &catalog, &foreign).expect("same target");
+        let plan = reconcile_open_set(version(1), &catalog, &foreign, false).expect("same target");
         assert_eq!(
             plan.classification,
             OpenReconcileClassification::UnsafeZeroIntersection
@@ -376,6 +414,7 @@ mod tests {
             version(1),
             &catalog,
             &OpenSetEvidence::try_new(target("NB"), [], 0).expect("empty set"),
+            false,
         )
         .expect("same target");
         assert_eq!(
@@ -388,6 +427,7 @@ mod tests {
             version(1),
             &catalog,
             &OpenSetEvidence::try_new(target("NB"), [index("99999")], 1).expect("nonempty set"),
+            false,
         )
         .expect("same target");
         assert_eq!(
@@ -406,6 +446,7 @@ mod tests {
             version(1),
             &catalog,
             &OpenSetEvidence::try_new(target("NB"), [index("00001")], 1).expect("set"),
+            false,
         )
         .expect("same target");
         assert_eq!(
@@ -432,7 +473,7 @@ mod tests {
         let other_batch =
             OpenSetEvidence::try_new(target("NWK"), [index("00001")], 1).expect("set");
         assert_eq!(
-            reconcile_open_set(version(1), &catalog, &other_batch),
+            reconcile_open_set(version(1), &catalog, &other_batch, false),
             Err(ReconcileInputError::ForeignOpenBatch)
         );
     }
@@ -461,8 +502,8 @@ mod tests {
             [section("NB", "00001"), section("NB", "00002")],
         )
         .expect("catalog");
-        let first_plan = reconcile_open_set(version(1), &first, &forward).expect("same target");
-        let second_plan = reconcile_open_set(version(2), &second, &forward).expect("same target");
+        let first_plan = reconcile_open_set(version(1), &first, &forward, false).expect("same target");
+        let second_plan = reconcile_open_set(version(2), &second, &forward, false).expect("same target");
         assert_eq!(
             first_plan.state_hash.as_deref(),
             Some("09a3c51f4f65611abf20f0179c001a6cd782c057524ba591899dfdd3b4331d3b")

@@ -49,9 +49,9 @@ pub use scheduler::{
     restore_monotonic_due,
 };
 pub use service::{
-    OpenPullClock, OpenPullCommand, OpenPullExecution, OpenPullFailure, OpenPullPersistence,
-    OpenPullTerminal, SharedOpenService, SharedOpenServiceError, SystemOpenPullClock,
-    rutgers_day_at,
+    OpenGateRoute, OpenGateWiring, OpenPullClock, OpenPullCommand, OpenPullExecution,
+    OpenPullFailure, OpenPullPersistence, OpenPullTerminal, SharedOpenService,
+    SharedOpenServiceError, SystemOpenPullClock, rutgers_day_at,
 };
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-open";

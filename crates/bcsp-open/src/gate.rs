@@ -247,6 +247,17 @@ impl GateRuntime {
         matches!(self.state, GateState::Quarantined { .. })
     }
 
+    /// The catalog identity this runtime's baseline is bound to, when one
+    /// exists (used by the wiring to detect serving-catalog changes).
+    pub fn catalog_identity(&self) -> Option<&CatalogSetIdentity> {
+        match &self.state {
+            GateState::Healthy { baseline } => {
+                baseline.as_ref().map(|epoch| &epoch.catalog_identity)
+            }
+            GateState::Quarantined { baseline, .. } => Some(&baseline.catalog_identity),
+        }
+    }
+
     /// Suspect entry rule: `missing >= max(ceil(baseline / 10), 25)`.
     /// One-sided (growth never quarantines); `baseline == 0` never trips
     /// because the absolute floor exceeds any possible shortfall.
@@ -534,6 +545,12 @@ pub struct TargetGateSet {
 impl TargetGateSet {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether a serving runtime has been installed (restart rebuild or first
+    /// use). `false` tells the wiring to perform the lazy rebuild first.
+    pub fn serving_installed(&self) -> bool {
+        self.serving.is_some()
     }
 
     pub fn serving_mut(&mut self) -> &mut GateRuntime {
