@@ -81,9 +81,5 @@ N6（原非阻断负 gap）：episode 全部时间边统一 `(0..=120s).contains
 - [x] S1-PR3（接线，93f88d7）——经 PR3.1/PR3.2 修复后闭环
 - [x] S1-PR3.1（58d3ba1）——**Codex 批准 B1-B4**；B5 余项见 PR3.2
 - [x] S1-PR3.2（8384d45）——**Codex 批准**（B5b + 负 gap；扫描 0 findings）
-- [ ] S1-PR4（前端展示）——5 个 wire 值全部落地：3 个 union（contracts/
-      open.ts，镜像 Rust wire 顺序）、2 个 exhaustive Record（presenter.ts，
-      `satisfies Record<...>` 编译期强制齐全）、en/zh 文案各 2 条
-      （catalog.ts；OpenFailureClass 无 UI 渲染面、仅 union）。
-      `npm run verify` 全绿（import graph、180 项测试、typecheck、
-      双目标构建）。待 Codex 复审——S1 至此代码面收口。
+- [x] S1-PR4（前端展示，bef6d24）——**Codex 批准，S1 全量收口**
+      （扫描 0 findings；发布基线含 bef6d24 即解除"PR3 不独立部署"约束）。
