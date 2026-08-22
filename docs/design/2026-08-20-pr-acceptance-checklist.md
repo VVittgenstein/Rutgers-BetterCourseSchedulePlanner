@@ -99,6 +99,19 @@ S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
        c) 旧 policy 不得覆盖新 policy；
        d) reset 升代后，前代等待中的 upsert 不得重新落库。
        调用方合同已写入 store.rs / lib.rs 文档（SEQUENCING CONTRACT）。
+       **PR5 执行语义（Codex 批准 8103168 时冻结，验收按此含义执行）**：
+       e) "用户意图顺序"必须由 connection/leader/retry epoch 或
+          revision 判定，不能等同于 manager 收包或抢锁顺序；
+       f) 四反例测试必须让旧命令在新意图之后**实际到达**；只制造
+          enqueue/SQLite 延迟不算通过；
+       g) manager 临界区负责 freshness 校验、序号分配和入队线性化，
+          不得横跨可能长时间阻塞的 SQLite 操作；
+       h) reset 必须是同一 sequencer 的 generation barrier；
+       i) 第一个生产调用方必须与 sequencer 和全部 D3 测试**同一 PR
+          落地**；任何提前直调重新触发 P1。
+       非阻断（PR5 一并做）：Windows 打包测试走完整路径——写入非空
+       意图 → 重启恢复且 active=0 → reset 返回删除计数 → 再重启仍空；
+       不能只断言空数组。
 
 ## 通用
 
@@ -171,5 +184,6 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
 - [x] S2-PR1（host 二级 WS seam，74eac23）——**Codex 批准**（携带项 S2a-S2e）
 - [x] S2-PR2（validate 合同 + reserve_ws 租约）——经 PR2.1/PR2.2 修复后
       **Codex 批准 81c50b5**（B4 延后至 H4，规格冻结于 S2-D1）
-- [ ] S2-PR3（L1 期望监控表，da5be13）——Codex 驳回 2 P1，PR3.1 修复中
-      （B1 前端合同；B2 → S2-D3 接线硬门）
+- [x] S2-PR3（L1 期望监控表，da5be13）——驳回 2 P1 后经 PR3.1 修复
+      **Codex 批准 8103168**（B1 关闭；B2 → S2-D3 接线硬门 + PR5
+      执行语义 e-i；扫描 0 findings）
