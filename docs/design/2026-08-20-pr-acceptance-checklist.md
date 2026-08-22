@@ -184,6 +184,7 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
 - [x] S2-PR1（host 二级 WS seam，74eac23）——**Codex 批准**（携带项 S2a-S2e）
 - [x] S2-PR2（validate 合同 + reserve_ws 租约）——经 PR2.1/PR2.2 修复后
       **Codex 批准 81c50b5**（B4 延后至 H4，规格冻结于 S2-D1）
+- [ ] S2-PR4（应用层心跳，56a9f70）——实现清单第 6 条，待复审
 - [x] S2-PR3（L1 期望监控表，da5be13）——驳回 2 P1 后经 PR3.1 修复
       **Codex 批准 8103168**（B1 关闭；B2 → S2-D3 接线硬门 + PR5
       执行语义 e-i；扫描 0 findings）
