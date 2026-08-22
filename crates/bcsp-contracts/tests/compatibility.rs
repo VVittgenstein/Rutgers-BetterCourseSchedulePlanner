@@ -210,6 +210,9 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
             } else {
                 assert!(
                     field.type_ref.starts_with("$generic:")
+                        // Literal constants: the field's value domain is the
+                        // single stated JSON literal.
+                        || field.type_ref == "$literal:true"
                         || matches!(
                             field.type_ref.as_str(),
                             "$primitive:bool"

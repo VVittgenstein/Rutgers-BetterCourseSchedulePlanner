@@ -45,23 +45,51 @@ const MILLI: u64 = 1_000;
 
 static POISON_LOGGED: AtomicBool = AtomicBool::new(false);
 
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
 #[derive(Clone, Copy)]
 struct Bucket {
     milli_tokens: u64,
     last_refill: Instant,
+    /// Fractional refill credit carried between samples: the remainder of
+    /// `elapsed_ns * rate` modulo 1e9, always `< 1e9`. Without it, advancing
+    /// `last_refill` on a sub-granularity elapsed would silently burn the
+    /// time credit -- a stream of sub-millisecond denied requests could
+    /// freeze refill forever (reviewer P1).
+    refill_residual: u64,
 }
 
 impl Bucket {
+    fn full(burst_milli: u64, now: Instant) -> Self {
+        Self {
+            milli_tokens: burst_milli,
+            last_refill: now,
+            refill_residual: 0,
+        }
+    }
+
     /// Advances the bucket to `now`. A `now` at or before `last_refill`
     /// (out-of-order sample) is zero elapsed: no refill, no timestamp
     /// rewind -- an exhausted bucket can never be reset by timestamp races.
+    /// Credit arithmetic is exact: `credited = (elapsed_ns * rate + residual)
+    /// / 1e9` milli-tokens with the remainder carried, so no request cadence
+    /// can burn fractional credit.
     fn refill(&mut self, now: Instant, burst_milli: u64, refill_milli_per_second: u64) {
         let Some(elapsed) = now.checked_duration_since(self.last_refill) else {
             return;
         };
-        let elapsed_milliseconds = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
-        let refilled = elapsed_milliseconds.saturating_mul(refill_milli_per_second) / MILLI;
-        self.milli_tokens = self.milli_tokens.saturating_add(refilled).min(burst_milli);
+        let numerator = elapsed
+            .as_nanos()
+            .saturating_mul(u128::from(refill_milli_per_second))
+            .saturating_add(u128::from(self.refill_residual));
+        let credited = u64::try_from(numerator / NANOS_PER_SECOND).unwrap_or(u64::MAX);
+        self.milli_tokens = self.milli_tokens.saturating_add(credited).min(burst_milli);
+        self.refill_residual = if self.milli_tokens == burst_milli {
+            // A full bucket holds no pending credit.
+            0
+        } else {
+            (numerator % NANOS_PER_SECOND) as u64
+        };
         self.last_refill = now;
     }
 
@@ -159,10 +187,7 @@ impl IssuanceRateLimiter {
         let state = slot.get_or_insert_with(|| LimiterState {
             buckets: BTreeMap::new(),
             by_staleness: BTreeSet::new(),
-            global: Bucket {
-                milli_tokens: self.global_burst_milli_tokens,
-                last_refill: now,
-            },
+            global: Bucket::full(self.global_burst_milli_tokens, now),
         });
 
         // Incremental idle cleanup: at most SWEEP_BATCH stale entries per
@@ -208,10 +233,7 @@ impl IssuanceRateLimiter {
                         state.buckets.remove(&key);
                     }
                 }
-                Bucket {
-                    milli_tokens: self.burst_milli_tokens,
-                    last_refill: now,
-                }
+                Bucket::full(self.burst_milli_tokens, now)
             }
         };
 
@@ -323,6 +345,51 @@ mod tests {
         // Past the idle expiry the entry is swept and recreated full.
         let much_later = now + BUCKET_IDLE_EXPIRY + Duration::from_secs(1);
         assert_eq!(limiter.check_at("client-a", much_later), RateDecision::Allow);
+    }
+
+    #[test]
+    fn sub_millisecond_denials_cannot_freeze_the_refill() {
+        // Reviewer P1: 10,000 denied probes at 100us intervals must not burn
+        // the fractional time credit -- at exactly t0+1s the 1-token/s bucket
+        // must have accrued its token.
+        let limiter = limiter(1, 1);
+        let t0 = Instant::now();
+        assert_eq!(limiter.check_at("client-a", t0), RateDecision::Allow);
+        for ordinal in 1..10_000_u64 {
+            let at = t0 + Duration::from_micros(100 * ordinal);
+            assert!(
+                matches!(limiter.check_at("client-a", at), RateDecision::Deny { .. }),
+                "probe {ordinal} inside the first second must stay denied",
+            );
+        }
+        assert_eq!(
+            limiter.check_at("client-a", t0 + Duration::from_secs(1)),
+            RateDecision::Allow,
+            "the full second of fractional credit must have accumulated",
+        );
+    }
+
+    #[test]
+    fn a_denied_request_burns_credit_in_neither_bucket() {
+        // Global exhausted by client A; client B's denied attempts must not
+        // consume B's own (full) bucket, and must not stall the global
+        // refill: one second later B is admitted on the refilled global
+        // token with its burst intact.
+        let limiter = IssuanceRateLimiter::new(1, 1, 1, 1);
+        let t0 = Instant::now();
+        assert_eq!(limiter.check_at("client-a", t0), RateDecision::Allow);
+        for ordinal in 0..50_u64 {
+            let at = t0 + Duration::from_micros(200 * ordinal);
+            assert!(matches!(
+                limiter.check_at("client-b", at),
+                RateDecision::Deny { .. }
+            ));
+        }
+        assert_eq!(
+            limiter.check_at("client-b", t0 + Duration::from_secs(1)),
+            RateDecision::Allow,
+            "B's burst survived the denials and the global bucket refilled",
+        );
     }
 
     #[test]

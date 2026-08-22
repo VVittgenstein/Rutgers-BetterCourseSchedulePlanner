@@ -2872,7 +2872,9 @@ pub fn contract_manifest() -> ContractManifest {
                 variants: vec![
                     ContractVariant {
                         tag_value: "VALID".to_owned(),
-                        fields: vec![field("valid", "$primitive:bool")],
+                        // Literal constant: the field's only legal value is
+                        // `true` (never a free boolean).
+                        fields: vec![field("valid", "$literal:true")],
                     },
                     ContractVariant {
                         tag_value: "RENEWED".to_owned(),

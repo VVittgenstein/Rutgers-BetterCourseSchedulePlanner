@@ -56,28 +56,85 @@ pub struct SessionValidateRequestV1 {
     pub locale: Option<String>,
 }
 
+/// A session nonce proven canonical at construction: the only way to put a
+/// `renewed` value on the wire, so a non-canonical nonce is unrepresentable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanonicalSessionNonce(String);
+
+impl CanonicalSessionNonce {
+    pub fn try_new(value: String) -> Option<Self> {
+        is_canonical_session_nonce(&value).then_some(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Response body of `POST /api/v1/session/validate`.
 ///
 /// EXACTLY one of the two frozen shapes: `{"valid":true}` when the supplied
 /// nonce is still registered (its activity window was touched), or
 /// `{"renewed":"<nonce>"}` carrying a freshly issued replacement when it was
 /// not. Renew-and-evict is atomic inside the registry lock on the server.
-/// The decoder enforces the one-of strictly: dual-key objects, unknown
-/// fields, and `{"valid":false}` are all rejected.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum SessionValidateResponseV1 {
-    Valid { valid: bool },
-    Renewed { renewed: String },
+///
+/// Illegal states are unrepresentable: the payload is a private one-of whose
+/// only constructors are [`Self::valid`] (literal `true`, no boolean field
+/// exists to set) and [`Self::renewed`] (requires a [`CanonicalSessionNonce`]).
+/// The decoder is a strict visitor: unknown or duplicate keys, dual-key
+/// objects, explicit `null` values, `valid:false`, and non-canonical
+/// `renewed` nonces are all rejected -- a `null` never masquerades as an
+/// omitted field.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionValidateResponseV1 {
+    kind: ValidateResponseKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ValidateResponseKind {
+    Valid,
+    Renewed(CanonicalSessionNonce),
 }
 
 impl SessionValidateResponseV1 {
     pub fn valid() -> Self {
-        Self::Valid { valid: true }
+        Self {
+            kind: ValidateResponseKind::Valid,
+        }
     }
 
-    pub fn renewed(nonce: String) -> Self {
-        Self::Renewed { renewed: nonce }
+    pub fn renewed(nonce: CanonicalSessionNonce) -> Self {
+        Self {
+            kind: ValidateResponseKind::Renewed(nonce),
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        matches!(self.kind, ValidateResponseKind::Valid)
+    }
+
+    pub fn as_renewed(&self) -> Option<&str> {
+        match &self.kind {
+            ValidateResponseKind::Valid => None,
+            ValidateResponseKind::Renewed(nonce) => Some(nonce.as_str()),
+        }
+    }
+}
+
+impl Serialize for SessionValidateResponseV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap as _;
+        let mut map = serializer.serialize_map(Some(1))?;
+        match &self.kind {
+            ValidateResponseKind::Valid => map.serialize_entry("valid", &true)?,
+            ValidateResponseKind::Renewed(nonce) => {
+                map.serialize_entry("renewed", nonce.as_str())?;
+            }
+        }
+        map.end()
     }
 }
 
@@ -86,33 +143,60 @@ impl<'de> Deserialize<'de> for SessionValidateResponseV1 {
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            valid: Option<bool>,
-            #[serde(default)]
-            renewed: Option<String>,
+        struct ResponseVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ResponseVisitor {
+            type Value = SessionValidateResponseV1;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("exactly one of {\"valid\":true} or {\"renewed\":\"<nonce>\"}")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut outcome: Option<ValidateResponseKind> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if outcome.is_some() {
+                        return Err(A::Error::custom(
+                            "a validate response carries exactly one field",
+                        ));
+                    }
+                    match key.as_str() {
+                        "valid" => {
+                            // bool, not Option<bool>: an explicit null fails
+                            // here instead of imitating an omitted field.
+                            let value: bool = map.next_value()?;
+                            if !value {
+                                return Err(A::Error::custom(
+                                    "a validate response never carries valid=false",
+                                ));
+                            }
+                            outcome = Some(ValidateResponseKind::Valid);
+                        }
+                        "renewed" => {
+                            let value: String = map.next_value()?;
+                            let nonce = CanonicalSessionNonce::try_new(value).ok_or_else(|| {
+                                A::Error::custom("renewed must be a canonical session nonce")
+                            })?;
+                            outcome = Some(ValidateResponseKind::Renewed(nonce));
+                        }
+                        unknown => {
+                            return Err(A::Error::unknown_field(unknown, &["valid", "renewed"]));
+                        }
+                    }
+                }
+                match outcome {
+                    Some(kind) => Ok(SessionValidateResponseV1 { kind }),
+                    None => Err(A::Error::custom(
+                        "a validate response carries exactly one of valid or renewed",
+                    )),
+                }
+            }
         }
 
-        let wire = Wire::deserialize(deserializer)?;
-        match (wire.valid, wire.renewed) {
-            (Some(true), None) => Ok(Self::Valid { valid: true }),
-            (Some(false), None) => Err(D::Error::custom(
-                "a validate response never carries valid=false",
-            )),
-            (None, Some(renewed)) => {
-                if !is_canonical_session_nonce(&renewed) {
-                    return Err(D::Error::custom(
-                        "renewed must be a canonical session nonce",
-                    ));
-                }
-                Ok(Self::Renewed { renewed })
-            }
-            (Some(_), Some(_)) | (None, None) => Err(D::Error::custom(
-                "a validate response carries exactly one of valid or renewed",
-            )),
-        }
+        deserializer.deserialize_map(ResponseVisitor)
     }
 }
 
@@ -140,34 +224,43 @@ mod tests {
             r#"{"valid":true}"#,
         );
         let nonce = "00000000-0000-4000-8000-000000000001";
+        let canonical = CanonicalSessionNonce::try_new(nonce.to_owned()).expect("canonical");
         assert_eq!(
-            serde_json::to_string(&SessionValidateResponseV1::renewed(nonce.to_owned()))
+            serde_json::to_string(&SessionValidateResponseV1::renewed(canonical))
                 .expect("renewed"),
             format!(r#"{{"renewed":"{nonce}"}}"#),
+        );
+        assert!(
+            CanonicalSessionNonce::try_new("not-a-nonce".to_owned()).is_none(),
+            "a non-canonical renewed nonce is unrepresentable",
         );
     }
 
     #[test]
     fn the_response_decoder_enforces_the_exact_one_of() {
         let nonce = "00000000-0000-4000-8000-000000000001";
-        assert_eq!(
-            serde_json::from_str::<SessionValidateResponseV1>(r#"{"valid":true}"#)
-                .expect("valid decodes"),
-            SessionValidateResponseV1::valid(),
-        );
-        assert_eq!(
-            serde_json::from_str::<SessionValidateResponseV1>(&format!(
-                r#"{{"renewed":"{nonce}"}}"#
-            ))
-            .expect("renewed decodes"),
-            SessionValidateResponseV1::renewed(nonce.to_owned()),
-        );
+        let valid = serde_json::from_str::<SessionValidateResponseV1>(r#"{"valid":true}"#)
+            .expect("valid decodes");
+        assert!(valid.is_valid());
+        assert_eq!(valid.as_renewed(), None);
+        let renewed = serde_json::from_str::<SessionValidateResponseV1>(&format!(
+            r#"{{"renewed":"{nonce}"}}"#
+        ))
+        .expect("renewed decodes");
+        assert_eq!(renewed.as_renewed(), Some(nonce));
         for rejected in [
             r#"{"valid":false}"#.to_owned(),
             format!(r#"{{"valid":true,"renewed":"{nonce}"}}"#),
+            // Explicit null is NOT an omitted field: neither half of a
+            // dual-key object may hide behind null (reviewer P1).
+            format!(r#"{{"valid":true,"renewed":null}}"#),
+            format!(r#"{{"valid":null,"renewed":"{nonce}"}}"#),
+            r#"{"valid":null}"#.to_owned(),
+            r#"{"renewed":null}"#.to_owned(),
             r#"{}"#.to_owned(),
             r#"{"renewed":"not-a-nonce"}"#.to_owned(),
             format!(r#"{{"renewed":"{nonce}","extra":1}}"#),
+            format!(r#"{{"renewed":"{nonce}","renewed":"{nonce}"}}"#),
         ] {
             assert!(
                 serde_json::from_str::<SessionValidateResponseV1>(&rejected).is_err(),

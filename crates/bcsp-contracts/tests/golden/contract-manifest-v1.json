@@ -5368,7 +5368,7 @@
           "fields": [
             {
               "name": "valid",
-              "typeRef": "$primitive:bool",
+              "typeRef": "$literal:true",
               "required": true
             }
           ]

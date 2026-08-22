@@ -54,9 +54,19 @@ S2e. `on_upgrade` pump 未纳入 `LoopbackServer` 所有权属基线既有
 
 S2-D1. **H4 全局/per-client WS 上限与背压（P2 加固）落地之前，
        `feat/s2-alert-delivery` 分支不得部署**。理由：租约钉死 +
-       validate 匿名签发面下，全局签发预算只能限速、不能阻止最终
-       填满 registry；只有 H4 的 WS 全局上限能阻止攻击者把 4096 个
-       会话全部钉为不可淘汰（首页/validate 永久 503）。
+       validate 匿名签发面下，全局签发预算只能限速（rate shaper，
+       非容量安全边界——Codex 追认措辞），不能阻止最终填满
+       registry；只有 H4 的 WS 全局上限能阻止攻击者把 4096 个会话
+       全部钉为不可淘汰（首页/validate 永久 503）。
+       **规格冻结（Codex S2-PR2.2 轮要求，H4 实现时为硬验收）**：
+       a) global active-WS cap **= 1024**，严格小于 registry 容量
+          4096，保留 3072 项可淘汰 headroom（数值待产品追认，
+          方向已冻结：cap < 4096 且 headroom ≥ 50%）；
+       b) per-client 并发 WS 上限 **= 64**，client 身份与限流器的
+          规范化 key 完全一致（IPv4 全址 / IPv6 /64 聚合 /
+          v4-mapped 归 IPv4 / 无头归 direct）；
+       c) 验收测试：WS 达全局帽时，registry 必须仍可签发新会话
+          （被钉死的租约集合 < 容量，首页/validate 不 503）。
 S2-D2. XFF 最后一跳取值规则以"Caddy 为公网第一跳、默认覆写
        X-Forwarded-*"为前提冻结；若将来接入 CDN/`trusted_proxies`/
        其他代理链，必须重新冻结取值规则并跑真 Caddy 链路测试。

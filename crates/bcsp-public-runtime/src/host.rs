@@ -641,12 +641,21 @@ async fn handle_session_validate(
             StatusCode::OK,
             &HttpSuccessEnvelope::new(SessionValidateResponseV1::valid()),
         ),
-        Ok(ValidateOutcome::Renewed(nonce)) => json_response(
-            StatusCode::OK,
-            &HttpSuccessEnvelope::new(SessionValidateResponseV1::renewed(
-                nonce.as_str().to_owned(),
-            )),
-        ),
+        Ok(ValidateOutcome::Renewed(nonce)) => {
+            let Some(nonce) =
+                bcsp_contracts::CanonicalSessionNonce::try_new(nonce.as_str().to_owned())
+            else {
+                // Unreachable: the registry only generates canonical nonces.
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ApiErrorCode::InternalError,
+                );
+            };
+            json_response(
+                StatusCode::OK,
+                &HttpSuccessEnvelope::new(SessionValidateResponseV1::renewed(nonce)),
+            )
+        }
         Err(DocumentSessionError::CapacityExhausted) => api_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             ApiErrorCode::InternalError,
@@ -2293,6 +2302,45 @@ mod tests {
         assert_eq!(demand.active_watch_count(&target_b), 0);
     }
 
+    #[test]
+    fn client_rate_keys_aggregate_networks_not_addresses() {
+        let key = |forwarded: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = forwarded {
+                headers.insert(
+                    FORWARDED_FOR_HEADER,
+                    HeaderValue::from_str(value).expect("header value"),
+                );
+            }
+            client_rate_key(&headers)
+        };
+
+        // IPv4 keys by full address; the LAST entry wins (forged prefixes
+        // appended by the client are ignored -- Caddy appends the true peer).
+        assert_eq!(key(Some("198.51.100.7")), "198.51.100.7");
+        assert_eq!(key(Some("1.2.3.4, 198.51.100.7")), "198.51.100.7");
+
+        // IPv6 aggregates to the routed /64: two interface identifiers in
+        // one /64 share a bucket; the adjacent /64 does not.
+        assert_eq!(
+            key(Some("2001:db8:aaaa:1:1111:2222:3333:4444")),
+            key(Some("2001:db8:aaaa:1:dead:beef:cafe:1234")),
+            "same /64 must share one key",
+        );
+        assert_ne!(
+            key(Some("2001:db8:aaaa:1:1111:2222:3333:4444")),
+            key(Some("2001:db8:aaaa:2:1111:2222:3333:4444")),
+            "the adjacent /64 is a different key",
+        );
+
+        // IPv4-mapped IPv6 keys as its embedded IPv4 address.
+        assert_eq!(key(Some("::ffff:198.51.100.7")), "198.51.100.7");
+
+        // Absent or unparsable headers share the single direct bucket.
+        assert_eq!(key(None), "direct");
+        assert_eq!(key(Some("not-an-address")), "direct");
+    }
+
     async fn post_validate(
         client: &Client,
         runtime: &PublicRuntime,
@@ -2395,6 +2443,45 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body: Value = response.json().await.expect("renewed validates");
         assert_eq!(body["data"]["valid"], Value::Bool(true));
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    #[tokio::test]
+    async fn validate_returns_503_when_every_session_is_leased() {
+        let (_temp, runtime, _store) = spawn_runtime(Arc::new(NoPublicProductRoutes)).await;
+        let client = client();
+
+        // Pin the ENTIRE production-capacity registry: every session holds a
+        // live WebSocket lease, so renewal admission has nothing to evict.
+        let mut leases = Vec::new();
+        loop {
+            match runtime.sessions.issue(PublicLocale::EnUs) {
+                Ok(nonce) => {
+                    leases.push(
+                        runtime
+                            .sessions
+                            .reserve_ws(nonce.as_str())
+                            .expect("lease the fresh session"),
+                    );
+                }
+                Err(DocumentSessionError::CapacityExhausted) => break,
+                Err(DocumentSessionError::Unavailable) => panic!("registry unavailable"),
+            }
+            assert!(leases.len() <= 5_000, "capacity must exhaust");
+        }
+
+        // The frozen contract's 503 branch over real HTTP.
+        let stale = r#"{"nonce":"00000000-0000-4000-8000-00000000dead"}"#;
+        let response =
+            post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), stale).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        // Releasing one lease restores renewal admission.
+        leases.pop();
+        let response =
+            post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), stale).await;
+        assert_eq!(response.status(), StatusCode::OK);
 
         runtime.shutdown().await.expect("clean shutdown");
     }
