@@ -8,7 +8,8 @@ use bcsp_contracts::{
     WatchNotificationMode, WatchPolicyV1,
 };
 use bcsp_local_user_state::{
-    CatalogRefreshMinutes, CurrentFiltersRevision, EpisodeActionInput, EpisodeActionKind,
+    CatalogRefreshMinutes, CurrentFiltersRevision, DesiredWatch, DesiredWatchMutation,
+    EpisodeActionInput, EpisodeActionKind,
     EpisodeDisposition, EpisodeHistoryIdentity, EpisodeSummaryInput, FilterAssociation,
     HistoryFilter, HistoryWriteOutcome, LocalSettings, LocaleOverride, MAX_SELECTED_SECTIONS,
     OpenRefreshSeconds, PageRequest, PersonalStateError, PersonalStateStore, SavedViewContent,
@@ -174,9 +175,10 @@ fn first_start_is_schema_only_and_enforces_sqlite_and_migration_contracts() {
     assert!(configuration.busy_timeout_ms >= 5_000);
     assert_eq!(store.personal_table_counts().unwrap(), Default::default());
     let migrations = store.migration_records().unwrap();
-    assert_eq!(migrations.len(), 2);
+    assert_eq!(migrations.len(), 3);
     assert_eq!(migrations[0].migration_id, 10_001);
     assert_eq!(migrations[1].migration_id, 10_002);
+    assert_eq!(migrations[2].migration_id, 10_003);
     assert_eq!(migrations[0].checksum.len(), 64);
     let _ = store.checkpoint_wal().unwrap();
     drop(store);
@@ -599,7 +601,8 @@ fn legacy_settings_current_filters_migrate_to_the_dedicated_snapshot_table() {
     let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
-            "DELETE FROM personal_migration_ledger WHERE migration_id = 10002;
+            "DELETE FROM personal_migration_ledger WHERE migration_id IN (10002, 10003);
+             DROP TABLE personal_desired_watches_v1;
              DROP TABLE personal_saved_views_v1;
              DROP TABLE personal_current_filters_v1;
              DROP TABLE personal_state_metadata_v1;",
@@ -620,7 +623,7 @@ fn legacy_settings_current_filters_migrate_to_the_dedicated_snapshot_table() {
     drop(connection);
 
     let store = PersonalStateStore::open(&path).unwrap();
-    assert_eq!(store.migration_records().unwrap().len(), 2);
+    assert_eq!(store.migration_records().unwrap().len(), 3);
     assert_eq!(store.settings().unwrap().value, LocalSettings::default());
     let migrated = store.current_filters().unwrap();
     assert_eq!(migrated.revision.get(), 1);
@@ -772,6 +775,20 @@ fn restart_snapshot_never_restores_active_watch_and_reset_preserves_operational_
             &[section(1), section(2)],
         )
         .unwrap();
+    // Desired-watch INTENT persists across restarts (L1); the live watch
+    // count never does.
+    assert_eq!(
+        store
+            .upsert_desired_watch(&section(1), &WatchPolicyV1::default())
+            .unwrap(),
+        DesiredWatchMutation::Added
+    );
+    assert_eq!(
+        store
+            .upsert_desired_watch(&section(2), &WatchPolicyV1::default())
+            .unwrap(),
+        DesiredWatchMutation::Added
+    );
     let saved = store
         .create_saved_view(
             state_one(),
@@ -832,6 +849,15 @@ fn restart_snapshot_never_restores_active_watch_and_reset_preserves_operational_
         LocaleOverride::EnUs
     );
     assert_eq!(snapshot.selected_sections, vec![section(1), section(2)]);
+    assert_eq!(
+        snapshot
+            .desired_watches
+            .iter()
+            .map(|watch| watch.section.clone())
+            .collect::<Vec<_>>(),
+        vec![section(1), section(2)],
+        "desired-watch intent survives the restart",
+    );
     assert_eq!(snapshot.episode_history.total, 1);
     let reset = store
         .clear_personal_data(store.user_state_revision().unwrap())
@@ -840,6 +866,7 @@ fn restart_snapshot_never_restores_active_watch_and_reset_preserves_operational_
     assert_eq!(reset.deleted_current_filters, 1);
     assert_eq!(reset.deleted_saved_views, 1);
     assert_eq!(reset.deleted_selected_sections, 2);
+    assert_eq!(reset.deleted_desired_watches, 2);
     assert_eq!(reset.deleted_episode_summaries, 1);
     assert_eq!(reset.deleted_episode_actions, 1);
     assert_eq!(store.personal_table_counts().unwrap(), Default::default());
@@ -889,8 +916,70 @@ fn restart_snapshot_never_restores_active_watch_and_reset_preserves_operational_
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
-        2
+        3
     );
     let serialized = serde_json::to_value(snapshot).unwrap();
     assert_eq!(serialized["activeWatchCount"], json!(0));
+    assert_eq!(serialized["desiredWatches"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn desired_watches_are_idempotent_capped_and_removed_on_stop() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+
+    // Idempotent re-arm: identical upserts write nothing.
+    assert_eq!(
+        store
+            .upsert_desired_watch(&section(1), &WatchPolicyV1::default())
+            .unwrap(),
+        DesiredWatchMutation::Added
+    );
+    assert_eq!(
+        store
+            .upsert_desired_watch(&section(1), &WatchPolicyV1::default())
+            .unwrap(),
+        DesiredWatchMutation::Unchanged
+    );
+
+    // Policy change updates in place without consuming cap headroom.
+    let continuous = WatchPolicyV1 {
+        notification_mode: WatchNotificationMode::Continuous,
+        ..Default::default()
+    };
+    assert_eq!(
+        store.upsert_desired_watch(&section(1), &continuous).unwrap(),
+        DesiredWatchMutation::Updated
+    );
+    assert_eq!(
+        store.desired_watches().unwrap(),
+        vec![DesiredWatch {
+            section: section(1),
+            policy: continuous.clone(),
+        }],
+    );
+
+    // The nine-watch cap rejects the tenth NEW section; updating an
+    // existing one still succeeds at the cap.
+    for ordinal in 2..=9 {
+        store
+            .upsert_desired_watch(&section(ordinal), &WatchPolicyV1::default())
+            .unwrap();
+    }
+    assert!(matches!(
+        store.upsert_desired_watch(&section(10), &WatchPolicyV1::default()),
+        Err(PersonalStateError::DesiredWatchLimitExceeded { maximum: 9 })
+    ));
+    assert_eq!(
+        store
+            .upsert_desired_watch(&section(1), &WatchPolicyV1::default())
+            .unwrap(),
+        DesiredWatchMutation::Updated
+    );
+
+    // Explicit STOP removes; a second STOP is an idempotent no-op.
+    assert!(store.remove_desired_watch(&section(1)).unwrap());
+    assert!(!store.remove_desired_watch(&section(1)).unwrap());
+    assert_eq!(store.desired_watches().unwrap().len(), 8);
 }

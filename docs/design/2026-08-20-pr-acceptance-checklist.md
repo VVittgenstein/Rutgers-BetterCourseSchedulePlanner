@@ -66,7 +66,21 @@ S2-D1. **H4 全局/per-client WS 上限与背压（P2 加固）落地之前，
           规范化 key 完全一致（IPv4 全址 / IPv6 /64 聚合 /
           v4-mapped 归 IPv4 / 无头归 direct）；
        c) 验收测试：WS 达全局帽时，registry 必须仍可签发新会话
-          （被钉死的租约集合 < 容量，首页/validate 不 503）。
+          （被钉死的租约集合 < 容量，首页/validate 不 503）；测试
+          直接钉死 leases 与容量的数值不变量（1024/4096 关系）。
+       **参数终认（Codex 2026-08-22）**：全局预算 600/10 批准（仅
+       rate shaper）；global cap 1024 批准（75% headroom）；
+       per-client 64 批准为首发默认值。
+       **H4 实现级验收（随参数终认新增）**：
+       d) per-client 拒绝需有指标与可调能力（校园 NAT/共享 /64
+          可能误拒）；
+       e) cap 1024 仅在 H4 同时落实 per-socket 字节帽 + 全局
+          outbound 内存预算时成立（1 MiB × 1024 > 主机 ~955 MiB）；
+       f) "active-WS" 语义：permit 在 `reserve_ws` 前或同一原子准入
+          中取得，计入尚未完成 upgrade 的租约，RAII 贯穿
+          upgrade/pump 并覆盖所有失败退出路径；
+       g) 发布前确认无仓外旧版 manifest consumer，或为其同步
+          `$literal:true` 支持 / 升级 schemaVersion。
 S2-D2. XFF 最后一跳取值规则以"Caddy 为公网第一跳、默认覆写
        X-Forwarded-*"为前提冻结；若将来接入 CDN/`trusted_proxies`/
        其他代理链，必须重新冻结取值规则并跑真 Caddy 链路测试。

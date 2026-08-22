@@ -1,7 +1,10 @@
-//! Local-only durable settings, selection, and notification history.
+//! Local-only durable settings, selection, desired-watch intent, and notification history.
 //!
 //! The caller chooses the SQLite path. This crate owns only `personal_*` tables inside that
-//! database and deliberately has no representation for a browser connection or active watch.
+//! database. It persists desired-watch INTENT (section + policy, written on user START and
+//! removed on explicit STOP) so a reload can re-arm monitoring, but it deliberately has no
+//! representation for a browser connection, a live watch identifier, or ring consumption --
+//! restoring stored state never resurrects a live watch, it only re-arms intent.
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]
@@ -15,9 +18,10 @@ mod store;
 
 pub use error::{PersonalStateError, PersonalStateResult, SettingValueError};
 pub use model::{
-    CatalogRefreshMinutes, CurrentFilters, CurrentFiltersRevision, EpisodeActionInput,
-    EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition, EpisodeHistoryIdentity,
-    EpisodeHistorySummary, EpisodeSummaryInput, FilterAssociation, HistoryFilter, HistoryPage,
+    CatalogRefreshMinutes, CurrentFilters, CurrentFiltersRevision, DesiredWatch,
+    DesiredWatchMutation, EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord,
+    EpisodeDisposition, EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput,
+    FilterAssociation, HistoryFilter, HistoryPage,
     HistoryWriteOutcome, LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest,
     PersonalMigrationRecord, PersonalResetResult, PersonalStateSnapshot, PersonalTableCounts,
     SavedViewContent, SavedViewDefinition, SavedViewDeleteResult, SavedViewIncompatibility,
@@ -36,6 +40,7 @@ pub const PERSONAL_DATA_TABLE_ALLOWLIST: &[&str] = &[
     "personal_current_filters_v1",
     "personal_saved_views_v1",
     "personal_selected_sections_v1",
+    "personal_desired_watches_v1",
     "personal_episode_summaries_v1",
     "personal_episode_actions_v1",
 ];
@@ -46,6 +51,7 @@ pub const PERSONAL_TABLE_ALLOWLIST: &[&str] = &[
     "personal_current_filters_v1",
     "personal_saved_views_v1",
     "personal_selected_sections_v1",
+    "personal_desired_watches_v1",
     "personal_episode_summaries_v1",
     "personal_episode_actions_v1",
 ];

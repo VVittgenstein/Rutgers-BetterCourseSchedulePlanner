@@ -761,6 +761,25 @@ pub struct PersonalMigrationRecord {
     pub checksum: String,
 }
 
+/// One persisted desired-watch intent row: the section plus the policy the
+/// user chose at START. No watch identifier, no ring consumption, no
+/// connection state -- restoring it re-arms intent via a fresh START.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredWatch {
+    pub section: SectionKey,
+    pub policy: WatchPolicyV1,
+}
+
+/// Outcome of an idempotent desired-watch upsert. `Unchanged` performs no
+/// write, so re-arm loops (reconnect, auto-START on load) cost nothing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DesiredWatchMutation {
+    Added,
+    Updated,
+    Unchanged,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PersonalTableCounts {
@@ -768,6 +787,7 @@ pub struct PersonalTableCounts {
     pub current_filters: u64,
     pub saved_views: u64,
     pub selected_sections: u64,
+    pub desired_watches: u64,
     pub episode_summaries: u64,
     pub episode_actions: u64,
 }
@@ -780,6 +800,7 @@ pub struct PersonalResetResult {
     pub deleted_current_filters: u64,
     pub deleted_saved_views: u64,
     pub deleted_selected_sections: u64,
+    pub deleted_desired_watches: u64,
     pub deleted_episode_summaries: u64,
     pub deleted_episode_actions: u64,
 }
@@ -792,6 +813,7 @@ pub struct PersonalStateSnapshot {
     pub current_filters: StoredCurrentFilters,
     pub saved_views: Vec<SavedViewDefinition>,
     pub selected_sections: Vec<SectionKey>,
+    pub desired_watches: Vec<DesiredWatch>,
     pub episode_history: HistoryPage<EpisodeHistorySummary>,
     pub active_watch_count: u8,
 }

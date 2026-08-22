@@ -34,6 +34,12 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         sql: include_str!("../migrations/0002_saved_views.sql"),
         after_sql: Some(crate::saved_view::migrate_legacy_current_filters),
     },
+    EmbeddedMigration {
+        id: PERSONAL_MIGRATION_ID_BASE + 3,
+        name: "desired_watches",
+        sql: include_str!("../migrations/0003_desired_watches.sql"),
+        after_sql: None,
+    },
 ];
 
 pub(crate) fn apply_migrations(connection: &mut Connection) -> PersonalStateResult<()> {
