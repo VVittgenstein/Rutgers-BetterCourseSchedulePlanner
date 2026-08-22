@@ -133,6 +133,71 @@ describe('WatchClient', () => {
     expect(received).toEqual([envelope, ...siblingEnvelopes, observationEnvelope]);
   });
 
+  it('passively acknowledges server PINGs from the message handler and dedups replays', () => {
+    const ping = readGolden<WatchServerEventV1>('watch-server-ping-v1.json');
+    const ack = readGolden<WatchClientCommandV1>('watch-client-heartbeat-ack-v1.json');
+    if (ping.type !== 'PING') throw new Error('ping golden has the wrong type');
+    const socket = new FakeSocket();
+    let nextId = 0;
+    const client = new WatchClient({
+      baseUrl: 'https://planner.invalid/',
+      session: () => 'nonce',
+      socket: () => socket,
+      messageId: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12, '0')}`,
+    });
+    const received: WsServerEnvelope<WatchServerEventV1>[] = [];
+    client.subscribe((envelope) => received.push(envelope));
+    client.connect();
+    socket.open();
+
+    const envelope: WsServerEnvelope<WatchServerEventV1> = {
+      protocolVersion: 1,
+      messageId: '10000000-0000-4000-8000-000000000001',
+      payload: ping,
+    };
+    socket.message(JSON.stringify(envelope));
+    expect(socket.sent).toHaveLength(1);
+    expect(JSON.parse(socket.sent[0] ?? '')).toEqual({
+      protocolVersion: 1,
+      messageId: '00000000-0000-4000-8000-000000000001',
+      payload: ack,
+    });
+    expect(received).toEqual([envelope]);
+
+    socket.message(JSON.stringify(envelope));
+    expect(socket.sent).toHaveLength(1);
+    expect(received).toEqual([envelope]);
+
+    // A retransmitted heartbeat carries the SAME payload under a fresh
+    // envelope ID: it is a distinct heartbeat and must be acknowledged again.
+    const resent: WsServerEnvelope<WatchServerEventV1> = {
+      ...envelope,
+      messageId: '10000000-0000-4000-8000-000000000002',
+    };
+    socket.message(JSON.stringify(resent));
+    expect(socket.sent).toHaveLength(2);
+    expect(JSON.parse(socket.sent[1] ?? '').payload).toEqual(ack);
+
+    const next: WsServerEnvelope<WatchServerEventV1> = {
+      protocolVersion: 1,
+      messageId: '10000000-0000-4000-8000-000000000003',
+      payload: { type: 'PING', sequence: 2 },
+    };
+    socket.message(JSON.stringify(next));
+    expect(socket.sent).toHaveLength(3);
+    expect(JSON.parse(socket.sent[2] ?? '').payload).toEqual({
+      type: 'HEARTBEAT_ACK',
+      sequence: 2,
+    });
+
+    socket.readyState = 3;
+    expect(() => socket.message(JSON.stringify({
+      ...next,
+      messageId: '10000000-0000-4000-8000-000000000004',
+    }))).not.toThrow();
+    expect(socket.sent).toHaveLength(3);
+  });
+
   it('does not open implicitly and fails closed without a session', () => {
     const socketFactory = vi.fn(() => new FakeSocket());
     const client = new WatchClient({

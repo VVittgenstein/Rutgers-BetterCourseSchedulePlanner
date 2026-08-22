@@ -9,6 +9,8 @@ fn malformed_or_ambiguous_client_watch_commands_fail_closed() {
         r#"{"type":"START_WATCH","items":[{"sectionKey":{"term":"T2026F","campus":"CAMPUS_A","index":"00001"},"policy":{"notificationMode":"ONE_SHOT","maxAudible":0,"continuousDuration":{"kind":"FINITE","seconds":600}}}]}"#,
         r#"{"type":"START_WATCH","items":[{"sectionKey":{"term":"T2026F","campus":"CAMPUS_A","index":"00001"},"policy":{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"FINITE","seconds":0}}}]}"#,
         r#"{"type":"FUTURE_COMMAND"}"#,
+        r#"{"type":"HEARTBEAT_ACK"}"#,
+        r#"{"type":"HEARTBEAT_ACK","sequence":1,"future":true}"#,
     ];
     for json in invalid {
         assert!(

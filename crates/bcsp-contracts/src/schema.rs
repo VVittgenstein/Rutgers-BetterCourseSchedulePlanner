@@ -2314,6 +2314,7 @@ pub fn contract_manifest() -> ContractManifest {
                         "DISMISS_ALERT",
                         &[("alert", "$schema:bcsp.watch.alert-target.v1")],
                     ),
+                    ("HEARTBEAT_ACK", &[("sequence", "$primitive:u64")]),
                 ],
             ),
             enum_schema(
@@ -2602,6 +2603,7 @@ pub fn contract_manifest() -> ContractManifest {
                         "CUE_OUTCOME_RECORDED",
                         &[("receipt", "$schema:bcsp.watch.cue-outcome-receipt.v1")],
                     ),
+                    ("PING", &[("sequence", "$primitive:u64")]),
                 ],
             ),
             enum_schema(

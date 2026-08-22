@@ -366,6 +366,12 @@ pub enum WatchClientCommandV1 {
     DismissAlert {
         alert: WatchAlertTargetV1,
     },
+    /// Passive reply to a server `PING`, sent from the page's message
+    /// handler (never from a client timer -- hidden tabs throttle timers,
+    /// WS message events fire regardless). Echoes the ping sequence.
+    HeartbeatAck {
+        sequence: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -863,5 +869,11 @@ pub enum WatchServerEventV1 {
     },
     CueOutcomeRecorded {
         receipt: WatchCueOutcomeReceiptV1,
+    },
+    /// Server-driven application-level heartbeat, one per connection every
+    /// ping interval. A text frame (not a WS control Ping) so the page's
+    /// message handler observes it even in a throttled background tab.
+    Ping {
+        sequence: u64,
     },
 }

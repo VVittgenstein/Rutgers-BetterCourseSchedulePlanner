@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use bcsp_contracts::{
     OpenObservationV1, SectionKey, SystemTraceIdSource, TraceId, TraceIdSource,
-    WatchClientCommandV1, WatchStopReason, WsClientEnvelope, WsServerEnvelope,
+    WatchClientCommandV1, WatchServerEventV1, WatchStopReason, WsClientEnvelope, WsServerEnvelope,
     decode_versioned_envelope_json,
 };
 use bcsp_watch::{
@@ -17,6 +17,19 @@ use tokio::sync::mpsc;
 use crate::WebSocketExtension;
 
 const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Application-level heartbeat cadence: one server PING **text frame** per
+/// connection per interval. A text frame (not a WS control Ping) because the
+/// page must observe liveness from its message handler even in a throttled
+/// background tab, and browsers surface no event for control-frame pongs.
+///
+/// The direction that matters is server-to-page: the PING lets the PAGE prove
+/// the server is still delivering. The returning ACK is an ordinary inbound
+/// frame -- it refreshes the manager heartbeat exactly like any command, and
+/// the server does not require it, so a frozen page whose transport still
+/// auto-pongs is not detected here. Detecting that is the page's job (the
+/// staleness bound in the Readiness chain), by design.
+pub const WATCH_APP_PING_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Supplies the Catalog/storage admission decision and optional current Open observation for START.
 ///
@@ -95,9 +108,15 @@ impl WatchClock for SystemWatchClock {
     }
 }
 
+struct ConnectionChannel {
+    sender: mpsc::UnboundedSender<String>,
+    last_ping_at: WatchInstant,
+    ping_sequence: u64,
+}
+
 struct SocketState<C, I, E> {
     manager: WatchManager<C, I>,
-    connections: BTreeMap<TraceId, mpsc::UnboundedSender<String>>,
+    connections: BTreeMap<TraceId, ConnectionChannel>,
     envelope_ids: E,
     sealed: bool,
 }
@@ -219,7 +238,7 @@ where
     where
         E: TraceIdSource,
     {
-        let (forced, outcome) = match self.lock_state() {
+        let (forced, outcome, pings) = match self.lock_state() {
             Some(mut state) => {
                 let candidates = state
                     .connections
@@ -257,7 +276,8 @@ where
                         for report in &outcome.expired_connections {
                             state.connections.remove(&report.connection_id);
                         }
-                        (forced, outcome)
+                        let pings = Self::due_pings(&mut state);
+                        (forced, outcome, pings)
                     }
                     Err(error) => {
                         tracing::error!(?error, "shared watch timer tick failed");
@@ -273,9 +293,48 @@ where
         for dispatch in outcome.dispatches {
             self.deliver(dispatch, None, true);
         }
+        for (sender, frame) in pings {
+            let _ = sender.send(frame);
+        }
         for report in outcome.expired_connections {
             self.sink.record_cleanup(&report);
         }
+    }
+
+    /// Serializes one application-level PING frame for every connection whose
+    /// last PING is at least [`WATCH_APP_PING_INTERVAL`] old. Sequences are
+    /// per-connection starting at 1; envelope IDs are fresh per frame, so
+    /// client-side envelope dedup never coalesces two heartbeats.
+    fn due_pings(state: &mut SocketState<C, I, E>) -> Vec<(mpsc::UnboundedSender<String>, String)>
+    where
+        E: TraceIdSource,
+    {
+        let SocketState {
+            manager,
+            connections,
+            envelope_ids,
+            ..
+        } = state;
+        let now = manager.clock_mut().now();
+        let mut pings = Vec::new();
+        for channel in connections.values_mut() {
+            if now.elapsed_since(channel.last_ping_at) < WATCH_APP_PING_INTERVAL {
+                continue;
+            }
+            channel.ping_sequence = channel.ping_sequence.saturating_add(1);
+            channel.last_ping_at = now;
+            let envelope = WsServerEnvelope::new(
+                envelope_ids.next_trace_id(),
+                WatchServerEventV1::Ping {
+                    sequence: channel.ping_sequence,
+                },
+            );
+            match serde_json::to_string(&envelope) {
+                Ok(frame) => pings.push((channel.sender.clone(), frame)),
+                Err(_) => tracing::error!("failed to serialize a watch heartbeat PING"),
+            }
+        }
+        pings
     }
 
     /// Clears active connection state and records cleanup actions without persisting watches.
@@ -371,6 +430,21 @@ where
             WatchClientCommandV1::DismissAlert { alert } => {
                 Ok((state.manager.dismiss_alert(connection_id, alert)?, true))
             }
+            WatchClientCommandV1::HeartbeatAck { sequence: _ } => {
+                // The pre-dispatch touch above is the entire effect: an ACK
+                // refreshes the manager heartbeat and must never create
+                // product events, history actions, or an outbound reply.
+                let emitted_at = state.manager.clock_mut().wall_now();
+                Ok((
+                    WatchDispatch {
+                        connection_id,
+                        emitted_at,
+                        events: Vec::new(),
+                        actions: Vec::new(),
+                    },
+                    false,
+                ))
+            }
         }
     }
 
@@ -380,7 +454,10 @@ where
     {
         let (sender, frames) = match self.lock_state() {
             Some(mut state) => {
-                let sender = state.connections.get(&dispatch.connection_id).cloned();
+                let sender = state
+                    .connections
+                    .get(&dispatch.connection_id)
+                    .map(|channel| channel.sender.clone());
                 let frames = dispatch
                     .events
                     .iter()
@@ -430,7 +507,15 @@ where
             tracing::warn!(?error, "rejected watch WebSocket connection");
             return false;
         }
-        state.connections.insert(connection_id, outbound);
+        let now = state.manager.clock_mut().now();
+        state.connections.insert(
+            connection_id,
+            ConnectionChannel {
+                sender: outbound,
+                last_ping_at: now,
+                ping_sequence: 0,
+            },
+        );
         true
     }
 
@@ -1236,5 +1321,125 @@ mod tests {
                 .iter()
                 .any(|action| action.kind == WatchActionKind::EpisodeTimedOut)
         );
+    }
+
+    #[test]
+    fn server_pings_every_ten_seconds_and_passive_acks_keep_the_connection_alive() {
+        let sink = Arc::new(RecordingSink::default());
+        let (socket, clock) = socket_with_clock(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            sink.clone(),
+        );
+        let connection_id = trace(80);
+        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(connection_id, outbound));
+        send(
+            &socket,
+            connection_id,
+            trace(81),
+            WatchClientCommandV1::StartWatch {
+                items: items([section(80)]),
+            },
+        );
+        let _ = receive(&mut receiver);
+        assert_eq!(sink.dispatches.lock().unwrap().len(), 1);
+
+        socket.tick();
+        assert!(
+            receiver.try_recv().is_err(),
+            "no PING before the interval elapses"
+        );
+
+        let mut seen_envelope_ids = std::collections::BTreeSet::new();
+        // Six PING/ACK rounds cover 60s of wall time during which ONLY the
+        // app-level ACK (never transport activity) refreshes the manager
+        // heartbeat -- a passive background-tab page must survive this.
+        for round in 1..=6u64 {
+            clock.advance(WATCH_APP_PING_INTERVAL);
+            socket.tick();
+            socket.tick();
+            let envelope = receive(&mut receiver);
+            assert!(seen_envelope_ids.insert(envelope.message_id()));
+            let WatchServerEventV1::Ping { sequence } = envelope.into_payload() else {
+                panic!("expected an application-level PING");
+            };
+            assert_eq!(sequence, round);
+            assert!(
+                receiver.try_recv().is_err(),
+                "exactly one PING per interval even across repeated ticks"
+            );
+            send(
+                &socket,
+                connection_id,
+                trace(0x8100 + round),
+                WatchClientCommandV1::HeartbeatAck { sequence },
+            );
+        }
+        assert_eq!(
+            socket.connection_count(),
+            1,
+            "60s of ACK-only activity keeps the connection alive"
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "an ACK produces no reply frame"
+        );
+        assert_eq!(
+            sink.dispatches.lock().unwrap().len(),
+            1,
+            "an ACK records no history dispatch"
+        );
+
+        clock.advance(Duration::from_secs(61));
+        socket.tick();
+        assert_eq!(socket.connection_count(), 0);
+        {
+            let cleanups = sink.cleanups.lock().unwrap();
+            assert_eq!(cleanups.len(), 1);
+            assert_eq!(cleanups[0].reason, WatchCleanupReason::HeartbeatExpired);
+        }
+        while receiver.try_recv().is_ok() {}
+        clock.advance(WATCH_APP_PING_INTERVAL);
+        socket.tick();
+        assert!(
+            receiver.try_recv().is_err(),
+            "expired connections are not pinged"
+        );
+    }
+
+    #[test]
+    fn malformed_heartbeat_acks_fail_closed_and_refresh_nothing() {
+        let sink = Arc::new(RecordingSink::default());
+        let (socket, clock) = socket_with_clock(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            sink.clone(),
+        );
+        let connection_id = trace(90);
+        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        assert!(socket.connect(connection_id, outbound));
+
+        // 59s idle, then only a MALFORMED ack arrives (extra field under the
+        // strict client decoder). This pins the decoder-internal ordering:
+        // decode fails closed BEFORE route_command, so a malformed ACK
+        // reaches neither the manager nor the sink. It is not an end-to-end
+        // claim -- the production pump calls transport_activity before
+        // receive_text, so on a live socket any inbound frame, malformed or
+        // not, still refreshes the transport-level heartbeat.
+        clock.advance(Duration::from_secs(59));
+        let mut value = serde_json::to_value(WsClientEnvelope::new(
+            trace(91),
+            WatchClientCommandV1::HeartbeatAck { sequence: 1 },
+        ))
+        .unwrap();
+        assert!(value["payload"].is_object());
+        value["payload"]["future"] = serde_json::json!(true);
+        socket.receive_text(connection_id, &value.to_string());
+        assert_eq!(socket.connection_count(), 1);
+
+        clock.advance(Duration::from_secs(1));
+        socket.tick();
+        assert_eq!(socket.connection_count(), 0);
+        assert!(receiver.try_recv().is_err(), "no frame ever went out");
+        assert!(sink.dispatches.lock().unwrap().is_empty());
     }
 }

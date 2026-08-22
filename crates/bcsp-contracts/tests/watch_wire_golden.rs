@@ -68,6 +68,25 @@ fn max_nine_start_result_wire_is_exact() {
 }
 
 #[test]
+fn heartbeat_ping_and_ack_wires_are_exact() {
+    let event = WatchServerEventV1::Ping { sequence: 1 };
+    let golden = include_str!("golden/watch-server-ping-v1.json");
+    assert_eq!(pretty(&event), canonical(golden));
+    assert_eq!(
+        serde_json::from_str::<WatchServerEventV1>(golden).unwrap(),
+        event
+    );
+
+    let command = WatchClientCommandV1::HeartbeatAck { sequence: 1 };
+    let golden = include_str!("golden/watch-client-heartbeat-ack-v1.json");
+    assert_eq!(pretty(&command), canonical(golden));
+    assert_eq!(
+        serde_json::from_str::<WatchClientCommandV1>(golden).unwrap(),
+        command
+    );
+}
+
+#[test]
 fn fanout_embeds_the_open_observation_without_copying_open_fields() {
     let observation: bcsp_contracts::OpenObservationV1 =
         serde_json::from_str(include_str!("golden/open-observation-v1.json")).unwrap();

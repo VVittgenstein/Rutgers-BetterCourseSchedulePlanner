@@ -69,12 +69,12 @@ fn client_is_strict_server_is_additive_and_fanout_reuses_open_observation() {
     assert_eq!(client.direction, SchemaDirection::ClientToServer);
     assert_eq!(client.unknown_fields, UnknownFieldPolicy::Reject);
     assert_eq!(client.discriminator.as_deref(), Some("type"));
-    assert_eq!(client.variants.len(), 9);
+    assert_eq!(client.variants.len(), 10);
 
     let server = schema("bcsp.watch.server-event.v1");
     assert_eq!(server.direction, SchemaDirection::ServerToClient);
     assert_eq!(server.unknown_fields, UnknownFieldPolicy::Ignore);
-    assert_eq!(server.variants.len(), 7);
+    assert_eq!(server.variants.len(), 8);
 
     let fanout = schema("bcsp.watch.open-observation-fanout.v1");
     let fields = fanout

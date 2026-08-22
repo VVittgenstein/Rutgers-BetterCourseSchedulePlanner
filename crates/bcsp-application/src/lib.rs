@@ -79,8 +79,8 @@ pub use target_refresh_demand::{
     ManualTargetRetryRequest, TargetRefreshDemand, TargetRefreshDemandError,
 };
 pub use watch_socket::{
-    NoopWatchDispatchSink, SharedWatchSocket, SystemWatchClock, WatchAdmissionSource,
-    WatchDispatchSink,
+    NoopWatchDispatchSink, SharedWatchSocket, SystemWatchClock, WATCH_APP_PING_INTERVAL,
+    WatchAdmissionSource, WatchDispatchSink,
 };
 
 pub fn boundary_marker() -> &'static str {

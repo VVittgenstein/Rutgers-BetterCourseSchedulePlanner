@@ -18,6 +18,7 @@ const SERVER_EVENT_TYPES = new Set([
   'ALERT_UPDATED',
   'AUDIO_DISPOSITION',
   'CUE_OUTCOME_RECORDED',
+  'PING',
 ]);
 
 interface WatchMessageEvent {
@@ -97,6 +98,7 @@ export class WatchClient implements WatchClientPort {
       if (this.#socket !== socket) return;
       const envelope = decodeServerEnvelope(event.data);
       if (envelope !== null && this.#acceptServerEnvelope(envelope)) {
+        if (envelope.payload.type === 'PING') this.#acknowledgePing(envelope.payload.sequence);
         this.#listeners.forEach((listener) => listener(envelope));
       }
     });
@@ -143,6 +145,19 @@ export class WatchClient implements WatchClientPort {
   subscribeState(listener: WatchStateListener): () => void {
     this.#stateListeners.add(listener);
     return () => this.#stateListeners.delete(listener);
+  }
+
+  // Passive heartbeat reply, issued from the message handler itself: hidden
+  // tabs throttle client timers, but message events keep firing, so this is
+  // the only reply path that stays alive in a background tab. Never throws --
+  // a PING racing the socket teardown is dropped, not fatal.
+  #acknowledgePing(sequence: number): void {
+    if (this.#socket === null || this.#state !== 'OPEN' || this.#socket.readyState !== 1) return;
+    try {
+      this.send({ type: 'HEARTBEAT_ACK', sequence });
+    } catch {
+      // Teardown races leave the ACK unsent; the next PING retries.
+    }
   }
 
   #setState(state: WatchConnectionState): void {

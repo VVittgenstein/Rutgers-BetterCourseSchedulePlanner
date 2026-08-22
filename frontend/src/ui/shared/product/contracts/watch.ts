@@ -58,7 +58,8 @@ export type WatchClientCommandV1 =
   | { readonly type: 'RESUME_TIMED_OUT_EPISODE'; readonly episode: WatchEpisodeTargetV1 }
   | { readonly type: 'RESET_AUDIBLE_COUNT'; readonly watch: ActiveWatchTargetV1 }
   | { readonly type: 'REPORT_CUE_OUTCOME'; readonly report: WatchCueOutcomeReportV1 }
-  | { readonly type: 'DISMISS_ALERT'; readonly alert: WatchAlertTargetV1 };
+  | { readonly type: 'DISMISS_ALERT'; readonly alert: WatchAlertTargetV1 }
+  | { readonly type: 'HEARTBEAT_ACK'; readonly sequence: number };
 
 export type WatchStartRejectionReason =
   | 'MAX_ACTIVE_WATCHES'
@@ -197,4 +198,5 @@ export type WatchServerEventV1 =
   | { readonly type: 'EPISODE_UPDATED'; readonly episode: OpenEpisodeV1 }
   | { readonly type: 'ALERT_UPDATED'; readonly alert: WatchAlertV1 }
   | { readonly type: 'AUDIO_DISPOSITION'; readonly audio: WatchAudioDispositionV1 }
-  | { readonly type: 'CUE_OUTCOME_RECORDED'; readonly receipt: WatchCueOutcomeReceiptV1 };
+  | { readonly type: 'CUE_OUTCOME_RECORDED'; readonly receipt: WatchCueOutcomeReceiptV1 }
+  | { readonly type: 'PING'; readonly sequence: number };
