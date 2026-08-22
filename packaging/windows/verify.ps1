@@ -260,6 +260,7 @@ function Assert-EmptyPersonalState {
 
     Assert-Condition (@($Bootstrap.data.state.savedViews).Count -eq 0) "$Label Saved views are not empty."
     Assert-Condition (@($Bootstrap.data.state.selectedSections).Count -eq 0) "$Label selected Sections are not empty."
+    Assert-Condition (@($Bootstrap.data.state.desiredWatches).Count -eq 0) "$Label desired watches are not empty."
     Assert-Condition (@($Bootstrap.data.state.episodeHistory.items).Count -eq 0) "$Label local history is not empty."
     Assert-Condition ($null -eq $Bootstrap.data.state.currentFilters.value) "$Label current filters are not empty."
     Assert-Condition ([int]$Bootstrap.data.state.activeWatchCount -eq 0) "$Label active watch count is not zero."
@@ -463,6 +464,7 @@ try {
     Assert-Condition ($firstNonce -match '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') 'Local bootstrap session nonce is not a UUIDv4.'
     Assert-Condition (@($first.data.state.savedViews).Count -eq 0) 'First-run Saved views are not empty.'
     Assert-Condition (@($first.data.state.selectedSections).Count -eq 0) 'First-run selected Sections are not empty.'
+    Assert-Condition (@($first.data.state.desiredWatches).Count -eq 0) 'First-run desired watches are not empty.'
     Assert-Condition (@($first.data.state.episodeHistory.items).Count -eq 0) 'First-run local history is not empty.'
     Assert-Condition ($null -eq $first.data.state.currentFilters.value) 'First-run current filters are not empty.'
     Assert-Condition ([int]$first.data.state.activeWatchCount -eq 0) 'First-run active watch count is not zero.'
@@ -558,6 +560,15 @@ try {
         -ContentType 'application/json' -Body $confirmResetBody -TimeoutSec 10
     Assert-Condition ([int]$confirmedReset.protocolVersion -eq 1) 'Full Reset confirmation did not return protocol version 1.'
     Assert-Condition ([long]$confirmedReset.data.deletedSelectedSections -eq 1) 'Full Reset did not delete the synthetic selected Section.'
+    # Desired-watch intent has no HTTP write path, and a WS START only persists
+    # intent for a PUBLISHED Section, which this catalog-less smoke run has none
+    # of. The packaged run can therefore only pin the field's presence and its
+    # zero count; the full write -> restore -> reset -> empty path is pinned
+    # in-crate by the_watch_socket_persists_desired_intent_only_for_user_actions.
+    Assert-Condition (
+        ($null -ne $confirmedReset.data.deletedDesiredWatches) -and
+        ([long]$confirmedReset.data.deletedDesiredWatches -eq 0)
+    ) 'Full Reset did not report a desired-watch deletion count.'
     Assert-Condition (
         [long]$confirmedReset.data.stateRevision -gt [long]$second.data.state.stateRevision
     ) 'Full Reset did not advance the user-state revision.'

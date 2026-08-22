@@ -121,6 +121,16 @@ S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
        非阻断（PR5 一并做）：Windows 打包测试走完整路径——写入非空
        意图 → 重启恢复且 active=0 → reset 返回删除计数 → 再重启仍空；
        不能只断言空数组。
+       **路线改判（产品所有者 2026-08-22 裁定）：本硬门改走二选一里的
+       另一条——持久化 revision + tombstone + CAS**，不再走 fenced
+       sequencer。理由与实跑证据见
+       `docs/design/2026-08-22-desired-watch-revision-cas.md` §0：
+       fenced sequencer 隐含"单写者"，而产品模型是**所有标签页平权
+       编辑**；按注册序当 epoch 会造成"较旧但仍存活的连接的真实用户
+       操作被静默丢弃"，即活跃 watch 与持久意图反向错位（已复现）。
+       上面 e–i 五条执行语义是针对 fenced sequencer 写的，**随之作废**，
+       由该设计文档 §3 的 CAS 规则与 §7 的四反例映射取代；a–d 四个
+       反例本身继续有效。本硬门在 CAS 路线落地并复审通过前保持关闭。
 
 ## 通用
 
@@ -193,6 +203,10 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
 - [x] S2-PR1（host 二级 WS seam，74eac23）——**Codex 批准**（携带项 S2a-S2e）
 - [x] S2-PR2（validate 合同 + reserve_ws 租约）——经 PR2.1/PR2.2 修复后
       **Codex 批准 81c50b5**（B4 延后至 H4，规格冻结于 S2-D1）
+- [~] S2-PR5——第一版按 fenced sequencer 实现，自查三镜头实跑复现 2 项
+      P1（活跃/持久反向错位；重放 START 重新落库），**未提交即作废**；
+      路线改判为 revision/CAS，设计见
+      `2026-08-22-desired-watch-revision-cas.md`，实现重做中。
 - [x] S2-PR4（应用层心跳，56a9f70）——**Codex 批准**，清单第 6 条关闭
       （三项披露获追认；新增携带项 S2f/S2g 归 PR6；扫描 0 findings）
 - [x] S2-PR3（L1 期望监控表，da5be13）——驳回 2 P1 后经 PR3.1 修复
