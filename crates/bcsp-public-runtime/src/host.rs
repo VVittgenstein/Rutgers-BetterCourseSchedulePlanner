@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -12,7 +12,8 @@ use axum::http::header::{
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
-use axum::routing::{any, get};
+use axum::http::header::RETRY_AFTER;
+use axum::routing::{any, get, post};
 use bcsp_application::{
     ExtensionRequest, ExtensionResponse, ExtensionRoute, FixedRefreshPolicyProvider,
     OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError, OpenRuntimeSnapshotRegistry,
@@ -21,9 +22,10 @@ use bcsp_application::{
     serve_websocket,
 };
 use bcsp_contracts::{
-    ActiveWatchTargetV1, ApiErrorBody, ApiErrorCode, ApiErrorEnvelope, FilterRequestV1,
-    FilterSchemaV1, HttpSuccessEnvelope, SectionKey, SystemTraceIdSource, TraceIdSource,
-    WatchAlertV1, WatchPolicyV1, filter_schema_v1,
+    ActiveWatchTargetV1, ApiErrorBody, ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope,
+    FilterRequestV1, FilterSchemaV1, HttpSuccessEnvelope, SectionKey, SessionValidateRequestV1,
+    SessionValidateResponseV1, SystemTraceIdSource, TraceIdSource, WatchAlertV1, WatchPolicyV1,
+    filter_schema_v1,
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_operational_storage::OperationalStorage;
@@ -40,8 +42,10 @@ use crate::config::{
     PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS, PublicHostConfig, PublicHostConfigError,
 };
 use crate::product::create_public_product_routes;
+use crate::rate_limit::{IssuanceRateLimiter, RateDecision};
 use crate::session::{
-    DocumentSessionError, DocumentSessionRegistry, PublicLocale, negotiate_locale,
+    DocumentSessionError, DocumentSessionRegistry, PublicLocale, ReserveWsError, ValidateOutcome,
+    locale_for_tag, negotiate_locale,
 };
 use crate::status::{
     InMemoryPublicSchedulerStatus, PublicSchedulerStatusSource, PublicServiceInspector,
@@ -60,6 +64,13 @@ pub const PUBLIC_LIVENESS_PATH: &str = "/health/live";
 pub const PUBLIC_READINESS_PATH: &str = "/health/ready";
 pub const PUBLIC_METRICS_PATH: &str = "/metrics";
 pub const PUBLIC_WATCH_PATH: &str = "/api/v1/watch";
+pub const PUBLIC_SESSION_VALIDATE_PATH: &str = "/api/v1/session/validate";
+/// Route-level body cap for the validate endpoint (design contract: 4 KB
+/// under the 1 MB global cap; an oversized body is a malformed body -> 400).
+const MAX_VALIDATE_BODY_BYTES: usize = 4 * 1024;
+/// The reverse proxy (loopback-only bind guarantees one exists in front)
+/// appends the real client address as the LAST entry of this header.
+const FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
 pub static PUBLIC_RUNTIME_ROUTE_INVENTORY: &[ExtensionRoute] = &[
     ExtensionRoute::new(RequestMethod::Get, PUBLIC_LIVENESS_PATH),
     ExtensionRoute::new(RequestMethod::Head, PUBLIC_LIVENESS_PATH),
@@ -68,6 +79,7 @@ pub static PUBLIC_RUNTIME_ROUTE_INVENTORY: &[ExtensionRoute] = &[
     ExtensionRoute::new(RequestMethod::Get, PUBLIC_METRICS_PATH),
     ExtensionRoute::new(RequestMethod::Head, PUBLIC_METRICS_PATH),
     ExtensionRoute::new(RequestMethod::Get, PUBLIC_WATCH_PATH),
+    ExtensionRoute::new(RequestMethod::Post, PUBLIC_SESSION_VALIDATE_PATH),
 ];
 static PUBLIC_WEB_ASSETS: Dir<'_> = include_dir!("$OUT_DIR/web-assets");
 const PUBLIC_HTML: &str = "public.html";
@@ -76,6 +88,9 @@ const PUBLIC_HTML: &str = "public.html";
 struct PublicHostState {
     config: Arc<PublicHostConfig>,
     sessions: Arc<DocumentSessionRegistry>,
+    /// One shared bucket set for both anonymous issuance surfaces: document
+    /// GETs and the validate endpoint (design: same policy, same bucket).
+    issuance_limits: Arc<IssuanceRateLimiter>,
     service: Arc<dyn PublicServiceStateSource>,
     product_routes: Arc<dyn RouteExtension>,
     watch: Arc<SharedWatchSocket>,
@@ -231,6 +246,7 @@ impl PublicRuntime {
         let state = PublicHostState {
             config: Arc::new(config),
             sessions: sessions.clone(),
+            issuance_limits: Arc::new(IssuanceRateLimiter::default()),
             service,
             product_routes,
             watch: watch.clone(),
@@ -424,21 +440,30 @@ async fn wait_for_shutdown_signal() -> Result<(), PublicRuntimeError> {
 fn public_router(state: PublicHostState) -> Router {
     PUBLIC_RUNTIME_ROUTE_INVENTORY
         .iter()
-        .filter(|route| route.method() == &RequestMethod::Get)
-        .fold(Router::<PublicHostState>::new(), register_builtin_get_route)
+        .filter(|route| route.method() != &RequestMethod::Head)
+        .fold(Router::<PublicHostState>::new(), register_builtin_route)
         .fallback(any(handle_fallback))
         .with_state(state)
 }
 
-fn register_builtin_get_route(
+fn register_builtin_route(
     router: Router<PublicHostState>,
     route: &ExtensionRoute,
 ) -> Router<PublicHostState> {
-    match route.path() {
-        PUBLIC_LIVENESS_PATH => router.route(route.path(), get(handle_liveness)),
-        PUBLIC_READINESS_PATH => router.route(route.path(), get(handle_readiness)),
-        PUBLIC_METRICS_PATH => router.route(route.path(), get(handle_metrics)),
-        PUBLIC_WATCH_PATH => router.route(route.path(), get(handle_watch_socket)),
+    match (route.method(), route.path()) {
+        (RequestMethod::Get, PUBLIC_LIVENESS_PATH) => {
+            router.route(route.path(), get(handle_liveness))
+        }
+        (RequestMethod::Get, PUBLIC_READINESS_PATH) => {
+            router.route(route.path(), get(handle_readiness))
+        }
+        (RequestMethod::Get, PUBLIC_METRICS_PATH) => router.route(route.path(), get(handle_metrics)),
+        (RequestMethod::Get, PUBLIC_WATCH_PATH) => {
+            router.route(route.path(), get(handle_watch_socket))
+        }
+        (RequestMethod::Post, PUBLIC_SESSION_VALIDATE_PATH) => {
+            router.route(route.path(), post(handle_session_validate))
+        }
         _ => panic!("unknown public built-in route inventory entry"),
     }
 }
@@ -511,14 +536,39 @@ async fn handle_watch_socket(
     request: Request,
 ) -> Response {
     let headers = request.headers();
-    let session = strict_session_query(request.uri().query());
-    let authenticated = valid_host(headers, &state)
-        && header_text(headers, ORIGIN).as_deref() == Some(state.config.external_origin())
-        && requested_subprotocol(headers)
-        && session.is_some_and(|nonce| matches!(state.sessions.locale(nonce), Ok(Some(_))));
-    if !authenticated {
-        return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
+    // Status-code discipline (acceptance checklist item 4): a wrong
+    // authority is 421 everywhere, including the WebSocket handshake; every
+    // other admission failure stays 403.
+    if !valid_host(headers, &state) {
+        return api_error_response(
+            StatusCode::MISDIRECTED_REQUEST,
+            ApiErrorCode::MalformedRequest,
+        );
     }
+    let session = strict_session_query(request.uri().query());
+    let admitted = header_text(headers, ORIGIN).as_deref()
+        == Some(state.config.external_origin())
+        && requested_subprotocol(headers);
+    let Some(nonce) = session.filter(|_| admitted) else {
+        return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
+    };
+    // Atomic reserve_ws lease (design section 2b): validity + per-session
+    // connection cap + count increment + activity touch in one lock. The
+    // lease rides the upgrade closure and lives for the whole transport
+    // pump, so the session cannot be pruned or evicted mid-handshake, and
+    // any exit path (including task abort) releases the slot.
+    let lease = match state.sessions.reserve_ws(nonce) {
+        Ok(lease) => lease,
+        Err(ReserveWsError::UnknownSession | ReserveWsError::ConnectionLimit) => {
+            return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
+        }
+        Err(ReserveWsError::Unavailable) => {
+            return api_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ApiErrorCode::InternalError,
+            );
+        }
+    };
     let mut source = SystemTraceIdSource;
     let connection_id = source.next_trace_id();
     let extension: Arc<dyn WebSocketExtension> = state.watch;
@@ -526,7 +576,107 @@ async fn handle_watch_socket(
         .protocols([PUBLIC_WS_SUBPROTOCOL])
         .max_message_size(MAX_WEBSOCKET_MESSAGE_BYTES)
         .max_frame_size(MAX_WEBSOCKET_MESSAGE_BYTES)
-        .on_upgrade(move |socket| serve_websocket(socket, extension, connection_id))
+        .on_upgrade(move |socket| async move {
+            let _lease = lease;
+            serve_websocket(socket, extension, connection_id).await;
+        })
+}
+
+async fn handle_session_validate(
+    State(state): State<PublicHostState>,
+    request: Request,
+) -> Response {
+    let headers = request.headers().clone();
+    if !valid_host(&headers, &state) {
+        return api_error_response(
+            StatusCode::MISDIRECTED_REQUEST,
+            ApiErrorCode::MalformedRequest,
+        );
+    }
+    if header_text(&headers, ORIGIN).as_deref() != Some(state.config.external_origin()) {
+        return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
+    }
+    // Renewal is anonymous issuance: it draws from the same per-client
+    // bucket as document GETs, so neither surface bypasses the other.
+    if let RateDecision::Deny {
+        retry_after_seconds,
+    } = state
+        .issuance_limits
+        .check(&client_rate_key(&headers), Instant::now())
+    {
+        return rate_limited_response(retry_after_seconds);
+    }
+    let body = match to_bytes(request.into_body(), MAX_VALIDATE_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(_) => {
+            // Over the 4 KB route cap: a malformed body per the frozen
+            // contract (the status matrix has no 413 entry).
+            return api_error_response(StatusCode::BAD_REQUEST, ApiErrorCode::MalformedRequest);
+        }
+    };
+    let Ok(request_body) = serde_json::from_slice::<SessionValidateRequestV1>(&body) else {
+        return api_error_response(StatusCode::BAD_REQUEST, ApiErrorCode::MalformedRequest);
+    };
+    // Locale precedence mirrors document issuance: request body first,
+    // Accept-Language fallback (an unknown body tag falls through too).
+    let locale = request_body
+        .locale
+        .as_deref()
+        .and_then(locale_for_tag)
+        .unwrap_or_else(|| negotiate_locale(header_text(&headers, ACCEPT_LANGUAGE).as_deref()));
+    match state
+        .sessions
+        .validate_or_renew(&request_body.nonce, locale)
+    {
+        Ok(ValidateOutcome::Valid) => json_response(
+            StatusCode::OK,
+            &HttpSuccessEnvelope::new(SessionValidateResponseV1::valid()),
+        ),
+        Ok(ValidateOutcome::Renewed(nonce)) => json_response(
+            StatusCode::OK,
+            &HttpSuccessEnvelope::new(SessionValidateResponseV1::renewed(
+                nonce.as_str().to_owned(),
+            )),
+        ),
+        Err(DocumentSessionError::CapacityExhausted) => api_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ApiErrorCode::InternalError,
+        ),
+        Err(DocumentSessionError::Unavailable) => api_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ApiErrorCode::InternalError,
+        ),
+    }
+}
+
+/// Per-client key for the shared issuance buckets. The public listener is
+/// loopback-only behind a reverse proxy, which appends the real client
+/// address as the LAST `X-Forwarded-For` entry; anything a client forged
+/// earlier in the list is ignored. Without the header (direct local access)
+/// every caller shares one bucket.
+fn client_rate_key(headers: &HeaderMap) -> String {
+    header_text_name(headers, FORWARDED_FOR_HEADER)
+        .as_deref()
+        .and_then(|value| value.rsplit(',').next())
+        .map(str::trim)
+        .and_then(|candidate| candidate.parse::<std::net::IpAddr>().ok())
+        .map_or_else(|| "direct".to_owned(), |address| address.to_string())
+}
+
+fn rate_limited_response(retry_after_seconds: u32) -> Response {
+    let mut source = SystemTraceIdSource;
+    let envelope = ApiErrorEnvelope::new(
+        ApiErrorBody::new(ApiErrorCode::RateLimited, source.next_trace_id()).with_details(vec![
+            ApiErrorDetail::RetryAfterSeconds {
+                seconds: retry_after_seconds,
+            },
+        ]),
+    );
+    let mut response = json_response(StatusCode::TOO_MANY_REQUESTS, &envelope);
+    if let Ok(value) = HeaderValue::from_str(&retry_after_seconds.to_string()) {
+        response.headers_mut().insert(RETRY_AFTER, value);
+    }
+    response
 }
 
 async fn handle_fallback(State(state): State<PublicHostState>, request: Request) -> Response {
@@ -543,6 +693,16 @@ async fn handle_fallback(State(state): State<PublicHostState>, request: Request)
             return public_asset_response(asset_path);
         }
         if is_public_document_path(&path) {
+            // Document GETs issue a fresh session nonce, so they draw from
+            // the same per-client buckets as the validate endpoint.
+            if let RateDecision::Deny {
+                retry_after_seconds,
+            } = state
+                .issuance_limits
+                .check(&client_rate_key(request.headers()), Instant::now())
+            {
+                return rate_limited_response(retry_after_seconds);
+            }
             return document_response(&state, request.headers()).await;
         }
     }
@@ -618,7 +778,9 @@ async fn document_response(state: &PublicHostState, headers: &HeaderMap) -> Resp
     };
     let nonce = match state.sessions.issue(locale) {
         Ok(nonce) => nonce,
-        Err(DocumentSessionError::Unavailable) => {
+        Err(DocumentSessionError::Unavailable | DocumentSessionError::CapacityExhausted) => {
+            // Capacity exhaustion (every session leased) is a 503 by the
+            // frozen status contract -- never a silent eviction.
             return api_error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 ApiErrorCode::InternalError,
@@ -1186,6 +1348,7 @@ mod tests {
                 ExtensionRoute::new(RequestMethod::Get, PUBLIC_METRICS_PATH),
                 ExtensionRoute::new(RequestMethod::Head, PUBLIC_METRICS_PATH),
                 ExtensionRoute::new(RequestMethod::Get, PUBLIC_WATCH_PATH),
+                ExtensionRoute::new(RequestMethod::Post, PUBLIC_SESSION_VALIDATE_PATH),
             ]
         );
         for get_route in PUBLIC_RUNTIME_ROUTE_INVENTORY.iter().filter(|route| {
@@ -1233,6 +1396,7 @@ mod tests {
             let request = match route.method() {
                 RequestMethod::Get => client.get(request_url(&runtime, route.path())),
                 RequestMethod::Head => client.head(request_url(&runtime, route.path())),
+                RequestMethod::Post => client.post(request_url(&runtime, route.path())),
                 method => panic!("unexpected built-in method: {method:?}"),
             };
             let response = request
@@ -1943,8 +2107,19 @@ mod tests {
         origin: &str,
         protocol: Option<&str>,
     ) -> (String, TcpStream) {
+        websocket_handshake_with_host(address, path, TEST_AUTHORITY, origin, protocol).await
+    }
+
+    async fn websocket_handshake_with_host(
+        address: std::net::SocketAddr,
+        path: &str,
+        host: &str,
+        origin: &str,
+        protocol: Option<&str>,
+    ) -> (String, TcpStream) {
         let path = path.to_owned();
         let origin = origin.to_owned();
+        let host = host.to_owned();
         let protocol = protocol.map(str::to_owned);
         tokio::task::spawn_blocking(move || {
             let mut stream = TcpStream::connect(address).expect("WebSocket TCP connection");
@@ -1955,7 +2130,7 @@ mod tests {
                 .map(|value| format!("Sec-WebSocket-Protocol: {value}\r\n"))
                 .unwrap_or_default();
             let request = format!(
-                "GET {path} HTTP/1.1\r\nHost: {TEST_AUTHORITY}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{protocol}\r\n"
+                "GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{protocol}\r\n"
             );
             stream.write_all(request.as_bytes()).expect("write handshake");
             let mut response = Vec::new();
@@ -2088,5 +2263,208 @@ mod tests {
         assert_eq!(demand.total_active_watch_count(), 7);
         assert_eq!(demand.active_watch_count(&target_a), 1);
         assert_eq!(demand.active_watch_count(&target_b), 0);
+    }
+
+    async fn post_validate(
+        client: &Client,
+        runtime: &PublicRuntime,
+        host: &str,
+        origin: Option<&str>,
+        body: &str,
+    ) -> reqwest::Response {
+        let mut request = client
+            .post(request_url(runtime, PUBLIC_SESSION_VALIDATE_PATH))
+            .header(HOST.as_str(), host)
+            .header(CONTENT_TYPE.as_str(), "application/json")
+            .body(body.to_owned());
+        if let Some(origin) = origin {
+            request = request.header(ORIGIN.as_str(), origin);
+        }
+        request.send().await.expect("validate response")
+    }
+
+    #[tokio::test]
+    async fn session_validate_enforces_the_frozen_status_matrix() {
+        let (_temp, runtime, _store) = spawn_runtime(Arc::new(NoPublicProductRoutes)).await;
+        let client = client();
+        let (_, _, bootstrap) = document(&client, &runtime, "/", "en-US").await;
+        let nonce = bootstrap_data(&bootstrap)["sessionNonce"]
+            .as_str()
+            .expect("document nonce")
+            .to_owned();
+        let valid_body = format!(r#"{{"nonce":"{nonce}"}}"#);
+
+        // 421: authority mismatch outranks everything else.
+        let response = post_validate(
+            &client,
+            &runtime,
+            "evil.example.test",
+            Some(TEST_ORIGIN),
+            &valid_body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST);
+
+        // 403: wrong or missing Origin.
+        let response = post_validate(
+            &client,
+            &runtime,
+            TEST_AUTHORITY,
+            Some("https://evil.example.test"),
+            &valid_body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = post_validate(&client, &runtime, TEST_AUTHORITY, None, &valid_body).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // 400: malformed JSON, unknown fields, and an over-cap body.
+        for body in [
+            "not json",
+            r#"{"nonce":"x","extra":true}"#,
+            r#"{}"#,
+        ] {
+            let response =
+                post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), body).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+        }
+        let oversized = format!(
+            r#"{{"nonce":"{nonce}","locale":"{}"}}"#,
+            "x".repeat(5 * 1024),
+        );
+        let response =
+            post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), &oversized).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 200 {valid:true}: the registered nonce validates and is touched.
+        let response =
+            post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), &valid_body).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.expect("valid body");
+        assert_eq!(body["data"]["valid"], Value::Bool(true));
+        assert!(body["data"].get("renewed").is_none());
+
+        // 200 {renewed}: an unregistered (well-formed) nonce is atomically
+        // replaced, and the replacement immediately validates.
+        let stale = r#"{"nonce":"00000000-0000-4000-8000-00000000dead"}"#;
+        let response =
+            post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), stale).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.expect("renewed body");
+        let renewed = body["data"]["renewed"].as_str().expect("renewed nonce");
+        let renewed_body = format!(r#"{{"nonce":"{renewed}"}}"#);
+        let response = post_validate(
+            &client,
+            &runtime,
+            TEST_AUTHORITY,
+            Some(TEST_ORIGIN),
+            &renewed_body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.expect("renewed validates");
+        assert_eq!(body["data"]["valid"], Value::Bool(true));
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    #[tokio::test]
+    async fn issuance_rate_limit_is_one_bucket_across_documents_and_validate() {
+        let (_temp, runtime, _store) = spawn_runtime(Arc::new(NoPublicProductRoutes)).await;
+        let client = client();
+        let stale = r#"{"nonce":"00000000-0000-4000-8000-00000000dead"}"#;
+
+        // Drain the shared per-client bucket through the validate surface.
+        let mut denied = None;
+        for _ in 0..80 {
+            let response =
+                post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), stale).await;
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                denied = Some(response);
+                break;
+            }
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let denied = denied.expect("the issuance bucket must exhaust");
+        let retry_after = denied
+            .headers()
+            .get(RETRY_AFTER.as_str())
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u32>().ok())
+            .expect("Retry-After header");
+        assert!(retry_after >= 1);
+        let body: Value = denied.json().await.expect("denied body");
+        assert_eq!(body["error"]["code"], "RATE_LIMITED");
+
+        // Same bucket: the homepage document GET is now denied too, so the
+        // validate surface cannot be used to bypass the issuance limit (nor
+        // vice versa).
+        let response = client
+            .get(request_url(&runtime, "/"))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .send()
+            .await
+            .expect("document under exhausted bucket");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        runtime.shutdown().await.expect("clean shutdown");
+    }
+
+    #[tokio::test]
+    async fn websocket_wrong_authority_is_misdirected_and_leases_bound_connections() {
+        let (_temp, runtime, _store) = spawn_runtime(Arc::new(NoPublicProductRoutes)).await;
+        let client = client();
+        let (_, _, bootstrap) = document(&client, &runtime, "/", "en-US").await;
+        let nonce = bootstrap_data(&bootstrap)["sessionNonce"]
+            .as_str()
+            .expect("document nonce")
+            .to_owned();
+        let path = format!("/api/v1/watch?session={nonce}");
+
+        // Checklist item 4: a wrong authority on the WS handshake is 421.
+        let (response, _stream) = websocket_handshake_with_host(
+            runtime.address(),
+            &path,
+            "evil.example.test",
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(
+            response.starts_with("HTTP/1.1 421 "),
+            "wrong authority must be misdirected, got: {response}",
+        );
+
+        // The per-session lease caps connections: the cap accepts exactly
+        // MAX_WS_CONNECTIONS_PER_SESSION concurrent upgrades and rejects the
+        // next while the leases are held.
+        let mut held = Vec::new();
+        for ordinal in 0..crate::session::MAX_WS_CONNECTIONS_PER_SESSION {
+            let (response, stream) = websocket_handshake(
+                runtime.address(),
+                &path,
+                TEST_ORIGIN,
+                Some(PUBLIC_WS_SUBPROTOCOL),
+            )
+            .await;
+            assert!(
+                response.starts_with("HTTP/1.1 101 "),
+                "connection {ordinal} within the cap must upgrade, got: {response}",
+            );
+            held.push(stream);
+        }
+        let (over_cap, _stream) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(
+            over_cap.starts_with("HTTP/1.1 403 "),
+            "the connection over the per-session cap must be rejected, got: {over_cap}",
+        );
+
+        runtime.shutdown().await.expect("clean shutdown");
     }
 }

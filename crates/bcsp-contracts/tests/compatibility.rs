@@ -194,7 +194,8 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
                         )
                         || matches!(
                             field.type_ref.as_str(),
-                            "$optional:$primitive:rfc3339-timestamp"
+                            "$optional:$primitive:bool"
+                                | "$optional:$primitive:rfc3339-timestamp"
                                 | "$optional:$primitive:string"
                                 | "$optional:$primitive:u16"
                                 | "$optional:$primitive:u32"

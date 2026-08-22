@@ -67,6 +67,7 @@ define_api_error_codes! {
     UpstreamUnavailable => ("UPSTREAM_UNAVAILABLE", "error.upstream_unavailable"),
     AudioBlocked => ("AUDIO_BLOCKED", "error.audio_blocked"),
     InternalError => ("INTERNAL_ERROR", "error.internal"),
+    RateLimited => ("RATE_LIMITED", "error.rate_limited"),
 }
 
 pub trait StableErrorCode: Copy + Eq + Serialize {

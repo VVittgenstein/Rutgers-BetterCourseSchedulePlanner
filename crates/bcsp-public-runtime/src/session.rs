@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use bcsp_application::SessionNonce;
@@ -8,6 +8,10 @@ use thiserror::Error;
 
 const DOCUMENT_SESSION_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_DOCUMENT_SESSIONS: usize = 4_096;
+/// Per-session WebSocket connection cap enforced inside the reserve_ws
+/// lease (alert-delivery design v3.1, section 2b). The public client holds
+/// one watch socket per document; the headroom covers reconnect overlap.
+pub(crate) const MAX_WS_CONNECTIONS_PER_SESSION: u32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum PublicLocale {
@@ -60,6 +64,12 @@ pub fn negotiate_locale(accept_language: Option<&str>) -> PublicLocale {
     best.map_or(PublicLocale::EnUs, |(_, _, locale)| locale)
 }
 
+/// Resolves one explicit locale tag (the validate request body's `locale`
+/// field) with the same support boundaries as `Accept-Language` negotiation.
+pub(crate) fn locale_for_tag(value: &str) -> Option<PublicLocale> {
+    locale_for_range(value)
+}
+
 fn locale_for_range(value: &str) -> Option<PublicLocale> {
     let value = value.trim().to_ascii_lowercase();
     if value == "en" || value.starts_with("en-") {
@@ -90,6 +100,12 @@ fn parse_quality(value: &str) -> Option<u16> {
 struct DocumentSession {
     locale: PublicLocale,
     last_activity: Instant,
+    /// Live WebSocket connections holding a [`WsSessionLease`] on this
+    /// session. A leased session is pinned: it is never TTL-pruned and never
+    /// capacity-evicted while the count is non-zero, which is what keeps an
+    /// idle-HTTP page with a live socket from losing its nonce (design:
+    /// "WS 活动续期 nonce").
+    active_ws_count: u32,
 }
 
 pub(crate) struct DocumentSessionRegistry {
@@ -110,6 +126,56 @@ impl Default for DocumentSessionRegistry {
 pub(crate) enum DocumentSessionError {
     #[error("public document-session state is unavailable")]
     Unavailable,
+    /// Every registered session holds at least one live WebSocket lease, so
+    /// nothing is evictable. Design status contract: capacity exhaustion is
+    /// always 503 (429 stays reserved for rate limiting).
+    #[error("public document-session registry is at capacity with only leased sessions")]
+    CapacityExhausted,
+}
+
+/// Outcome of the atomic validate-or-renew primitive behind
+/// `POST /api/v1/session/validate`.
+pub(crate) enum ValidateOutcome {
+    /// The supplied nonce is registered; its activity window was touched.
+    Valid,
+    /// The supplied nonce is gone; a replacement was issued in the same
+    /// lock acquisition (sign-new-and-discard-old is atomic by construction:
+    /// the old key is absent, the new key is inserted before unlock).
+    Renewed(SessionNonce),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub(crate) enum ReserveWsError {
+    #[error("public document-session state is unavailable")]
+    Unavailable,
+    #[error("the session nonce is not registered")]
+    UnknownSession,
+    #[error("the session already holds the maximum number of WebSocket connections")]
+    ConnectionLimit,
+}
+
+/// RAII lease pairing one admitted WebSocket connection with its document
+/// session. Held across the whole `serve_websocket` pump; dropping it (any
+/// exit path, including task abort) decrements the session's connection
+/// count and touches its activity window.
+pub(crate) struct WsSessionLease {
+    registry: Arc<DocumentSessionRegistry>,
+    nonce: String,
+}
+
+impl Drop for WsSessionLease {
+    fn drop(&mut self) {
+        let Ok(mut sessions) = self.registry.sessions.lock() else {
+            // Poisoned lock: the registry is already reporting Unavailable
+            // on every path; nothing recoverable from a Drop.
+            tracing::error!(code = "PUBLIC_DOCUMENT_STATE_UNAVAILABLE");
+            return;
+        };
+        if let Some(session) = sessions.get_mut(&self.nonce) {
+            session.active_ws_count = session.active_ws_count.saturating_sub(1);
+            session.last_activity = Instant::now();
+        }
+    }
 }
 
 impl DocumentSessionRegistry {
@@ -124,17 +190,33 @@ impl DocumentSessionRegistry {
     ) -> Result<SessionNonce, DocumentSessionError> {
         let mut sessions = self.lock()?;
         prune(&mut sessions, now);
-        if sessions.len() >= self.maximum_sessions {
+        Self::admit_new_session(&mut sessions, self.maximum_sessions, locale, now)
+    }
+
+    /// Capacity discipline shared by issuance and renewal: at capacity the
+    /// least-recently-active UNLEASED session is evicted; when every session
+    /// is leased, admission fails closed with [`DocumentSessionError::CapacityExhausted`].
+    fn admit_new_session(
+        sessions: &mut BTreeMap<String, DocumentSession>,
+        maximum_sessions: usize,
+        locale: PublicLocale,
+        now: Instant,
+    ) -> Result<SessionNonce, DocumentSessionError> {
+        if sessions.len() >= maximum_sessions {
             let oldest = sessions
                 .iter()
+                .filter(|(_, session)| session.active_ws_count == 0)
                 .min_by(|(left_key, left), (right_key, right)| {
                     left.last_activity
                         .cmp(&right.last_activity)
                         .then_with(|| left_key.cmp(right_key))
                 })
                 .map(|(key, _)| key.clone());
-            if let Some(oldest) = oldest {
-                sessions.remove(&oldest);
+            match oldest {
+                Some(oldest) => {
+                    sessions.remove(&oldest);
+                }
+                None => return Err(DocumentSessionError::CapacityExhausted),
             }
         }
         let nonce = SessionNonce::generate();
@@ -143,9 +225,68 @@ impl DocumentSessionRegistry {
             DocumentSession {
                 locale,
                 last_activity: now,
+                active_ws_count: 0,
             },
         );
         Ok(nonce)
+    }
+
+    pub(crate) fn validate_or_renew(
+        &self,
+        nonce: &str,
+        locale: PublicLocale,
+    ) -> Result<ValidateOutcome, DocumentSessionError> {
+        self.validate_or_renew_at(nonce, locale, Instant::now())
+    }
+
+    fn validate_or_renew_at(
+        &self,
+        nonce: &str,
+        locale: PublicLocale,
+        now: Instant,
+    ) -> Result<ValidateOutcome, DocumentSessionError> {
+        let mut sessions = self.lock()?;
+        prune(&mut sessions, now);
+        if let Some(session) = sessions.get_mut(nonce) {
+            session.last_activity = now;
+            return Ok(ValidateOutcome::Valid);
+        }
+        Self::admit_new_session(&mut sessions, self.maximum_sessions, locale, now)
+            .map(ValidateOutcome::Renewed)
+    }
+
+    /// Atomic WebSocket admission (design: reserve_ws): validity check,
+    /// per-session connection cap, count increment, and activity touch in one
+    /// lock acquisition. The returned lease closes the check-then-upgrade
+    /// TOCTOU window -- a leased session cannot be pruned or evicted while
+    /// the upgrade completes.
+    pub(crate) fn reserve_ws(
+        self: &Arc<Self>,
+        nonce: &str,
+    ) -> Result<WsSessionLease, ReserveWsError> {
+        self.reserve_ws_at(nonce, Instant::now())
+    }
+
+    fn reserve_ws_at(
+        self: &Arc<Self>,
+        nonce: &str,
+        now: Instant,
+    ) -> Result<WsSessionLease, ReserveWsError> {
+        let mut sessions = self.lock().map_err(|_| ReserveWsError::Unavailable)?;
+        prune(&mut sessions, now);
+        let Some(session) = sessions.get_mut(nonce) else {
+            return Err(ReserveWsError::UnknownSession);
+        };
+        if session.active_ws_count >= MAX_WS_CONNECTIONS_PER_SESSION {
+            return Err(ReserveWsError::ConnectionLimit);
+        }
+        session.active_ws_count += 1;
+        session.last_activity = now;
+        drop(sessions);
+        Ok(WsSessionLease {
+            registry: Arc::clone(self),
+            nonce: nonce.to_owned(),
+        })
     }
 
     pub(crate) fn locale(&self, nonce: &str) -> Result<Option<PublicLocale>, DocumentSessionError> {
@@ -192,12 +333,25 @@ impl DocumentSessionRegistry {
             maximum_sessions,
         }
     }
+
+    #[cfg(test)]
+    fn active_ws_count(&self, nonce: &str) -> Option<u32> {
+        self.sessions
+            .lock()
+            .ok()
+            .and_then(|sessions| sessions.get(nonce).map(|session| session.active_ws_count))
+    }
 }
 
 fn prune(sessions: &mut BTreeMap<String, DocumentSession>, now: Instant) {
+    // Leased sessions never expire: a live WebSocket IS the activity. The
+    // lease's Drop touches last_activity, so the 2h window restarts when the
+    // last connection closes.
     sessions.retain(|_, session| {
-        now.checked_duration_since(session.last_activity)
-            .is_some_and(|age| age <= DOCUMENT_SESSION_TTL)
+        session.active_ws_count > 0
+            || now
+                .checked_duration_since(session.last_activity)
+                .is_some_and(|age| age <= DOCUMENT_SESSION_TTL)
     });
 }
 
@@ -255,6 +409,122 @@ mod tests {
                 .expect("expired lookup"),
             None
         );
+    }
+
+    #[test]
+    fn leased_sessions_survive_ttl_and_eviction_and_capacity_fails_closed() {
+        let registry = Arc::new(DocumentSessionRegistry::with_capacity(1));
+        let now = Instant::now();
+        let nonce = registry
+            .issue_at(PublicLocale::EnUs, now)
+            .expect("leased session");
+        let lease = registry
+            .reserve_ws_at(nonce.as_str(), now)
+            .expect("reserve one connection");
+
+        // TTL immunity: far past the 2h window the leased session survives.
+        let far_future = now + DOCUMENT_SESSION_TTL + Duration::from_secs(3_600);
+        assert_eq!(
+            registry
+                .locale_at(nonce.as_str(), far_future)
+                .expect("leased lookup"),
+            Some(PublicLocale::EnUs),
+            "a live WebSocket lease must keep the nonce alive",
+        );
+
+        // Capacity fails closed while everything is leased: 503, never a
+        // silent eviction of an active session.
+        assert_eq!(
+            registry.issue_at(PublicLocale::ZhCn, far_future),
+            Err(DocumentSessionError::CapacityExhausted),
+        );
+        assert!(matches!(
+            registry.validate_or_renew_at("unknown-nonce", PublicLocale::ZhCn, far_future),
+            Err(DocumentSessionError::CapacityExhausted),
+        ));
+
+        // Dropping the lease releases the pin: the session becomes evictable
+        // again and admission resumes.
+        drop(lease);
+        assert_eq!(registry.active_ws_count(nonce.as_str()), Some(0));
+        registry
+            .issue_at(PublicLocale::ZhCn, far_future + Duration::from_secs(1))
+            .expect("unleased sessions are evictable again");
+    }
+
+    #[test]
+    fn validate_touches_and_renew_signs_new_atomically() {
+        let registry = Arc::new(DocumentSessionRegistry::default());
+        let now = Instant::now();
+        let nonce = registry
+            .issue_at(PublicLocale::ZhCn, now)
+            .expect("issued session");
+
+        // Valid: the activity window slides.
+        let later = now + DOCUMENT_SESSION_TTL - Duration::from_secs(1);
+        assert!(matches!(
+            registry.validate_or_renew_at(nonce.as_str(), PublicLocale::ZhCn, later),
+            Ok(ValidateOutcome::Valid),
+        ));
+        assert_eq!(
+            registry
+                .locale_at(nonce.as_str(), later + DOCUMENT_SESSION_TTL - Duration::from_secs(1))
+                .expect("slid window"),
+            Some(PublicLocale::ZhCn),
+        );
+
+        // Renew: an unknown nonce yields a usable replacement; the supplied
+        // one stays invalid (nothing resurrects it).
+        let Ok(ValidateOutcome::Renewed(renewed)) =
+            registry.validate_or_renew_at("00000000-0000-4000-8000-00000000dead", PublicLocale::EnUs, later)
+        else {
+            panic!("unknown nonce must renew");
+        };
+        assert_eq!(
+            registry
+                .locale_at(renewed.as_str(), later)
+                .expect("renewed lookup"),
+            Some(PublicLocale::EnUs),
+        );
+        assert_eq!(
+            registry
+                .locale_at("00000000-0000-4000-8000-00000000dead", later)
+                .expect("stale lookup"),
+            None,
+        );
+    }
+
+    #[test]
+    fn reserve_ws_enforces_the_per_session_cap_and_unknown_nonces() {
+        let registry = Arc::new(DocumentSessionRegistry::default());
+        let now = Instant::now();
+        let nonce = registry
+            .issue_at(PublicLocale::EnUs, now)
+            .expect("issued session");
+
+        assert_eq!(
+            registry
+                .reserve_ws_at("00000000-0000-4000-8000-00000000dead", now)
+                .err(),
+            Some(ReserveWsError::UnknownSession),
+        );
+
+        let mut leases = Vec::new();
+        for _ in 0..MAX_WS_CONNECTIONS_PER_SESSION {
+            leases.push(
+                registry
+                    .reserve_ws_at(nonce.as_str(), now)
+                    .expect("within the connection cap"),
+            );
+        }
+        assert_eq!(
+            registry.reserve_ws_at(nonce.as_str(), now).err(),
+            Some(ReserveWsError::ConnectionLimit),
+        );
+        leases.pop();
+        registry
+            .reserve_ws_at(nonce.as_str(), now)
+            .expect("a dropped lease frees one slot");
     }
 
     #[test]

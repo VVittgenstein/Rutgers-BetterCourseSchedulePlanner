@@ -67,6 +67,13 @@
       "semantic": "canonical lowercase RFC 4122 random UUID v4; injected source"
     },
     {
+      "id": "session-nonce",
+      "wireType": "string",
+      "exactBytes": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "semantic": "public document-session nonce; canonical lowercase UUID v4"
+    },
+    {
       "id": "protocol-version",
       "wireType": "u16",
       "semantic": "integer 2 is the active query contract; integer 1 is accepted only for explicit legacy migration"
@@ -5329,7 +5336,42 @@
         "SEARCH_DATA_NOT_READY",
         "UPSTREAM_UNAVAILABLE",
         "AUDIO_BLOCKED",
-        "INTERNAL_ERROR"
+        "INTERNAL_ERROR",
+        "RATE_LIMITED"
+      ]
+    },
+    {
+      "id": "bcsp.session.validate-request.v1",
+      "direction": "CLIENT_TO_SERVER",
+      "unknownFields": "REJECT",
+      "fields": [
+        {
+          "name": "nonce",
+          "typeRef": "$scalar:session-nonce",
+          "required": true
+        },
+        {
+          "name": "locale",
+          "typeRef": "$optional:$primitive:string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bcsp.session.validate-response.v1",
+      "direction": "SERVER_TO_CLIENT",
+      "unknownFields": "IGNORE",
+      "fields": [
+        {
+          "name": "valid",
+          "typeRef": "$optional:$primitive:bool",
+          "required": true
+        },
+        {
+          "name": "renewed",
+          "typeRef": "$optional:$scalar:session-nonce",
+          "required": true
+        }
       ]
     },
     {

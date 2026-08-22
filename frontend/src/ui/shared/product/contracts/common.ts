@@ -46,7 +46,8 @@ export type ApiErrorCode =
   | 'SEARCH_DATA_NOT_READY'
   | 'UPSTREAM_UNAVAILABLE'
   | 'AUDIO_BLOCKED'
-  | 'INTERNAL_ERROR';
+  | 'INTERNAL_ERROR'
+  | 'RATE_LIMITED';
 
 export type ApiErrorDetail =
   | { readonly kind: 'INVALID_FIELD'; readonly field: string }

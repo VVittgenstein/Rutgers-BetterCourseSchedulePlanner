@@ -304,6 +304,13 @@ pub fn contract_manifest() -> ContractManifest {
                 Some("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"),
                 Some("canonical lowercase RFC 4122 random UUID v4; injected source"),
             ),
+            string_constraint(
+                "session-nonce",
+                Some(36),
+                None,
+                Some("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"),
+                Some("public document-session nonce; canonical lowercase UUID v4"),
+            ),
             ScalarConstraint {
                 id: "protocol-version".to_owned(),
                 wire_type: "u16".to_owned(),
@@ -2844,6 +2851,24 @@ pub fn contract_manifest() -> ContractManifest {
                 ],
             ),
             enum_schema("bcsp.error.shared-code.v1", error_codes),
+            schema(
+                "bcsp.session.validate-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("nonce", "$scalar:session-nonce"),
+                    ("locale", "$optional:$primitive:string"),
+                ],
+            ),
+            schema(
+                "bcsp.session.validate-response.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("valid", "$optional:$primitive:bool"),
+                    ("renewed", "$optional:$scalar:session-nonce"),
+                ],
+            ),
             schema(
                 "bcsp.http.request-envelope.v1",
                 SchemaDirection::ClientToServer,

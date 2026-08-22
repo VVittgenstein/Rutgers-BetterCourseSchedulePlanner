@@ -36,6 +36,20 @@ N1. 0005 升级测试增加 37 列 sentinel 值逐列前后比对；
 N2. 索引与 FK 定义的精确快照断言（非仅计数）；
 N3. FK 恢复失败的 fault seam 注入测试。
 
+## S2 各 PR 验收携带项（Codex S2-PR1 批准时明确，L2 slice 硬验收）
+
+S2a. `SecondaryWebSocketRoute::new` 路径校验：绝对、精确、无参数/通配符/
+     查询片段、不等于内建 `/api/v1/watch`（防维护任务启动后 Axum panic）；
+S2b. 本地集成测试直接钉死"未注入 → 404"（现有单测只钉到 fallback，
+     404 是本地 extension 的行为而非 seam trait 保证）；
+S2c. presence 上线前给共享 `serve_websocket` 补 WS 帧/消息大小帽
+     （公网 host 已有 64KB，共享 host 目前无帽）；
+S2d. presence 首帧 HELLO 承载 tab 身份：注册期限不受 Ping/Pong 延长；
+     非法/重复首帧 → 关闭连接且计数回滚，逐一钉死；
+S2e. `on_upgrade` pump 未纳入 `LoopbackServer` 所有权属基线既有
+     shutdown 债务——L2 流程以"presence count=0 → 等 60s"为序，不受
+     影响；记录在案，不新增义务。
+
 ## 通用
 
 9. 每个 PR 的验收段引用本清单对应条目编号；条目完成后在本文件勾除。

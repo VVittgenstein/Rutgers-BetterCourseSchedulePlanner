@@ -6,6 +6,7 @@
 mod config;
 mod host;
 mod product;
+mod rate_limit;
 mod session;
 mod status;
 mod watch;

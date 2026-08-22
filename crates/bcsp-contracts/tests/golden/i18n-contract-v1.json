@@ -60,6 +60,10 @@
     {
       "wire": "INTERNAL_ERROR",
       "messageKey": "error.internal"
+    },
+    {
+      "wire": "RATE_LIMITED",
+      "messageKey": "error.rate_limited"
     }
   ],
   "matchReasons": [
