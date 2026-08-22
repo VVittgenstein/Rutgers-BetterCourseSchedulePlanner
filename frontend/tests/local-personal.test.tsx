@@ -56,6 +56,7 @@ function localBootstrap(
       currentFilters: { stateRevision, revision: 1, value: null },
       savedViews: [],
       selectedSections: [],
+      desiredWatches: [],
       episodeHistory: { items: [], total: 0, offset: 0, limit: 50 },
       activeWatchCount: 0,
     },
@@ -274,6 +275,63 @@ describe('P7.2-004 local personal state', () => {
       },
       reason: { kind: 'UNKNOWN_FIELD', stableId: 'FLT-C10' },
     });
+  });
+
+  it('parses persisted desired watches and rejects legacy, live-watch, or overfull payloads', () => {
+    const policy = {
+      notificationMode: 'CONTINUOUS',
+      maxAudible: 5,
+      continuousDuration: { kind: 'UNLIMITED' },
+    } as const;
+    const desiredWatches = [
+      { section: { term: '92026', campus: 'NB', index: '10855' }, policy },
+      {
+        section: { term: '92026', campus: 'CM', index: '04312' },
+        policy: {
+          notificationMode: 'ONE_SHOT',
+          maxAudible: 3,
+          continuousDuration: { kind: 'FINITE', seconds: 600 },
+        },
+      },
+    ] as const;
+    const bootstrap = localBootstrap();
+    const withDesired = {
+      ...bootstrap,
+      state: { ...bootstrap.state, desiredWatches },
+    };
+
+    expect(parseLocalBootstrapData(withDesired).state.desiredWatches).toEqual(desiredWatches);
+
+    const legacyPayload = structuredClone(bootstrap) as unknown as { state: Record<string, unknown> };
+    delete legacyPayload.state.desiredWatches;
+    const liveWatchLeak = {
+      ...bootstrap,
+      state: {
+        ...bootstrap.state,
+        desiredWatches: [{ ...desiredWatches[0], activeWatchId: SESSION }],
+      },
+    };
+    const invalidPolicy = {
+      ...bootstrap,
+      state: {
+        ...bootstrap.state,
+        desiredWatches: [{ section: desiredWatches[0].section, policy: { ...policy, maxAudible: 0 } }],
+      },
+    };
+    const overfull = {
+      ...bootstrap,
+      state: {
+        ...bootstrap.state,
+        desiredWatches: Array.from({ length: 10 }, (_, ordinal) => ({
+          section: { term: '92026', campus: 'NB', index: String(10_000 + ordinal) },
+          policy,
+        })),
+      },
+    };
+
+    for (const rejected of [legacyPayload, liveWatchLeak, invalidPolicy, overfull]) {
+      expect(() => parseLocalBootstrapData(rejected)).toThrow(ProductBootstrapError);
+    }
   });
 
   it('accepts every frozen REVIEW_REQUIRED migration reason and rejects unknown reason codes', () => {

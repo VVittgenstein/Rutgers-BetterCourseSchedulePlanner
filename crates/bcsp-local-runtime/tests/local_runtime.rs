@@ -1748,6 +1748,7 @@ async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_
     assert_eq!(confirmed["deletedCurrentFilters"], 1);
     assert_eq!(confirmed["deletedSavedViews"], 1);
     assert_eq!(confirmed["deletedSelectedSections"], 1);
+    assert_eq!(confirmed["deletedDesiredWatches"], 0);
 
     let reused = raw_api(
         authority,
@@ -1794,6 +1795,12 @@ async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_
     );
     assert!(
         bootstrap["state"]["selectedSections"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        bootstrap["state"]["desiredWatches"]
             .as_array()
             .unwrap()
             .is_empty()

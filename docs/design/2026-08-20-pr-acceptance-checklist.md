@@ -84,6 +84,21 @@ S2-D1. **H4 全局/per-client WS 上限与背压（P2 加固）落地之前，
 S2-D2. XFF 最后一跳取值规则以"Caddy 为公网第一跳、默认覆写
        X-Forwarded-*"为前提冻结；若将来接入 CDN/`trusted_proxies`/
        其他代理链，必须重新冻结取值规则并跑真 Caddy 链路测试。
+S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
+       desired-watch 存储 API 为刻意无栅栏的 last-writer-wins（无
+       revision、无操作序号、无删除 tombstone），S2-PR3 本身**不可
+       独立部署/接线**——在本硬门关闭前，任何生产写入方不得接到
+       `upsert_desired_watch` / `remove_desired_watch`。关闭条件
+       （S2-PR5 硬验收，二选一已定为后者）：持久化操作序号+tombstone，
+       或 **fenced sequencer**——所有 desired-watch 变更（含清空它的
+       reset）在 watch-manager 的每命令临界区内按用户意图顺序同步
+       下发，覆盖跨连接、leader/retry epoch 与 reset barrier。四个
+       反例必须逐一钉死：
+       a) STOP 后延迟旧 START 不得重插已停意图；
+       b) 新 START 后延迟旧 STOP 不得删除新意图；
+       c) 旧 policy 不得覆盖新 policy；
+       d) reset 升代后，前代等待中的 upsert 不得重新落库。
+       调用方合同已写入 store.rs / lib.rs 文档（SEQUENCING CONTRACT）。
 
 ## 通用
 
@@ -123,6 +138,27 @@ N6（原非阻断负 gap）：episode 全部时间边统一 `(0..=120s).contains
     活跃续用负 gap 重新锚定；重启 newest 来自未来则拒绝续用（LKG 地板
     仍设防）。单元钉死。
 
+## S2-PR3 复审阻断修复（Codex 2026-08-22 驳回 da5be13 的 2 项 P1）
+
+B1. bootstrap 合同断裂（PR3.1 修复）：Rust 无条件序列化
+    `desiredWatches`，而前端 `hasKeys` 为键集全等、snapshot 校验器仍是
+    旧字段表——新 payload 即使空列表也 BOOTSTRAP_INVALID。修复：TS
+    `DesiredWatch` 类型 + `desiredWatches` 严格校验（元素级
+    section/policy 全等键校验 + ≤9 帽）、三处 bootstrap fixtures
+    （local-personal / product-bootstrap / local-bootstrap-fixture.mjs）、
+    真实新 payload 解析测试（接受非空列表；拒绝旧形状缺键 / 元素混入
+    live-watch 键 / 非法 policy / 10 项超帽）；同步非阻断漂移
+    `PersonalResetResult.deletedDesiredWatches`。`npm run verify` 此前
+    漏检的原因（fixtures 全为旧 payload）由新解析测试补上。HTTP 层
+    对称断言（local_runtime.rs reset/bootstrap 处 `deletedDesiredWatches`
+    与 `desiredWatches`）已随 PR3.1 补齐；打包 E2E
+    `packaging/windows/verify.ps1` 的同型对称断言并入 S2-PR5（随 S2-D3
+    测试工作一并做）。
+B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S2-D3——
+    本提交标记为不可独立接线，fenced sequencer 及四反例测试列为
+    S2-PR5 硬验收；PR3.1 将调用方 SEQUENCING CONTRACT 写入
+    store.rs/lib.rs 文档。
+
 ## 进度
 
 - [x] S1-PR1（gate 决策核心，8e83ee4）——**Codex 已批准 v5.1 迟滞追认**
@@ -132,3 +168,8 @@ N6（原非阻断负 gap）：episode 全部时间边统一 `(0..=120s).contains
 - [x] S1-PR3.2（8384d45）——**Codex 批准**（B5b + 负 gap；扫描 0 findings）
 - [x] S1-PR4（前端展示，bef6d24）——**Codex 批准，S1 全量收口**
       （扫描 0 findings；发布基线含 bef6d24 即解除"PR3 不独立部署"约束）。
+- [x] S2-PR1（host 二级 WS seam，74eac23）——**Codex 批准**（携带项 S2a-S2e）
+- [x] S2-PR2（validate 合同 + reserve_ws 租约）——经 PR2.1/PR2.2 修复后
+      **Codex 批准 81c50b5**（B4 延后至 H4，规格冻结于 S2-D1）
+- [ ] S2-PR3（L1 期望监控表，da5be13）——Codex 驳回 2 P1，PR3.1 修复中
+      （B1 前端合同；B2 → S2-D3 接线硬门）

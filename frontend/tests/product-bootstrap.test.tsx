@@ -54,6 +54,7 @@ function localBootstrapEnvelope(sessionNonce: string): unknown {
         currentFilters: { stateRevision: 0, revision: 0, value: null },
         savedViews: [],
         selectedSections: [],
+        desiredWatches: [],
         episodeHistory: { items: [], total: 0, offset: 0, limit: 50 },
         activeWatchCount: 0,
       },

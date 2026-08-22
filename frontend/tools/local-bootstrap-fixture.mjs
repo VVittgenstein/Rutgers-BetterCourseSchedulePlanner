@@ -29,6 +29,7 @@ export function localBootstrapFixture(overrides = {}) {
       },
       savedViews: overrides.savedViews ?? [],
       selectedSections: overrides.selectedSections ?? [],
+      desiredWatches: overrides.desiredWatches ?? [],
       episodeHistory: overrides.episodeHistory ?? {
         items: [],
         total: 0,

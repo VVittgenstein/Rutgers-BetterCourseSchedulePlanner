@@ -4,7 +4,10 @@
 //! database. It persists desired-watch INTENT (section + policy, written on user START and
 //! removed on explicit STOP) so a reload can re-arm monitoring, but it deliberately has no
 //! representation for a browser connection, a live watch identifier, or ring consumption --
-//! restoring stored state never resurrects a live watch, it only re-arms intent.
+//! restoring stored state never resurrects a live watch, it only re-arms intent. The
+//! desired-watch mutation APIs are unfenced last-writer-wins; the sequencing contract on
+//! [`PersonalStateStore::upsert_desired_watch`] binds every writer, and no production writer
+//! exists yet (wiring is gated on the watch-manager fence, S2-PR5).
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]

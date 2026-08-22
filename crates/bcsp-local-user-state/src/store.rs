@@ -194,13 +194,22 @@ impl PersonalStateStore {
         load_desired_watches(&self.connection)
     }
 
-    /// Idempotently records desired-watch intent (user START). Like the
-    /// episode-history writers -- and unlike the HTTP selection mutations --
-    /// this is NOT revision-guarded: the writer is the local watch socket's
-    /// persistence hook, which has no user-state revision in hand, and an
-    /// identical re-arm (reconnect, auto-START on load) must be a no-op
-    /// rather than a conflict. The nine-watch cap applies to NEW sections
-    /// only; a policy update of an existing intent always succeeds.
+    /// Idempotently records desired-watch intent (user START). The
+    /// nine-watch cap applies to NEW sections only; a policy update of an
+    /// existing intent always succeeds.
+    ///
+    /// SEQUENCING CONTRACT: this store is deliberately unfenced -- no
+    /// revision guard, no operation sequence, no delete tombstone; each call
+    /// is last-writer-wins. The caller therefore MUST issue every mutation
+    /// of this table (upsert, remove, and the reset that clears it) from ONE
+    /// serialized fence -- the watch manager's per-command critical section
+    /// -- so that user-intent order is the issue order. In particular the
+    /// fence must make these interleavings impossible: a delayed START
+    /// landing after its STOP (re-inserting stopped intent), a delayed STOP
+    /// landing after a newer START (deleting live intent), an older policy
+    /// overwriting a newer one, and a pre-reset write landing after the
+    /// reset barrier. No production writer may be wired to this API until
+    /// that fence exists and is pinned by tests (S2-PR5 hard gate).
     pub fn upsert_desired_watch(
         &mut self,
         section: &SectionKey,
@@ -267,7 +276,9 @@ impl PersonalStateStore {
     }
 
     /// Removes desired-watch intent (explicit user STOP). Returns whether a
-    /// row existed. Idempotent for the same reason as the upsert.
+    /// row existed. Idempotent, unfenced last-writer-wins like the upsert:
+    /// the same SEQUENCING CONTRACT (see [`Self::upsert_desired_watch`])
+    /// binds every caller.
     pub fn remove_desired_watch(&mut self, section: &SectionKey) -> PersonalStateResult<bool> {
         let removed = self.connection.execute(
             "DELETE FROM personal_desired_watches_v1

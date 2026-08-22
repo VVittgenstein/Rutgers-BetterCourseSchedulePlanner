@@ -165,12 +165,18 @@ export interface HistoryPage<T> {
   readonly limit: number;
 }
 
+export interface DesiredWatch {
+  readonly section: SectionKey;
+  readonly policy: WatchPolicyV1;
+}
+
 export interface PersonalStateSnapshot {
   readonly stateRevision: number;
   readonly settings: StoredSettings;
   readonly currentFilters: StoredCurrentFilters;
   readonly savedViews: readonly SavedViewDefinition[];
   readonly selectedSections: readonly SectionKey[];
+  readonly desiredWatches: readonly DesiredWatch[];
   readonly episodeHistory: HistoryPage<EpisodeHistorySummary>;
   readonly activeWatchCount: number;
 }
@@ -247,6 +253,7 @@ export interface PersonalResetResult {
   readonly deletedCurrentFilters: number;
   readonly deletedSavedViews: number;
   readonly deletedSelectedSections: number;
+  readonly deletedDesiredWatches: number;
   readonly deletedEpisodeSummaries: number;
   readonly deletedEpisodeActions: number;
 }
@@ -479,6 +486,13 @@ function isHistorySummary(value: unknown): value is EpisodeHistorySummary {
     && isNonnegativeInteger(value.actionCount);
 }
 
+function isDesiredWatch(value: unknown): value is DesiredWatch {
+  return isRecord(value)
+    && hasKeys(value, ['section', 'policy'])
+    && isSectionKey(value.section)
+    && isWatchPolicy(value.policy);
+}
+
 function isHistoryPage(value: unknown): value is HistoryPage<EpisodeHistorySummary> {
   return isRecord(value)
     && hasKeys(value, ['items', 'total', 'offset', 'limit'])
@@ -497,6 +511,7 @@ function isPersonalStateSnapshot(value: unknown): value is PersonalStateSnapshot
       'currentFilters',
       'savedViews',
       'selectedSections',
+      'desiredWatches',
       'episodeHistory',
       'activeWatchCount',
     ])
@@ -507,6 +522,9 @@ function isPersonalStateSnapshot(value: unknown): value is PersonalStateSnapshot
     && value.savedViews.every(isSavedViewDefinition)
     && Array.isArray(value.selectedSections)
     && value.selectedSections.every(isSectionKey)
+    && Array.isArray(value.desiredWatches)
+    && value.desiredWatches.length <= 9
+    && value.desiredWatches.every(isDesiredWatch)
     && isHistoryPage(value.episodeHistory)
     && isNonnegativeInteger(value.activeWatchCount)
     && value.activeWatchCount <= 9;
