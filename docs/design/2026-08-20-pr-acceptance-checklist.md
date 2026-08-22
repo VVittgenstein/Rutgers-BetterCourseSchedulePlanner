@@ -19,8 +19,9 @@
    容量耗尽一律 `503`、`429` 专用于限流（文档已统一，代码对齐）。
 5. Readiness 的第②环必须验证**当前 connection/retry epoch 下**
    `desired(policy) == armed(policy)`——不是"连接活着"就绿。
-6. app 层心跳**不得依赖 hidden-tab 会被节流的客户端定时器**：服务端驱动
-   PING（WS 消息事件在后台标签页照常触发），页面在消息处理器内被动 ACK。
+6. ~~app 层心跳**不得依赖 hidden-tab 会被节流的客户端定时器**：服务端~~
+   ~~驱动 PING，页面在消息处理器内被动 ACK。~~ **S2-PR4 已关闭
+   （56a9f70，Codex 批准）**；25s Readiness 判定仍属 PR6。
 7. leader tab 接管后从**持久期望监控表**重水合（不信任 BroadcastChannel
    缓存）；BroadcastChannel 消息带 revision/ACK，或明确持久表为唯一真相。
 
@@ -28,7 +29,8 @@
 
 8. H4 出站定界**不得照抄"256 帧"**：64 KiB 帧上限下 256 帧 ≈ 16 MiB/
    socket；按**字节预算**（如 1 MiB/socket）+ 全局内存预算定界，并附
-   慢消费者压测。
+   慢消费者压测。**同属 H4（Codex S2-PR4 批准时确认，非该差分引入）**：
+   既有 pump 的出站通道无界且无 write timeout。
 
 ## 非阻断加固（Codex S1-PR2 复核建议，择机补做）
 
@@ -49,6 +51,13 @@ S2d. presence 首帧 HELLO 承载 tab 身份：注册期限不受 Ping/Pong 延�
 S2e. `on_upgrade` pump 未纳入 `LoopbackServer` 所有权属基线既有
      shutdown 债务——L2 流程以"presence count=0 → 等 60s"为序，不受
      影响；记录在案，不新增义务。
+S2f（Codex S2-PR4 批准时新增，**PR6 硬验收**）：`WatchClient` 对 PING
+     目前是浅层运行时解码。把 PING 计入绿色 Readiness 之前，必须要求
+     `sequence` 为**正的 safe integer**，否则可信服务端的异常帧会造成
+     假 contact。PR4 不回修。
+S2g（同轮）：PING 的 10–10.25s 只是**正常 250ms ticker 下的入队节拍**；
+     传输阻塞时实际到达可更晚——PR6 必须按 **25s 上界**降级，不得假设
+     节拍即到达。
 
 ## S2 部署硬门（Codex S2-PR2 复审裁定，整批部署阻断）
 
@@ -184,7 +193,8 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
 - [x] S2-PR1（host 二级 WS seam，74eac23）——**Codex 批准**（携带项 S2a-S2e）
 - [x] S2-PR2（validate 合同 + reserve_ws 租约）——经 PR2.1/PR2.2 修复后
       **Codex 批准 81c50b5**（B4 延后至 H4，规格冻结于 S2-D1）
-- [ ] S2-PR4（应用层心跳，56a9f70）——实现清单第 6 条，待复审
+- [x] S2-PR4（应用层心跳，56a9f70）——**Codex 批准**，清单第 6 条关闭
+      （三项披露获追认；新增携带项 S2f/S2g 归 PR6；扫描 0 findings）
 - [x] S2-PR3（L1 期望监控表，da5be13）——驳回 2 P1 后经 PR3.1 修复
       **Codex 批准 8103168**（B1 关闭；B2 → S2-D3 接线硬门 + PR5
       执行语义 e-i；扫描 0 findings）
