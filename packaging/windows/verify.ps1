@@ -560,11 +560,13 @@ try {
         -ContentType 'application/json' -Body $confirmResetBody -TimeoutSec 10
     Assert-Condition ([int]$confirmedReset.protocolVersion -eq 1) 'Full Reset confirmation did not return protocol version 1.'
     Assert-Condition ([long]$confirmedReset.data.deletedSelectedSections -eq 1) 'Full Reset did not delete the synthetic selected Section.'
-    # Desired-watch intent has no HTTP write path, and a WS START only persists
-    # intent for a PUBLISHED Section, which this catalog-less smoke run has none
-    # of. The packaged run can therefore only pin the field's presence and its
-    # zero count; the full write -> restore -> reset -> empty path is pinned
-    # in-crate by the_watch_socket_persists_desired_intent_only_for_user_actions.
+    # Presence plus value, not value alone: [long]$null is 0, so a field that
+    # exists but is null would slip past the count check. (A field that is
+    # absent entirely already throws under Set-StrictMode -Version Latest.)
+    # This still only covers the empty state. The non-empty path -- production
+    # writer commits intent, ordinary restart restores it, Full Reset reports
+    # one deletion, next restart is empty -- needs a desired-watch write path
+    # this catalog-less smoke run does not yet have, and remains OPEN.
     Assert-Condition (
         ($null -ne $confirmedReset.data.deletedDesiredWatches) -and
         ([long]$confirmedReset.data.deletedDesiredWatches -eq 0)

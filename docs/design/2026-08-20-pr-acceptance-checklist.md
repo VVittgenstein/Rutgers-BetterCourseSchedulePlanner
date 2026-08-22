@@ -128,9 +128,28 @@ S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
        fenced sequencer 隐含"单写者"，而产品模型是**所有标签页平权
        编辑**；按注册序当 epoch 会造成"较旧但仍存活的连接的真实用户
        操作被静默丢弃"，即活跃 watch 与持久意图反向错位（已复现）。
-       上面 e–i 五条执行语义是针对 fenced sequencer 写的，**随之作废**，
-       由该设计文档 §3 的 CAS 规则与 §7 的四反例映射取代；a–d 四个
-       反例本身继续有效。本硬门在 CAS 路线落地并复审通过前保持关闭。
+       a–d 四反例继续有效。e–i **不整体作废**（Codex 复审 e53f525 时
+       更正 v1 的说法）：**f（旧命令必须实际迟到）与 i（首个生产调用方
+       与全部反例测试同 PR）继续有效**；**h 改写为"reset 进入同一
+       authority transition barrier"**；e 与 g 改写——新旧由客户端携带的
+       `(generation, revision)` 经 CAS 判定，CAS 在 socket 锁之外的
+       authority actor 内执行。逐条映射见设计文档 §9。
+       **v1 设计稿被 Codex 驳回的 5 组阻断已在 v2 闭合**：① tombstone
+       淘汰重新引入 ABA（改为保留到 Full Reset，256 仅作告警阈值）+
+       冲突后必须终止而非改号重发；② CAS 顺序未延伸到 manager 与广播
+       （新增单一 authority transition actor，reset 与 0↔1 连接转换同入
+       其 inbox，另加三处应用点拒绝倒退元组）；③ 现有 WatchManager 无法
+       表示服务端统一拥有的监控（引入 connection-independent 逻辑 owner
+       + 常驻 reconciler，arm 失败不回滚 desired）；④ mutation/bootstrap/
+       reset 合同闭合（mutationId 绑定指纹与三态幂等、generation 为
+       bootstrap 顶层必填、轮换广播完整 snapshot、desired=false 免准入、
+       数值收敛到 MAX_SAFE_INTEGER）；⑤ 公网边界（desired 命令/事件/
+       authority 全部移入本地专有 crate，走 S2-PR1 的 SecondaryWebSocket
+       接缝，公网当未知命令拒绝）。新增验收项 N-a..N-g 见设计文档 §9。
+       本硬门在 CAS 路线落地并复审通过前保持关闭。
+       **打包 E2E 非空路径门保持开放**（Codex 本轮明确）：待本地专有
+       desired 路由落地后，打包冒烟可直连该路由提交一次 CAS 再走
+       写入 → 重启恢复 → reset 删除计数 → 再重启为空。
 
 ## 通用
 
@@ -205,8 +224,9 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
       **Codex 批准 81c50b5**（B4 延后至 H4，规格冻结于 S2-D1）
 - [~] S2-PR5——第一版按 fenced sequencer 实现，自查三镜头实跑复现 2 项
       P1（活跃/持久反向错位；重放 START 重新落库），**未提交即作废**；
-      路线改判为 revision/CAS，设计见
-      `2026-08-22-desired-watch-revision-cas.md`，实现重做中。
+      路线改判为 revision/CAS。设计 v1（e53f525）被 Codex 驳回 5 组
+      设计阻断，**v2 已逐条闭合**，见
+      `2026-08-22-desired-watch-revision-cas.md`；待设计复审通过后实现。
 - [x] S2-PR4（应用层心跳，56a9f70）——**Codex 批准**，清单第 6 条关闭
       （三项披露获追认；新增携带项 S2f/S2g 归 PR6；扫描 0 findings）
 - [x] S2-PR3（L1 期望监控表，da5be13）——驳回 2 P1 后经 PR3.1 修复
