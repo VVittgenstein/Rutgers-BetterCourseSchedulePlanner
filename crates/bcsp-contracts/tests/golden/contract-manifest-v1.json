@@ -5352,25 +5352,36 @@
         },
         {
           "name": "locale",
-          "typeRef": "$optional:$primitive:string",
-          "required": true
+          "typeRef": "$primitive:string",
+          "required": false
         }
       ]
     },
     {
       "id": "bcsp.session.validate-response.v1",
       "direction": "SERVER_TO_CLIENT",
-      "unknownFields": "IGNORE",
-      "fields": [
+      "unknownFields": "REJECT",
+      "fields": [],
+      "variants": [
         {
-          "name": "valid",
-          "typeRef": "$optional:$primitive:bool",
-          "required": true
+          "tagValue": "VALID",
+          "fields": [
+            {
+              "name": "valid",
+              "typeRef": "$primitive:bool",
+              "required": true
+            }
+          ]
         },
         {
-          "name": "renewed",
-          "typeRef": "$optional:$scalar:session-nonce",
-          "required": true
+          "tagValue": "RENEWED",
+          "fields": [
+            {
+              "name": "renewed",
+              "typeRef": "$scalar:session-nonce",
+              "required": true
+            }
+          ]
         }
       ]
     },

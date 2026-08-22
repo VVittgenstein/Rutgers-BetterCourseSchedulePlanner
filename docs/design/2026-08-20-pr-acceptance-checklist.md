@@ -50,6 +50,17 @@ S2e. `on_upgrade` pump 未纳入 `LoopbackServer` 所有权属基线既有
      shutdown 债务——L2 流程以"presence count=0 → 等 60s"为序，不受
      影响；记录在案，不新增义务。
 
+## S2 部署硬门（Codex S2-PR2 复审裁定，整批部署阻断）
+
+S2-D1. **H4 全局/per-client WS 上限与背压（P2 加固）落地之前，
+       `feat/s2-alert-delivery` 分支不得部署**。理由：租约钉死 +
+       validate 匿名签发面下，全局签发预算只能限速、不能阻止最终
+       填满 registry；只有 H4 的 WS 全局上限能阻止攻击者把 4096 个
+       会话全部钉为不可淘汰（首页/validate 永久 503）。
+S2-D2. XFF 最后一跳取值规则以"Caddy 为公网第一跳、默认覆写
+       X-Forwarded-*"为前提冻结；若将来接入 CDN/`trusted_proxies`/
+       其他代理链，必须重新冻结取值规则并跑真 Caddy 链路测试。
+
 ## 通用
 
 9. 每个 PR 的验收段引用本清单对应条目编号；条目完成后在本文件勾除。

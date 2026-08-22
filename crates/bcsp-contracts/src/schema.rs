@@ -2851,24 +2851,35 @@ pub fn contract_manifest() -> ContractManifest {
                 ],
             ),
             enum_schema("bcsp.error.shared-code.v1", error_codes),
-            schema(
+            schema_with_optional_fields(
                 "bcsp.session.validate-request.v1",
                 SchemaDirection::ClientToServer,
                 UnknownFieldPolicy::Reject,
-                &[
-                    ("nonce", "$scalar:session-nonce"),
-                    ("locale", "$optional:$primitive:string"),
-                ],
+                &[("nonce", "$scalar:session-nonce")],
+                // May be OMITTED entirely; falls back to Accept-Language.
+                &[("locale", "$primitive:string")],
             ),
-            schema(
-                "bcsp.session.validate-response.v1",
-                SchemaDirection::ServerToClient,
-                UnknownFieldPolicy::Ignore,
-                &[
-                    ("valid", "$optional:$primitive:bool"),
-                    ("renewed", "$optional:$scalar:session-nonce"),
+            // Untagged exact one-of (no discriminator field): the shape is
+            // identified by its single key, and the decoder rejects dual-key
+            // objects and valid=false.
+            ContractSchema {
+                id: "bcsp.session.validate-response.v1".to_owned(),
+                direction: SchemaDirection::ServerToClient,
+                unknown_fields: UnknownFieldPolicy::Reject,
+                fields: Vec::new(),
+                enum_values: Vec::new(),
+                discriminator: None,
+                variants: vec![
+                    ContractVariant {
+                        tag_value: "VALID".to_owned(),
+                        fields: vec![field("valid", "$primitive:bool")],
+                    },
+                    ContractVariant {
+                        tag_value: "RENEWED".to_owned(),
+                        fields: vec![field("renewed", "$scalar:session-nonce")],
+                    },
                 ],
-            ),
+            },
             schema(
                 "bcsp.http.request-envelope.v1",
                 SchemaDirection::ClientToServer,

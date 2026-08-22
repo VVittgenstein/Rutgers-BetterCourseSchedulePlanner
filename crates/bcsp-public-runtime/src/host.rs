@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -559,7 +559,13 @@ async fn handle_watch_socket(
     // any exit path (including task abort) releases the slot.
     let lease = match state.sessions.reserve_ws(nonce) {
         Ok(lease) => lease,
-        Err(ReserveWsError::UnknownSession | ReserveWsError::ConnectionLimit) => {
+        Err(ReserveWsError::UnknownSession) => {
+            return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
+        }
+        Err(ReserveWsError::ConnectionLimit) => {
+            // The browser cannot see this status; the server-side record is
+            // the observable signal for over-cap sessions.
+            tracing::warn!(code = "PUBLIC_WS_SESSION_CONNECTION_LIMIT");
             return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
         }
         Err(ReserveWsError::Unavailable) => {
@@ -600,9 +606,7 @@ async fn handle_session_validate(
     // bucket as document GETs, so neither surface bypasses the other.
     if let RateDecision::Deny {
         retry_after_seconds,
-    } = state
-        .issuance_limits
-        .check(&client_rate_key(&headers), Instant::now())
+    } = state.issuance_limits.check(&client_rate_key(&headers))
     {
         return rate_limited_response(retry_after_seconds);
     }
@@ -617,6 +621,11 @@ async fn handle_session_validate(
     let Ok(request_body) = serde_json::from_slice::<SessionValidateRequestV1>(&body) else {
         return api_error_response(StatusCode::BAD_REQUEST, ApiErrorCode::MalformedRequest);
     };
+    // The manifest's session-nonce scalar is enforced at runtime too: a
+    // non-canonical nonce is a malformed body, never a renewable one.
+    if !bcsp_contracts::is_canonical_session_nonce(&request_body.nonce) {
+        return api_error_response(StatusCode::BAD_REQUEST, ApiErrorCode::MalformedRequest);
+    }
     // Locale precedence mirrors document issuance: request body first,
     // Accept-Language fallback (an unknown body tag falls through too).
     let locale = request_body
@@ -650,17 +659,36 @@ async fn handle_session_validate(
 }
 
 /// Per-client key for the shared issuance buckets. The public listener is
-/// loopback-only behind a reverse proxy, which appends the real client
-/// address as the LAST `X-Forwarded-For` entry; anything a client forged
-/// earlier in the list is ignored. Without the header (direct local access)
-/// every caller shares one bucket.
+/// loopback-only behind the first-hop reverse proxy (Caddy overwrites
+/// client-supplied `X-Forwarded-*` values), so the LAST `X-Forwarded-For`
+/// entry is the true client address; anything forged earlier in the list is
+/// ignored. If a CDN or additional proxy hop is ever introduced, this rule
+/// must be re-frozen and re-tested against the real chain. Without the
+/// header (direct local access) every caller shares one bucket.
+///
+/// IPv6 clients are aggregated to their /64 prefix -- a single routed /64
+/// must not multiply its allowance by rotating interface identifiers.
+/// IPv4-mapped IPv6 addresses key as their embedded IPv4 address.
 fn client_rate_key(headers: &HeaderMap) -> String {
-    header_text_name(headers, FORWARDED_FOR_HEADER)
+    let address = header_text_name(headers, FORWARDED_FOR_HEADER)
         .as_deref()
         .and_then(|value| value.rsplit(',').next())
         .map(str::trim)
-        .and_then(|candidate| candidate.parse::<std::net::IpAddr>().ok())
-        .map_or_else(|| "direct".to_owned(), |address| address.to_string())
+        .and_then(|candidate| candidate.parse::<std::net::IpAddr>().ok());
+    match address {
+        Some(std::net::IpAddr::V4(address)) => address.to_string(),
+        Some(std::net::IpAddr::V6(address)) => match address.to_ipv4_mapped() {
+            Some(mapped) => mapped.to_string(),
+            None => {
+                let segments = address.segments();
+                format!(
+                    "{:x}:{:x}:{:x}:{:x}::/64",
+                    segments[0], segments[1], segments[2], segments[3],
+                )
+            }
+        },
+        None => "direct".to_owned(),
+    }
 }
 
 fn rate_limited_response(retry_after_seconds: u32) -> Response {
@@ -699,7 +727,7 @@ async fn handle_fallback(State(state): State<PublicHostState>, request: Request)
                 retry_after_seconds,
             } = state
                 .issuance_limits
-                .check(&client_rate_key(request.headers()), Instant::now())
+                .check(&client_rate_key(request.headers()))
             {
                 return rate_limited_response(retry_after_seconds);
             }
@@ -2318,11 +2346,14 @@ mod tests {
         let response = post_validate(&client, &runtime, TEST_AUTHORITY, None, &valid_body).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
-        // 400: malformed JSON, unknown fields, and an over-cap body.
+        // 400: malformed JSON, unknown fields, non-canonical nonce, and an
+        // over-cap body.
         for body in [
             "not json",
             r#"{"nonce":"x","extra":true}"#,
             r#"{}"#,
+            r#"{"nonce":"not-a-canonical-nonce"}"#,
+            r#"{"nonce":"00000000-0000-1000-8000-000000000001"}"#,
         ] {
             let response =
                 post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), body).await;

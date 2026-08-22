@@ -102,7 +102,9 @@ pub use schema::{
     CONTRACT_SCHEMA_VERSION, ContractField, ContractManifest, ContractSchema, ContractVariant,
     ScalarConstraint, SchemaDirection, UnknownFieldPolicy, contract_manifest,
 };
-pub use session::{SessionValidateRequestV1, SessionValidateResponseV1};
+pub use session::{
+    SessionValidateRequestV1, SessionValidateResponseV1, is_canonical_session_nonce,
+};
 pub use service::{
     SERVICE_STATUS_CONTRACT_VERSION, SERVICE_STATUS_V2_CONTRACT_VERSION,
     ServiceAutomaticTermSummaryV2, ServiceAvailabilitySummaryV1, ServiceAvailabilityV1,

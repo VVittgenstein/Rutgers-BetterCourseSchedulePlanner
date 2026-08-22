@@ -111,7 +111,37 @@ fn every_manifest_reference_resolves_and_names_are_unique() {
                     schema.id
                 );
             }
-            None => assert!(schema.variants.is_empty(), "{}", schema.id),
+            None => {
+                // Variants WITHOUT a discriminator model an UNTAGGED exact
+                // one-of: the shape is identified by its keys alone, which
+                // is only decodable when every variant's field-name set is
+                // pairwise distinct (and top-level fields stay empty).
+                if !schema.variants.is_empty() {
+                    assert!(schema.fields.is_empty(), "{}", schema.id);
+                    let mut shapes = schema
+                        .variants
+                        .iter()
+                        .map(|variant| {
+                            let mut names = variant
+                                .fields
+                                .iter()
+                                .map(|field| field.name.as_str())
+                                .collect::<Vec<_>>();
+                            names.sort_unstable();
+                            names
+                        })
+                        .collect::<Vec<_>>();
+                    let shape_count = shapes.len();
+                    shapes.sort();
+                    shapes.dedup();
+                    assert_eq!(
+                        shapes.len(),
+                        shape_count,
+                        "untagged one-of variants must be distinguishable by their keys: {}",
+                        schema.id
+                    );
+                }
+            }
         }
 
         let mut field_names = schema
