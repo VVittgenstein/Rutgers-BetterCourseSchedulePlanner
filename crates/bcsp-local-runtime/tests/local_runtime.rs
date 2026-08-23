@@ -2199,9 +2199,38 @@ fn websocket_handshake(authority: &str, path: &str, origin: &str, nonce: &str) -
     )
     .unwrap();
     stream.flush().unwrap();
+    read_http_response(&mut stream)
+}
+
+/// Reads one whole HTTP response: the headers, then exactly the body its
+/// `content-length` promises. One `read` is not enough -- TCP may deliver
+/// the body in a later segment than the headers, and a caller that assumes
+/// otherwise passes or fails by chance. A 101 carries no body, so it stops
+/// at the header terminator; the connection stays open, which rules out
+/// simply reading to EOF.
+fn read_http_response(stream: &mut TcpStream) -> String {
+    let mut response = Vec::new();
     let mut buffer = [0_u8; 2_048];
-    let read = stream.read(&mut buffer).unwrap();
-    String::from_utf8(buffer[..read].to_vec()).unwrap()
+    loop {
+        if let Some(header_end) = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|at| at + 4)
+        {
+            let head = String::from_utf8_lossy(&response[..header_end]).to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map_or(0, |value| value.trim().parse::<usize>().unwrap());
+            if response.len() >= header_end + length {
+                break;
+            }
+        }
+        let read = stream.read(&mut buffer).unwrap();
+        assert!(read > 0, "the response ended before it was complete");
+        response.extend_from_slice(&buffer[..read]);
+    }
+    String::from_utf8(response).unwrap()
 }
 
 fn status(response: &str) -> u16 {

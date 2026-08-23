@@ -457,6 +457,22 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
   路径**钉死"未注入 → 404"（WS 升级形与普通 GET 形各一），并同时钉死
   内建 `/api/v1/watch` 仍为 101。
 
+S2-PR5b.1（Codex 驳回 `a77d9e0` 的 1 项 P2 + 1 项 P3）：
+- **P2**：64 KiB 测试只发单个 FIN text frame，因此**只证明了 frame cap**
+  ——误删 `max_message_size` 仍全绿。补**分片消息**判别测试：
+  `32 KiB Text(FIN=0) + 32 KiB Continuation(FIN=1)` 合计恰好 64 KiB →
+  交付一次；`32 KiB + (32 KiB+1)` 每帧均低于帽、合计超限 → 断连且零交付。
+  **实测：仅删 `max_message_size` 时该测试 3/3 FAILED,单帧测试仍 ok。**
+  同时补对称缺口——单帧测试同样不能证明 `max_frame_size`（只有
+  `max_message_size` 时 65537 字节单帧也会在重组处被拒）。新增**声明长度**
+  测试：宣称 1 MiB 只发 8 字节 → 必须在**帧头**即拒绝而不缓冲。
+  **实测：仅删 `max_frame_size` 时该测试 2/2 FAILED,恢复 5/5 ok。**
+  （1 MiB 而非更大：axum 默认 frame cap 为 16 MiB,更大的声明会被默认值
+  拦下,证明不了本 host 设置的帽。）
+- **P3**：`websocket_handshake` 只调用一次 `read`,body 与 headers 同批到达
+  是 TCP 不保证的。改为读满 headers 再按 `content-length` 读满 body；101
+  无 body 即在头终止符处停止（连接保持,不能读到 EOF）。
+
 三点披露：
 1. 64 KiB 上限是**入站**约束（tungstenite 仅在 `read_message_frame`
    校验），出站帧不受限；§2/§6 的 chunk 预算是另一回事。这是本地 watch

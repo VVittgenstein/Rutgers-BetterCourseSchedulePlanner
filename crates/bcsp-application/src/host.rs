@@ -1020,11 +1020,17 @@ mod tests {
         response.starts_with(b"HTTP/1.1 101 ").then_some(stream)
     }
 
-    /// A masked client text frame, which is the only text frame a server is
-    /// allowed to accept.
+    /// A whole masked client text message: one FIN text frame.
     fn masked_text_frame(payload: &[u8]) -> Vec<u8> {
+        masked_frame(0x81, payload)
+    }
+
+    /// A masked client frame with a caller-chosen first byte, so a test can
+    /// build a fragmented message: `0x01` opens a text message with FIN
+    /// clear, `0x80` closes it with a FIN continuation.
+    fn masked_frame(first_byte: u8, payload: &[u8]) -> Vec<u8> {
         let mask = [0x37_u8, 0xfa, 0x21, 0x3d];
-        let mut frame = vec![0x81_u8];
+        let mut frame = vec![first_byte];
         let length = payload.len();
         if length < 126 {
             frame.push(0x80 | u8::try_from(length).unwrap());
@@ -1664,6 +1670,138 @@ mod tests {
             "the over-ceiling payload must never be handed to the extension",
         );
         drop(admitted);
+        server.shutdown().await.unwrap();
+    }
+
+    /// The ceiling has to bound the reassembled message, not just one frame.
+    /// Both fragments here sit far under the frame cap, so the frame cap
+    /// cannot decide either case -- only the message cap can. Without it a
+    /// caller could stream an unbounded message through the host one small
+    /// fragment at a time.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_ceiling_bounds_a_reassembled_message_not_just_one_frame() {
+        const HALF: usize = MAX_WEBSOCKET_MESSAGE_BYTES / 2;
+
+        let extension = Arc::new(CountingExtension {
+            calls: AtomicUsize::new(0),
+        });
+        let watch = Arc::new(RecordingSocket::default());
+        let server =
+            spawn_loopback_server_with_socket(extension, watch.clone(), SessionNonce::generate())
+                .await
+                .unwrap();
+        let origin = server.origin().to_owned();
+        let authority = origin.strip_prefix("http://").unwrap().to_owned();
+        let address = authority.parse::<SocketAddr>().unwrap();
+        let nonce = server.nonce().as_str().to_owned();
+        // A text opener with FIN clear, then a continuation carrying FIN.
+        let fragmented = move |tail: usize| {
+            let (authority, origin, nonce) = (authority.clone(), origin.clone(), nonce.clone());
+            tokio::task::spawn_blocking(move || {
+                let mut stream = upgraded_websocket(
+                    address,
+                    WATCH_SOCKET_PATH,
+                    &authority,
+                    &origin,
+                    &nonce,
+                    Duration::from_secs(5),
+                )
+                .expect("the watch route upgrades");
+                stream
+                    .write_all(&masked_frame(0x01, &vec![b'a'; HALF]))
+                    .unwrap();
+                stream
+                    .write_all(&masked_frame(0x80, &vec![b'b'; tail]))
+                    .unwrap();
+                stream.flush().unwrap();
+                stream
+            })
+        };
+
+        // Reassembles to exactly the ceiling: admitted as one message.
+        let admitted = fragmented(HALF).await.unwrap();
+        await_count(&watch.texts, 1, "a fragmented message is reassembled").await;
+        assert_eq!(
+            watch.bytes.load(Ordering::SeqCst),
+            MAX_WEBSOCKET_MESSAGE_BYTES,
+            "both fragments arrive as one whole message",
+        );
+
+        // One byte more, still two under-cap frames: refused on reassembly.
+        let mut over = fragmented(HALF + 1).await.unwrap();
+        let closed = tokio::task::spawn_blocking(move || closed_by_peer(&mut over))
+            .await
+            .unwrap();
+        assert!(
+            closed,
+            "a reassembled message past the ceiling must end the connection",
+        );
+        assert_eq!(
+            watch.texts.load(Ordering::SeqCst),
+            1,
+            "the over-ceiling message must never be handed to the extension",
+        );
+        assert_eq!(
+            watch.bytes.load(Ordering::SeqCst),
+            MAX_WEBSOCKET_MESSAGE_BYTES,
+            "and none of its fragments may leak through either",
+        );
+        drop(admitted);
+        server.shutdown().await.unwrap();
+    }
+
+    /// And the frame cap has to decide on the declared length, before the
+    /// host buffers anything. This client announces a megabyte and sends a
+    /// handful of bytes: with the frame cap the header alone is refused, and
+    /// without it the host sits waiting for the rest. A megabyte, not
+    /// something wilder, because axum's default frame cap is 16 MiB -- a
+    /// larger claim would be refused by that default and prove nothing
+    /// about the ceiling this host sets.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_frame_cap_refuses_a_declared_length_without_buffering_it() {
+        let extension = Arc::new(CountingExtension {
+            calls: AtomicUsize::new(0),
+        });
+        let watch = Arc::new(RecordingSocket::default());
+        let server =
+            spawn_loopback_server_with_socket(extension, watch.clone(), SessionNonce::generate())
+                .await
+                .unwrap();
+        let origin = server.origin().to_owned();
+        let authority = origin.strip_prefix("http://").unwrap().to_owned();
+        let address = authority.parse::<SocketAddr>().unwrap();
+        let nonce = server.nonce().as_str().to_owned();
+
+        let closed = tokio::task::spawn_blocking(move || {
+            let mut stream = upgraded_websocket(
+                address,
+                WATCH_SOCKET_PATH,
+                &authority,
+                &origin,
+                &nonce,
+                Duration::from_secs(5),
+            )
+            .expect("the watch route upgrades");
+            let mut header = vec![0x81_u8, 0x80 | 127];
+            header.extend_from_slice(&(1_u64 << 20).to_be_bytes());
+            header.extend_from_slice(&[0x37, 0xfa, 0x21, 0x3d]);
+            header.extend_from_slice(&[0x00; 8]);
+            stream.write_all(&header).unwrap();
+            stream.flush().unwrap();
+            closed_by_peer(&mut stream)
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            closed,
+            "a declared length past the frame cap must be refused on the header",
+        );
+        assert_eq!(
+            watch.texts.load(Ordering::SeqCst),
+            0,
+            "nothing may reach the extension",
+        );
         server.shutdown().await.unwrap();
     }
 
