@@ -10,14 +10,17 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter,
 };
+use sha2::{Digest, Sha256};
 
 use crate::migration::{apply_migrations, read_migration_records};
 use crate::{
-    DesiredWatch, DesiredWatchAuthority, DesiredWatchCounters, DesiredWatchEntry,
-    EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord,
+    DesiredWatch, DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchCommand,
+    DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome,
+    DesiredWatchReceipt, DesiredWatchSource, EpisodeActionInput, EpisodeActionKind,
+    EpisodeActionRecord,
     EpisodeDisposition,
     EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput, HistoryFilter, HistoryPage,
-    HistoryWriteOutcome, LocalSettings, MAX_SELECTED_SECTIONS, PageRequest,
+    HistoryWriteOutcome, LocalSettings, MAX_DESIRED_WATCHES, MAX_SELECTED_SECTIONS, PageRequest,
     PersonalMigrationRecord, PersonalResetResult, PersonalStateError, PersonalStateResult,
     PersonalStateSnapshot, PersonalTableCounts, SelectionMutation, SettingsRevision,
     SqliteConfiguration, StoredSettings, UnixMillis, UserStateRevision, WalCheckpoint,
@@ -28,6 +31,9 @@ use crate::{
 // run on blocking workers, so waiting here preserves the user action without
 // starving the async HTTP runtime or returning a transient 500.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(120);
+// Every authority counter crosses the wire to a JavaScript client, so the
+// table bounds them here rather than at u64.
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 pub struct PersonalStateStore {
     pub(crate) connection: Connection,
@@ -215,6 +221,158 @@ impl PersonalStateStore {
                 entries: load_desired_watch_entries(&store.connection)?,
             })
         })
+    }
+
+    /// Commits one compare-and-swap against a section's desired-watch row.
+    ///
+    /// The checks run in the frozen order, inside one IMMEDIATE transaction,
+    /// because the order IS the contract: a caller whose generation is gone
+    /// must not also be told its id collided, and a caller at the cap must
+    /// not be told its revision was stale. Only the last step writes, so
+    /// every refusal leaves the authority untouched.
+    ///
+    /// `admission` is consulted lazily, and only for a command that asks to
+    /// watch and has already passed generation, receipt, revision, and the
+    /// cap. A command that asks to STOP skips admission entirely: a section
+    /// that has since become unsupported must still be stoppable.
+    pub fn commit_desired_watch_mutation<A>(
+        &mut self,
+        command: &DesiredWatchCommand,
+        admission: A,
+    ) -> PersonalStateResult<DesiredWatchMutationOutcome>
+    where
+        A: FnOnce(&SectionKey) -> DesiredWatchAdmission,
+    {
+        let policy_json = command
+            .policy
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let fingerprint = command_fingerprint(command, policy_json.as_deref());
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        // 1. Generation. A command from before a Full Reset is not stale in
+        //    the revision sense -- the authority it spoke about no longer
+        //    exists -- so it is refused without leaving a receipt behind.
+        let counters = load_desired_watch_counters(&transaction)?;
+        if command.authority_generation != counters.authority_generation {
+            return Ok(DesiredWatchMutationOutcome::StaleGeneration {
+                current: counters.authority_generation,
+            });
+        }
+
+        // 2. Receipt. A repeated id replays what it produced the first time;
+        //    a reused id carrying a different command is reported FROM the
+        //    row that exists, never by inserting a second one.
+        if command.source == DesiredWatchSource::User
+            && let Some(receipt) = load_desired_watch_receipt(
+                &transaction,
+                counters.authority_generation,
+                command.mutation_id,
+            )?
+        {
+            return Ok(
+                if receipt.section == command.section && receipt.fingerprint == fingerprint {
+                    DesiredWatchMutationOutcome::AlreadyApplied(receipt.committed)
+                } else {
+                    DesiredWatchMutationOutcome::MutationIdConflict(receipt)
+                },
+            );
+        }
+
+        // 3. Revision. An absent row reads as 0, and a tombstone does not,
+        //    which is the whole reason removals leave one behind.
+        let existing = load_desired_watch_row(&transaction, &command.section)?;
+        let current_revision = existing.as_ref().map_or(0, |row| row.revision);
+        if command.based_on_revision != current_revision {
+            return Ok(DesiredWatchMutationOutcome::StaleRevision {
+                current: current_revision,
+            });
+        }
+
+        // 4. Admission, for a command that asks to watch.
+        if command.desired() {
+            // A POST-STATE test, deliberately: only 0 -> 1 consumes a slot,
+            // so editing the policy of one of nine armed sections still
+            // commits. Testing "count < 9" instead would refuse it.
+            let already_desired = existing.as_ref().is_some_and(|row| row.desired);
+            if !already_desired && desired_watch_count(&transaction)? >= MAX_DESIRED_WATCHES as u64
+            {
+                return Ok(DesiredWatchMutationOutcome::LimitExceeded {
+                    maximum: MAX_DESIRED_WATCHES,
+                });
+            }
+            if let DesiredWatchAdmission::Reject(rejection) = admission(&command.section) {
+                return Ok(DesiredWatchMutationOutcome::Rejected(rejection));
+            }
+        }
+
+        // 5. Write. The revision always advances; the materialization epoch
+        //    advances only when the `desired` VALUE changes, or when there is
+        //    no previous epoch to keep.
+        let revision = next_counter(counters.revision_counter)?;
+        let (materialization_epoch, epoch_changed) = match &existing {
+            Some(row) if row.desired == command.desired() => (row.materialization_epoch, false),
+            _ => (next_counter(counters.materialization_counter)?, true),
+        };
+        transaction.execute(
+            "INSERT INTO personal_desired_watches_v1(
+                 term_id, campus_code, section_index, desired, policy_json,
+                 revision, materialization_epoch
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(term_id, campus_code, section_index) DO UPDATE SET
+                 desired = excluded.desired,
+                 policy_json = excluded.policy_json,
+                 revision = excluded.revision,
+                 materialization_epoch = excluded.materialization_epoch",
+            params![
+                command.section.term().as_str(),
+                command.section.campus().as_str(),
+                command.section.index().as_str(),
+                i64::from(command.desired()),
+                policy_json,
+                u64_to_i64(revision)?,
+                u64_to_i64(materialization_epoch)?,
+            ],
+        )?;
+        let materialization_counter = if epoch_changed {
+            materialization_epoch
+        } else {
+            counters.materialization_counter
+        };
+        transaction.execute(
+            "UPDATE personal_state_metadata_v1
+                SET desired_watch_revision_counter = ?1,
+                    desired_watch_materialization_counter = ?2
+              WHERE singleton_id = 1",
+            params![u64_to_i64(revision)?, u64_to_i64(materialization_counter)?],
+        )?;
+        let committed = DesiredWatchCommitted {
+            revision,
+            materialization_epoch,
+            epoch_changed,
+        };
+        if command.source == DesiredWatchSource::User {
+            transaction.execute(
+                "INSERT INTO personal_desired_watch_receipts_v1(
+                     authority_generation, mutation_id, term_id, campus_code,
+                     section_index, fingerprint, outcome_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    u64_to_i64(counters.authority_generation)?,
+                    command.mutation_id.to_string(),
+                    command.section.term().as_str(),
+                    command.section.campus().as_str(),
+                    command.section.index().as_str(),
+                    fingerprint,
+                    serde_json::to_string(&committed)?,
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(DesiredWatchMutationOutcome::Committed(committed))
     }
 
     pub fn upsert_episode_summary(
@@ -819,6 +977,117 @@ fn load_desired_watch_entries(
         })
     })
     .collect()
+}
+
+/// One desired-watch row as the CAS needs to see it.
+struct DesiredWatchRow {
+    desired: bool,
+    revision: u64,
+    materialization_epoch: u64,
+}
+
+fn load_desired_watch_row(
+    connection: &Connection,
+    section: &SectionKey,
+) -> PersonalStateResult<Option<DesiredWatchRow>> {
+    let row = connection
+        .query_row(
+            "SELECT desired, revision, materialization_epoch
+             FROM personal_desired_watches_v1
+             WHERE term_id = ?1 AND campus_code = ?2 AND section_index = ?3",
+            params![
+                section.term().as_str(),
+                section.campus().as_str(),
+                section.index().as_str(),
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(|(desired, revision, epoch)| {
+        Ok(DesiredWatchRow {
+            desired: desired != 0,
+            revision: nonnegative_i64_to_u64(revision)?,
+            materialization_epoch: nonnegative_i64_to_u64(epoch)?,
+        })
+    })
+    .transpose()
+}
+
+/// Tombstones are excluded: they are revision history, not consumed slots.
+fn desired_watch_count(connection: &Connection) -> PersonalStateResult<u64> {
+    let count = connection.query_row(
+        "SELECT COUNT(*) FROM personal_desired_watches_v1 WHERE desired = 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    nonnegative_i64_to_u64(count)
+}
+
+fn load_desired_watch_receipt(
+    connection: &Connection,
+    authority_generation: u64,
+    mutation_id: TraceId,
+) -> PersonalStateResult<Option<DesiredWatchReceipt>> {
+    let row = connection
+        .query_row(
+            "SELECT term_id, campus_code, section_index, fingerprint, outcome_json
+             FROM personal_desired_watch_receipts_v1
+             WHERE authority_generation = ?1 AND mutation_id = ?2",
+            params![u64_to_i64(authority_generation)?, mutation_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(|(term, campus, index, fingerprint, outcome_json)| {
+        Ok(DesiredWatchReceipt {
+            section: SectionKey::try_new(&term, &campus, &index)?,
+            fingerprint,
+            committed: serde_json::from_str::<DesiredWatchCommitted>(&outcome_json)?,
+        })
+    })
+    .transpose()
+}
+
+/// A stable digest of everything a retry has to present identically. The
+/// generation is not in it -- that is half the key -- and neither is the
+/// source, because only user mutations are receipted at all. The NUL
+/// separators keep the three section fields from running together.
+fn command_fingerprint(command: &DesiredWatchCommand, policy_json: Option<&str>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(command.section.term().as_str().as_bytes());
+    hasher.update([0]);
+    hasher.update(command.section.campus().as_str().as_bytes());
+    hasher.update([0]);
+    hasher.update(command.section.index().as_str().as_bytes());
+    hasher.update([0]);
+    hasher.update(command.based_on_revision.to_be_bytes());
+    hasher.update([u8::from(command.desired())]);
+    hasher.update(policy_json.unwrap_or("").as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Advances one authority counter. Exhaustion is a real end state rather
+/// than something to wrap silently: these values are compared as JavaScript
+/// numbers on the other side of the wire.
+fn next_counter(current: u64) -> PersonalStateResult<u64> {
+    let next = current
+        .checked_add(1)
+        .filter(|next| *next <= MAX_SAFE_INTEGER)
+        .ok_or(PersonalStateError::DesiredWatchCounterExhausted)?;
+    Ok(next)
 }
 
 fn episode_summary_exists(

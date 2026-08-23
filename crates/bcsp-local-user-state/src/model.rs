@@ -791,6 +791,107 @@ impl DesiredWatchEntry {
     }
 }
 
+/// Who is asking for a desired-watch mutation.
+///
+/// A user mutation is receipted, so a retry replays its original outcome
+/// instead of being evaluated a second time. A system CAS -- a permanent arm
+/// failure retiring its own row -- mints a fresh id on every attempt and is
+/// deliberately NOT receipted: receipting it would fill the ledger with ids
+/// no client will ever present again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DesiredWatchSource {
+    User,
+    System,
+}
+
+/// One compare-and-swap against a section's desired-watch row.
+///
+/// `policy` carries the intent: `Some` asks for the section to be watched,
+/// `None` asks for it to stop. `based_on_revision` is the revision the caller
+/// read from its own projection, and `0` states "I read no row at all" -- so
+/// a tombstone still fails a caller that saw nothing, which is exactly what
+/// stops a delayed START from resurrecting intent the user cancelled.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesiredWatchCommand {
+    pub section: SectionKey,
+    pub policy: Option<WatchPolicyV1>,
+    pub based_on_revision: u64,
+    pub authority_generation: u64,
+    pub mutation_id: TraceId,
+    pub source: DesiredWatchSource,
+}
+
+impl DesiredWatchCommand {
+    /// True when the command asks for the section to be watched.
+    pub const fn desired(&self) -> bool {
+        self.policy.is_some()
+    }
+}
+
+/// What a committed mutation produced.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredWatchCommitted {
+    pub revision: u64,
+    pub materialization_epoch: u64,
+    /// True when a new materialization epoch was allocated -- the `desired`
+    /// value changed, or the row did not exist. A policy-only edit leaves an
+    /// armed watch alone and so keeps its epoch, which is the difference
+    /// between adjusting a watch and restarting it.
+    pub epoch_changed: bool,
+}
+
+/// The receipt already recorded for one `(generation, mutationId)`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesiredWatchReceipt {
+    pub section: SectionKey,
+    pub fingerprint: String,
+    pub committed: DesiredWatchCommitted,
+}
+
+/// Why a section cannot be watched at all.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DesiredWatchRejection {
+    UnsupportedTarget,
+    TermOutOfRange,
+    SectionNotFound,
+}
+
+/// A caller's verdict on whether a section may be armed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DesiredWatchAdmission {
+    Admit,
+    /// The section exists but the publication gate has not released it yet.
+    /// This COMMITS. Refusing here would turn a temporary hold into lost user
+    /// intent; the arm side retries the materialization instead.
+    PendingGate,
+    Reject(DesiredWatchRejection),
+}
+
+/// What the authority decided about one command.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DesiredWatchMutationOutcome {
+    Committed(DesiredWatchCommitted),
+    /// The receipt for this id already recorded this exact command, so its
+    /// original outcome is replayed rather than applied again.
+    AlreadyApplied(DesiredWatchCommitted),
+    /// The same id under this generation already recorded a DIFFERENT
+    /// command. Derived from the row that exists -- never a second insert,
+    /// which would defeat the ledger it is reported from.
+    MutationIdConflict(DesiredWatchReceipt),
+    StaleGeneration {
+        current: u64,
+    },
+    StaleRevision {
+        current: u64,
+    },
+    /// Committing would leave more than `maximum` sections desired.
+    LimitExceeded {
+        maximum: usize,
+    },
+    Rejected(DesiredWatchRejection),
+}
+
 /// The four persisted authority counters.
 ///
 /// All four cross the wire to a JavaScript client, so the table bounds them at

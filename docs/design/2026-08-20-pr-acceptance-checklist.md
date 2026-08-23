@@ -490,6 +490,53 @@ S2-PR5b.1（Codex 驳回 `a77d9e0` 的 1 项 P2 + 1 项 P3）：
 3. `tokio::time::interval` 首拍立即触发，因此每条连接建立后服务端**立刻**
    发一帧 Ping；判定"对端是否关闭"必须走帧而不能只看首字节。
 
+## S2-PR5c（CAS 写入器，dormant）
+
+设计依据 §3.2（五步顺序）、§5.5/§5.7（两个帽）、§5.6（系统 CAS）。
+本片只落**存储层写入器**，无调用方、无路由、无接线，S2-D3 保持开放。
+
+落地：
+- `commit_desired_watch_mutation(&command, admission)`：单条 `IMMEDIATE`
+  事务内按冻结顺序求值——① generation ② receipt 幂等 ③ revision CAS
+  ④ **post-state 准入帽 + 准入判定** ⑤ 写入。**只有第 ⑤ 步写**，任何
+  拒绝都不留痕（不写行、不写 receipt、不动计数器）。
+- **准入帽按 post-state 判定**：仅 `0→1` 占额，因此**满 9 门时的
+  policy-only 更新照常提交**。v6 的"当前 count < 9"会误拒它——满员的
+  监控列表将变成不可编辑。
+- **`DesiredWatchLimitExceeded` 不再是孤儿**：它作为**错误**是错的形状
+  （把产品裁决和 SQLite 故障混在同一个 `Result` 里），已删除；改为
+  outcome `LimitExceeded { maximum }`。新增错误
+  `DesiredWatchCounterExhausted`(计数器触达 `Number.MAX_SAFE_INTEGER`)。
+- **receipt 幂等**：同 `(generation, mutationId)` 且指纹相同 → 重放原
+  结果（`AlreadyApplied`），**不写第二行**；指纹或 section 不同 →
+  `MutationIdConflict`，**由既有行派生**。指纹 = SHA-256(section ‖
+  basedOnRevision ‖ desired ‖ policy_json)。
+- **epoch 规则**：revision 每次提交都前进；`materialization_epoch`
+  仅在 `desired` **值**变化（或行不存在）时新铸——policy-only 编辑保留
+  已武装 watch 的身份，这正是"调整"与"重启"的区别。
+- **STOP 完全跳过准入**：一个事后变得不受支持的 section 仍必须停得掉。
+  `PendingGate` **提交**而非拒绝（§3.2 步 4）。
+- **系统 CAS 不记 receipt**（§5.6）：每次重试新铸 id，记了只会用永不复现
+  的 id 撑满 ledger。
+
+三处**判别力实测**（去掉规则则测试失败，装回则通过）：
+1. 把 post-state 帽换成 pre-state（v6 形状）→
+   `the_cap_counts_the_state_a_mutation_leaves_behind` FAILED
+   （满 9 门的 policy 编辑被误拒）。
+2. 反转 epoch 保留条件 → `a_policy_edit_keeps_the_epoch_and_a_desired_
+   change_allocates_one` FAILED（left 2 / right 1）。
+3. 关掉 receipt 查询 → `a_repeated_mutation_id_replays_...` FAILED，
+   重放变成 `StaleRevision`——即"客户端丢了响应后重试,被告知过期,按
+   §3.1 必须终止",用户的 START 静默不发生。
+
+两点披露：
+1. 写入器取 `&mut self` 并自开事务,**不可**嵌入 `consistent_read()`；
+   这与 PR5a.1 的可组合性问题不同——那是读路径,写入器嵌进读事务本身
+   就是错的。类型上也不可能(`&mut self` vs `&self`)。
+2. **absent → STOP 会建 tombstone 并新铸一个 epoch**。这是刻意的:页面
+   在 START 落库前取消时可达,建行让 revision 线从此处起算,使仍在途、
+   携带 `basedOnRevision = 0` 的 START 失败而不是被放行。已单测钉死。
+
 ## 进度
 
 - [x] S1-PR1（gate 决策核心，8e83ee4）——**Codex 已批准 v5.1 迟滞追认**
@@ -527,3 +574,4 @@ S2-PR5b.1（Codex 驳回 `a77d9e0` 的 1 项 P2 + 1 项 P3）：
       经 PR5b.1（3aa4935，**Codex 批准**）与 PR5b.2（b32cce4，**Codex
       批准**）闭合；**S2-PR5b 无遗留 finding**，三轮扫描均 0 findings。
       详见下节
+- [~] S2-PR5c（CAS 写入器）——见下节；待复审

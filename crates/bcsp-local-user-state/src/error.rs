@@ -75,8 +75,8 @@ pub enum PersonalStateError {
     DuplicateSelection(bcsp_contracts::SectionKey),
     #[error("selection limit exceeded; maximum is {maximum}")]
     SelectionLimitExceeded { maximum: usize },
-    #[error("desired-watch limit exceeded; maximum is {maximum}")]
-    DesiredWatchLimitExceeded { maximum: usize },
+    #[error("a desired-watch authority counter is exhausted")]
+    DesiredWatchCounterExhausted,
     #[error("history page limit must be between 1 and 100")]
     InvalidPageLimit,
     #[error("history page offset cannot be represented by SQLite")]

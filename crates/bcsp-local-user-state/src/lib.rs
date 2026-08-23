@@ -26,7 +26,9 @@ mod store;
 pub use error::{PersonalStateError, PersonalStateResult, SettingValueError};
 pub use model::{
     CatalogRefreshMinutes, CurrentFilters, CurrentFiltersRevision, DesiredWatch,
-    DesiredWatchAuthority, DesiredWatchCounters, DesiredWatchEntry, EpisodeActionInput,
+    DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchCommand, DesiredWatchCommitted,
+    DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome, DesiredWatchReceipt,
+    DesiredWatchRejection, DesiredWatchSource, EpisodeActionInput,
     EpisodeActionKind, EpisodeActionRecord,
     EpisodeDisposition, EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput,
     FilterAssociation, HistoryFilter, HistoryPage,
@@ -66,6 +68,9 @@ pub const PERSONAL_TABLE_ALLOWLIST: &[&str] = &[
     "personal_episode_actions_v1",
 ];
 pub const MAX_SELECTED_SECTIONS: usize = bcsp_contracts::MAX_ACTIVE_WATCHES as usize;
+/// The product admission cap on desired watches, tested against the state a
+/// mutation would LEAVE BEHIND rather than the state it found.
+pub const MAX_DESIRED_WATCHES: usize = bcsp_contracts::MAX_ACTIVE_WATCHES as usize;
 
 pub fn boundary_marker() -> &'static str {
     let _ = (
