@@ -491,26 +491,48 @@ impl PersonalStateStore {
         })
     }
 
+    /// Row counts for every allowlisted personal table.
+    ///
+    /// One statement, deliberately: eight separate `COUNT(*)`s can straddle a
+    /// concurrent Full Reset and add up to a state that never existed, but
+    /// wrapping them in a transaction here would break composition -- a caller
+    /// that already holds [`Self::consistent_read`] would hit "cannot start a
+    /// transaction within a transaction". A single SELECT gets the snapshot
+    /// from the statement itself and nests safely.
     pub fn personal_table_counts(&self) -> PersonalStateResult<PersonalTableCounts> {
-        // Eight independent COUNT(*)s can straddle a concurrent Full Reset and
-        // add up to a state that never existed.
-        self.consistent_read(|store| {
-            Self::table_counts_within_snapshot(&store.connection)
-        })
-    }
-
-    fn table_counts_within_snapshot(
-        connection: &Connection,
-    ) -> PersonalStateResult<PersonalTableCounts> {
+        let counts = self.connection.query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM personal_settings_v1),
+                 (SELECT COUNT(*) FROM personal_current_filters_v1),
+                 (SELECT COUNT(*) FROM personal_saved_views_v1),
+                 (SELECT COUNT(*) FROM personal_selected_sections_v1),
+                 (SELECT COUNT(*) FROM personal_desired_watches_v1),
+                 (SELECT COUNT(*) FROM personal_desired_watch_receipts_v1),
+                 (SELECT COUNT(*) FROM personal_episode_summaries_v1),
+                 (SELECT COUNT(*) FROM personal_episode_actions_v1)",
+            [],
+            |row| {
+                Ok([
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                ])
+            },
+        )?;
         Ok(PersonalTableCounts {
-            settings: table_count(connection, "personal_settings_v1")?,
-            current_filters: table_count(connection, "personal_current_filters_v1")?,
-            saved_views: table_count(connection, "personal_saved_views_v1")?,
-            selected_sections: table_count(connection, "personal_selected_sections_v1")?,
-            desired_watches: table_count(connection, "personal_desired_watches_v1")?,
-            desired_watch_receipts: table_count(connection, "personal_desired_watch_receipts_v1")?,
-            episode_summaries: table_count(connection, "personal_episode_summaries_v1")?,
-            episode_actions: table_count(connection, "personal_episode_actions_v1")?,
+            settings: nonnegative_i64_to_u64(counts[0])?,
+            current_filters: nonnegative_i64_to_u64(counts[1])?,
+            saved_views: nonnegative_i64_to_u64(counts[2])?,
+            selected_sections: nonnegative_i64_to_u64(counts[3])?,
+            desired_watches: nonnegative_i64_to_u64(counts[4])?,
+            desired_watch_receipts: nonnegative_i64_to_u64(counts[5])?,
+            episode_summaries: nonnegative_i64_to_u64(counts[6])?,
+            episode_actions: nonnegative_i64_to_u64(counts[7])?,
         })
     }
 
@@ -1053,24 +1075,6 @@ fn parse_notification_mode(value: &str) -> PersonalStateResult<WatchNotification
             field: "mode",
         }),
     }
-}
-
-fn table_count(connection: &Connection, table: &'static str) -> PersonalStateResult<u64> {
-    let sql = match table {
-        "personal_settings_v1" => "SELECT COUNT(*) FROM personal_settings_v1",
-        "personal_current_filters_v1" => "SELECT COUNT(*) FROM personal_current_filters_v1",
-        "personal_saved_views_v1" => "SELECT COUNT(*) FROM personal_saved_views_v1",
-        "personal_selected_sections_v1" => "SELECT COUNT(*) FROM personal_selected_sections_v1",
-        "personal_desired_watches_v1" => "SELECT COUNT(*) FROM personal_desired_watches_v1",
-        "personal_desired_watch_receipts_v1" => {
-            "SELECT COUNT(*) FROM personal_desired_watch_receipts_v1"
-        }
-        "personal_episode_summaries_v1" => "SELECT COUNT(*) FROM personal_episode_summaries_v1",
-        "personal_episode_actions_v1" => "SELECT COUNT(*) FROM personal_episode_actions_v1",
-        _ => return Err(PersonalStateError::SqliteConfiguration("table allowlist")),
-    };
-    let count = connection.query_row(sql, [], |row| row.get::<_, i64>(0))?;
-    nonnegative_i64_to_u64(count)
 }
 
 fn u64_to_i64(value: u64) -> PersonalStateResult<i64> {

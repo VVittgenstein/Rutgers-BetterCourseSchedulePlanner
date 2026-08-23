@@ -1136,63 +1136,21 @@ fn full_reset_is_the_authority_generation_barrier() {
 }
 
 #[test]
-fn two_openers_racing_the_same_pending_upgrade_both_start() {
+fn table_counts_compose_inside_a_callers_consistent_read() {
     let directory = TempDir::new().unwrap();
     let path = database_path(&directory);
-    drop(PersonalStateStore::open(&path).unwrap());
-
-    // Rewind to 10003 so both openers see the same pending migration.
-    let connection = Connection::open(&path).unwrap();
-    connection
-        .execute_batch(
-            "DELETE FROM personal_migration_ledger WHERE migration_id = 10004;
-             DROP TABLE personal_desired_watch_receipts_v1;
-             DROP TABLE personal_desired_watches_v1;
-             CREATE TABLE personal_desired_watches_v1 (
-                 term_id TEXT NOT NULL,
-                 campus_code TEXT NOT NULL,
-                 section_index TEXT NOT NULL,
-                 policy_json TEXT NOT NULL CHECK (json_valid(policy_json)),
-                 PRIMARY KEY (term_id, campus_code, section_index)
-             ) STRICT;
-             ALTER TABLE personal_state_metadata_v1 RENAME TO personal_state_metadata_post;
-             CREATE TABLE personal_state_metadata_v1 (
-                 singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-                 state_revision INTEGER NOT NULL CHECK (state_revision > 0)
-             ) STRICT;
-             INSERT INTO personal_state_metadata_v1(singleton_id, state_revision)
-                 SELECT singleton_id, state_revision FROM personal_state_metadata_post;
-             DROP TABLE personal_state_metadata_post;",
-        )
-        .unwrap();
-    drop(connection);
-
-    // The prefix check runs before the write lock is taken, so both openers
-    // can read "10003 applied". Only one may actually run 10004; the other
-    // must notice inside the lock and start anyway.
-    //
-    // This is a REPRODUCER, not the guarantee: the two threads may serialize
-    // so completely that the second never enters the window, in which case the
-    // round passes vacuously. The guarantee is the re-read under the lock in
-    // apply_migrations; the barrier below just makes the window likely to be
-    // hit at least once.
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let handles = (0..2)
-        .map(|_| {
-            let path = path.clone();
-            let barrier = std::sync::Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                barrier.wait();
-                PersonalStateStore::open(&path).map(|_| ())
-            })
-        })
-        .collect::<Vec<_>>();
-    for handle in handles {
-        handle.join().unwrap().expect("both openers start");
-    }
-
     let store = PersonalStateStore::open(&path).unwrap();
-    let migrations = store.migration_records().unwrap();
-    assert_eq!(migrations.len(), 4, "10004 applied exactly once");
-    assert_eq!(migrations[3].migration_id, 10_004);
+    seed_desired_watch(&path, section(1), 1);
+
+    // personal_table_counts() must not open a transaction of its own: a caller
+    // that already holds a snapshot would otherwise get "cannot start a
+    // transaction within a transaction".
+    let (outer, inner) = store
+        .consistent_read(|store| {
+            let counts = store.personal_table_counts()?;
+            Ok((store.desired_watches()?.len(), counts.desired_watches))
+        })
+        .expect("counts compose inside consistent_read");
+    assert_eq!(outer, 1);
+    assert_eq!(inner, 1);
 }

@@ -1,4 +1,6 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+#[cfg(test)]
+use std::sync::{Arc, Barrier, Mutex};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -48,6 +50,13 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
     },
 ];
 
+/// Test-only rendezvous placed between the unlocked ledger read and
+/// `BEGIN IMMEDIATE`. Without it a race test cannot prove both openers were
+/// ever in the window at the same time, so it would pass against the broken
+/// implementation too.
+#[cfg(test)]
+pub(crate) static PRE_LOCK_RENDEZVOUS: Mutex<Option<Arc<Barrier>>> = Mutex::new(None);
+
 pub(crate) fn apply_migrations(connection: &mut Connection) -> PersonalStateResult<()> {
     connection.execute_batch(CREATE_LEDGER_SQL)?;
     let applied = read_migration_records(connection)?;
@@ -55,6 +64,17 @@ pub(crate) fn apply_migrations(connection: &mut Connection) -> PersonalStateResu
 
     if applied.len() == MIGRATIONS.len() {
         return Ok(());
+    }
+
+    #[cfg(test)]
+    {
+        let rendezvous = PRE_LOCK_RENDEZVOUS
+            .lock()
+            .expect("rendezvous mutex")
+            .clone();
+        if let Some(rendezvous) = rendezvous {
+            rendezvous.wait();
+        }
     }
 
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -165,5 +185,68 @@ mod tests {
             migration_checksum("a\nb\n"),
             migration_checksum("a\r\nb\r\n")
         );
+    }
+
+    /// Both openers are held at the rendezvous until each has finished the
+    /// UNLOCKED ledger read, so both provably enter the window this fix
+    /// exists for. Against the pre-fix code -- which skipped by the count it
+    /// read outside the lock -- the loser re-runs 10004 and its ledger insert
+    /// collides, so one opener fails. Against the fix, both start.
+    #[test]
+    fn two_openers_that_both_read_a_stale_prefix_still_both_start() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let path = directory.path().join("rbcsp.sqlite");
+        drop(crate::PersonalStateStore::open(&path).expect("initial open"));
+
+        // Rewind one migration so there is something pending to race on.
+        let connection = Connection::open(&path).expect("rewind connection");
+        connection
+            .execute_batch(
+                "DELETE FROM personal_migration_ledger WHERE migration_id = 10004;
+                 DROP TABLE personal_desired_watch_receipts_v1;
+                 DROP TABLE personal_desired_watches_v1;
+                 CREATE TABLE personal_desired_watches_v1 (
+                     term_id TEXT NOT NULL,
+                     campus_code TEXT NOT NULL,
+                     section_index TEXT NOT NULL,
+                     policy_json TEXT NOT NULL CHECK (json_valid(policy_json)),
+                     PRIMARY KEY (term_id, campus_code, section_index)
+                 ) STRICT;
+                 ALTER TABLE personal_state_metadata_v1 RENAME TO personal_state_metadata_post;
+                 CREATE TABLE personal_state_metadata_v1 (
+                     singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                     state_revision INTEGER NOT NULL CHECK (state_revision > 0)
+                 ) STRICT;
+                 INSERT INTO personal_state_metadata_v1(singleton_id, state_revision)
+                     SELECT singleton_id, state_revision FROM personal_state_metadata_post;
+                 DROP TABLE personal_state_metadata_post;",
+            )
+            .expect("rewind to 10003");
+        drop(connection);
+
+        *PRE_LOCK_RENDEZVOUS.lock().expect("rendezvous mutex") =
+            Some(Arc::new(Barrier::new(2)));
+        let outcomes = std::thread::scope(|scope| {
+            let handles = (0..2)
+                .map(|_| {
+                    let path = path.clone();
+                    scope.spawn(move || crate::PersonalStateStore::open(&path).map(|_| ()))
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("opener thread"))
+                .collect::<Vec<_>>()
+        });
+        *PRE_LOCK_RENDEZVOUS.lock().expect("rendezvous mutex") = None;
+
+        for outcome in outcomes {
+            outcome.expect("both openers start");
+        }
+
+        let store = crate::PersonalStateStore::open(&path).expect("final open");
+        let migrations = store.migration_records().expect("ledger");
+        assert_eq!(migrations.len(), 4, "10004 applied exactly once");
+        assert_eq!(migrations[3].migration_id, 10_004);
     }
 }
