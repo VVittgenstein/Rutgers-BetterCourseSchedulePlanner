@@ -523,4 +523,7 @@ S2-PR5b.1（Codex 驳回 `a77d9e0` 的 1 项 P2 + 1 项 P3）：
       恢复可组合性；`PRE_LOCK_RENDEZVOUS` 使竞态测试成为回归判别器，
       去掉锁内重读即 FAILED；扫描 0 findings）。非阻断建议：若将来同进程
       新增迁移单测，把全局 rendezvous 按 DB 路径作用域化并用 RAII 清理。
-- [~] S2-PR5b（host 受校验二级路由集合）——见下节
+- [x] S2-PR5b（host 受校验二级路由集合，a77d9e0）——驳回 1 P2 + 1 P3 后
+      经 PR5b.1（3aa4935，**Codex 批准**）与 PR5b.2（b32cce4，**Codex
+      批准**）闭合；**S2-PR5b 无遗留 finding**，三轮扫描均 0 findings。
+      详见下节
