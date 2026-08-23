@@ -23,7 +23,8 @@ use bcsp_contracts::{
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_runtime::{
-    LocalRuntimeError, LocalRuntimePaths, LocalSurfaceState, PersonalSurface, PreparedLocalRuntime,
+    LOCAL_DESIRED_WATCH_SOCKET_PATH, LOCAL_PRESENCE_SOCKET_PATH, LocalRuntimeError,
+    LocalRuntimePaths, LocalSurfaceState, PersonalSurface, PreparedLocalRuntime,
     prepare_and_start_with,
 };
 use bcsp_local_user_state::{
@@ -918,7 +919,7 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
 
     let bootstrap = request(authority, "GET /api/v1/local/bootstrap", &origin, nonce, "");
     assert!(bootstrap.contains("\"activeWatchCount\":0"));
-    let websocket = websocket_handshake(authority, &origin, nonce);
+    let websocket = websocket_handshake(authority, "/api/v1/watch", &origin, nonce);
     assert_eq!(status(&websocket), 101, "{websocket}");
     assert!(
         websocket
@@ -984,6 +985,40 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
         status(&request(authority, "GET /missing", &origin, nonce, "")),
         404
     );
+
+    running.shutdown().await.unwrap();
+}
+
+/// S2b. The shared host promises nothing about a path no target injected --
+/// it simply is not in the route table, and what a client sees there is
+/// whatever the local extension fallback does with it. Pin that per route,
+/// for both shapes a page can reach it with, so a future injection is a
+/// visible behaviour change rather than a silent one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn un_injected_local_socket_paths_are_404_not_a_websocket_route() {
+    let temp = TestDirectory::new("no-secondary-socket");
+    let (_root, executable) = package(&temp);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let nonce = running.nonce().as_str();
+
+    for path in [LOCAL_PRESENCE_SOCKET_PATH, LOCAL_DESIRED_WATCH_SOCKET_PATH] {
+        let upgrade = websocket_handshake(authority, path, &origin, nonce);
+        assert_eq!(status(&upgrade), 404, "{path} upgrade: {upgrade}");
+        assert_eq!(body(&upgrade), "not found", "{path}");
+
+        let read = request(authority, &format!("GET {path}"), &origin, nonce, "");
+        assert_eq!(status(&read), 404, "{path} read: {read}");
+        assert_eq!(body(&read), "not found", "{path}");
+    }
+    // The built-in route is unaffected by any of this.
+    let watch = websocket_handshake(authority, "/api/v1/watch", &origin, nonce);
+    assert_eq!(status(&watch), 101, "{watch}");
 
     running.shutdown().await.unwrap();
 }
@@ -2153,14 +2188,14 @@ fn request_without_session(authority: &str, request_line: &str) -> String {
     response
 }
 
-fn websocket_handshake(authority: &str, origin: &str, nonce: &str) -> String {
+fn websocket_handshake(authority: &str, path: &str, origin: &str, nonce: &str) -> String {
     let mut stream = TcpStream::connect(authority).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
     write!(
         stream,
-        "GET /api/v1/watch?session={nonce} HTTP/1.1\r\nHost: {authority}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: bcsp.v1\r\n\r\n"
+        "GET {path}?session={nonce} HTTP/1.1\r\nHost: {authority}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: bcsp.v1\r\n\r\n"
     )
     .unwrap();
     stream.flush().unwrap();

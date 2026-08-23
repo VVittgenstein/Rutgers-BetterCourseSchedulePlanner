@@ -434,6 +434,39 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
     S2-PR5 硬验收；PR3.1 将调用方 SEQUENCING CONTRACT 写入
     store.rs/lib.rs 文档。
 
+## S2-PR5b（host 受校验二级路由集合，dormant）
+
+设计依据 §7.2/§7.3。本片**不注册任何 desired/presence 路由**，只把承载
+能力做出来，S2-D3 保持开放。
+
+落地：
+- `SecondaryWebSocketRoute::new` 改 **fallible**，承载 S2a 路径校验
+  （绝对 / 无空段 / 无 `.`、`..` / 无 query、fragment / 仅 RFC 3986
+  unreserved 字面量——`{param}`、`*rest`、`:kind`、`%2D` 全部落入
+  NotLiteral / 不得等于内建 `/api/v1/watch`）；新增
+  `LoopbackServerError::SecondaryRoutePath { path, rejection }` 与
+  `SecondaryRoutePathRejection`。
+- `spawn_loopback_server_with_sockets` 收 **一组** 路由；`HostState` 改
+  `Arc<BTreeMap<&'static str, Arc<dyn WebSocketExtension>>>`；**集合内
+  路径唯一性在 bind 之前**校验（axum `Router::route` 重复路径会 panic，
+  且失败不得泄漏已绑定端口）。
+- **S2c**：新增共享 `shared_websocket_upgrade()`，把 64 KiB 帧/消息上限
+  与子协议 offer 收敛到唯一一处；公网 host 删除自带常量改用它，本地
+  loopback host 两条 WS 路由同时获得该上限。
+- **S2b**：`bcsp-local-runtime` 冻结两条本地路径常量，集成测试对**每条
+  路径**钉死"未注入 → 404"（WS 升级形与普通 GET 形各一），并同时钉死
+  内建 `/api/v1/watch` 仍为 101。
+
+三点披露：
+1. 64 KiB 上限是**入站**约束（tungstenite 仅在 `read_message_frame`
+   校验），出站帧不受限；§2/§6 的 chunk 预算是另一回事。这是本地 watch
+   路由上的**真实行为变化**（此前本地无帽，公网已有同值帽）。
+2. 共享 pump 在 extension **丢弃 outbound sender** 时立即结束连接
+   （`outbound_messages.recv()` 返回 `None` → break）。既有行为，正确，
+   但会让"只读"测试 socket 自己拆掉连接——测试替身必须持有 sender。
+3. `tokio::time::interval` 首拍立即触发，因此每条连接建立后服务端**立刻**
+   发一帧 Ping；判定"对端是否关闭"必须走帧而不能只看首字节。
+
 ## 进度
 
 - [x] S1-PR1（gate 决策核心，8e83ee4）——**Codex 已批准 v5.1 迟滞追认**
@@ -458,3 +491,13 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
 - [x] S2-PR3（L1 期望监控表，da5be13）——驳回 2 P1 后经 PR3.1 修复
       **Codex 批准 8103168**（B1 关闭；B2 → S2-D3 接线硬门 + PR5
       执行语义 e-i；扫描 0 findings）
+- [x] S2-PR5a（authority 存储，3802926）——**Codex 批准为完全 dormant**；
+      3 项非阻断（P2 ledger 竞态、P3 TS reset 合同、P3 counts 非一致快照）
+- [x] S2-PR5a.1（f13ff83）——驳回 2 项 P2：`personal_table_counts()`
+      自开事务破坏 `consistent_read()` 可组合性；双 opener 竞态测试
+      对旧实现同样通过（barrier 位置错误）
+- [x] S2-PR5a.2（1c12567）——**Codex 批准**（单条八 scalar 子查询 SELECT
+      恢复可组合性；`PRE_LOCK_RENDEZVOUS` 使竞态测试成为回归判别器，
+      去掉锁内重读即 FAILED；扫描 0 findings）。非阻断建议：若将来同进程
+      新增迁移单测，把全局 rendezvous 按 DB 路径作用域化并用 RAII 清理。
+- [~] S2-PR5b（host 受校验二级路由集合）——见下节

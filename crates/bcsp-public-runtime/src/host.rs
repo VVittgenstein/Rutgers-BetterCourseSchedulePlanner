@@ -19,7 +19,7 @@ use bcsp_application::{
     OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError, OpenRuntimeSnapshotRegistry,
     RefreshPolicyError, RequestMethod, RouteExtension, SHARED_WATCH_SUBPROTOCOL,
     SharedProductStorage, SharedWatchSocket, TargetRefreshDemand, WebSocketExtension,
-    serve_websocket,
+    serve_websocket, shared_websocket_upgrade,
 };
 use bcsp_contracts::{
     ActiveWatchTargetV1, ApiErrorBody, ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope,
@@ -54,7 +54,6 @@ use crate::status::{
 use crate::watch::create_public_watch_socket;
 
 const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
-const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 * 1024;
 const SESSION_HEADER: &str = "x-bcsp-session";
 pub const PUBLIC_WS_SUBPROTOCOL: &str = SHARED_WATCH_SUBPROTOCOL;
 const WATCH_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(250);
@@ -578,14 +577,10 @@ async fn handle_watch_socket(
     let mut source = SystemTraceIdSource;
     let connection_id = source.next_trace_id();
     let extension: Arc<dyn WebSocketExtension> = state.watch;
-    upgrade
-        .protocols([PUBLIC_WS_SUBPROTOCOL])
-        .max_message_size(MAX_WEBSOCKET_MESSAGE_BYTES)
-        .max_frame_size(MAX_WEBSOCKET_MESSAGE_BYTES)
-        .on_upgrade(move |socket| async move {
-            let _lease = lease;
-            serve_websocket(socket, extension, connection_id).await;
-        })
+    shared_websocket_upgrade(upgrade, PUBLIC_WS_SUBPROTOCOL).on_upgrade(move |socket| async move {
+        let _lease = lease;
+        serve_websocket(socket, extension, connection_id).await;
+    })
 }
 
 async fn handle_session_validate(

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -24,12 +25,25 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 const MAX_EXTENSION_BODY_BYTES: usize = 1024 * 1024;
+/// The one WebSocket frame/message ceiling every target shares.
+///
+/// It is applied at the upgrade rather than inside [`serve_websocket`]:
+/// axum fixes both limits when the upgrade is configured, so the pump
+/// receives a socket that is already bounded -- or already unbounded, with
+/// no way left to narrow it. [`shared_websocket_upgrade`] is therefore the
+/// single place either target may build a socket from.
+pub const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 * 1024;
 const LOOPBACK_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_HEADER: &str = "x-bcsp-session";
 pub const SHARED_WATCH_SUBPROTOCOL: &str = "bcsp.v1";
 const SOCKET_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 const SOCKET_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 const SOCKET_PRODUCT_TICK_INTERVAL: Duration = Duration::from_millis(250);
+/// The host's own WebSocket route, and the only path the router registers
+/// without a target asking for it. No injected route may claim it; a second
+/// built-in route would have to join [`secondary_route_path_rejection`]'s
+/// reserved check at the same time it joins the router.
+const WATCH_SOCKET_PATH: &str = "/api/v1/watch";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RequestMethod {
@@ -238,6 +252,51 @@ pub enum LoopbackServerError {
     Serve(#[source] std::io::Error),
     #[error("loopback server task failed: {0}")]
     Join(#[source] tokio::task::JoinError),
+    #[error("secondary WebSocket route path {path:?} rejected: {rejection}")]
+    SecondaryRoutePath {
+        path: &'static str,
+        rejection: SecondaryRoutePathRejection,
+    },
+}
+
+/// Why a target-supplied secondary WebSocket path was refused.
+///
+/// Every one of these is refused before a listener exists, because the two
+/// downstream failure modes are both worse than an error return: a path
+/// axum reads as a pattern silently widens the host's attack surface, and a
+/// duplicate path makes `Router::route` panic inside the spawn path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SecondaryRoutePathRejection {
+    /// The path does not start at the root.
+    NotAbsolute,
+    /// The path ends in `/`, or two separators are adjacent.
+    EmptySegment,
+    /// A segment is `.` or `..`.
+    RelativeSegment,
+    /// The path carries a query or fragment instead of being a bare path.
+    QueryOrFragment,
+    /// A character outside the RFC 3986 unreserved set. This is how axum
+    /// path parameters (`{id}`), wildcards (`*rest`), and percent escapes
+    /// would get in.
+    NotLiteral,
+    /// The path is the host's own built-in watch route.
+    ReservedPath,
+    /// Another route in the same set already claimed this path.
+    Duplicate,
+}
+
+impl fmt::Display for SecondaryRoutePathRejection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NotAbsolute => "not an absolute path",
+            Self::EmptySegment => "empty path segment",
+            Self::RelativeSegment => "relative path segment",
+            Self::QueryOrFragment => "carries a query or fragment",
+            Self::NotLiteral => "not a literal path",
+            Self::ReservedPath => "reserved by the built-in watch route",
+            Self::Duplicate => "already claimed by another route in the set",
+        })
+    }
 }
 
 pub struct LoopbackServer {
@@ -311,30 +370,71 @@ struct HostState {
     nonce: SessionNonce,
     extension: Arc<dyn RouteExtension>,
     socket: Option<Arc<dyn WebSocketExtension>>,
-    secondary_socket: Option<Arc<dyn WebSocketExtension>>,
+    secondary_sockets: Arc<BTreeMap<&'static str, Arc<dyn WebSocketExtension>>>,
 }
 
-/// A target-injected additional WebSocket route. The shared host registers it
-/// only when the target supplies one at spawn time; without injection the
-/// path does not exist in the route table and falls through to the extension
-/// fallback (404). Admission (Host/Origin/session nonce/subprotocol) is the
-/// host's standard WebSocket policy, identical to the built-in watch route.
+/// A target-injected additional WebSocket route. The shared host registers
+/// only the routes a target supplies at spawn time; an un-injected path does
+/// not exist in the route table and falls through to the extension fallback,
+/// whose 404 is the local extension's behaviour rather than a promise of this
+/// seam. Admission (Host/Origin/session nonce/subprotocol) is the host's
+/// standard WebSocket policy, identical to the built-in watch route.
 pub struct SecondaryWebSocketRoute {
     path: &'static str,
     socket: Arc<dyn WebSocketExtension>,
 }
 
 impl SecondaryWebSocketRoute {
-    pub fn new(path: &'static str, socket: Arc<dyn WebSocketExtension>) -> Self {
-        Self { path, socket }
+    /// Validates the path at construction, so a rejected path can never
+    /// reach `Router::route`.
+    pub fn new(
+        path: &'static str,
+        socket: Arc<dyn WebSocketExtension>,
+    ) -> Result<Self, LoopbackServerError> {
+        if let Some(rejection) = secondary_route_path_rejection(path) {
+            return Err(LoopbackServerError::SecondaryRoutePath { path, rejection });
+        }
+        Ok(Self { path, socket })
     }
+
+    pub const fn path(&self) -> &'static str {
+        self.path
+    }
+}
+
+/// Absolute, exact, literal, and not the built-in watch path.
+fn secondary_route_path_rejection(path: &str) -> Option<SecondaryRoutePathRejection> {
+    if path == WATCH_SOCKET_PATH {
+        return Some(SecondaryRoutePathRejection::ReservedPath);
+    }
+    if path.contains('?') || path.contains('#') {
+        return Some(SecondaryRoutePathRejection::QueryOrFragment);
+    }
+    let Some(segments) = path.strip_prefix('/') else {
+        return Some(SecondaryRoutePathRejection::NotAbsolute);
+    };
+    for segment in segments.split('/') {
+        if segment.is_empty() {
+            return Some(SecondaryRoutePathRejection::EmptySegment);
+        }
+        if segment == "." || segment == ".." {
+            return Some(SecondaryRoutePathRejection::RelativeSegment);
+        }
+        if !segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
+        {
+            return Some(SecondaryRoutePathRejection::NotLiteral);
+        }
+    }
+    None
 }
 
 pub async fn spawn_loopback_server(
     extension: Arc<dyn RouteExtension>,
     nonce: SessionNonce,
 ) -> Result<LoopbackServer, LoopbackServerError> {
-    spawn_loopback_server_internal(extension, None, None, nonce).await
+    spawn_loopback_server_internal(extension, None, Vec::new(), nonce).await
 }
 
 pub async fn spawn_loopback_server_with_socket(
@@ -342,39 +442,52 @@ pub async fn spawn_loopback_server_with_socket(
     socket: Arc<dyn WebSocketExtension>,
     nonce: SessionNonce,
 ) -> Result<LoopbackServer, LoopbackServerError> {
-    spawn_loopback_server_internal(extension, Some(socket), None, nonce).await
+    spawn_loopback_server_internal(extension, Some(socket), Vec::new(), nonce).await
 }
 
+/// Spawns with a validated set of secondary routes. The set is checked for
+/// in-set path uniqueness before anything is bound or registered.
 pub async fn spawn_loopback_server_with_sockets(
     extension: Arc<dyn RouteExtension>,
     socket: Arc<dyn WebSocketExtension>,
-    secondary: SecondaryWebSocketRoute,
+    secondary_routes: Vec<SecondaryWebSocketRoute>,
     nonce: SessionNonce,
 ) -> Result<LoopbackServer, LoopbackServerError> {
-    spawn_loopback_server_internal(extension, Some(socket), Some(secondary), nonce).await
+    spawn_loopback_server_internal(extension, Some(socket), secondary_routes, nonce).await
 }
 
 async fn spawn_loopback_server_internal(
     extension: Arc<dyn RouteExtension>,
     socket: Option<Arc<dyn WebSocketExtension>>,
-    secondary: Option<SecondaryWebSocketRoute>,
+    secondary_routes: Vec<SecondaryWebSocketRoute>,
     nonce: SessionNonce,
 ) -> Result<LoopbackServer, LoopbackServerError> {
+    // Collapse the set before binding: `Router::route` panics on a duplicate
+    // path, and a panic here would take the process down instead of handing
+    // the target a wiring error it can report.
+    let mut secondary_sockets: BTreeMap<&'static str, Arc<dyn WebSocketExtension>> =
+        BTreeMap::new();
+    for route in secondary_routes {
+        let SecondaryWebSocketRoute { path, socket } = route;
+        if secondary_sockets.insert(path, socket).is_some() {
+            return Err(LoopbackServerError::SecondaryRoutePath {
+                path,
+                rejection: SecondaryRoutePathRejection::Duplicate,
+            });
+        }
+    }
+    let secondary_sockets = Arc::new(secondary_sockets);
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
         .map_err(LoopbackServerError::Bind)?;
     let address = listener.local_addr().map_err(LoopbackServerError::Bind)?;
     let authority = format!("127.0.0.1:{}", address.port());
     let origin = format!("http://{authority}");
-    let (secondary_path, secondary_socket) = match secondary {
-        Some(route) => (Some(route.path), Some(route.socket)),
-        None => (None, None),
-    };
     // One maintenance task drives every injected socket extension on the
     // shared cadence; a socket with the default no-op tick costs nothing.
     let tick_sockets: Vec<Arc<dyn WebSocketExtension>> = socket
         .iter()
-        .chain(secondary_socket.iter())
+        .chain(secondary_sockets.values())
         .map(Arc::clone)
         .collect();
     let socket_maintenance = (!tick_sockets.is_empty()).then(|| {
@@ -403,10 +516,10 @@ async fn spawn_loopback_server_internal(
         nonce: nonce.clone(),
         extension,
         socket,
-        secondary_socket,
+        secondary_sockets: Arc::clone(&secondary_sockets),
     };
-    let mut router = Router::new().route("/api/v1/watch", get(handle_watch_socket));
-    if let Some(path) = secondary_path {
+    let mut router = Router::new().route(WATCH_SOCKET_PATH, get(handle_watch_socket));
+    for path in secondary_sockets.keys() {
         router = router.route(path, get(handle_secondary_socket));
     }
     let router = router.fallback(any(handle_extension)).with_state(state);
@@ -451,8 +564,7 @@ async fn handle_watch_socket(
     };
     let mut source = SystemTraceIdSource;
     let connection_id = source.next_trace_id();
-    upgrade
-        .protocols([SHARED_WATCH_SUBPROTOCOL])
+    shared_websocket_upgrade(upgrade, SHARED_WATCH_SUBPROTOCOL)
         .on_upgrade(move |socket| serve_websocket(socket, extension, connection_id))
 }
 
@@ -464,16 +576,30 @@ async fn handle_secondary_socket(
     if websocket_admission_denied(&state, &request) {
         return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
     }
-    let Some(extension) = state.secondary_socket else {
-        // Unreachable while the route is only registered alongside the
-        // injected socket; kept as a fail-closed guard rather than a panic.
+    // Registered paths are exact literals, so the request path is the map
+    // key. Fail closed rather than panic if that ever stops being true.
+    let Some(extension) = state.secondary_sockets.get(request.uri().path()).cloned() else {
         return extension_response(ExtensionResponse::not_found());
     };
     let mut source = SystemTraceIdSource;
     let connection_id = source.next_trace_id();
-    upgrade
-        .protocols([SHARED_WATCH_SUBPROTOCOL])
+    shared_websocket_upgrade(upgrade, SHARED_WATCH_SUBPROTOCOL)
         .on_upgrade(move |socket| serve_websocket(socket, extension, connection_id))
+}
+
+/// Configures a WebSocket upgrade the one way every target uses: the shared
+/// subprotocol offer and [`MAX_WEBSOCKET_MESSAGE_BYTES`] on both the frame
+/// and the message. An oversized frame fails inside axum's codec, so the
+/// pump sees a transport error and tears the connection down without the
+/// extension ever being handed the bytes.
+pub fn shared_websocket_upgrade(
+    upgrade: WebSocketUpgrade,
+    subprotocol: &'static str,
+) -> WebSocketUpgrade {
+    upgrade
+        .protocols([subprotocol])
+        .max_message_size(MAX_WEBSOCKET_MESSAGE_BYTES)
+        .max_frame_size(MAX_WEBSOCKET_MESSAGE_BYTES)
 }
 
 /// Runs the target-neutral WebSocket frame, heartbeat, and cleanup pump.
@@ -785,6 +911,38 @@ mod tests {
         }
     }
 
+    /// Accepts the connection, unlike [`CountingSocket`], so a test can put
+    /// real frames through the shared pump.
+    #[derive(Default)]
+    struct RecordingSocket {
+        connects: AtomicUsize,
+        texts: AtomicUsize,
+        bytes: AtomicUsize,
+        // Held for the life of the connection on purpose: the pump ends as
+        // soon as the outbound channel closes, so an extension that drops
+        // its sender tears its own connection down before any frame lands.
+        outbound: Mutex<Vec<mpsc::UnboundedSender<String>>>,
+    }
+
+    impl WebSocketExtension for RecordingSocket {
+        fn connect(
+            &self,
+            _connection_id: TraceId,
+            outbound: mpsc::UnboundedSender<String>,
+        ) -> bool {
+            self.outbound.lock().unwrap().push(outbound);
+            self.connects.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+
+        fn receive_text(&self, _connection_id: TraceId, message: &str) {
+            self.texts.fetch_add(1, Ordering::SeqCst);
+            self.bytes.fetch_add(message.len(), Ordering::SeqCst);
+        }
+
+        fn disconnect(&self, _connection_id: TraceId) {}
+    }
+
     impl RouteExtension for CountingExtension {
         fn handle(&self, request: ExtensionRequest) -> ExtensionResponse {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -801,7 +959,7 @@ mod tests {
                 nonce: "00000000-0000-4000-8000-000000000001".parse().unwrap(),
                 extension,
                 socket: None,
-                secondary_socket: None,
+                secondary_sockets: Arc::new(BTreeMap::new()),
             })
     }
 
@@ -813,13 +971,26 @@ mod tests {
         nonce: &str,
         timeout: Duration,
     ) -> bool {
+        upgraded_websocket(address, path, authority, origin, nonce, timeout).is_some()
+    }
+
+    /// The handshake, keeping the upgraded stream so a test can drive frames
+    /// through it.
+    fn upgraded_websocket(
+        address: SocketAddr,
+        path: &str,
+        authority: &str,
+        origin: &str,
+        nonce: &str,
+        timeout: Duration,
+    ) -> Option<TcpStream> {
         let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
-            return false;
+            return None;
         };
         if stream.set_read_timeout(Some(timeout)).is_err()
             || stream.set_write_timeout(Some(timeout)).is_err()
         {
-            return false;
+            return None;
         }
         let request = format!(
             "GET {path}?session={nonce} HTTP/1.1\r\n\
@@ -832,21 +1003,100 @@ mod tests {
              Sec-WebSocket-Protocol: {SHARED_WATCH_SUBPROTOCOL}\r\n\r\n"
         );
         if stream.write_all(request.as_bytes()).is_err() {
-            return false;
+            return None;
         }
         let mut response = Vec::new();
         let mut buffer = [0_u8; 512];
         while !response.windows(4).any(|window| window == b"\r\n\r\n") && response.len() <= 8 * 1024
         {
             let Ok(read) = stream.read(&mut buffer) else {
-                return false;
+                return None;
             };
             if read == 0 {
-                return false;
+                return None;
             }
             response.extend_from_slice(&buffer[..read]);
         }
-        response.starts_with(b"HTTP/1.1 101 ")
+        response.starts_with(b"HTTP/1.1 101 ").then_some(stream)
+    }
+
+    /// A masked client text frame, which is the only text frame a server is
+    /// allowed to accept.
+    fn masked_text_frame(payload: &[u8]) -> Vec<u8> {
+        let mask = [0x37_u8, 0xfa, 0x21, 0x3d];
+        let mut frame = vec![0x81_u8];
+        let length = payload.len();
+        if length < 126 {
+            frame.push(0x80 | u8::try_from(length).unwrap());
+        } else if let Ok(length) = u16::try_from(length) {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&length.to_be_bytes());
+        } else {
+            frame.push(0x80 | 127);
+            frame.extend_from_slice(&(length as u64).to_be_bytes());
+        }
+        frame.extend_from_slice(&mask);
+        frame.extend(
+            payload
+                .iter()
+                .enumerate()
+                .map(|(index, byte)| byte ^ mask[index % 4]),
+        );
+        frame
+    }
+
+    /// True once the peer stops the connection. Three shapes mean the same
+    /// thing to a client: a Close frame, a plain EOF, or a reset -- the last
+    /// is what a host produces when it drops a socket whose receive buffer
+    /// still holds bytes it refused to read. The shared pump's heartbeat
+    /// sends a Ping the moment a connection opens, so server frames have to
+    /// be walked rather than sampled. A read that merely times out is the
+    /// one outcome meaning the connection is still up.
+    fn closed_by_peer(stream: &mut TcpStream) -> bool {
+        let mut pending = Vec::new();
+        loop {
+            while let Some(opcode) = take_server_frame(&mut pending) {
+                if opcode & 0x0f == 0x08 {
+                    return true;
+                }
+            }
+            let mut buffer = [0_u8; 256];
+            match stream.read(&mut buffer) {
+                Ok(0) => return true,
+                Ok(read) => pending.extend_from_slice(&buffer[..read]),
+                Err(error) => {
+                    return matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset
+                    );
+                }
+            }
+        }
+    }
+
+    /// Pops one complete server frame and reports its first byte. Server
+    /// frames are never masked, so the header is opcode plus length only.
+    fn take_server_frame(pending: &mut Vec<u8>) -> Option<u8> {
+        if pending.len() < 2 {
+            return None;
+        }
+        let opcode = pending[0];
+        let (header, length) = match pending[1] & 0x7f {
+            126 => (
+                4,
+                usize::from(u16::from_be_bytes([*pending.get(2)?, *pending.get(3)?])),
+            ),
+            127 => {
+                let bytes: [u8; 8] = pending.get(2..10)?.try_into().ok()?;
+                (10, usize::try_from(u64::from_be_bytes(bytes)).ok()?)
+            }
+            short => (2, usize::from(short)),
+        };
+        if pending.len() < header + length {
+            return None;
+        }
+        pending.drain(..header + length);
+        Some(opcode)
     }
 
     #[test]
@@ -1052,7 +1302,7 @@ mod tests {
         let server = spawn_loopback_server_with_sockets(
             extension.clone(),
             watch,
-            SecondaryWebSocketRoute::new("/api/v1/second-socket", secondary),
+            vec![SecondaryWebSocketRoute::new("/api/v1/second-socket", secondary).unwrap()],
             SessionNonce::generate(),
         )
         .await
@@ -1152,7 +1402,7 @@ mod tests {
         let server = spawn_loopback_server_with_sockets(
             extension,
             watch.clone(),
-            SecondaryWebSocketRoute::new("/api/v1/second-socket", secondary.clone()),
+            vec![SecondaryWebSocketRoute::new("/api/v1/second-socket", secondary.clone()).unwrap()],
             SessionNonce::generate(),
         )
         .await
@@ -1168,5 +1418,263 @@ mod tests {
         .await
         .expect("both injected sockets share the maintenance cadence");
         server.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn a_secondary_route_path_must_be_absolute_exact_and_literal() {
+        let socket = || Arc::new(CountingSocket::default()) as Arc<dyn WebSocketExtension>;
+        for (path, expected) in [
+            (
+                "api/v1/local/presence",
+                SecondaryRoutePathRejection::NotAbsolute,
+            ),
+            ("", SecondaryRoutePathRejection::NotAbsolute),
+            ("/", SecondaryRoutePathRejection::EmptySegment),
+            ("/api//presence", SecondaryRoutePathRejection::EmptySegment),
+            (
+                "/api/v1/presence/",
+                SecondaryRoutePathRejection::EmptySegment,
+            ),
+            (
+                "/api/../watch",
+                SecondaryRoutePathRejection::RelativeSegment,
+            ),
+            ("/api/./watch", SecondaryRoutePathRejection::RelativeSegment),
+            (
+                "/api/v1/presence?session=1",
+                SecondaryRoutePathRejection::QueryOrFragment,
+            ),
+            (
+                "/api/v1/presence#tab",
+                SecondaryRoutePathRejection::QueryOrFragment,
+            ),
+            // Every axum pattern form, plus percent escapes, is a non-literal.
+            ("/api/v1/{kind}", SecondaryRoutePathRejection::NotLiteral),
+            ("/api/v1/*rest", SecondaryRoutePathRejection::NotLiteral),
+            ("/api/v1/:kind", SecondaryRoutePathRejection::NotLiteral),
+            (
+                "/api/v1/desired%2Dwatch",
+                SecondaryRoutePathRejection::NotLiteral,
+            ),
+            (
+                "/api/v1/local presence",
+                SecondaryRoutePathRejection::NotLiteral,
+            ),
+            // Claiming the built-in path would panic the router at startup.
+            ("/api/v1/watch", SecondaryRoutePathRejection::ReservedPath),
+        ] {
+            let error = SecondaryWebSocketRoute::new(path, socket())
+                .err()
+                .unwrap_or_else(|| panic!("{path} must be rejected"));
+            let LoopbackServerError::SecondaryRoutePath {
+                path: seen,
+                rejection,
+            } = error
+            else {
+                panic!("{path} must fail as a path rejection");
+            };
+            assert_eq!(seen, path);
+            assert_eq!(rejection, expected, "{path}");
+        }
+
+        // The two paths frozen for the local desired-watch topology.
+        for path in ["/api/v1/local/presence", "/api/v1/local/desired-watch"] {
+            let route = SecondaryWebSocketRoute::new(path, socket()).expect(path);
+            assert_eq!(route.path(), path);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_path_in_the_route_set_is_an_error_rather_than_a_router_panic() {
+        let extension = Arc::new(CountingExtension {
+            calls: AtomicUsize::new(0),
+        });
+        let watch = Arc::new(CountingSocket::default());
+        // `Router::route` panics on a duplicate path, so the set has to be
+        // collapsed before registration; the listener must not exist yet
+        // either, or the failure would leak a bound port.
+        let error = spawn_loopback_server_with_sockets(
+            extension,
+            watch,
+            vec![
+                SecondaryWebSocketRoute::new(
+                    "/api/v1/local/presence",
+                    Arc::new(CountingSocket::default()),
+                )
+                .unwrap(),
+                SecondaryWebSocketRoute::new(
+                    "/api/v1/local/presence",
+                    Arc::new(CountingSocket::default()),
+                )
+                .unwrap(),
+            ],
+            SessionNonce::generate(),
+        )
+        .await
+        .err()
+        .expect("a duplicate path must be refused");
+        let LoopbackServerError::SecondaryRoutePath { path, rejection } = error else {
+            panic!("a duplicate must fail as a path rejection");
+        };
+        assert_eq!(path, "/api/v1/local/presence");
+        assert_eq!(rejection, SecondaryRoutePathRejection::Duplicate);
+    }
+
+    /// A multi-thread runtime, deliberately: these tests poll a counter that
+    /// only a server task can advance, and on the single-threaded flavour a
+    /// polling loop and the server compete for the one thread.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn each_route_in_the_set_reaches_its_own_socket() {
+        let extension = Arc::new(CountingExtension {
+            calls: AtomicUsize::new(0),
+        });
+        let watch = Arc::new(CountingSocket::default());
+        let presence = Arc::new(RecordingSocket::default());
+        let desired = Arc::new(RecordingSocket::default());
+        let server = spawn_loopback_server_with_sockets(
+            extension,
+            watch,
+            vec![
+                SecondaryWebSocketRoute::new("/api/v1/local/presence", presence.clone()).unwrap(),
+                SecondaryWebSocketRoute::new("/api/v1/local/desired-watch", desired.clone())
+                    .unwrap(),
+            ],
+            SessionNonce::generate(),
+        )
+        .await
+        .unwrap();
+        let origin = server.origin().to_owned();
+        let authority = origin.strip_prefix("http://").unwrap().to_owned();
+        let address = authority.parse::<SocketAddr>().unwrap();
+        let nonce = server.nonce().as_str().to_owned();
+
+        let speak = move |path: &'static str, message: &'static str| {
+            let (address, authority, origin, nonce) =
+                (address, authority.clone(), origin.clone(), nonce.clone());
+            tokio::task::spawn_blocking(move || {
+                let mut stream = upgraded_websocket(
+                    address,
+                    path,
+                    &authority,
+                    &origin,
+                    &nonce,
+                    Duration::from_secs(5),
+                )
+                .unwrap_or_else(|| panic!("{path} upgrades"));
+                stream
+                    .write_all(&masked_text_frame(message.as_bytes()))
+                    .unwrap();
+                stream.flush().unwrap();
+                stream
+            })
+        };
+
+        let presence_stream = speak("/api/v1/local/presence", r#"{"type":"HELLO"}"#)
+            .await
+            .unwrap();
+        await_count(&presence.texts, 1, "the presence socket receives its frame").await;
+        assert_eq!(
+            desired.connects.load(Ordering::SeqCst),
+            0,
+            "one path in the set must not be served by another path's socket",
+        );
+
+        let desired_stream = speak("/api/v1/local/desired-watch", r#"{"type":"START"}"#)
+            .await
+            .unwrap();
+        await_count(
+            &desired.texts,
+            1,
+            "the desired socket receives its own frame",
+        )
+        .await;
+        assert_eq!(
+            presence.texts.load(Ordering::SeqCst),
+            1,
+            "the second route's traffic must not reach the first route's socket",
+        );
+
+        drop((presence_stream, desired_stream));
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_shared_ceiling_admits_a_full_size_frame_and_drops_the_next_byte() {
+        let extension = Arc::new(CountingExtension {
+            calls: AtomicUsize::new(0),
+        });
+        let watch = Arc::new(RecordingSocket::default());
+        let server =
+            spawn_loopback_server_with_socket(extension, watch.clone(), SessionNonce::generate())
+                .await
+                .unwrap();
+        let origin = server.origin().to_owned();
+        let authority = origin.strip_prefix("http://").unwrap().to_owned();
+        let address = authority.parse::<SocketAddr>().unwrap();
+        let nonce = server.nonce().as_str().to_owned();
+        let connect = move || {
+            upgraded_websocket(
+                address,
+                WATCH_SOCKET_PATH,
+                &authority,
+                &origin,
+                &nonce,
+                Duration::from_secs(5),
+            )
+            .expect("the watch route upgrades")
+        };
+
+        // Exactly at the ceiling is the positive control: it proves a later
+        // "nothing arrived" means the cap fired rather than the pump being
+        // broken, and it pins the boundary as inclusive.
+        let at_ceiling = connect.clone();
+        let admitted = tokio::task::spawn_blocking(move || {
+            let mut stream = at_ceiling();
+            let payload = vec![b'a'; MAX_WEBSOCKET_MESSAGE_BYTES];
+            stream.write_all(&masked_text_frame(&payload)).unwrap();
+            stream.flush().unwrap();
+            stream
+        })
+        .await
+        .unwrap();
+        await_count(&watch.texts, 1, "a full-size frame reaches the extension").await;
+        assert_eq!(
+            watch.bytes.load(Ordering::SeqCst),
+            MAX_WEBSOCKET_MESSAGE_BYTES,
+            "the full-size payload arrives whole",
+        );
+
+        let closed = tokio::task::spawn_blocking(move || {
+            let mut stream = connect();
+            let payload = vec![b'b'; MAX_WEBSOCKET_MESSAGE_BYTES + 1];
+            stream.write_all(&masked_text_frame(&payload)).unwrap();
+            stream.flush().unwrap();
+            closed_by_peer(&mut stream)
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            closed,
+            "one byte past the shared ceiling must end the connection",
+        );
+        assert_eq!(
+            watch.texts.load(Ordering::SeqCst),
+            1,
+            "the over-ceiling payload must never be handed to the extension",
+        );
+        drop(admitted);
+        server.shutdown().await.unwrap();
+    }
+
+    /// Waits for a counter another task owns, without spinning the scheduler.
+    async fn await_count(counter: &AtomicUsize, expected: usize, what: &str) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while counter.load(Ordering::SeqCst) < expected {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting until {what}"));
     }
 }

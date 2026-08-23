@@ -37,7 +37,9 @@ pub use path::{
 };
 pub use personal::PersonalSurface;
 pub use policy::{LocalRefreshPolicyProvider, LocalRuntimeCore, create_local_runtime_core};
-pub use watch::create_local_watch_socket;
+pub use watch::{
+    LOCAL_DESIRED_WATCH_SOCKET_PATH, LOCAL_PRESENCE_SOCKET_PATH, create_local_watch_socket,
+};
 
 pub fn boundary_marker() -> &'static str {
     let _ = (

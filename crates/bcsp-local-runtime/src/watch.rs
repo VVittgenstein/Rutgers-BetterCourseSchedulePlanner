@@ -1,3 +1,9 @@
+//! Local watch wiring, plus the frozen paths of the local-only WebSocket
+//! routes. The paths live here so the S2b pin -- an un-injected path must
+//! 404 -- and the eventual registration cannot drift apart: the shared host
+//! promises nothing about a path it was never given, and the 404 is the
+//! local extension fallback's behaviour.
+
 use std::sync::{Arc, Mutex};
 
 use bcsp_application::{
@@ -11,6 +17,11 @@ use bcsp_watch::{WatchManagerError, WatchStartAdmission};
 use time::OffsetDateTime;
 
 use crate::{LocalPrimaryDatabase, LocalRuntimeCore, history::LocalWatchHistorySink};
+
+/// Frozen path of the local presence route.
+pub const LOCAL_PRESENCE_SOCKET_PATH: &str = "/api/v1/local/presence";
+/// Frozen path of the local desired-watch route.
+pub const LOCAL_DESIRED_WATCH_SOCKET_PATH: &str = "/api/v1/local/desired-watch";
 
 struct LocalWatchAdmission {
     database: Arc<Mutex<LocalPrimaryDatabase>>,
