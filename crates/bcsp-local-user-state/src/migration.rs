@@ -40,6 +40,12 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         sql: include_str!("../migrations/0003_desired_watches.sql"),
         after_sql: None,
     },
+    EmbeddedMigration {
+        id: PERSONAL_MIGRATION_ID_BASE + 4,
+        name: "desired_watch_authority",
+        sql: include_str!("../migrations/0004_desired_watch_authority.sql"),
+        after_sql: None,
+    },
 ];
 
 pub(crate) fn apply_migrations(connection: &mut Connection) -> PersonalStateResult<()> {

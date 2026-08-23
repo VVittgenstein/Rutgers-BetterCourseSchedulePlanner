@@ -13,7 +13,8 @@ use rusqlite::{
 
 use crate::migration::{apply_migrations, read_migration_records};
 use crate::{
-    DesiredWatch, DesiredWatchMutation, EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord,
+    DesiredWatch, DesiredWatchAuthority, DesiredWatchCounters, DesiredWatchEntry,
+    EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord,
     EpisodeDisposition,
     EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput, HistoryFilter, HistoryPage,
     HistoryWriteOutcome, LocalSettings, MAX_SELECTED_SECTIONS, PageRequest,
@@ -189,107 +190,31 @@ impl PersonalStateStore {
         Ok(true)
     }
 
-    /// The persisted desired-watch intents, ordered by section key.
+    /// The desired-watch intents a bootstrap should show, ordered by section
+    /// key. Tombstones (`desired = 0`) are excluded, so this stays the exact
+    /// shape protocol v1 already ships -- the authority state below is not on
+    /// the wire until the frontend slice lands.
     pub fn desired_watches(&self) -> PersonalStateResult<Vec<DesiredWatch>> {
         load_desired_watches(&self.connection)
     }
 
-    /// Idempotently records desired-watch intent (user START). The
-    /// nine-watch cap applies to NEW sections only; a policy update of an
-    /// existing intent always succeeds.
+    /// The full authority state: generation, counters, and every row
+    /// INCLUDING tombstones.
     ///
-    /// SEQUENCING CONTRACT: this store is deliberately unfenced -- no
-    /// revision guard, no operation sequence, no delete tombstone; each call
-    /// is last-writer-wins. The caller therefore MUST issue every mutation
-    /// of this table (upsert, remove, and the reset that clears it) from ONE
-    /// serialized fence -- the watch manager's per-command critical section
-    /// -- so that user-intent order is the issue order. In particular the
-    /// fence must make these interleavings impossible: a delayed START
-    /// landing after its STOP (re-inserting stopped intent), a delayed STOP
-    /// landing after a newer START (deleting live intent), an older policy
-    /// overwriting a newer one, and a pre-reset write landing after the
-    /// reset barrier. No production writer may be wired to this API until
-    /// that fence exists and is pinned by tests (S2-PR5 hard gate).
-    pub fn upsert_desired_watch(
-        &mut self,
-        section: &SectionKey,
-        policy: &WatchPolicyV1,
-    ) -> PersonalStateResult<DesiredWatchMutation> {
-        let policy_json = serde_json::to_string(policy)?;
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing = transaction
-            .query_row(
-                "SELECT policy_json FROM personal_desired_watches_v1
-                 WHERE term_id = ?1 AND campus_code = ?2 AND section_index = ?3",
-                params![
-                    section.term().as_str(),
-                    section.campus().as_str(),
-                    section.index().as_str(),
-                ],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        let mutation = match existing {
-            Some(stored) if stored == policy_json => DesiredWatchMutation::Unchanged,
-            Some(_) => {
-                transaction.execute(
-                    "UPDATE personal_desired_watches_v1 SET policy_json = ?4
-                     WHERE term_id = ?1 AND campus_code = ?2 AND section_index = ?3",
-                    params![
-                        section.term().as_str(),
-                        section.campus().as_str(),
-                        section.index().as_str(),
-                        policy_json,
-                    ],
-                )?;
-                DesiredWatchMutation::Updated
-            }
-            None => {
-                let count: i64 = transaction.query_row(
-                    "SELECT COUNT(*) FROM personal_desired_watches_v1",
-                    [],
-                    |row| row.get(0),
-                )?;
-                if nonnegative_i64_to_u64(count)? >= MAX_SELECTED_SECTIONS as u64 {
-                    return Err(PersonalStateError::DesiredWatchLimitExceeded {
-                        maximum: MAX_SELECTED_SECTIONS,
-                    });
-                }
-                transaction.execute(
-                    "INSERT INTO personal_desired_watches_v1
-                        (term_id, campus_code, section_index, policy_json)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        section.term().as_str(),
-                        section.campus().as_str(),
-                        section.index().as_str(),
-                        policy_json,
-                    ],
-                )?;
-                DesiredWatchMutation::Added
-            }
-        };
-        transaction.commit()?;
-        Ok(mutation)
-    }
-
-    /// Removes desired-watch intent (explicit user STOP). Returns whether a
-    /// row existed. Idempotent, unfenced last-writer-wins like the upsert:
-    /// the same SEQUENCING CONTRACT (see [`Self::upsert_desired_watch`])
-    /// binds every caller.
-    pub fn remove_desired_watch(&mut self, section: &SectionKey) -> PersonalStateResult<bool> {
-        let removed = self.connection.execute(
-            "DELETE FROM personal_desired_watches_v1
-             WHERE term_id = ?1 AND campus_code = ?2 AND section_index = ?3",
-            params![
-                section.term().as_str(),
-                section.campus().as_str(),
-                section.index().as_str(),
-            ],
-        )?;
-        Ok(removed > 0)
+    /// A tombstone is load-bearing rather than debris: a section whose row was
+    /// deleted has no revision to compare a late `basedOnRevision` against, so
+    /// a delayed START would be admitted and would resurrect intent the user
+    /// had cancelled. Callers therefore see removals, not absences.
+    pub fn desired_watch_authority(&self) -> PersonalStateResult<DesiredWatchAuthority> {
+        // One WAL snapshot for both halves: counters read separately from rows
+        // can straddle a concurrent Full Reset and report a generation that
+        // never went with those rows.
+        self.consistent_read(|store| {
+            Ok(DesiredWatchAuthority {
+                counters: load_desired_watch_counters(&store.connection)?,
+                entries: load_desired_watch_entries(&store.connection)?,
+            })
+        })
     }
 
     pub fn upsert_episode_summary(
@@ -573,6 +498,10 @@ impl PersonalStateStore {
             saved_views: table_count(&self.connection, "personal_saved_views_v1")?,
             selected_sections: table_count(&self.connection, "personal_selected_sections_v1")?,
             desired_watches: table_count(&self.connection, "personal_desired_watches_v1")?,
+            desired_watch_receipts: table_count(
+                &self.connection,
+                "personal_desired_watch_receipts_v1",
+            )?,
             episode_summaries: table_count(&self.connection, "personal_episode_summaries_v1")?,
             episode_actions: table_count(&self.connection, "personal_episode_actions_v1")?,
         })
@@ -611,9 +540,23 @@ impl PersonalStateStore {
             transaction.execute("DELETE FROM personal_selected_sections_v1", [])?;
         let deleted_desired_watches =
             transaction.execute("DELETE FROM personal_desired_watches_v1", [])?;
+        let deleted_desired_watch_receipts =
+            transaction.execute("DELETE FROM personal_desired_watch_receipts_v1", [])?;
         let deleted_settings = transaction.execute("DELETE FROM personal_settings_v1", [])?;
+        // Full Reset is the authority's generation barrier: bump the
+        // generation and zero the two counters in the SAME transaction that
+        // deletes the rows. Without the bump, a command issued before the
+        // reset still carries a matching generation and would be admitted
+        // afterwards. The actor incarnation is deliberately untouched -- it
+        // orders frames, not data.
         transaction.execute(
-            "UPDATE personal_state_metadata_v1 SET state_revision = ?1 WHERE singleton_id = 1",
+            "UPDATE personal_state_metadata_v1
+                SET state_revision = ?1,
+                    desired_watch_authority_generation =
+                        desired_watch_authority_generation + 1,
+                    desired_watch_revision_counter = 0,
+                    desired_watch_materialization_counter = 0
+              WHERE singleton_id = 1",
             [u64_to_i64(next_state_revision)?],
         )?;
         transaction.commit()?;
@@ -624,6 +567,7 @@ impl PersonalStateStore {
             deleted_saved_views: deleted_saved_views as u64,
             deleted_selected_sections: deleted_selected_sections as u64,
             deleted_desired_watches: deleted_desired_watches as u64,
+            deleted_desired_watch_receipts: deleted_desired_watch_receipts as u64,
             deleted_episode_summaries: deleted_episode_summaries as u64,
             deleted_episode_actions: deleted_episode_actions as u64,
         })
@@ -751,6 +695,7 @@ fn load_desired_watches(connection: &Connection) -> PersonalStateResult<Vec<Desi
     let mut statement = connection.prepare(
         "SELECT term_id, campus_code, section_index, policy_json
          FROM personal_desired_watches_v1
+         WHERE desired = 1
          ORDER BY term_id, campus_code, section_index",
     )?;
     let rows = statement.query_map([], |row| {
@@ -766,6 +711,82 @@ fn load_desired_watches(connection: &Connection) -> PersonalStateResult<Vec<Desi
         Ok(DesiredWatch {
             section: SectionKey::try_new(&term, &campus, &section_index)?,
             policy: serde_json::from_str::<WatchPolicyV1>(&policy_json)?,
+        })
+    })
+    .collect()
+}
+
+fn load_desired_watch_counters(
+    connection: &Connection,
+) -> PersonalStateResult<DesiredWatchCounters> {
+    connection
+        .query_row(
+            "SELECT desired_watch_authority_generation,
+                    desired_watch_revision_counter,
+                    desired_watch_materialization_counter,
+                    desired_watch_actor_incarnation
+             FROM personal_state_metadata_v1
+             WHERE singleton_id = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .map_err(PersonalStateError::from)
+        .and_then(|(generation, revision, materialization, incarnation)| {
+            Ok(DesiredWatchCounters {
+                authority_generation: nonnegative_i64_to_u64(generation)?,
+                revision_counter: nonnegative_i64_to_u64(revision)?,
+                materialization_counter: nonnegative_i64_to_u64(materialization)?,
+                actor_incarnation: nonnegative_i64_to_u64(incarnation)?,
+            })
+        })
+}
+
+fn load_desired_watch_entries(
+    connection: &Connection,
+) -> PersonalStateResult<Vec<DesiredWatchEntry>> {
+    let mut statement = connection.prepare(
+        "SELECT term_id, campus_code, section_index, desired, policy_json,
+                revision, materialization_epoch
+         FROM personal_desired_watches_v1
+         ORDER BY term_id, campus_code, section_index",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, i64>(6)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (term, campus, index, desired, policy_json, revision, epoch) = row?;
+        // The table CHECK already ties policy presence to `desired`; a
+        // mismatch here would mean the file was edited outside this crate.
+        let policy = match (desired, policy_json) {
+            (1, Some(policy_json)) => Some(serde_json::from_str::<WatchPolicyV1>(&policy_json)?),
+            (0, None) => None,
+            _ => {
+                return Err(PersonalStateError::InvalidStoredValue {
+                    table: "personal_desired_watches_v1",
+                    field: "policy_json",
+                });
+            }
+        };
+        Ok(DesiredWatchEntry {
+            section: SectionKey::try_new(&term, &campus, &index)?,
+            policy,
+            revision: nonnegative_i64_to_u64(revision)?,
+            materialization_epoch: nonnegative_i64_to_u64(epoch)?,
         })
     })
     .collect()
@@ -1034,6 +1055,9 @@ fn table_count(connection: &Connection, table: &'static str) -> PersonalStateRes
         "personal_saved_views_v1" => "SELECT COUNT(*) FROM personal_saved_views_v1",
         "personal_selected_sections_v1" => "SELECT COUNT(*) FROM personal_selected_sections_v1",
         "personal_desired_watches_v1" => "SELECT COUNT(*) FROM personal_desired_watches_v1",
+        "personal_desired_watch_receipts_v1" => {
+            "SELECT COUNT(*) FROM personal_desired_watch_receipts_v1"
+        }
         "personal_episode_summaries_v1" => "SELECT COUNT(*) FROM personal_episode_summaries_v1",
         "personal_episode_actions_v1" => "SELECT COUNT(*) FROM personal_episode_actions_v1",
         _ => return Err(PersonalStateError::SqliteConfiguration("table allowlist")),

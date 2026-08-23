@@ -8,7 +8,7 @@ use bcsp_contracts::{
     WatchNotificationMode, WatchPolicyV1,
 };
 use bcsp_local_user_state::{
-    CatalogRefreshMinutes, CurrentFiltersRevision, DesiredWatch, DesiredWatchMutation,
+    CatalogRefreshMinutes, CurrentFiltersRevision, DesiredWatch,
     EpisodeActionInput, EpisodeActionKind,
     EpisodeDisposition, EpisodeHistoryIdentity, EpisodeSummaryInput, FilterAssociation,
     HistoryFilter, HistoryWriteOutcome, LocalSettings, LocaleOverride, MAX_SELECTED_SECTIONS,
@@ -40,6 +40,37 @@ fn filters() -> FilterRequestV1 {
 fn filters_for(term: &str) -> FilterRequestV1 {
     let input = FilterValuesInputV1::for_term(TermId::try_from(term).unwrap());
     FilterRequestV1::new(NormalizedFilterValuesV1::try_new(input).unwrap())
+}
+
+/// Writes one desired row straight to SQLite. The store exposes no writer:
+/// the unfenced upsert was removed with the CAS design, and the fenced one
+/// arrives with the authority actor.
+fn seed_desired_watch(path: &std::path::Path, key: SectionKey, revision: i64) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO personal_desired_watches_v1
+                 (term_id, campus_code, section_index, desired, policy_json,
+                  revision, materialization_epoch)
+             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?5)",
+            rusqlite::params![
+                key.term().as_str(),
+                key.campus().as_str(),
+                key.index().as_str(),
+                serde_json::to_string(&WatchPolicyV1::default()).unwrap(),
+                revision,
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE personal_state_metadata_v1
+                SET desired_watch_revision_counter = MAX(desired_watch_revision_counter, ?1),
+                    desired_watch_materialization_counter =
+                        MAX(desired_watch_materialization_counter, ?1)",
+            [revision],
+        )
+        .unwrap();
 }
 
 fn state_one() -> UserStateRevision {
@@ -175,10 +206,11 @@ fn first_start_is_schema_only_and_enforces_sqlite_and_migration_contracts() {
     assert!(configuration.busy_timeout_ms >= 5_000);
     assert_eq!(store.personal_table_counts().unwrap(), Default::default());
     let migrations = store.migration_records().unwrap();
-    assert_eq!(migrations.len(), 3);
+    assert_eq!(migrations.len(), 4);
     assert_eq!(migrations[0].migration_id, 10_001);
     assert_eq!(migrations[1].migration_id, 10_002);
     assert_eq!(migrations[2].migration_id, 10_003);
+    assert_eq!(migrations[3].migration_id, 10_004);
     assert_eq!(migrations[0].checksum.len(), 64);
     let _ = store.checkpoint_wal().unwrap();
     drop(store);
@@ -601,7 +633,9 @@ fn legacy_settings_current_filters_migrate_to_the_dedicated_snapshot_table() {
     let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
-            "DELETE FROM personal_migration_ledger WHERE migration_id IN (10002, 10003);
+            "DELETE FROM personal_migration_ledger
+                 WHERE migration_id IN (10002, 10003, 10004);
+             DROP TABLE personal_desired_watch_receipts_v1;
              DROP TABLE personal_desired_watches_v1;
              DROP TABLE personal_saved_views_v1;
              DROP TABLE personal_current_filters_v1;
@@ -623,7 +657,7 @@ fn legacy_settings_current_filters_migrate_to_the_dedicated_snapshot_table() {
     drop(connection);
 
     let store = PersonalStateStore::open(&path).unwrap();
-    assert_eq!(store.migration_records().unwrap().len(), 3);
+    assert_eq!(store.migration_records().unwrap().len(), 4);
     assert_eq!(store.settings().unwrap().value, LocalSettings::default());
     let migrated = store.current_filters().unwrap();
     assert_eq!(migrated.revision.get(), 1);
@@ -776,19 +810,10 @@ fn restart_snapshot_never_restores_active_watch_and_reset_preserves_operational_
         )
         .unwrap();
     // Desired-watch INTENT persists across restarts (L1); the live watch
-    // count never does.
-    assert_eq!(
-        store
-            .upsert_desired_watch(&section(1), &WatchPolicyV1::default())
-            .unwrap(),
-        DesiredWatchMutation::Added
-    );
-    assert_eq!(
-        store
-            .upsert_desired_watch(&section(2), &WatchPolicyV1::default())
-            .unwrap(),
-        DesiredWatchMutation::Added
-    );
+    // count never does. Seeded directly: the CAS writer lands with the
+    // authority actor, and no unfenced writer exists for a caller to reach.
+    seed_desired_watch(&path, section(1), 1);
+    seed_desired_watch(&path, section(2), 2);
     let saved = store
         .create_saved_view(
             state_one(),
@@ -916,7 +941,7 @@ fn restart_snapshot_never_restores_active_watch_and_reset_preserves_operational_
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
-        3
+        4
     );
     let serialized = serde_json::to_value(snapshot).unwrap();
     assert_eq!(serialized["activeWatchCount"], json!(0));
@@ -924,62 +949,188 @@ fn restart_snapshot_never_restores_active_watch_and_reset_preserves_operational_
 }
 
 #[test]
-fn desired_watches_are_idempotent_capped_and_removed_on_stop() {
+fn migration_10004_upgrades_intent_rows_and_separates_authority_from_the_wire() {
     let directory = TempDir::new().unwrap();
     let path = database_path(&directory);
-    let mut store = PersonalStateStore::open(&path).unwrap();
+    drop(PersonalStateStore::open(&path).unwrap());
 
-    // Idempotent re-arm: identical upserts write nothing.
-    assert_eq!(
-        store
-            .upsert_desired_watch(&section(1), &WatchPolicyV1::default())
-            .unwrap(),
-        DesiredWatchMutation::Added
-    );
-    assert_eq!(
-        store
-            .upsert_desired_watch(&section(1), &WatchPolicyV1::default())
-            .unwrap(),
-        DesiredWatchMutation::Unchanged
-    );
+    // Rewind to the 10003 shape and re-seed two intent rows, so reopening
+    // exercises the real upgrade rather than a freshly built table.
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "DELETE FROM personal_migration_ledger WHERE migration_id = 10004;
+             DROP TABLE personal_desired_watch_receipts_v1;
+             DROP TABLE personal_desired_watches_v1;
+             CREATE TABLE personal_desired_watches_v1 (
+                 term_id TEXT NOT NULL,
+                 campus_code TEXT NOT NULL,
+                 section_index TEXT NOT NULL,
+                 policy_json TEXT NOT NULL CHECK (json_valid(policy_json)),
+                 PRIMARY KEY (term_id, campus_code, section_index)
+             ) STRICT;
+             ALTER TABLE personal_state_metadata_v1
+                 RENAME TO personal_state_metadata_post10004;
+             CREATE TABLE personal_state_metadata_v1 (
+                 singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                 state_revision INTEGER NOT NULL CHECK (state_revision > 0)
+             ) STRICT;
+             INSERT INTO personal_state_metadata_v1(singleton_id, state_revision)
+                 SELECT singleton_id, state_revision FROM personal_state_metadata_post10004;
+             DROP TABLE personal_state_metadata_post10004;",
+        )
+        .unwrap();
+    let policy_json = serde_json::to_string(&WatchPolicyV1::default()).unwrap();
+    for index in [2u16, 1u16] {
+        let key = section(index);
+        connection
+            .execute(
+                "INSERT INTO personal_desired_watches_v1
+                     (term_id, campus_code, section_index, policy_json)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    key.term().as_str(),
+                    key.campus().as_str(),
+                    key.index().as_str(),
+                    policy_json,
+                ],
+            )
+            .unwrap();
+    }
+    drop(connection);
 
-    // Policy change updates in place without consuming cap headroom.
-    let continuous = WatchPolicyV1 {
-        notification_mode: WatchNotificationMode::Continuous,
-        ..Default::default()
-    };
+    let store = PersonalStateStore::open(&path).unwrap();
+    assert_eq!(store.migration_records().unwrap().len(), 4);
+
+    let authority = store.desired_watch_authority().unwrap();
+    assert_eq!(authority.counters.authority_generation, 1);
+    assert_eq!(authority.counters.actor_incarnation, 1);
+    // Revisions are assigned in section-key order regardless of insert order,
+    // and the counters are repaired to the highest value handed out.
     assert_eq!(
-        store.upsert_desired_watch(&section(1), &continuous).unwrap(),
-        DesiredWatchMutation::Updated
+        authority
+            .entries
+            .iter()
+            .map(|entry| (entry.section.clone(), entry.revision, entry.materialization_epoch))
+            .collect::<Vec<_>>(),
+        vec![(section(1), 1, 1), (section(2), 2, 2)],
     );
+    assert_eq!(authority.counters.revision_counter, 2);
+    assert_eq!(authority.counters.materialization_counter, 2);
+    assert!(authority.entries.iter().all(|entry| !entry.is_tombstone()));
+
+    // A tombstone is authority state, not wire state: it must reach the
+    // authority reader (a late command needs its revision to compare against)
+    // and must NOT reach the bootstrap, whose shape stays protocol-v1 exact.
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE personal_desired_watches_v1
+                SET desired = 0, policy_json = NULL, revision = 3
+              WHERE section_index = ?1",
+            [section(1).index().as_str()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = PersonalStateStore::open(&path).unwrap();
+    let authority = store.desired_watch_authority().unwrap();
+    assert_eq!(authority.entries.len(), 2, "the tombstone survives");
+    let tombstone = authority
+        .entries
+        .iter()
+        .find(|entry| entry.section == section(1))
+        .expect("tombstone row");
+    assert!(tombstone.is_tombstone());
+    assert_eq!(tombstone.revision, 3);
+
     assert_eq!(
         store.desired_watches().unwrap(),
         vec![DesiredWatch {
-            section: section(1),
-            policy: continuous.clone(),
+            section: section(2),
+            policy: WatchPolicyV1::default(),
         }],
+        "the bootstrap view hides tombstones",
     );
+    // The table count is authority-shaped (tombstones included) on purpose:
+    // Full Reset has to delete them too.
+    assert_eq!(store.personal_table_counts().unwrap().desired_watches, 2);
+}
 
-    // The nine-watch cap rejects the tenth NEW section; updating an
-    // existing one still succeeds at the cap.
-    for ordinal in 2..=9 {
-        store
-            .upsert_desired_watch(&section(ordinal), &WatchPolicyV1::default())
-            .unwrap();
+#[test]
+fn the_desired_watch_table_rejects_a_row_that_disagrees_with_itself() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let store = PersonalStateStore::open(&path).unwrap();
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    let key = section(1);
+    // desired = 1 without a policy, and desired = 0 with one: the CHECK ties
+    // the two together so no reader has to defend against a half-row.
+    for (desired, policy) in [(1, None), (0, Some("{}".to_owned()))] {
+        let error = connection.execute(
+            "INSERT INTO personal_desired_watches_v1
+                 (term_id, campus_code, section_index, desired, policy_json,
+                  revision, materialization_epoch)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, 1)",
+            rusqlite::params![
+                key.term().as_str(),
+                key.campus().as_str(),
+                key.index().as_str(),
+                desired,
+                policy,
+            ],
+        );
+        assert!(error.is_err(), "desired = {desired} must not stand alone");
     }
-    assert!(matches!(
-        store.upsert_desired_watch(&section(10), &WatchPolicyV1::default()),
-        Err(PersonalStateError::DesiredWatchLimitExceeded { maximum: 9 })
-    ));
-    assert_eq!(
-        store
-            .upsert_desired_watch(&section(1), &WatchPolicyV1::default())
-            .unwrap(),
-        DesiredWatchMutation::Updated
-    );
+}
 
-    // Explicit STOP removes; a second STOP is an idempotent no-op.
-    assert!(store.remove_desired_watch(&section(1)).unwrap());
-    assert!(!store.remove_desired_watch(&section(1)).unwrap());
-    assert_eq!(store.desired_watches().unwrap().len(), 8);
+#[test]
+fn full_reset_is_the_authority_generation_barrier() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    seed_desired_watch(&path, section(1), 1);
+    seed_desired_watch(&path, section(2), 2);
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO personal_desired_watch_receipts_v1
+                 (authority_generation, mutation_id, term_id, campus_code,
+                  section_index, fingerprint, outcome_json)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, '{}')",
+            rusqlite::params![
+                "00000000-0000-4000-8000-000000000001",
+                section(1).term().as_str(),
+                section(1).campus().as_str(),
+                section(1).index().as_str(),
+                "a".repeat(64),
+            ],
+        )
+        .unwrap();
+    drop(connection);
+
+    let before = store.desired_watch_authority().unwrap();
+    assert_eq!(before.counters.authority_generation, 1);
+    assert_eq!(before.counters.revision_counter, 2);
+    assert_eq!(store.personal_table_counts().unwrap().desired_watch_receipts, 1);
+
+    let reset = store.clear_personal_data(state_one()).unwrap();
+    assert_eq!(reset.deleted_desired_watches, 2);
+    assert_eq!(reset.deleted_desired_watch_receipts, 1);
+
+    // A reset that only deleted rows would leave every pre-reset command
+    // still carrying a matching generation, so it would be admitted right
+    // after the wipe. The bump is what makes those commands stale.
+    let after = store.desired_watch_authority().unwrap();
+    assert_eq!(after.counters.authority_generation, 2);
+    assert_eq!(after.counters.revision_counter, 0);
+    assert_eq!(after.counters.materialization_counter, 0);
+    assert_eq!(
+        after.counters.actor_incarnation, 1,
+        "the incarnation orders frames, not data, and must survive a reset",
+    );
+    assert!(after.entries.is_empty());
+    assert_eq!(store.personal_table_counts().unwrap(), Default::default());
 }

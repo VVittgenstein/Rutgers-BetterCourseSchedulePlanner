@@ -771,13 +771,43 @@ pub struct DesiredWatch {
     pub policy: WatchPolicyV1,
 }
 
-/// Outcome of an idempotent desired-watch upsert. `Unchanged` performs no
-/// write, so re-arm loops (reconnect, auto-START on load) cost nothing.
+/// One row of desired-watch authority state, **including tombstones**.
+///
+/// `policy` is `None` exactly when the row is a tombstone. A tombstone is
+/// not debris: without it a removed section has no revision left to compare a
+/// late `basedOnRevision` against, and a delayed START would be admitted and
+/// would resurrect intent the user had cancelled.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesiredWatchEntry {
+    pub section: SectionKey,
+    pub policy: Option<WatchPolicyV1>,
+    pub revision: u64,
+    pub materialization_epoch: u64,
+}
+
+impl DesiredWatchEntry {
+    pub const fn is_tombstone(&self) -> bool {
+        self.policy.is_none()
+    }
+}
+
+/// The four persisted authority counters.
+///
+/// All four cross the wire to a JavaScript client, so the table bounds them at
+/// `Number.MAX_SAFE_INTEGER`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DesiredWatchMutation {
-    Added,
-    Updated,
-    Unchanged,
+pub struct DesiredWatchCounters {
+    pub authority_generation: u64,
+    pub revision_counter: u64,
+    pub materialization_counter: u64,
+    pub actor_incarnation: u64,
+}
+
+/// Full desired-watch authority state: counters plus every row.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesiredWatchAuthority {
+    pub counters: DesiredWatchCounters,
+    pub entries: Vec<DesiredWatchEntry>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -788,6 +818,7 @@ pub struct PersonalTableCounts {
     pub saved_views: u64,
     pub selected_sections: u64,
     pub desired_watches: u64,
+    pub desired_watch_receipts: u64,
     pub episode_summaries: u64,
     pub episode_actions: u64,
 }
@@ -801,6 +832,7 @@ pub struct PersonalResetResult {
     pub deleted_saved_views: u64,
     pub deleted_selected_sections: u64,
     pub deleted_desired_watches: u64,
+    pub deleted_desired_watch_receipts: u64,
     pub deleted_episode_summaries: u64,
     pub deleted_episode_actions: u64,
 }

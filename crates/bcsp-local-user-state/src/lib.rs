@@ -4,10 +4,14 @@
 //! database. It persists desired-watch INTENT (section + policy, written on user START and
 //! removed on explicit STOP) so a reload can re-arm monitoring, but it deliberately has no
 //! representation for a browser connection, a live watch identifier, or ring consumption --
-//! restoring stored state never resurrects a live watch, it only re-arms intent. The
-//! desired-watch mutation APIs are unfenced last-writer-wins; the sequencing contract on
-//! [`PersonalStateStore::upsert_desired_watch`] binds every writer, and no production writer
-//! exists yet (wiring is gated on the watch-manager fence, S2-PR5).
+//! restoring stored state never resurrects a live watch, it only re-arms intent.
+//!
+//! The desired-watch table is **authority state** for the revision/CAS co-editing design:
+//! every row carries a revision and a materialization epoch, a removal leaves a tombstone
+//! rather than vanishing, and repeated mutations are settled against a receipt ledger. The
+//! CAS writer itself lands with the authority actor; this crate currently exposes only the
+//! readers, and `desired_watches()` deliberately hides tombstones so the bootstrap wire
+//! stays byte-identical to protocol v1 until the frontend slice consumes the new shape.
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]
@@ -22,7 +26,8 @@ mod store;
 pub use error::{PersonalStateError, PersonalStateResult, SettingValueError};
 pub use model::{
     CatalogRefreshMinutes, CurrentFilters, CurrentFiltersRevision, DesiredWatch,
-    DesiredWatchMutation, EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord,
+    DesiredWatchAuthority, DesiredWatchCounters, DesiredWatchEntry, EpisodeActionInput,
+    EpisodeActionKind, EpisodeActionRecord,
     EpisodeDisposition, EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput,
     FilterAssociation, HistoryFilter, HistoryPage,
     HistoryWriteOutcome, LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest,
@@ -44,6 +49,7 @@ pub const PERSONAL_DATA_TABLE_ALLOWLIST: &[&str] = &[
     "personal_saved_views_v1",
     "personal_selected_sections_v1",
     "personal_desired_watches_v1",
+    "personal_desired_watch_receipts_v1",
     "personal_episode_summaries_v1",
     "personal_episode_actions_v1",
 ];
@@ -55,6 +61,7 @@ pub const PERSONAL_TABLE_ALLOWLIST: &[&str] = &[
     "personal_saved_views_v1",
     "personal_selected_sections_v1",
     "personal_desired_watches_v1",
+    "personal_desired_watch_receipts_v1",
     "personal_episode_summaries_v1",
     "personal_episode_actions_v1",
 ];
