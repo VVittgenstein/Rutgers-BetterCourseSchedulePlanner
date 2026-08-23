@@ -618,7 +618,32 @@ skeptic 推翻，但完整性批评提出两条**没有任何镜头检查过**�
 `threshold-1` / `threshold` / `hard cap` 三点验收）归 **PR5d**；
 (b) 顺带裁定 base-0 STOP 是否应当**拒绝创建新行**——按 §3.2 字面它应当
 写入，我因此**没有**擅自改动，但它让未校验的 section key 进入 authority
-状态并上 bootstrap wire，值得一条明确裁决。
+状态，值得一条明确裁决。（**措辞更正**：初稿此处写"并上 bootstrap
+wire"，不准确——当前 protocol-v1 兼容视图 `desired_watches()` 过滤
+tombstone，只有**未来的** authority bootstrap / projection 才会携带它们。）
+
+**Codex 裁定（2026-08-23，随 `65cfd07` 批准）**：
+
+- **T1 已裁定：base-0 用户 STOP 必须创建 tombstone**，不得拒绝、不得变
+  no-op。否则"START 尚未落库 → 用户取消 → 延迟 START 携 base 0 到达"会
+  复活已取消的意图。任意 SectionKey 带来的增长**由资源帽与 rotation
+  解决**，不由拒绝解决。系统 retirement 对 absent/tombstone 返回
+  `NothingToRetire` **仍然正确**。→ 现有实现无需改动。
+- **T2 已裁定：归 PR5d，且 PR5d 是 P1 硬门**——在**任何**生产 caller /
+  desired 路由 / filter / owner materialization 之前必须完成：
+  1. tombstone / receipt 硬帽 **512 / 2048**；
+  2. 80% 阈值精确为 **409 / 1638**（`floor(512*4/5)` / `floor(2048*4/5)`），
+     覆盖 `threshold-1` / `threshold` / `hard-cap` 三点；
+  3. **存储层 fail-closed**：即使 actor 调和遗漏，第 **513 / 2049** 行也
+     不得落库；
+  4. **原子 rotation**：升 generation、重写全部 `desired = 1`、**仅清**
+     tombstone 与 receipt、修复 counters、**保留 `actorIncarnation`**、
+     **不重置同化身内 `transitionId`**；
+  5. **G6**：最大合法状态证明 FULL ≤ 256 KiB / 16 块；
+  6. PR6 原子激活或能力握手，以及 published + gate-pass 的 true-path
+     打包 E2E。
+
+  **若在 PR5d 之前出现任何生产可达入口，T1/T2 立即升级为阻断。**
 
 四处**判别力实测**:
 1. 去掉终局拒绝的 receipt 写入 → 四个测试同时 FAILED

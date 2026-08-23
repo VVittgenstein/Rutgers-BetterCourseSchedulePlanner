@@ -1749,10 +1749,13 @@ fn stopping_a_section_that_was_never_started_still_records_the_cancellation() {
     // Reachable whenever a page cancels before its START commits. The row is
     // written rather than dropped so the revision line starts here: a START
     // still in flight carries `basedOnRevision = 0` and now fails, instead of
-    // arriving after the cancellation and being admitted.
+    // arriving after the cancellation and being admitted. The panicking
+    // admission source is the point of this call -- a stop reaches a section
+    // no admission source has ever been asked about, and must not start
+    // asking now.
     let cancelled = committed(
         store
-            .commit_desired_watch_mutation(&stop(section(1), 0, 1), admit)
+            .commit_desired_watch_mutation(&stop(section(1), 0, 1), never)
             .unwrap(),
     );
     assert!(
