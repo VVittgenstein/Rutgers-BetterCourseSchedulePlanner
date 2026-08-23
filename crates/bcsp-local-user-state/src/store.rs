@@ -16,9 +16,8 @@ use crate::migration::{apply_migrations, read_migration_records};
 use crate::{
     DesiredWatch, DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchCommand,
     DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome,
-    DesiredWatchReceipt, DesiredWatchSource, EpisodeActionInput, EpisodeActionKind,
-    EpisodeActionRecord,
-    EpisodeDisposition,
+    DesiredWatchReceipt, DesiredWatchReceiptOutcome, DesiredWatchRetirementOutcome,
+    EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition,
     EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput, HistoryFilter, HistoryPage,
     HistoryWriteOutcome, LocalSettings, MAX_DESIRED_WATCHES, MAX_SELECTED_SECTIONS, PageRequest,
     PersonalMigrationRecord, PersonalResetResult, PersonalStateError, PersonalStateResult,
@@ -223,13 +222,23 @@ impl PersonalStateStore {
         })
     }
 
-    /// Commits one compare-and-swap against a section's desired-watch row.
+    /// Commits one client compare-and-swap against a section's desired-watch
+    /// row.
     ///
     /// The checks run in the frozen order, inside one IMMEDIATE transaction,
     /// because the order IS the contract: a caller whose generation is gone
     /// must not also be told its id collided, and a caller at the cap must
-    /// not be told its revision was stale. Only the last step writes, so
-    /// every refusal leaves the authority untouched.
+    /// not be told its revision was stale.
+    ///
+    /// A TERMINAL rejection is recorded in the ledger and its transaction is
+    /// committed -- receipt only, never the row and never the counters. That
+    /// is what makes a refusal an answer instead of a guess about timing: a
+    /// rejection that left no trace could be retried later against a world
+    /// that had changed and quietly succeed, so the user would be told "no"
+    /// and then get "yes" for the very same mutation. `StaleGeneration` and
+    /// `MutationIdConflict` are the two terminal answers that stay unwritten:
+    /// the first is decided before the ledger is consulted at all, and the
+    /// second is derived from a row that already exists.
     ///
     /// `admission` is consulted lazily, and only for a command that asks to
     /// watch and has already passed generation, receipt, revision, and the
@@ -263,19 +272,17 @@ impl PersonalStateStore {
             });
         }
 
-        // 2. Receipt. A repeated id replays what it produced the first time;
+        // 2. Receipt. A repeated id replays what it decided the first time;
         //    a reused id carrying a different command is reported FROM the
         //    row that exists, never by inserting a second one.
-        if command.source == DesiredWatchSource::User
-            && let Some(receipt) = load_desired_watch_receipt(
-                &transaction,
-                counters.authority_generation,
-                command.mutation_id,
-            )?
-        {
+        if let Some(receipt) = load_desired_watch_receipt(
+            &transaction,
+            counters.authority_generation,
+            command.mutation_id,
+        )? {
             return Ok(
                 if receipt.section == command.section && receipt.fingerprint == fingerprint {
-                    DesiredWatchMutationOutcome::AlreadyApplied(receipt.committed)
+                    DesiredWatchMutationOutcome::Replayed(receipt.outcome)
                 } else {
                     DesiredWatchMutationOutcome::MutationIdConflict(receipt)
                 },
@@ -287,9 +294,15 @@ impl PersonalStateStore {
         let existing = load_desired_watch_row(&transaction, &command.section)?;
         let current_revision = existing.as_ref().map_or(0, |row| row.revision);
         if command.based_on_revision != current_revision {
-            return Ok(DesiredWatchMutationOutcome::StaleRevision {
-                current: current_revision,
-            });
+            return record_terminal_rejection(
+                transaction,
+                &counters,
+                command,
+                &fingerprint,
+                DesiredWatchReceiptOutcome::StaleRevision {
+                    current: current_revision,
+                },
+            );
         }
 
         // 4. Admission, for a command that asks to watch.
@@ -300,79 +313,98 @@ impl PersonalStateStore {
             let already_desired = existing.as_ref().is_some_and(|row| row.desired);
             if !already_desired && desired_watch_count(&transaction)? >= MAX_DESIRED_WATCHES as u64
             {
-                return Ok(DesiredWatchMutationOutcome::LimitExceeded {
-                    maximum: MAX_DESIRED_WATCHES,
-                });
+                return record_terminal_rejection(
+                    transaction,
+                    &counters,
+                    command,
+                    &fingerprint,
+                    DesiredWatchReceiptOutcome::LimitExceeded {
+                        maximum: MAX_DESIRED_WATCHES,
+                    },
+                );
             }
-            if let DesiredWatchAdmission::Reject(rejection) = admission(&command.section) {
-                return Ok(DesiredWatchMutationOutcome::Rejected(rejection));
+            match admission(&command.section) {
+                DesiredWatchAdmission::Admit | DesiredWatchAdmission::PendingGate => {}
+                // Non-terminal, so nothing is written and no receipt is left:
+                // recording it would freeze a busy lock into a permanent no.
+                DesiredWatchAdmission::Unavailable => {
+                    return Ok(DesiredWatchMutationOutcome::Unavailable);
+                }
+                DesiredWatchAdmission::Reject(reason) => {
+                    return record_terminal_rejection(
+                        transaction,
+                        &counters,
+                        command,
+                        &fingerprint,
+                        DesiredWatchReceiptOutcome::Rejected { reason },
+                    );
+                }
             }
         }
 
-        // 5. Write. The revision always advances; the materialization epoch
-        //    advances only when the `desired` VALUE changes, or when there is
-        //    no previous epoch to keep.
-        let revision = next_counter(counters.revision_counter)?;
-        let (materialization_epoch, epoch_changed) = match &existing {
-            Some(row) if row.desired == command.desired() => (row.materialization_epoch, false),
-            _ => (next_counter(counters.materialization_counter)?, true),
-        };
-        transaction.execute(
-            "INSERT INTO personal_desired_watches_v1(
-                 term_id, campus_code, section_index, desired, policy_json,
-                 revision, materialization_epoch
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(term_id, campus_code, section_index) DO UPDATE SET
-                 desired = excluded.desired,
-                 policy_json = excluded.policy_json,
-                 revision = excluded.revision,
-                 materialization_epoch = excluded.materialization_epoch",
-            params![
-                command.section.term().as_str(),
-                command.section.campus().as_str(),
-                command.section.index().as_str(),
-                i64::from(command.desired()),
-                policy_json,
-                u64_to_i64(revision)?,
-                u64_to_i64(materialization_epoch)?,
-            ],
+        // 5. Write.
+        let committed = apply_desired_watch_write(
+            &transaction,
+            &command.section,
+            policy_json.as_deref(),
+            existing.as_ref(),
+            &counters,
         )?;
-        let materialization_counter = if epoch_changed {
-            materialization_epoch
-        } else {
-            counters.materialization_counter
-        };
-        transaction.execute(
-            "UPDATE personal_state_metadata_v1
-                SET desired_watch_revision_counter = ?1,
-                    desired_watch_materialization_counter = ?2
-              WHERE singleton_id = 1",
-            params![u64_to_i64(revision)?, u64_to_i64(materialization_counter)?],
+        write_desired_watch_receipt(
+            &transaction,
+            counters.authority_generation,
+            command,
+            &fingerprint,
+            DesiredWatchReceiptOutcome::committed(committed),
         )?;
-        let committed = DesiredWatchCommitted {
-            revision,
-            materialization_epoch,
-            epoch_changed,
-        };
-        if command.source == DesiredWatchSource::User {
-            transaction.execute(
-                "INSERT INTO personal_desired_watch_receipts_v1(
-                     authority_generation, mutation_id, term_id, campus_code,
-                     section_index, fingerprint, outcome_json
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    u64_to_i64(counters.authority_generation)?,
-                    command.mutation_id.to_string(),
-                    command.section.term().as_str(),
-                    command.section.campus().as_str(),
-                    command.section.index().as_str(),
-                    fingerprint,
-                    serde_json::to_string(&committed)?,
-                ],
-            )?;
-        }
         transaction.commit()?;
         Ok(DesiredWatchMutationOutcome::Committed(committed))
+    }
+
+    /// Retires a section the authority itself can never arm -- an unsupported
+    /// target, a term that fell out of the window -- by committing a
+    /// `desired = false` row on its own behalf.
+    ///
+    /// Deliberately not a flag on [`Self::commit_desired_watch_mutation`].
+    /// A system retirement obeys different rules at every step, and a shared
+    /// entry point would leave each of them to a caller's discipline: it can
+    /// only ever clear intent, never create it; it refuses to write over a
+    /// tombstone the user made first; it consults no admission source, since
+    /// the reason it exists is that admission said no; and it leaves no
+    /// receipt, because it mints a fresh id per attempt and a ledger row that
+    /// will never be presented again is just an unbounded source of rows.
+    pub fn retire_desired_watch(
+        &mut self,
+        section: &SectionKey,
+        based_on_revision: u64,
+        authority_generation: u64,
+    ) -> PersonalStateResult<DesiredWatchRetirementOutcome> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let counters = load_desired_watch_counters(&transaction)?;
+        if authority_generation != counters.authority_generation {
+            return Ok(DesiredWatchRetirementOutcome::StaleGeneration {
+                current: counters.authority_generation,
+            });
+        }
+        // The user wins this race. Once the section is gone the retirement
+        // has nothing left to do, and writing a second tombstone over the
+        // user's own would move the revision under a page that is already
+        // showing the right answer.
+        let Some(row) = load_desired_watch_row(&transaction, section)?.filter(|row| row.desired)
+        else {
+            return Ok(DesiredWatchRetirementOutcome::NothingToRetire);
+        };
+        if based_on_revision != row.revision {
+            return Ok(DesiredWatchRetirementOutcome::StaleRevision {
+                current: row.revision,
+            });
+        }
+        let committed =
+            apply_desired_watch_write(&transaction, section, None, Some(&row), &counters)?;
+        transaction.commit()?;
+        Ok(DesiredWatchRetirementOutcome::Retired(committed))
     }
 
     pub fn upsert_episode_summary(
@@ -1055,16 +1087,124 @@ fn load_desired_watch_receipt(
         Ok(DesiredWatchReceipt {
             section: SectionKey::try_new(&term, &campus, &index)?,
             fingerprint,
-            committed: serde_json::from_str::<DesiredWatchCommitted>(&outcome_json)?,
+            outcome: serde_json::from_str::<DesiredWatchReceiptOutcome>(&outcome_json)?,
         })
     })
     .transpose()
 }
 
-/// A stable digest of everything a retry has to present identically. The
-/// generation is not in it -- that is half the key -- and neither is the
-/// source, because only user mutations are receipted at all. The NUL
-/// separators keep the three section fields from running together.
+/// Records a terminal rejection and commits the transaction. The ledger row
+/// is the only thing written: the desired row and the counters are untouched,
+/// because nothing about the authority changed -- only the answer this id
+/// will get from now on.
+fn record_terminal_rejection(
+    transaction: Transaction<'_>,
+    counters: &DesiredWatchCounters,
+    command: &DesiredWatchCommand,
+    fingerprint: &str,
+    outcome: DesiredWatchReceiptOutcome,
+) -> PersonalStateResult<DesiredWatchMutationOutcome> {
+    write_desired_watch_receipt(
+        &transaction,
+        counters.authority_generation,
+        command,
+        fingerprint,
+        outcome,
+    )?;
+    transaction.commit()?;
+    Ok(outcome.into())
+}
+
+fn write_desired_watch_receipt(
+    transaction: &Transaction<'_>,
+    authority_generation: u64,
+    command: &DesiredWatchCommand,
+    fingerprint: &str,
+    outcome: DesiredWatchReceiptOutcome,
+) -> PersonalStateResult<()> {
+    transaction.execute(
+        "INSERT INTO personal_desired_watch_receipts_v1(
+             authority_generation, mutation_id, term_id, campus_code,
+             section_index, fingerprint, outcome_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            u64_to_i64(authority_generation)?,
+            command.mutation_id.to_string(),
+            command.section.term().as_str(),
+            command.section.campus().as_str(),
+            command.section.index().as_str(),
+            fingerprint,
+            serde_json::to_string(&outcome)?,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Writes the row and advances the counters. The revision always advances;
+/// the materialization epoch advances only when the `desired` VALUE changes,
+/// or when there is no previous epoch to keep -- the difference between
+/// adjusting a watch and restarting it.
+fn apply_desired_watch_write(
+    transaction: &Transaction<'_>,
+    section: &SectionKey,
+    policy_json: Option<&str>,
+    existing: Option<&DesiredWatchRow>,
+    counters: &DesiredWatchCounters,
+) -> PersonalStateResult<DesiredWatchCommitted> {
+    let desired = policy_json.is_some();
+    let revision = next_counter(counters.revision_counter)?;
+    let (materialization_epoch, epoch_changed) = match existing {
+        Some(row) if row.desired == desired => (row.materialization_epoch, false),
+        _ => (next_counter(counters.materialization_counter)?, true),
+    };
+    transaction.execute(
+        "INSERT INTO personal_desired_watches_v1(
+             term_id, campus_code, section_index, desired, policy_json,
+             revision, materialization_epoch
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(term_id, campus_code, section_index) DO UPDATE SET
+             desired = excluded.desired,
+             policy_json = excluded.policy_json,
+             revision = excluded.revision,
+             materialization_epoch = excluded.materialization_epoch",
+        params![
+            section.term().as_str(),
+            section.campus().as_str(),
+            section.index().as_str(),
+            i64::from(desired),
+            policy_json,
+            u64_to_i64(revision)?,
+            u64_to_i64(materialization_epoch)?,
+        ],
+    )?;
+    let materialization_counter = if epoch_changed {
+        materialization_epoch
+    } else {
+        counters.materialization_counter
+    };
+    transaction.execute(
+        "UPDATE personal_state_metadata_v1
+            SET desired_watch_revision_counter = ?1,
+                desired_watch_materialization_counter = ?2
+          WHERE singleton_id = 1",
+        params![u64_to_i64(revision)?, u64_to_i64(materialization_counter)?],
+    )?;
+    Ok(DesiredWatchCommitted {
+        revision,
+        materialization_epoch,
+        epoch_changed,
+    })
+}
+
+/// A stable digest of everything a retry has to present identically, and a
+/// PERSISTED format: it is compared against rows written by earlier builds,
+/// so the preimage below is a contract rather than an implementation detail.
+///
+/// The generation is not in it -- that is the other half of the ledger key.
+/// Nothing about the caller is in it either: a system retirement has its own
+/// entry point and is never receipted, so there is no provenance to
+/// distinguish here. The NUL separators keep the three section fields from
+/// running together.
 fn command_fingerprint(command: &DesiredWatchCommand, policy_json: Option<&str>) -> String {
     let mut hasher = Sha256::new();
     hasher.update(command.section.term().as_str().as_bytes());

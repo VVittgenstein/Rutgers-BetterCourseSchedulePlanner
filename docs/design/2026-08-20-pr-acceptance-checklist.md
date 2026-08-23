@@ -498,8 +498,9 @@ S2-PR5b.1（Codex 驳回 `a77d9e0` 的 1 项 P2 + 1 项 P3）：
 落地：
 - `commit_desired_watch_mutation(&command, admission)`：单条 `IMMEDIATE`
   事务内按冻结顺序求值——① generation ② receipt 幂等 ③ revision CAS
-  ④ **post-state 准入帽 + 准入判定** ⑤ 写入。**只有第 ⑤ 步写**，任何
-  拒绝都不留痕（不写行、不写 receipt、不动计数器）。
+  ④ **post-state 准入帽 + 准入判定** ⑤ 写入。
+  **【已撤回】** 初版此处写"任何拒绝都不留痕"，与 §2.4 / §6.2 冻结的
+  receipt 表直接冲突，见下方 PR5c.1。
 - **准入帽按 post-state 判定**：仅 `0→1` 占额，因此**满 9 门时的
   policy-only 更新照常提交**。v6 的"当前 count < 9"会误拒它——满员的
   监控列表将变成不可编辑。
@@ -536,6 +537,96 @@ S2-PR5b.1（Codex 驳回 `a77d9e0` 的 1 项 P2 + 1 项 P3）：
 2. **absent → STOP 会建 tombstone 并新铸一个 epoch**。这是刻意的:页面
    在 START 落库前取消时可达,建行让 revision 线从此处起算,使仍在途、
    携带 `basedOnRevision = 0` 的 START 失败而不是被放行。已单测钉死。
+
+### S2-PR5c.1（Codex 驳回 `72c6383` 的 1 P1 + 3 P2 + 2 非阻断）
+
+**P1（我的规格违反，最严重的一次）**：终局拒绝没有 receipt。§2.4 写明
+"只记客户端提交的成功与**终局拒绝**"，§6.2 的表进一步逐项冻结：
+**记** = 成功 / `STALE_REVISION` / `LIMIT_EXCEEDED` / `UNSUPPORTED_TARGET` /
+`TERM_OUT_OF_RANGE` / `SECTION_NOT_FOUND`；**不记** = `STALE_GENERATION`
+（步骤 1 即判定）/ `MUTATION_ID_CONFLICT`（由既有行推导）/ 两个非终局项 /
+系统 CAS。我只实现了成功路径。
+评审给的反例是精确的:X 对空行提交 `basedOnRevision=1` → 终局
+`StaleRevision(current=0)`；Y 以 base 0 建行得到 revision 1；X **原样重试
+即通过并提交**。同理,槽位释放会让原 `LIMIT_EXCEEDED` 变成成功,目录发布
+会让原 `SECTION_NOT_FOUND` 变成成功。**被告知"否"的同一个 mutation 稍后
+静默变成"是"**——正是本子系统存在的理由所要防的那类错位。
+修复:终局拒绝写 receipt 并**提交该事务(仅 receipt)**,不写 desired 行、
+不动计数器；重复呈现同 id 得到 `Replayed(原结果)`。
+
+**P2-1**:惰性 admission 无法表达**非终局** unavailable。本地
+`LocalWatchAdmission` 确有 `TargetUnavailable` 路径(快照未就绪 / 投影
+建不起来 / 数据库锁被占)。旧枚举只有 `Admit`/`PendingGate`/永久 `Reject`,
+调用方只能提前求值、误报永久拒绝、误当 `PendingGate` 提交,或 panic。
+新增 `DesiredWatchAdmission::Unavailable` → outcome `Unavailable`:
+**不写 receipt、不写任何东西、同 id 可重试**,且仍在 generation/receipt/
+revision/cap 之后求值。
+
+**P2-2**:`System` 未被限制为"退休仍然 desired 的现有行"。旧形状用
+`source` 标志控制"是否记 receipt",于是 System START 能无 receipt 地
+**创建**意图,System STOP 能对 absent/tombstone 行继续写。改为**独立
+受限 API** `retire_desired_watch(section, based_on_revision, generation)`:
+`DesiredWatchCommand` 删除 `source` 字段,退休**在类型上**只能清意图、
+不能创建；行不存在或已是 tombstone → `NothingToRetire`(§5.6"用户已删除
+则不再提交");不咨询准入(它存在的原因就是准入说了不);不记 receipt。
+
+**P2-3**:持久格式缺 golden 与 reopen 验收。新增
+`the_persisted_receipt_format_is_pinned`:逐字钉死 SHA-256 指纹与
+`outcome_json` 四种形态(`COMMITTED` / `STALE_REVISION` / `LIMIT_EXCEEDED` /
+`REJECTED`),并在注释中写明指纹**原像**(term‖0‖campus‖0‖index‖0‖
+basedOnRevision(8B BE)‖desired(1B)‖policy JSON)；
+`every_recorded_answer_survives_closing_and_reopening_the_database`:
+9 次成功 + 三类可 receipted 拒绝,**关库重开**后逐条重放一致,且重放时
+用 panicking 的 admission source 证明短路发生在重新判定之前。
+
+**非阻断两项**已同步:cap 测试改用 `MAX_DESIRED_WATCHES`(此前误用
+`MAX_SELECTED_SECTIONS`,二者恰好同值 9 但概念不同);crate 文档"只暴露
+readers"已改写。
+
+**自查另发现两项资源边界缺口（本片未修，需裁定归属）**。PR5c.1 提交前
+用五个独立镜头 + 完整性批评做了一轮对抗复核，六项 finding 全被独立
+skeptic 推翻，但完整性批评提出两条**没有任何镜头检查过**的、经我实跑
+复现的缺口：
+
+- **T1（tombstone 无界）**：`desired = false` 命令按 §3.2 步 4 跳过全部
+  准入，而步 5 无条件写入——因此对**从未 START 过**的任意合法 SectionKey
+  提交 `basedOnRevision = 0` 的 STOP，会**创建**一条永久 authority 行，
+  且该 section 从未经过 campus / term / 目录校验。**实跑**：600 次此类
+  STOP（admission source 用 panicking 的 `never`）→ 600 条 tombstone、
+  `revision_counter = 600`、`materialization_counter = 600`、admission
+  **零次**被咨询。§2.5 冻结 tombstone 硬帽 **512**，本 crate 未实现、
+  未上报、无任何 512 相关代码。更根本的是：即便没有这条路径，用户在一个
+  学期内反复 START/STOP 不同 section 同样会无界增长 tombstone——**帽与
+  rotation 才是真正缺的东西**，本条路径只是让它更快到达。
+  该缺口直接影响 **G6**（"用**最大合法状态**证明 FULL ≤ 256 KiB / 16 块；
+  证明失败即阻断 PR 合并"）：最大合法状态目前无界，G6 **不可证**。
+  我在 PR5c 的披露里把这条路径说成"页面在 START 落库前取消时可达"，
+  **那个理由只覆盖确实发过 START 的 section，而代码接受任意 section
+  key**——措辞过窄，一并更正。
+- **T2（receipt 无界）**：PR5c.1 把 receipt 从"每次成功一行"改成"每次
+  **尝试**一行"，而在双页共同编辑模型里 `STALE_REVISION` 是输掉 CAS 的
+  那一方的**正常**结果，因此拒绝至少和提交一样常见。**实跑**：3000 个
+  不同 mutationId 全部被正确拒绝 → 3000 条 receipt、零 desired 行、
+  无错误、无帽。§2.5 冻结 receipt 硬帽 **2048** 与 80% 触发
+  （`floor(2048*4/5) = 1638`），本 crate 同样未实现。
+
+**未在本片修复的理由**：§2.6 的 rotation 不是纯存储操作——它要求
+"**保留 `actorIncarnation`**"且"**不得在同一化身内重置 `transitionId`**"，
+后者是 actor 状态，不在本 crate 内。因此 rotation 跨 store 与 actor 两
+层，应与 authority actor 同片落地。本片能做且已做的是**如实上报**；
+建议裁定：(a) rotation + §2.5 两个硬帽 + 80% 触发（A-45 要求
+`threshold-1` / `threshold` / `hard cap` 三点验收）归 **PR5d**；
+(b) 顺带裁定 base-0 STOP 是否应当**拒绝创建新行**——按 §3.2 字面它应当
+写入，我因此**没有**擅自改动，但它让未校验的 section key 进入 authority
+状态并上 bootstrap wire，值得一条明确裁决。
+
+四处**判别力实测**:
+1. 去掉终局拒绝的 receipt 写入 → 四个测试同时 FAILED
+   (`a_terminal_rejection_is_recorded` / `a_freed_slot_cannot_turn...` /
+   `a_section_that_becomes_admissible...` / `every_recorded_answer_survives...`)。
+2. 把 `Unavailable` 当作 admit 放行 → `an_unavailable_admission...` FAILED。
+3. （沿用 PR5c）post-state 帽换成 pre-state → cap 测试 FAILED。
+4. （沿用 PR5c）反转 epoch 保留条件 → policy 编辑测试 FAILED。
 
 ## 进度
 
@@ -574,4 +665,5 @@ S2-PR5b.1（Codex 驳回 `a77d9e0` 的 1 项 P2 + 1 项 P3）：
       经 PR5b.1（3aa4935，**Codex 批准**）与 PR5b.2（b32cce4，**Codex
       批准**）闭合；**S2-PR5b 无遗留 finding**，三轮扫描均 0 findings。
       详见下节
-- [~] S2-PR5c（CAS 写入器）——见下节；待复审
+- [~] S2-PR5c（CAS 写入器，72c6383）——驳回 1 P1 + 3 P2 + 2 非阻断；
+      经 PR5c.1 修复，见下节；待复审

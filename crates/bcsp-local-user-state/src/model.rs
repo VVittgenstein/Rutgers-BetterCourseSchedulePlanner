@@ -791,26 +791,18 @@ impl DesiredWatchEntry {
     }
 }
 
-/// Who is asking for a desired-watch mutation.
-///
-/// A user mutation is receipted, so a retry replays its original outcome
-/// instead of being evaluated a second time. A system CAS -- a permanent arm
-/// failure retiring its own row -- mints a fresh id on every attempt and is
-/// deliberately NOT receipted: receipting it would fill the ledger with ids
-/// no client will ever present again.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DesiredWatchSource {
-    User,
-    System,
-}
-
-/// One compare-and-swap against a section's desired-watch row.
+/// One client-submitted compare-and-swap against a section's desired-watch
+/// row.
 ///
 /// `policy` carries the intent: `Some` asks for the section to be watched,
 /// `None` asks for it to stop. `based_on_revision` is the revision the caller
 /// read from its own projection, and `0` states "I read no row at all" -- so
 /// a tombstone still fails a caller that saw nothing, which is exactly what
 /// stops a delayed START from resurrecting intent the user cancelled.
+///
+/// There is no `source` field. The system's own retirement of a section it
+/// can never arm is a different operation with different rules, and it has
+/// its own entry point rather than a flag on this one.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DesiredWatchCommand {
     pub section: SectionKey,
@@ -818,7 +810,6 @@ pub struct DesiredWatchCommand {
     pub based_on_revision: u64,
     pub authority_generation: u64,
     pub mutation_id: TraceId,
-    pub source: DesiredWatchSource,
 }
 
 impl DesiredWatchCommand {
@@ -841,20 +832,62 @@ pub struct DesiredWatchCommitted {
     pub epoch_changed: bool,
 }
 
+/// Why a section cannot be watched at all. Permanent for this section: the
+/// campus is not a product target, the term is outside the window, or the
+/// section is not in the published catalog.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DesiredWatchRejection {
+    UnsupportedTarget,
+    TermOutOfRange,
+    SectionNotFound,
+}
+
+/// What a receipt records, and therefore what a repeated mutation replays.
+///
+/// This is a PERSISTED format: it is stored as the ledger's `outcome_json`
+/// and read back by later builds, so the tag and field names are part of the
+/// on-disk contract, not an implementation detail.
+///
+/// Terminal REJECTIONS are recorded here alongside commits, and that is the
+/// point. A rejection that left no trace could be retried later against a
+/// world that had changed -- a slot freed, a row created by another tab --
+/// and the same mutation the user was told was refused would quietly
+/// succeed. A receipted rejection is the answer forever; only a new gesture
+/// with a new id may ask again.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DesiredWatchReceiptOutcome {
+    #[serde(rename_all = "camelCase")]
+    Committed {
+        revision: u64,
+        materialization_epoch: u64,
+        epoch_changed: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    StaleRevision { current: u64 },
+    #[serde(rename_all = "camelCase")]
+    LimitExceeded { maximum: usize },
+    #[serde(rename_all = "camelCase")]
+    Rejected { reason: DesiredWatchRejection },
+}
+
+impl DesiredWatchReceiptOutcome {
+    pub const fn committed(commit: DesiredWatchCommitted) -> Self {
+        Self::Committed {
+            revision: commit.revision,
+            materialization_epoch: commit.materialization_epoch,
+            epoch_changed: commit.epoch_changed,
+        }
+    }
+}
+
 /// The receipt already recorded for one `(generation, mutationId)`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DesiredWatchReceipt {
     pub section: SectionKey,
     pub fingerprint: String,
-    pub committed: DesiredWatchCommitted,
-}
-
-/// Why a section cannot be watched at all.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DesiredWatchRejection {
-    UnsupportedTarget,
-    TermOutOfRange,
-    SectionNotFound,
+    pub outcome: DesiredWatchReceiptOutcome,
 }
 
 /// A caller's verdict on whether a section may be armed.
@@ -865,6 +898,12 @@ pub enum DesiredWatchAdmission {
     /// This COMMITS. Refusing here would turn a temporary hold into lost user
     /// intent; the arm side retries the materialization instead.
     PendingGate,
+    /// The answer is not knowable right now -- an unavailable snapshot, a
+    /// projection that will not build, a database lock held elsewhere.
+    /// NON-TERMINAL: nothing is written, no receipt is left, and the same id
+    /// may be retried. Reporting a permanent rejection here would throw away
+    /// the user's intent because a lock was busy.
+    Unavailable,
     Reject(DesiredWatchRejection),
 }
 
@@ -872,13 +911,16 @@ pub enum DesiredWatchAdmission {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DesiredWatchMutationOutcome {
     Committed(DesiredWatchCommitted),
-    /// The receipt for this id already recorded this exact command, so its
-    /// original outcome is replayed rather than applied again.
-    AlreadyApplied(DesiredWatchCommitted),
+    /// This id already decided under this generation, with this exact
+    /// command. The recorded outcome is replayed verbatim rather than the
+    /// command being evaluated a second time.
+    Replayed(DesiredWatchReceiptOutcome),
     /// The same id under this generation already recorded a DIFFERENT
     /// command. Derived from the row that exists -- never a second insert,
-    /// which would defeat the ledger it is reported from.
+    /// which would defeat the ledger it is reported from. Not receipted.
     MutationIdConflict(DesiredWatchReceipt),
+    /// Decided at step one, before the ledger is touched, so it is terminal
+    /// but deliberately NOT receipted: the authority it named is gone.
     StaleGeneration {
         current: u64,
     },
@@ -890,6 +932,53 @@ pub enum DesiredWatchMutationOutcome {
         maximum: usize,
     },
     Rejected(DesiredWatchRejection),
+    /// NON-TERMINAL. Nothing was written and no receipt was left; the same
+    /// id may be presented again.
+    Unavailable,
+}
+
+impl From<DesiredWatchReceiptOutcome> for DesiredWatchMutationOutcome {
+    fn from(value: DesiredWatchReceiptOutcome) -> Self {
+        match value {
+            DesiredWatchReceiptOutcome::Committed {
+                revision,
+                materialization_epoch,
+                epoch_changed,
+            } => Self::Committed(DesiredWatchCommitted {
+                revision,
+                materialization_epoch,
+                epoch_changed,
+            }),
+            DesiredWatchReceiptOutcome::StaleRevision { current } => {
+                Self::StaleRevision { current }
+            }
+            DesiredWatchReceiptOutcome::LimitExceeded { maximum } => {
+                Self::LimitExceeded { maximum }
+            }
+            DesiredWatchReceiptOutcome::Rejected { reason } => Self::Rejected(reason),
+        }
+    }
+}
+
+/// What the authority decided about a system retirement.
+///
+/// A retirement has no receipt and no admission check: it always asks for
+/// `desired = false`, it mints a fresh id per attempt so a ledger entry would
+/// never be presented again, and a section that cannot be armed must still be
+/// stoppable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DesiredWatchRetirementOutcome {
+    Retired(DesiredWatchCommitted),
+    StaleGeneration {
+        current: u64,
+    },
+    StaleRevision {
+        current: u64,
+    },
+    /// There is no desired row left to retire, because the user removed the
+    /// section first. The retirement stops here rather than writing a second
+    /// tombstone over the user's own.
+    NothingToRetire,
 }
 
 /// The four persisted authority counters.

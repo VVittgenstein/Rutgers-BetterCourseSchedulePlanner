@@ -8,10 +8,11 @@
 //!
 //! The desired-watch table is **authority state** for the revision/CAS co-editing design:
 //! every row carries a revision and a materialization epoch, a removal leaves a tombstone
-//! rather than vanishing, and repeated mutations are settled against a receipt ledger. The
-//! CAS writer itself lands with the authority actor; this crate currently exposes only the
-//! readers, and `desired_watches()` deliberately hides tombstones so the bootstrap wire
-//! stays byte-identical to protocol v1 until the frontend slice consumes the new shape.
+//! rather than vanishing, and repeated mutations -- successes and terminal rejections alike --
+//! are settled against a receipt ledger, so the same mutation id can never be answered two
+//! different ways. The CAS writer lives here; nothing calls it yet, and `desired_watches()`
+//! deliberately hides tombstones so the bootstrap wire stays byte-identical to protocol v1
+//! until the frontend slice consumes the new shape.
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]
@@ -28,17 +29,16 @@ pub use model::{
     CatalogRefreshMinutes, CurrentFilters, CurrentFiltersRevision, DesiredWatch,
     DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchCommand, DesiredWatchCommitted,
     DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome, DesiredWatchReceipt,
-    DesiredWatchRejection, DesiredWatchSource, EpisodeActionInput,
-    EpisodeActionKind, EpisodeActionRecord,
-    EpisodeDisposition, EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput,
-    FilterAssociation, HistoryFilter, HistoryPage,
-    HistoryWriteOutcome, LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest,
-    PersonalMigrationRecord, PersonalResetResult, PersonalStateSnapshot, PersonalTableCounts,
-    SavedViewContent, SavedViewDefinition, SavedViewDeleteResult, SavedViewIncompatibility,
-    SavedViewMatch, SavedViewMutation, SavedViewReviewCode, SavedViewReviewReason,
-    SavedViewRevision, SavedViewsDeleteAllResult, SelectionMutation, SettingsRevision,
-    SqliteConfiguration, StoredCurrentFilters, StoredSettings, UnixMillis, UserStateRevision,
-    VolumePercent, WalCheckpoint, WatchFastLaneSeconds,
+    DesiredWatchReceiptOutcome, DesiredWatchRejection, DesiredWatchRetirementOutcome,
+    EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition,
+    EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput, FilterAssociation,
+    HistoryFilter, HistoryPage, HistoryWriteOutcome, LocalSettings, LocaleOverride,
+    OpenRefreshSeconds, PageRequest, PersonalMigrationRecord, PersonalResetResult,
+    PersonalStateSnapshot, PersonalTableCounts, SavedViewContent, SavedViewDefinition,
+    SavedViewDeleteResult, SavedViewIncompatibility, SavedViewMatch, SavedViewMutation,
+    SavedViewReviewCode, SavedViewReviewReason, SavedViewRevision, SavedViewsDeleteAllResult,
+    SelectionMutation, SettingsRevision, SqliteConfiguration, StoredCurrentFilters, StoredSettings,
+    UnixMillis, UserStateRevision, VolumePercent, WalCheckpoint, WatchFastLaneSeconds,
 };
 pub use store::PersonalStateStore;
 
