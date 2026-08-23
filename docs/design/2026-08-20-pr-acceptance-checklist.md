@@ -195,8 +195,74 @@ S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
        不能"不再发"）、public marker 计账（不新增 capability 行，改在
        `PERSISTENT_ACTIVE_WATCH` 追加并同步 212 常量与两个摘要）、
        `contracts.ts` 的 9 门帽与 `hasKeys` 全等检查三处硬阻断。
-       验收项扩至 N-a..N-x 见设计文档 §9。wire 名冻结为
-       **`authorityGeneration`**（`resetGeneration` 作废）。
+       **v4 又被驳回 5 组，v5 逐条闭合**：① receipt 主键与"同 id 换
+       section 必须冲突"正面矛盾（section 在主键里会插第二行）——改为
+       `PK(generation, mutationId)`、section/fingerprint 为被比较列；
+       mutationId 粒度改为**每个发出的 section mutation 一个**（一次批量
+       START 手势含多 section），系统 CAS 每次重试新铸；② §0 投影未达
+       可批准版——`armed` 严格定义为"generation/revision/policy/epoch
+       四项全等"（对齐清单第 5 条 `desired(policy)==armed(policy)`），
+       补上 `desired=1 ∧ pendingDisarm` 这一合法状态，并把两帧投影
+       合并为**单一原子信封 `PROJECTION_UPDATE`**（原方案在两帧之间
+       可渲染出表外状态）；③ **manager 全豁免被否**——两个帽是两个
+       不变量而非两个真相，全豁免会让物理 watch 9→18→27 无限翻倍；
+       改为 CAS 管产品准入、manager 保留物理帽，旧槽未释放时新 section
+       显示"准备中（等待旧槽释放）"，owner 的 `RejectedLimit` 是暂态
+       告警而**非**删除 desired 的触发器；并新增按 `(generation, epoch)`
+       幂等的 owner `ensure`（已持有 section 实际走 `Restarted` 会换
+       ID、结束旧 episode、重复响铃），`attemptToken` 必须在 manager
+       副作用**之前**校验；④ tombstone/receipt 无资源边界——**loopback
+       输入不是可信人类输入**，可无限制造 receipt/tombstone 直至 FULL
+       snapshot 超 64 KiB 使恢复永久失败；新增 mutation 限流 + 行数/字节
+       硬预算 + 达预算前原子 rotation，且 rotation 必须**保留全部
+       `desired=1` 行**、只清 tombstone 与 receipt；⑤ marker 同步清单
+       闭合（追加 6 个冻结 marker，212→218，`markerSetVersion` 1→2
+       三处同步，两个 SHA 重算，`verify-import-graph.test.mjs` 的
+       18/212 硬编码，六个校验面正反例，local manifest 增
+       `persistent-desired-watches`、public 不含），并新增**本地旧三
+       命令的服务端 admission filter**（中立 manager API 本身不拒绝外部
+       旧命令）。前端接缝改为 target-neutral 的意图/投影 port
+       （`ProductRuntimePort.watch` 现为 wire 专用，共享 provider 自己
+       构造命令，无法逐 section 铸 id/取 base revision/处理双 socket）。
+       验收清单重编为**自包含的 A-01..A-32**（v4 声称保留的 N-h..N-n
+       从未存在）。
+       **v5 自查三镜头再挖出 15 项，v6 逐条闭合**，其中最严重的一条是
+       v5 自己制造的：严格 `armed` 定义让"停止中"一行**永远不可达**
+       ——STOP 一提交就换 epoch，幸存的物理 watch 因 epoch 不符而
+       `armed=false`，于是落进"未监控"，而那份 watch 还活着还会响铃，
+       **投影表自己造出了它要禁止的谎言**；v6 改为**有序求值**并把
+       `pendingDisarm` 提到第一条。其余：`armed` 的四个比较项在 v5
+       中不可计算（缺 generation/epoch 的物化孪生）→ 引入可空
+       `materialized` 记录；`pendingDisarm` 一词被用于两种互斥语义
+       → 拆为 `pendingDisarm` 与 `blockedOnSlot` 两个字段；
+       "每轮恰好一帧"与自身两条路径矛盾 → 改为**至多一帧**且
+       AttachAudience 的后续变更由 actor **自入队**；帧顺序守卫加
+       **持久 `actorIncarnation`**（否则 actor 重建后强制重播的 FULL
+       帧会被当作倒退丢弃，页面永久停在崩溃前投影）；`disarm` 改为
+       **发起时捕获 id**（v5 执行时重解析会把用户刚 START 的新 watch
+       拆掉）；新增 **`applyPolicy`** owner API（v5 只有 `ensure` 且
+       同 key 零副作用，policy-only 更新永远无法生效、section 永久非绿
+       ——一个活锁）；rotation 与 actor 重建换 epoch 时新增 **adopt
+       路径**（否则一次自动压缩会把 9 份健康 watch 全部 `Restarted`、
+       结束 episode、可能重新响铃）；`setDesired` 改为返回终局结果
+       （v5 的端口没有任何通道能把 `MUTATION_RESULT` 送到 UI，撞满
+       9 门帽在界面上毫无反应），端口补回 `state`/`connect` 等连接态
+       与全部六条 episode 命令；新增 `REQUEST_FULL_PROJECTION` 与
+       `transitionId` 连续性以支持**缺帧检测与恢复**；新增
+       `SlotReleased` 事件（否则一次普通换课要等最多 30s 退避）；
+       系统 CAS **不落 receipt**（v5 让它成为绕过限流的无界产出源）；
+       §2.5 的**六个数值全部冻结**（2/s·60、512、2048、32 KiB×3、80%）；
+       marker 由 6 个改为 **3 个**（规范化子串匹配下另三个是死条目）且
+       **必须按序数序插入**、冻结到数组顺序，总数 **212→215**。
+       验收清单扩至 **A-01..A-36**，补回 v5 漏掉的"客户端不得自动改号
+       重发"与"一般暂态 arm 失败不回滚 desired"两项。
+       wire 名冻结为 **`authorityGeneration`**。
+       **§10 两项已裁定**：打包冒烟播种为 **P1 release gate**（首个生产
+       writer/整批发布前必须完成，需确定性 PUBLISHED fixture 且 S1 gate
+       放行，`desired=false` 不可替代）；已批准设计测试 1c **取代但需
+       翻译**（leader 关闭且仍有 audience 时 activeWatchId/epoch/watch
+       计数不变、无 re-arm、无重复 episode，新 leader 只接管音频，跨 tab
+       STOP 仍收敛），须写回 alert-delivery-integrity.md。
        本硬门在 CAS 路线落地并复审通过前保持关闭。
        **打包 E2E 非空路径门保持开放**（Codex 本轮明确）：待本地专有
        desired 路由落地后，打包冒烟可直连该路由提交一次 CAS 再走
@@ -276,7 +342,8 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
 - [~] S2-PR5——第一版按 fenced sequencer 实现，自查三镜头实跑复现 2 项
       P1（活跃/持久反向错位；重放 START 重新落库），**未提交即作废**；
       路线改判为 revision/CAS。设计 v1（e53f525）驳回 5 组阻断 → v2
-      （d798f9d）驳回 4 组阻断 → v3 自查再挖 11 项 → **v4 逐条闭合**，见
+      （d798f9d）驳回 4 组 → v3 自查再挖 11 项 → v4（278fc9b）驳回 5 组
+      → **v5 逐条闭合**，见
       `2026-08-22-desired-watch-revision-cas.md`；待设计复审通过后实现。
 - [x] S2-PR4（应用层心跳，56a9f70）——**Codex 批准**，清单第 6 条关闭
       （三项披露获追认；新增携带项 S2f/S2g 归 PR6；扫描 0 findings）

@@ -1,74 +1,113 @@
 # 期望监控：revision/CAS 共同编辑模型（S2-D3 路线改判）
 
-状态：ACTIVE，**v4**。路线由产品所有者 2026-08-22 裁定：取代 fenced
+状态：ACTIVE，**v6**。路线由产品所有者 2026-08-22 裁定：取代 fenced
 sequencer，走清单二选一的另一条——**持久化 revision + tombstone + CAS**。
 S2-D3 硬门在本设计实现并复审通过前**保持关闭**。
 
-**wire 名冻结**：全篇只用 **`authorityGeneration`**，`resetGeneration` 作废。
+**wire 名冻结**：`authorityGeneration`（`resetGeneration` 作废）。
 
-**修订史**：v1 五组阻断 → v2 四组阻断 → v3 自查三镜头再挖出 11 项
-（幂等身份漏 section、mutationId 派生导致 section 永久锁死、epoch 无分配点/
-无持久化/未按代作用域、policy 更新自相矛盾、exactly-once 键在本仓库不存在、
-`pendingDisarm` 无 wire 字段、两个 9 门帽不是同一个计数器、前端负控与
-§7.5 冲突、**UI 投影规则完全缺失**等）→ **v4 逐条闭合**。
+**修订史**：v1 五组 → v2 四组 → v3 自查十一项 → v4 五组 → v5 自查十五项
+→ **v6 逐条闭合**。
 
 ## 0. 唯一要约束的东西：UI 投影
 
-本纲领禁止的失败只有一种：**页面声称某 section 在被监控而实际没有，或
-反之**。v1–v3 反复出洞的根因是全文只写服务端机制、从未写这条投影规则。
-先定死它：
+禁止的失败只有一种：**页面声称某 section 在被监控而实际没有，或反之**。
 
-| `desired` | `armed` | `pendingDisarm` | 用户看到 | Readiness |
-| --- | --- | --- | --- | --- |
-| 1 | true | false | **监控中** | 绿 |
-| 1 | false | false | **准备中**（附失败分类文案） | **非绿**（DEGRADED） |
-| 0 | true | true | **停止中** | 非绿 |
-| 0 | false | — | 未监控 | — |
-| 1 | false | — （分类 = PERMANENT） | 不可达：永久失败由 authority 自身移出 desired（§5.2） | — |
+### 0.1 物化记录与 `armed`
 
-**唯一的绿灯条件**：`desired = 1 ∧ armed = true ∧ ¬pendingDisarm`。
-"已提交但未武装"**必须**显示为准备中而非监控中——CAS 提交成功只代表
-意图落库，不代表在监控。
+owner 为每个 section 持有一条**可空的物化记录**：
+
+```
+materialized: { generation, revision, epoch, policy, activeWatchId } | null
+```
+
+它记录的是**实际生效在 manager 上的那份**，与 desired 侧的
+`(authorityGeneration, revision, materializationEpoch, policy)` 是**两组
+独立字段**（v5 只有 `materializedRevision`/`materializedPolicy`，缺
+generation 与 epoch 的物化孪生，导致 §0.1 的两个比较是自己比自己）。
+
+```
+armed(section) ≡ materialized ≠ null
+  ∧ materialized.generation = authorityGeneration
+  ∧ materialized.revision   = sectionRevision
+  ∧ materialized.epoch      = materializationEpoch
+  ∧ materialized.policy     = desiredPolicy
+```
+
+这满足清单第 5 条的 `desired(policy) == armed(policy)`：policy 已提交但
+尚未在 manager 生效 ⇒ 非绿。
+
+### 0.2 三个正交状态位
+
+| 位 | 含义 |
+| --- | --- |
+| `pendingDisarm` | **本 section 自己**的拆除正在退避重试中；物理 watch 仍活着、仍可能响铃 |
+| `blockedOnSlot` | **本 section 的 arm 在等物理槽**（别的 section 的拆除还占着）；本 section 没有任何物理 watch |
+| `armed` | §0.1 |
+
+v5 用同一个 `pendingDisarm` 表达"自己在拆"与"在等别人腾槽"，两者在
+`ProjectionEntry` 上无法区分，导致 §5.7 承诺的"新 section 显示准备中"
+落不到表上。二者现在是**两个字段**。
+
+### 0.3 投影判定（**有序**求值，第一条命中即止）
+
+```
+1. pendingDisarm            → desired=0 ? 「停止中」 : 「准备中（旧槽拆除中）」   非绿
+2. blockedOnSlot            → 「准备中（等待旧槽释放）」                          非绿
+3. desired = 0              → 「未监控」                                          —
+4. desired = 1 ∧ armed      → 「监控中」                                          **绿**
+5. desired = 1 ∧ ¬armed     → 「准备中」（附 classification 文案）                非绿
+```
+
+**必须有序求值**：v5 写成真值表时，STOP 一提交就换 epoch，幸存的物理
+watch 因 epoch 不符而 `armed = false`，于是落进"未监控"——而那份 watch
+还活着、还会响铃。**投影表自己制造了它要禁止的谎言**。把
+`pendingDisarm` 提到第一条即消除该洞。
+
+**唯一绿灯**：第 4 条。
+
+### 0.4 投影必须原子送达
+
+desired 与 materialization 合并为**单一原子信封**
+`PROJECTION_UPDATE`（§6.2），前端 reducer 整帧提交，中间态永不渲染。
 
 ## 1. 产品模型（裁定）
 
-- **所有标签页平权编辑**，不存在用户可见的"只有 leader 能改"；
-- **`desired_watches` 是唯一真相**；
-- **实际监控由服务端按已提交状态统一维护**，不由某个页面"拥有"；
-- **leader 只剩一件用户看不见的事**：避免多个页面同时响铃。
+所有标签页平权编辑；`desired_watches` 是唯一真相；实际监控由服务端统一
+维护；leader 只负责"避免多个页面同时响铃"这一件用户看不见的事。
 
 ## 2. 权威状态
 
-### 2.1 单调量
+### 2.1 单调量与守卫
 
-| 量 | 分配 | 持久 | 比较方式 | 排序对象 |
-| --- | --- | --- | --- | --- |
-| `authorityGeneration` | Full Reset / 压缩 | metadata 标量 | 直接 | 全表世代 |
-| `sectionRevision` | CAS 提交 | **全局计数器**，值存在每行上 | 逐 section 比较 | **desired 状态** |
-| `materializationEpoch` | desired 转移 / 连接边沿 / actor 重建 | **全局计数器**，值存在每行上 | 逐 section 比较 | **armed 身份** |
-| `attemptToken` | 每次 arm/disarm 尝试 | **不持久**（内存，actor 内单调） | 逐 section 比较 | **单次尝试** |
+| 量 | 分配 | 持久 | 排序对象 |
+| --- | --- | --- | --- |
+| `authorityGeneration` | Full Reset / 压缩 | metadata | 全表世代 |
+| `sectionRevision` | CAS 提交 | 全局计数器，值落每行 | desired 状态 |
+| `materializationEpoch` | desired **值**变化 / 连接边沿 / rotation / actor 重建 | 全局计数器，值落每行 | armed 身份 |
+| `attemptToken` | **每次 arm / disarm / policy 尝试** | 不持久（actor 内单调） | 单次尝试 |
+| `actorIncarnation` | **每次 actor 启动或重建** | **metadata 标量（持久）** | 帧流化身 |
+| `transitionId` | 每个 actor 轮次 | 不持久，**每化身内从 1 连续递增** | 帧顺序 |
 
-`sectionRevision` 与 `materializationEpoch` 都由**全局计数器**分配、
-**逐 section 比较**——v3 把作用域写成"每 section"是错的，会诱导实现者
-做 per-section 计数器，那样 metadata 标量与迁移赋值都无意义。
-
-**三层守卫**（manager 物化器、广播序列化器、前端 store）各自拒绝倒退的：
+**三层守卫**：
 
 - desired 侧：`(authorityGeneration, sectionRevision)`
-- armed 侧：**`(authorityGeneration, materializationEpoch, attemptToken)`**
+- armed 侧：`(authorityGeneration, materializationEpoch, attemptToken)`
+- 帧顺序：**`(actorIncarnation, transitionId)`**
 
-armed 侧**必须带 generation**：Full Reset 会把 epoch 计数器归零，若只比
-epoch 标量，则重置后所有新事件都被当作倒退丢弃（UI 永远停在重置前的
-armed 状态），且**重置前在途的 epoch-1 完成回执会与重置后的 epoch-1
-比较相等而被接受，复活一个本该被杀掉的 watch**。
+`actorIncarnation` 是 v5 的洞：actor 崩溃**不触发重连**（pump 活在 host
+的 tokio 任务里），页面保留 socket 与上次 `transitionId`；重建后计数器
+从头开始，**§4.2 强制的 FULL 重播会被当作倒退丢弃**，页面永久停在崩溃前
+的投影——正是 §4.2 声称要防的失败。持久化的化身号消除它。
 
-`attemptToken` 解决 **arm-vs-arm**：同一 epoch 下的两次退避重试若共用
-epoch，§5.3 的"旧 arm 完成一律丢弃"无法区分它们。它不需要持久化——进程
-崩溃后 epoch 本身就会翻新。
+`transitionId` 在每个化身内**连续**递增，客户端据此**检测缺帧**；缺帧时
+发 `REQUEST_FULL_PROJECTION`（§6.1）主动恢复。
+
+`attemptToken` 覆盖 **arm / disarm / policy 三类尝试**，且**必须在
+manager 副作用发生之前、于同一 actor/manager 临界区内校验**——cue 一旦
+响过就收不回来，事后丢回执没用。
 
 ### 2.2 desired 表（迁移 10004 重建）
-
-`personal_desired_watches_v1`：
 
 | 列 | 说明 |
 | --- | --- |
@@ -76,522 +115,534 @@ epoch，§5.3 的"旧 arm 完成一律丢弃"无法区分它们。它不需要�
 | `desired` | `INTEGER NOT NULL CHECK (desired IN (0,1))`；`0` 即 tombstone |
 | `policy_json` | `TEXT NULL`；`CHECK ((desired = 1) = (policy_json IS NOT NULL))`，`CHECK (policy_json IS NULL OR json_valid(policy_json))` |
 | `revision` | `INTEGER NOT NULL CHECK (revision BETWEEN 1 AND 9007199254740991)` |
-| `materialization_epoch` | `INTEGER NOT NULL`，同上界 CHECK |
+| `materialization_epoch` | `INTEGER NOT NULL`，同上界 |
 
-`personal_state_metadata_v1` 增三个持久标量（同上界 CHECK）：
-`desired_watch_authority_generation`（初值 1）、
-`desired_watch_revision_counter`（初值 0）、
-`desired_watch_materialization_counter`（初值 0）。
+metadata 增四个持久标量，**四者都带同一上界 CHECK**（v5 漏了
+generation 的 CHECK）：`desired_watch_authority_generation`（初值 1）、
+`desired_watch_revision_counter`、`desired_watch_materialization_counter`、
+`desired_watch_actor_incarnation`（初值 1）。
 
-**epoch 的分配点与持久点（v3 缺失）**：desired 转移在 §3.3 步骤 5 的
-**同一个 `IMMEDIATE` 事务内** `materialization_epoch = ++counter` 并落列；
-非 CAS 触发（连接 `1→0`/`0→1`、actor 重建）由 actor 在**自己的小事务内**
-分配并落列。任何时刻 epoch 都是持久的，因此崩溃重建不会重发已用过的值。
+epoch 在 §3.2 步骤 5 的同一 `IMMEDIATE` 事务内分配并落列（仅 `desired`
+**值**变化时）；非 CAS 触发由 actor 在自己的小事务内分配并落列。
 
-### 2.3 tombstone 与 receipt 永不在同一 generation 内被回收
-
-v1 的"256 行上限 + 淘汰最旧 tombstone"**引入 ABA**（GC 后 key 回 rev0，
-延迟的 `base=0` 旧 START 又被接受），已废除。
-
-- **tombstone 保留到 Full Reset**；
-- **receipt ledger 同样保留到 Full Reset**。注意二者增长律**不同**：
-  tombstone 受"曾编辑过多少 section"约束，receipt 随**每次 mutation**
-  增长。256 对二者都只是**观测/告警阈值**，不淘汰任何行；receipt 的实际
-  增长由人类点击速率约束，可接受；
-- **压缩（若将来确需）必须原子**：升代、**清理 desired 表与 receipt
-  ledger 两张表**、修复三个计数器，**在同一个 SQLite 事务内完成**；
-  **提交之后**才由 actor 广播完整 snapshot。v2/v3 稿的"升代 → 广播 →
-  再清理"会让已广播的新代 key 在同代被清回 revision 0。
-
-### 2.4 Full Reset
-
-同一事务内：真删 desired 表与 receipt ledger 全部行、generation +1、
-三个计数器归零；提交后由 actor 广播完整双 snapshot（§6.4）。
-
-## 3. 变更身份、幂等与冲突语义
-
-### 3.1 mutationId 是**新铸**的，不是派生的
-
-**`mutationId` 由客户端为每一次用户手势新铸一个 UUIDv4，绝不由内容派生。**
-
-v3 把它写成"绑定到 `(generation, section, 指纹)`"，在"派生"读法下会**永久
-锁死一个 section**：
-
-```
-9 门满额 → 用户点 START S → LIMIT_EXCEEDED，receipt 保留到 Full Reset
-用户停掉别的课，S 现在合法 → 用户再点 START S
-→ 同 generation/section/desired/policy/base ⇒ 同派生 id
-→ 重放 LIMIT_EXCEEDED，且"不重新 CAS、不 reconcile、不广播"
-⇒ S 在本 generation 内永远无法被启动，UI 显示"未监控/超限"而实际只有 8 门
-```
-
-因此：**绑定是校验规则，不是派生规则**——同一 `mutationId` 必须始终配同
-一个 `(authorityGeneration, section, 指纹)`；不一致即
-`MUTATION_ID_CONFLICT`。指纹 = `(section, desired, policy 规范 JSON,
-basedOnRevision)` 的 sha256（**v3 漏了 section**，见 §3.4）。
-
-**成功与拒绝结果都必须回显 `mutationId`**。
-
-### 3.2 冲突后必须终止，且服从单调守卫
-
-拒绝结果里回带的 `current` **只用于更新投影，不是重试令牌**：收到冲突的
-客户端必须**应用服务器真相并终止该 mutation**；只有用户在看到冲突后的
-新界面上做出的**新手势**，才允许以**新 mutationId** 提交。
-
-**但"应用服务器真相"服从 §2.1 的单调守卫**（v3 把它写成无条件，与守卫
-直接冲突）：`current` 携带 `(authorityGeneration, revision,
-materializationEpoch, armed, pendingDisarm)` 全套；客户端**只有在该元组
-不倒退时**才应用。重连后已收到更新 snapshot 的页面，不得被一条迟到的
-拒绝回执拉回旧状态。
-
-`AUTHORITY_UNAVAILABLE` **不携带任何状态字段**，是**非终局**结果：
-不落 receipt，同一 `mutationId` **允许原样重试**。它只在 authority 无法
-评估时产生（actor 不可用、存储不可用、inbox 关闭）；一切能评估出结论的
-情形都必须给终局结果。
-
-### 3.3 CAS 规则（单个 `IMMEDIATE` 事务内，顺序即校验序）
-
-1. `authorityGeneration != current` → `STALE_GENERATION`（**不落
-   receipt**，见 §3.4）；
-2. receipt ledger 幂等判定（§3.4）；
-3. `basedOnRevision != 该 section 当前 revision`（无行为 0）→
-   `STALE_REVISION`；
-4. **仅当 `desired = true`**：9 门帽（§5.7 单一执行点）→ `LIMIT_EXCEEDED`；
-   target 受支持 → `UNSUPPORTED_TARGET`；term 在窗口内 →
-   `TERM_OUT_OF_RANGE`；section 已发布**且 S1 gate 已放行** →
-   `SECTION_NOT_FOUND`（gate 未放行时**不拒绝**，见下）。
-   **`desired = false` 跳过全部准入校验**；
-5. 写入、`revision = ++revCounter`、`materialization_epoch = ++epochCounter`
-   （仅 desired 值变化时；policy-only 更新不换 epoch，见 §4.3）、写
-   receipt、提交。
-
-**`SECTION_NOT_FOUND` 的 gate 依赖（v3 只写在 arm 侧，CAS 侧漏了）**：
-S1 完整性 gate 处于 Hold/隔离期间，"section 不见了"可能只是残缺快照。
-此时 CAS **不得**给出 `SECTION_NOT_FOUND` 终局拒绝——那会让 §3.2 逼客户端
-放弃一个合法请求。改为：**放行提交**（desired 落库），由 arm 侧按
-`PENDING_GATE` 暂态重试（§5.2）。
-
-### 3.4 receipt ledger
-
-v3 把"最后一次 mutation"存在 section 行上，无法兑现幂等承诺（满额拒绝后
-腾出名额重到会被提交；M2 覆盖 M1 记录后 M1 无法重放）。
-
-新表 `personal_desired_watch_receipts_v1`：
+### 2.3 receipt ledger
 
 | 列 | 说明 |
 | --- | --- |
-| `authority_generation` + **`term_id` / `campus_code` / `section_index`** + `mutation_id` | 复合主键（**v3 漏了 section**） |
-| `fingerprint` | `TEXT NOT NULL` |
+| `authority_generation` + `mutation_id` | **主键** |
+| `term_id` / `campus_code` / `section_index` | 被比较列，**不入主键** |
+| `fingerprint` | `(section, desired, policy 规范 JSON, basedOnRevision)` 的 sha256 |
 | `outcome_json` | `TEXT NOT NULL CHECK (json_valid(outcome_json))` |
 
-**v3 漏 section 的后果**：同一 `mutationId` 用于两个不同 section 且
-`(desired, policy, base)` 相同（两个 rev0 的 START 是最常见情形）时，
-指纹相同 → **第二个 section 重放第一个的成功回执**，提交者被告知"已提交"，
-而该 section 从未落库、从未武装。
+- 命中主键 + section 与 fingerprint 均相同 → **重放**（只回提交者，
+  不重新 CAS、不 reconcile、不广播）；
+- 命中主键但 section 或 fingerprint 不同 → **`MUTATION_ID_CONFLICT`**，
+  **由已存在行推导，不插入第二条**；
+- **记录范围**：**仅客户端提交**的成功与终局拒绝（`STALE_REVISION` /
+  `LIMIT_EXCEEDED` / `UNSUPPORTED_TARGET` / `TERM_OUT_OF_RANGE` /
+  `SECTION_NOT_FOUND`）；
+- **`STALE_GENERATION` 不落 receipt**（步骤 1 即判定，落进哪个代都错）；
+- **系统 CAS（§5.5）不落 receipt**：它是 authority 内部的，没有任何客户端
+  会重放它。v5 让系统 CAS 的每次 `STALE_REVISION` 重试都写一行新 receipt，
+  形成一个**绕过路由限流**的无界产出源。
 
-规则：
+### 2.4 mutationId 的粒度与新铸规则
 
-- **记录范围**：成功 + 终局拒绝（`STALE_REVISION` / `LIMIT_EXCEEDED` /
-  `UNSUPPORTED_TARGET` / `TERM_OUT_OF_RANGE` / `SECTION_NOT_FOUND`）；
-- **`STALE_GENERATION` 不落 receipt**：它在步骤 1 就被判定，重复请求会被
-  同样地再拒一次，receipt 毫无作用；而落进哪个 generation 都错——落旧代
-  是永不可达的泄漏行，落当代会烧掉一个当代 id；
-- **`MUTATION_ID_CONFLICT` 不插入第二条 receipt**（v3 写"本身也落
-  receipt"会撞主键或覆盖原结果，反而毁掉重放保证）：它**由已存在的行
-  推导**——同 PK 存在但 `fingerprint` 不符即冲突，直接返回，不写库；
-- **重复请求只向提交者重放**，不重新 CAS、不 reconcile、不广播；
-- 重放使用**独立帧** `DESIRED_WATCH_REPLAYED`（§6.2），**不是**
-  `DESIRED_WATCH_COMMITTED`——后者是广播帧，客户端按权威处理，重放一条
-  旧 revision 的 COMMITTED 会与单调守卫打架。
+- **每一个"发出的 section mutation"新铸一个 UUIDv4**——不是每个手势；
+  一次批量 START 手势为每个 section 各铸一个；
+- **绝不由内容派生**（派生读法会让被拒的 section 在本代内永久无法启动）；
+- 系统 CAS 每次重试新铸 id（但不落 receipt，见 §2.3）；
+- 绑定是**校验规则**：同一 id 必须始终配同一
+  `(generation, section, fingerprint)`。
+
+### 2.5 资源边界（**数值冻结**）
+
+**loopback 协议输入不是可信的人类输入**。三条真实路径：用新 id 无限制造
+终局拒绝 receipt；用新 SectionKey 无限制造 tombstone（`desired = false`
+跳过全部准入）；tombstone 全部进入 bootstrap 与 FULL 投影，最终撑爆帧帽
+**使重连/恢复永久失败**。
+
+冻结（v5 只说"各设硬上限"却一个数都没给）：
+
+| 项 | 值 |
+| --- | --- |
+| desired 路由 mutation 限流 | 令牌桶 **2/s，突发 60**（与公网 per-client 限流器同一实现模式与参数形状） |
+| tombstone 行数硬上限 | **512** |
+| receipt 行数硬上限 | **2048** |
+| `PROJECTION_UPDATE{FULL}` 序列化字节上限 | **32 KiB**（帧帽 64 KiB 的一半） |
+| `PROJECTION_UPDATE{DELTA}` 序列化字节上限 | **32 KiB**；单帧装不下时按 section 切分为多帧，**每帧仍是完整 entry** |
+| bootstrap 的 `desiredWatches` 序列化字节上限 | **32 KiB**（bootstrap 是 HTTP GET，不受 WS 帧帽约束，但受同一预算以免恢复路径分叉） |
+| rotation 触发阈值 | 任一预算达 **80%** 即触发原子 rotation（§2.6） |
+
+### 2.6 压缩 / generation rotation（原子，且不得丢意图，也不得摧毁健康 watch）
+
+1. `authorityGeneration += 1`；
+2. **保留并重写全部 `desired = 1` 行**，分配新代的合法 `revision` 与
+   `materialization_epoch`；
+3. **只删除** tombstone 与全部 receipt；
+4. 修复四个计数器；
+5. 以上全部在**同一个 SQLite 事务内**；提交后广播一帧
+   `PROJECTION_UPDATE{kind: FULL}`。
+
+**rotation 与 actor 重建换 epoch 时必须走 §5.2 的 adopt 路径**：物理
+watch 仍然健康且正确，不得因为 epoch 变了就 `Restarted`（那会结束旧
+episode、换 ID、可能重新响铃）。v5 未给例外，等于让一次自动压缩把 9 份
+watch 全部拆建一遍。
+
+### 2.7 Full Reset
+
+同一事务内：真删 desired 表与 receipt ledger 全部行、generation +1、
+三个计数器归零（`actorIncarnation` **不归零**）；提交后广播
+`PROJECTION_UPDATE{kind: FULL}`。
+
+## 3. CAS
+
+### 3.1 冲突后必须终止，且服从单调守卫
+
+`MUTATION_RESULT` **只说结果与原因，不带任何状态**（v5 保留的
+`COMMITTED { revision }` 是状态，会诱导客户端拿它当 `basedOnRevision`，
+从而在并发下产生虚假 `STALE_REVISION`）。
+
+**`basedOnRevision` 只能取自投影 store**——这是唯一来源，冻结。
+
+客户端收到终局拒绝后**必须终止该 mutation**，**不得自动改号重发**；只有
+用户在新界面上做出的**新手势**才允许以**新 id** 提交。（authority 自身的
+系统 CAS 不受此约束，见 §5.5。）
+
+`AUTHORITY_UNAVAILABLE` 是**非终局**：不落 receipt，同 id 允许原样重试。
+
+### 3.2 CAS 规则（单个 `IMMEDIATE` 事务内，顺序即校验序）
+
+1. `authorityGeneration != current` → `STALE_GENERATION`（不落 receipt）；
+2. receipt ledger 幂等判定（§2.3）；
+3. `basedOnRevision != 该 section 当前 revision`（无行为 0）→
+   `STALE_REVISION`；
+4. **仅当 `desired = true`**：**产品准入帽**（`desired = 1` 行数 < 9）→
+   `LIMIT_EXCEEDED`；target 受支持 → `UNSUPPORTED_TARGET`；term 在窗口内
+   → `TERM_OUT_OF_RANGE`；section 已发布**且 S1 gate 已放行** →
+   `SECTION_NOT_FOUND`（**gate 未放行时不得拒绝**，放行提交、由 arm 侧按
+   `PENDING_GATE` 暂态重试）；
+   **`desired = false` 跳过全部准入校验**；
+5. 写入、`revision = ++revCounter`、`materialization_epoch = ++epochCounter`
+   （仅 `desired` **值**变化；policy-only 不换）、写 receipt、提交。
 
 ## 4. authority transition actor
 
-### 4.1 唯一执行者
+### 4.1 帧与轮次
 
-单一本地 actor（单线程 inbox）是下述三步的唯一执行者，按 inbox 顺序逐项
-完成：`CAS commit → manager reconcile → event enqueue`。
-**新旧由 CAS 判定**，actor 只保证已提交 revision 的**投影顺序**。
+单一本地 actor（单线程 inbox），按 inbox 顺序逐项完成
+`CAS commit → manager reconcile → 至多一帧 PROJECTION_UPDATE`。
+
+**每轮至多一帧**（v5 写"恰好一帧"与两条自身路径矛盾：receipt 重放轮次
+不广播 = 零帧；§4.4 的"下一帧" = 两帧）。轮次若无投影变化则不发帧，
+`transitionId` 也不递增（保持连续性）。
 
 ### 4.2 必须进入 inbox 的转移
 
-| 转移 | 说明 |
-| --- | --- |
-| 用户 mutation | §3.3 |
-| `AttachAudience` / `DetachAudience` | **每一次**都入 inbox；连接计数与 `0↔1` 边沿**由 actor 自算** |
-| Full Reset confirm | §2.4，同一 barrier |
-| generation 轮换 / 压缩 | §2.3 |
-| reconcile 重试完成 | 完成回执入 inbox 再广播 |
-| 启动恢复 | 进程启动第一件事：读权威 snapshot → 有 audience 则物化 |
-| **actor 故障重建** | supervisor 重建；入口 = 启动恢复；**为每个 section 分配新 epoch**；**并向所有现存 audience 广播完整双 snapshot**（v3 缺失，见下） |
+用户 mutation；`AttachAudience` / `DetachAudience`（**每一次**，连接计数
+与 `0↔1` 边沿由 actor 自算）；Full Reset confirm；generation 轮换 / 压缩；
+**`SlotReleased`**（物理槽释放，见 §5.7）；reconcile 重试完成回执；
+`REQUEST_FULL_PROJECTION`；启动恢复；**actor 故障重建**。
 
-**actor 故障重建必须重播 desired（v3 的洞）**：WS pump 活在 host 的
-tokio 任务里，不在 actor 线程里，所以 actor 崩溃**不会**触发任何重连。
-若重建只"物化"而不重播 desired，下述交错会让两个页面**永久**停在错误
-状态：
-
-```
-A 提交 M1（START S）→ CAS 提交 rev6 + receipt（事务已 COMMIT）
-actor 在 COMMIT 与 event enqueue 之间 panic
-supervisor 重建 → 读 snapshot → 武装 S
-WS 连接全程存活，无人重连 ⇒ 两个页面永远收不到 rev6
-⇒ UI 显示"未监控"，实际正在监控并会响铃
-```
-
-同理，**任何"SQLite 已提交但广播未发生"的崩溃**都由重建时的完整双
-snapshot 收敛。
+**actor 故障重建必须向所有现存 audience 重播 `kind: FULL`**，并先
+`++actorIncarnation`（§2.1）——否则重播帧会被帧顺序守卫当成倒退丢弃。
 
 ### 4.3 epoch 作废规则
 
-**分配新 `materializationEpoch`** 的触发（穷举）：
+**换新 epoch**：该 section 的 `desired` **值**变化的 CAS 提交；Full Reset；
+generation 轮换；连接 `1→0` 与新的 `0→1`；actor 故障重建。
+其中 **rotation 与重建走 adopt**（§2.6、§5.2），不重建物理 watch。
 
-- 该 section 的 **`desired` 值发生变化**的 CAS 提交（`0→1` 或 `1→0`）；
-- Full Reset / generation 轮换；
-- 连接 `1→0`（销毁活跃态）与新的 `0→1`（重新物化）；
-- actor 故障重建。
+**不换 epoch**：**policy-only 更新**——保留 `activeWatchId` 与 episode，
+经 §5.2 的 `applyPolicy` 就地更新。
 
-**明确不换 epoch**：**policy-only 更新**（`desired` 保持 1，仅
-`policy_json` 变化）。它**保留 `activeWatchId` 与 episode**，通过 manager
-的 `update_policy` 就地更新；通知模式变更沿用已批准的 `CUE_CANCELLED`
-(`NOTIFICATION_MODE_CHANGED`) 语义。
+### 4.4 AttachAudience 的顺序
 
-v3 的 §4.3 写"任何 CAS 提交（含 STOP）"换 epoch，而 §5.4 又写"policy
-更新保留 activeWatchId（不新起 epoch 的那类更新）"——后者指向一个前者
-不承认的空集合。按 v3 字面执行，改一次阈值就会换 `activeWatchId`，
-在同一次开放上产生重复响铃。本节即为该矛盾的裁定。
-
-**每次 arm/disarm 尝试**分配新 `attemptToken`（§2.1），旧尝试的完成回执
-一律丢弃。已批准设计里的"重连即作废旧 epoch"由连接 `0→1` 覆盖。
-
-### 4.4 AttachAudience 的快照与顺序
-
-- `MATERIALIZATION_SNAPSHOT` **在 `AttachAudience` 这一 inbox 轮次的
-  开始处**从 owner map 序列化；
-- **同一轮次内**产生的一切物化变更，作为事件**排在该快照之后**发出；
-- 新连接必须**同时**收到 `DESIRED_WATCH_SNAPSHOT` 与
-  `MATERIALIZATION_SNAPSHOT`——只发其一，页面无法区分"已提交但未武装"
-  （§0 的准备中）与"未提交"。
+`PROJECTION_UPDATE{kind: FULL}` 在该轮次**开始处**从 owner map 序列化，
+**它就是该轮次的那一帧**；该轮触发的任何物化变更由 actor **自行入队一条
+后续 inbox 项**（`MaterializeDue`），在其后的轮次发出各自的 DELTA。
+v5 写"排在其后的下一帧"既违反每轮一帧，又没有任何东西调度那个"下一帧"。
 
 ## 5. 服务端拥有的监控与失败模型
 
 ### 5.1 逻辑 owner
 
-- 本地引入 connection-independent 的 `LocalWatchOwner`，持有
-  `section → { activeWatchId | null, generation, revision,
-  materializationEpoch, attemptToken, armed, pendingDisarm, lastFailure }`；
-- 浏览器连接只是**编辑者 + 事件 audience**；
-- 每个 section 只产生一份 active watch、一份 episode 流、一份 cue；
-- **持久提交成功即为真相**。
+`LocalWatchOwner` 持有：
 
-**owner 在 manager 里是一条合成连接，必须防止被心跳回收**（v3 缺失）：
-manager 会清理 `last_touch` 超过 `heartbeat_timeout` 的连接及其全部
-watch。owner 连接**必须在维护 tick 上被 touch**，或在 manager 侧显式豁免
-过期——否则它拥有的每一份 watch 都会被静默收割。
+```
+section → {
+  generation, revision, materializationEpoch,     // desired 侧
+  materialized: {...} | null,                     // §0.1
+  attemptToken, armed, pendingDisarm, blockedOnSlot, lastFailure
+}
+```
 
-### 5.2 失败分类（覆盖 manager 全部 disposition）
+owner 在 manager 中是一条**内部合成连接**：新增
+**`ConnectionKind::Owner`**，**不可由 wire 请求构造**；**豁免心跳过期**，
+**不豁免物理 watch 帽**。
 
-manager 的实际 disposition 见 `crates/bcsp-watch/src/effect.rs`。逐项：
+### 5.2 owner API（三个，全部按 `(generation, epoch, attemptToken)` 幂等）
+
+- **`ensure(section, generation, epoch, policy, attemptToken)`**
+  - 同 `(generation, epoch)` 重试 → **收养**原有 `activeWatchId`，
+    **零 manager 副作用**；
+  - **新 epoch 但物理 watch 仍健康**（rotation / actor 重建）→ **adopt**：
+    只把物化记录重新盖章为新 `(generation, epoch)`，**不走 `Restarted`**；
+  - **新 epoch 且需要替换**（desired 值变化后的重新武装）→ 才允许
+    `Restarted` 语义；
+- **`applyPolicy(section, generation, epoch, policy, attemptToken)`**
+  （v5 缺失）：policy-only 路径。v5 只有 `ensure` 且它在同
+  `(generation, epoch)` 下"零副作用"，于是 policy-only 更新**永远无法生效**，
+  `materialized.policy` 永不前进，section 永久非绿——一个活锁；
+- **`disarm(section, targetActiveWatchId, epoch, attemptToken)`**：
+  见 §5.4。
+
+`RejectedDuplicate` 在本模型下**不可达**：owner 逐 section 调用，不批量
+提交。（它在 manager 里只表示同一批 START 内的重复 section；**已持有的
+section 实际走 `Restarted`**，会换 ID、结束旧 episode、可能重新响铃——
+这正是必须有 adopt 路径的原因。）
+
+### 5.3 失败分类
 
 | disposition | 分类 | 处置 |
 | --- | --- | --- |
-| `RejectedTargetUnavailable`、存储忙、快照未就绪 | **暂态** | `armed = false` + 退避 **5s/10s/20s 封顶 30s** 无限重试；desired 不动 |
-| `RejectedSectionNotFound` | **取决于 gate** | S1 gate 放行 → 永久；gate Hold/隔离 → 按 `PENDING_GATE` 暂态重试 |
-| `RejectedUnsupportedTarget`、`RejectedTermOutOfRange` | **永久** | §5.5 的系统 CAS 移出 desired + 通知 |
-| `RejectedLimit`（`MaxActiveWatches`） | **永久** | 同上。已批准设计把"超 9 门"归入 admission 类永久拒绝 |
-| `RejectedDuplicate`（`AlreadyActive`） | **不是失败** | 该 section 已被 owner 持有：直接视为 arm 成功，采用既有 `activeWatchId` |
-| disarm 返回 `UnknownWatch` | **不是失败** | 目标已不存在即达成目的，视为 disarm 成功 |
+| `RejectedTargetUnavailable`、存储忙、快照未就绪 | **暂态** | 退避 **5s/10s/20s 封顶 30s** 无限重试；desired 不动 |
+| `RejectedSectionNotFound` | **取决于 gate** | gate 放行 → 永久；gate Hold/隔离 → `PENDING_GATE` 暂态 |
+| `RejectedUnsupportedTarget`、`RejectedTermOutOfRange` | **永久** | §5.5 系统 CAS 移出 desired + 通知 |
+| `RejectedLimit`（owner 连接）**且存在 pendingDisarm** | **预期路径，非告警** | 置 `blockedOnSlot = true`，等 `SlotReleased`（§5.7） |
+| `RejectedLimit`（owner 连接）**且无 pendingDisarm** | **不变量告警** | 说明 CAS 帽与物理帽已失配，上报；仍**不**删除 desired |
+| disarm 返回 `UnknownWatch` | **不是失败** | 目标已不存在即达成目的 |
 
-退避与 retry-epoch 的原始出处：
-`docs/design/2026-08-20-alert-delivery-integrity.md` **第 57–61 行**
-（v3 只引了 214/250，那两行是"永久拒绝移出 desired"的出处）。
+**产品帽与物理帽是两类事件，不可混淆**：CAS 步骤 4 的 `LIMIT_EXCEEDED`
+是**面向用户的永久拒绝**（与已批准设计"超 9 门属 admission 类永久拒绝"
+一致）；owner 连接上的 `RejectedLimit` 是**内部物理槽条件**，绝不触发
+系统 CAS 删除 desired。该区分需写回
+`docs/design/2026-08-20-alert-delivery-integrity.md`（§10）。
 
-### 5.3 disarm 的寻址与失败
+退避与 retry-epoch 出处：该文档**第 57–61 行**；"永久拒绝移出 desired +
+通知"在 **214–215 / 250 行**。
 
-- **disarm 按 `section` 寻址**（v3 未定义）：owner 自己解析当前
-  `activeWatchId` 再调 manager。**绝不能**用调用方手里的旧 id——
-  §4.3 的 epoch 翻新意味着旧 id 早已不是 manager 认识的那个，会得到
-  `UnknownWatch`；
-- `desired = false`、Full Reset、连接 `1→0` 三种 disarm 失败按同一退避
-  重试至成功；
-- 重试期间 `pendingDisarm = true`，**对外报告 `armed = true,
-  pendingDisarm = true`，绝不谎报已停**（§0 的"停止中"）；
-- 旧 attempt 的任何完成回执一律丢弃，不得复活。
+### 5.4 disarm
 
-### 5.4 activeWatchId 与 episode 生命周期
+- **在发起时捕获** `(section, targetActiveWatchId, epoch)`，退避重试
+  **始终针对被捕获的那个 id**，**绝不在执行时重新解析**。v5 写"执行时
+  由 owner 解析当前 id"，在 §0.3 第 1 条明确合法的"STOP → 退避中 → 用户
+  又 START"下，会把**用户当前想要的那份新 watch 拆掉**；
+- epoch 变化**取消在途的 arm 尝试**，但**不取消在途的 disarm**——旧
+  watch 仍必须死；
+- 三种 disarm（`desired = false`、Full Reset、连接 `1→0`）失败按同一退避
+  重试至成功；期间 `pendingDisarm = true`（§0.3 第 1 条），**绝不谎报
+  已停**；
+- 成功后置 `pendingDisarm = false` 并向 actor 投递 **`SlotReleased`**；
+- `activeWatchId` 可空；每个"需要替换"的新 epoch 换新；adopt 与
+  policy-only 不换；
+- **历史身份不变**：仍是既有的 `(section_key, run_id, episode_id)`；
+- cue 的 exactly-once 由 manager 既有 per-episode audible 计数 + owner 是
+  唯一生产者 + `attemptToken` 的**前置**校验共同保证。
 
-- `activeWatchId` **可空**，首次 arm 成功前为 `null`；
-- **每个新 `materializationEpoch` 分配新 `activeWatchId`**；
-  policy-only 更新**不换**（§4.3）；
-- **历史身份不变**：持久化的 episode 身份是既有的
-  `(section_key, run_id, episode_id)`
-  （`crates/bcsp-local-user-state/src/model.rs` 的
-  `EpisodeHistoryIdentity`，表 `personal_episode_summaries_v1`）。
-  v3 声称的"键仍为 `(activeWatchId, episodeId, observationId)`"**在本仓库
-  不存在**，而且 §8 自己禁止个人表出现 `active_watch` 字样。本设计
-  **不改动**历史身份；
-- cue 的 exactly-once 由 manager 既有的 per-episode audible 计数与
-  "owner 是唯一生产者"共同保证——**不依赖任何新持久键**。
+### 5.5 永久失败：authority 自身的系统 CAS
 
-### 5.5 永久失败：由 authority 自身走一次系统 CAS
+authority 提交一次 `desired = false` 的 CAS，`basedOnRevision` 取读到的
+当前值，每次重试新铸 id，**不落 receipt**（§2.3），`source = SYSTEM`；
+并发丢失时**重读重试**（§3.1 的"冲突即终止"只约束客户端）；若重读后该
+section 已被用户删除，目的已达成，不再提交。
 
-已批准设计（`alert-delivery-integrity.md` 第 214/250 行）的"永久拒绝
-（admission 类）→ 移出 desired + 常驻通知"**继续有效，不作产品修订**。
-落地方式：
+### 5.6 零连接暂停
 
-- authority **自行提交一次 `desired = false` 的 CAS**：`basedOnRevision`
-  取**读到的当前 revision**，`mutationId` 由服务端新铸（UUIDv4，与客户端
-  同一空间，落 receipt），`source = SYSTEM`；
-- **`DESIRED_WATCH_COMMITTED.mutationId` 因此始终非空**；`source` 字段
-  区分 `USER` / `SYSTEM`；
-- **系统 CAS 失败（并发丢失）时重读重试**——§3.2 的"冲突即终止"约束的是
-  **客户端**，不约束 authority；authority 是权威，它重试到收敛为止；
-- 若该 section 在重读后已被用户自己删除，则目的已达成，不再提交。
+`0→1` 读权威 snapshot 物化一次（新 epoch，走 adopt/ensure）；`1→0` 只
+销毁 active manager 状态、保留 desired；
+`ACTIVE_WATCH_STATE_PERSISTENT = false` 继续成立。
 
-### 5.6 零连接暂停（裁定采纳）
+### 5.7 两个帽是两个不变量
 
-- `0→1`：读权威 snapshot 并物化一次（新 epoch）；
-- `1→0`：只销毁 active manager 状态，**保留 desired**；
-- `ACTIVE_WATCH_STATE_PERSISTENT = false` 继续成立；
-- 两个转换都走 §4.2 的同一 inbox。
-
-### 5.7 9 门帽只有一个执行点
-
-v3 有**两个不同的计数器**：CAS 数 `desired = 1` 行，manager 数**该连接**
-的 watch 数（`MAX_ACTIVE_WATCHES = 9`）。二者在"disarm 挂起"时必然发散：
-
-```
-9 门已武装 → 用户 STOP S1 → CAS 提交 desired=0 并广播（UI 显示已停）
-           → disarm 进入退避，manager 仍持有 9 份
-用户立刻 START S10 → CAS 只数到 8 行 → 通过 → 广播 COMMITTED（UI 显示已监控）
-           → actor reconcile → manager 返回 RejectedLimit
-```
-
-**裁定：CAS 是唯一执行点**。manager 侧对 **owner 这条合成连接豁免**该
-上限（需要 manager 侧一个明确的 API/标志）。理由：authority 已在事务内
-基于唯一真相判定，manager 再判一次只会引入第二个真相。
+- **CAS 是唯一的产品准入帽**：`desired = 1` 行数 ≤ 9；
+- **manager 保留独立物理帽**，owner 连接**不豁免**——否则
+  `9 armed → 9 pendingDisarm → 再 START 9 个` 会得到 18、27、36 份物理
+  watch；
+- 旧槽仍被 pending disarm 占用时，新 section 的 CAS 照常成功，物化推迟，
+  `blockedOnSlot = true`，UI 显示**准备中（等待旧槽释放）**；
+- 槽释放时 §5.4 投递 **`SlotReleased`**，actor 立刻重试被阻塞的 arm——
+  **不依赖 5–30s 的退避**（v5 让一次普通换课要等最多 30s）。
 
 ## 6. 契约
 
-### 6.1 命令（本地专有，见 §7）
+### 6.1 命令（本地专有）
 
 ```
 SET_DESIRED_WATCH {
   section, desired, policy | null,
   basedOnRevision, authorityGeneration, mutationId
 }
+REQUEST_FULL_PROJECTION { }        // 客户端检测到缺帧后主动重同步
 ```
 
-### 6.2 结果与广播
+### 6.2 事件
 
 ```
-DESIRED_WATCH_COMMITTED {        // 广播给所有本地 audience
-  section, desired, policy, revision, authorityGeneration,
-  mutationId, source: USER | SYSTEM
+PROJECTION_UPDATE {
+  actorIncarnation, transitionId, authorityGeneration,
+  kind: FULL | DELTA,
+  entries: [ ProjectionEntry ]
 }
-DESIRED_WATCH_REPLAYED {         // 只回提交者；receipt 重放，非广播帧
-  section, mutationId, outcome
+
+ProjectionEntry {
+  section,
+  desired, policy | null, revision, materializationEpoch,   // desired 侧
+  materialized: { generation, revision, epoch, policy,      // §0.1；可空
+                  activeWatchId } | null,
+  attemptToken, armed, pendingDisarm, blockedOnSlot,
+  classification: TRANSIENT | PERMANENT | PENDING_GATE | null,
+  reason | null
 }
-DESIRED_WATCH_REJECTED {         // 只回提交者；投影用，非重试令牌
-  section, mutationId, reason,
-  current { desired, policy, revision, authorityGeneration,
-            materializationEpoch, armed, pendingDisarm }
+
+MUTATION_RESULT {                  // 单播给提交者；**不含任何状态**
+  mutationId,
+  outcome: COMMITTED | REJECTED { reason } | REPLAYED { outcome }
 }
-AUTHORITY_UNAVAILABLE { mutationId }               // 无状态字段；非终局
-DESIRED_WATCH_SNAPSHOT { authorityGeneration, entries[] }
-MATERIALIZATION_SNAPSHOT { authorityGeneration, entries[] }
-  // entry: section, armed, pendingDisarm, activeWatchId | null,
-  //        materializationEpoch, attemptToken, classification | null
-DESIRED_WATCH_MATERIALIZED {
-  section, authorityGeneration, revision,
-  materializationEpoch, attemptToken, activeWatchId, pendingDisarm
-}
-DESIRED_WATCH_UNARMED {
-  section, authorityGeneration, revision,
-  materializationEpoch, attemptToken,
-  classification: TRANSIENT | PERMANENT | PENDING_GATE, reason
-}
+
+AUTHORITY_UNAVAILABLE { mutationId }   // 单播；非终局；无状态字段
 ```
 
-`pendingDisarm` **必须**出现在 `MATERIALIZATION_SNAPSHOT` 条目与
-`DESIRED_WATCH_MATERIALIZED` 上——否则"停止中"与"监控中"在 wire 上逐字节
-相同，§0 的投影表无法实现（v3 的洞）。
+`reason` ∈ `STALE_GENERATION` / `STALE_REVISION` / `MUTATION_ID_CONFLICT` /
+`LIMIT_EXCEEDED` / `UNSUPPORTED_TARGET` / `TERM_OUT_OF_RANGE` /
+`SECTION_NOT_FOUND`。
 
 ### 6.3 bootstrap
 
-- `desiredWatchAuthorityGeneration` 是 **snapshot 顶层 required 字段**；
-- `desiredWatches` 条目携带 `desired` / `policy | null` / `revision` /
-  `materializationEpoch`，**包含 tombstone**；
-- bootstrap **不含** materialization 运行态（随连接由
-  `MATERIALIZATION_SNAPSHOT` 下发）。
+`desiredWatchAuthorityGeneration` 为 snapshot **顶层 required 字段**；
+`desiredWatches` 条目携带 `desired` / `policy | null` / `revision` /
+`materializationEpoch`，**含 tombstone**，受 §2.5 的 32 KiB 预算；
+bootstrap **不含** materialization 运行态（随连接由第一帧
+`PROJECTION_UPDATE{FULL}` 下发）。
 
-### 6.4 generation 轮换
+### 6.4 数值边界与 scalar 归属
 
-Full Reset 与任何 generation 轮换必须广播完整
-`DESIRED_WATCH_SNAPSHOT` + `MATERIALIZATION_SNAPSHOT`；客户端按 §2.1 的
-两个元组单调合并，丢弃任何更旧 generation 的残留。
-
-### 6.5 数值边界与 scalar 归属
-
-三个计数量在 Rust 侧为 `u64`、JS 侧为 `number`，统一收敛到
-**`≤ Number.MAX_SAFE_INTEGER`**。三处钉死：SQLite CHECK、**本地专有**
-契约 scalar、前端本地专有校验器。**scalar 定义不得放进
-`bcsp-contracts`**——该 crate 在公网闭包内（§7.1）。
+`authorityGeneration` / `sectionRevision` / `materializationEpoch` /
+**`attemptToken`** / **`transitionId`** / **`actorIncarnation`** 六个量
+全部收敛到 **`≤ Number.MAX_SAFE_INTEGER`**（v5 漏了后三个）。三处钉死：
+SQLite CHECK（持久的四个）、**本地专有**契约 scalar、前端本地专有校验器。
+**不得放进 `bcsp-contracts`**（公网闭包内）。
 
 ## 7. 放置、拓扑与公网边界
 
 ### 7.1 Rust 放置
 
-`bcsp-contracts` 与 `bcsp-application` **都在公网 Cargo 闭包内**
-（`verify-rust-graph.mjs` 自 `bcsp-server` 可达性计算，12 包）。因此
-desired 命令、事件与 authority **全部放在本地专有 crate**；共享 host 只
-经 **tag 无关的 `WebSocketExtension`** 承载。
+`bcsp-contracts` 与 `bcsp-application` **都在公网 Cargo 闭包内**。desired
+命令、事件与 authority **全部放在本地专有 crate**；共享 host 只经 **tag
+无关**的 `WebSocketExtension` 承载。
 
 ### 7.2 secondary 路由：受校验的**路由集合**
 
-现状：host 只有单槽 `secondary_socket`（状态字段、构造器参数、路由注册与
-`handle_secondary_socket` 各一处；**按符号名引用，不按行号**——行号已被
-证实漂移），而已批准的 presence 已占 `/api/v1/local/presence`。
-
-**裁定：改为受校验的 secondary 路由集合**，不合并为单条 local-control
-socket。理由：presence 关心"哪些 tab 可见、谁响铃"，desired audience
-关心"哪些连接在编辑与收事件"，语义不同；合并会迫使 desired 复用 presence
-已冻结的 HELLO/期限语义并耦合失败面。本地是 loopback 单用户，两条 WS 无
-容量压力；公网结构上没有这些路由。
-
-实现要求（v3 只写了"改成 Vec"，不足以工作）：
+host 现为单槽 `secondary_socket`（状态字段、构造器参数、路由注册与
+handler 各一处；**按符号名引用**——行号已被证实漂移）。presence 已占
+`/api/v1/local/presence`。
 
 - `HostState` 需要 **`path → Arc<dyn WebSocketExtension>` 映射**，
-  `handle_secondary_socket` 按 `request.uri().path()` 选择——单槽字段读法
-  在多路由下无法选中正确 extension；
-- `SecondaryWebSocketRoute::new` 目前**不可失败**，需改为 fallible 以承载
-  S2a 路径校验；`LoopbackServerError` 需新增变体；
-- **集合内路径唯一性校验是必需项而非美观项**：axum 的 `Router::route`
-  在重复路径上 **panic**；
+  handler 按 `request.uri().path()` 选择；
+- `SecondaryWebSocketRoute::new` 改为 **fallible**（承载 S2a 路径校验），
+  `LoopbackServerError` 新增变体；
+- **集合内路径唯一性校验是必需项**：axum `Router::route` 在重复路径上
+  **panic**；
 - 路径冻结：presence `/api/v1/local/presence`、desired
   `/api/v1/local/desired-watch`。
 
 ### 7.3 既有携带项绑定为硬验收
 
-- **S2c**：共享 `serve_websocket` 补 **64 KiB** 帧/消息上限；
-- **S2b**：未注入 → **404**，集合化后**逐路由**钉死。
+**S2c**：共享 `serve_websocket` 补 **64 KiB** 帧/消息上限；
+**S2b**：未注入 → **404**，集合化后**逐路由**钉死。
 
-### 7.4 N-g 措辞更正
+### 7.4 N-g 措辞
 
-"公网完全不触碰 manager"在现有 pump 下不可达（pump 在解码**之前**调用
-`transport_activity`）。N-g 改述为：
+公网严格解码器把 desired tag 当未知命令拒绝：**不进入命令路由、不改变
+watch 状态、不产生 dispatch/sink/reply**。
 
-> 公网严格解码器把 desired tag 当未知命令拒绝：**不进入命令路由、不改变
-> watch 状态、不产生 dispatch/sink/reply**。
+### 7.5 旧命令去留 + 服务端准入过滤器
 
-### 7.5 旧命令去留
+公网保留现有 ephemeral 语义；**本地外部协议拒绝**；内部经 Rust API。
+**新增中立 manager API 本身不拒绝外部旧命令**——本地必须有一个**显式的
+服务端 command-admission filter**：本地 watch socket 收到这三条 tag 时
+直接拒绝并计数，不进入 `route_command`。
 
-| | `START_WATCH` / `STOP_WATCH` / `UPDATE_POLICY` |
-| --- | --- |
-| 公网 | **保留**现有 ephemeral、connection-owned 语义，不变 |
-| 本地 | **外部协议拒绝/退役** |
-| 内部 | 物化器通过 **Rust API** 调用 manager |
+### 7.6 前端接缝：target-neutral 意图/投影 port
 
-**`SharedWatchSocket` 目前不暴露任何 arm/disarm/update Rust API**，需新增
-一组 **tag 无关**（命名不得出现 desired 语义）的方法；它位于公网闭包且在
-API 审计面上，命名与文档需按公网中立措辞。
+`ProductRuntimePort.watch` 现为 wire 专用的 `WatchClientPort`，共享
+`LiveWatchProvider` 自己构造 START/STOP/UPDATE_POLICY，并且**还消费
+`state` / `subscribeState` / `connect` / `disconnect`**（连接态是清单第 5
+条"当前 connection/retry epoch 下"的判定输入，**不能丢**）。
 
-### 7.6 前端拆分走 runtime port，而不是"共享 provider 不再发"
+冻结端口形状：
 
-v3 写"共享 provider 不再发这三条"**与 §7.5 直接冲突且不可实现**：
-`LiveWatchProvider` 是这三条命令的**唯一**发送方，而它被**两个 target
-共用**（`entry.public.tsx → PublicCompositionRoot → SharedApplication →
-LiveWatchProvider`）。剥掉发送会让公网失去启停能力。
+```
+watch: {
+  // 意图：返回终局结果，使 MUTATION_RESULT 能到达 UI（v5 的洞）
+  setDesired(section, desired, policy): Promise<DesiredOutcome>
+  //   DesiredOutcome = { status: COMMITTED | REJECTED | UNAVAILABLE,
+  //                      reason?: <§6.2 的 reason> }
+  subscribeProjection(listener): unsubscribe     // §0.3 五态
+  // 连接态：清单第 5 条需要
+  readonly state; subscribeState(listener); connect(); disconnect()
+  // episode 命令：两 target 相同，**六条全列**
+  episodes: { acknowledgeEpisode, acknowledgeAllEpisodes,
+              resumeTimedOutEpisode, resetAudibleCount,
+              reportCueOutcome, dismissAlert }
+}
+```
 
-真正存在的接缝是注入的 **`ProductRuntimePort`**（provider 通过
-`runtime.watch.send` 发送，端口由各 target 的 bootstrap 构造）。因此：
+- **公网 adapter**：`setDesired` → 旧 wire 命令；`DesiredOutcome` 由
+  `START_RESULT` 的 rejection 映射；投影由 `START_RESULT` /
+  `WATCH_STOPPED` 合成（ephemeral：generation/revision 取退化值，
+  `pendingDisarm` / `blockedOnSlot` 恒 false）；
+- **本地 adapter**：`setDesired` → 逐 section 新铸 UUID、**从投影 store
+  取 base revision**（§3.1）→ `SET_DESIRED_WATCH`；投影来自
+  `PROJECTION_UPDATE`；缺帧时发 `REQUEST_FULL_PROJECTION`。
 
-- **本地的 runtime port 把这三个意图路由到 desired-watch CAS 通道**；
-  公网的 port 继续发 wire 命令；
-- 共享 provider 的形状不变；
-- 负控三件套：本地专有 import 图约束、capability manifest、
-  **public bundle 断言**——public 产物中不得出现任何 desired marker。
+共享 provider 只消费投影与连接态，不再构造 desired 类 wire 命令。
 
-### 7.7 public marker 计账（v3 未言明）
+### 7.7 public marker 计账（**冻结到数组顺序**）
 
-`public-source-deny.json` 现有 **18 行 capability**，且
-`EXPECTED_CAPABILITY_COUNT = 18`、`PUBLIC_SOURCE_MARKER_COUNT = 212`
-与两个 SHA-256 摘要分别硬编码在 `verify-public-rust-zero-surface.mjs`、
-`verify-rust-graph.mjs`、`frontend/tools/verify-import-graph.mjs`。
+`public-source-deny.json` 现有 **18 行 capability**，
+`PERSISTENT_ACTIVE_WATCH` 行 **13 个 marker**，`markerSetVersion = 1`，
+marker 总数 **212**。
 
-**裁定：不新增 capability 行**（新增会变成 19/19，与 N-g 的"保持
-18/18"自相矛盾），改为**在既有 `PERSISTENT_ACTIVE_WATCH` 行上追加
-marker**；随之必须同步：`markerSetVersion`、两处 212 常量、两个 SHA-256
-摘要。N-g 的措辞相应为"**capability 行保持 18/18**，marker 数与摘要按规则
-更新"。
+**不新增 capability 行**（会变 19/19，与"保持 18"矛盾）。在
+`PERSISTENT_ACTIVE_WATCH` 行追加 **3 个** marker——不是 v5 写的 6 个：
+匹配是**规范化后的子串包含**，`desired_watch` 已经吞掉
+`desired_watches` / `desired_watch_authority` / `desired_watch_receipt`，
+那三个是死条目。
+
+且 verifier **要求行内 marker 按序数序排列**，所以必须**插入**而非
+追加。冻结**结果数组**（16 项）：
+
+```
+active_watch_persistence, active_watch_store, authority_generation,
+auto_rewatch, automatic_rewatch, desired_watch, materialization_epoch,
+persisted_active_watch, persistent_active_watch, restore_subscription,
+restore_watch, restored_watch, subscription_restoration,
+watch_rehydration, watch_repository, watch_storage
+```
+
+**新总数 212 + 3 = 215**。同步项：
+
+- `markerSetVersion` **1 → 2**，三处：policy 文件、Rust verifier、
+  frontend verifier；
+- **Rust 侧 whole-document SHA** 与 **frontend 侧 rows-only SHA** 重算
+  （两者都对**数组顺序**敏感，故上面冻结了顺序）；
+- `frontend/tools/verify-import-graph.test.mjs` 的硬编码
+  **18/212 → 18/215**；
+- **五组校验面、八个断言面各补正反例**：Rust graph（1）、Rust zero
+  surface 的 SOURCE/API/STORAGE/PACKAGE（4）、frontend import graph（1）、
+  target build（1）、public DOM/bundle（1）；
+- **local capability manifest 增精确 slug `persistent-desired-watches`**，
+  **public manifest 必须不含**。
 
 ## 8. 迁移 10004 与同步面
 
 - 重建 `personal_desired_watches_v1`（§2.2），新建
-  `personal_desired_watch_receipts_v1`（§3.4）；
+  `personal_desired_watch_receipts_v1`（§2.3）；
 - 10003 遗留行升级为 `desired = 1`，按 `(term, campus, index)` 升序从 1
   起分配 `revision` 与 `materialization_epoch`；
-- metadata 写入 generation = 1、两个计数器 = 已分配最大值；
-- 迁移在既有 personal runner 的**单事务 + 可选 Rust after-hook** 模式内
-  完成（0002 已有先例）。
+- metadata 写入 generation = 1、`actorIncarnation` = 1、两个计数器 =
+  已分配最大值；
+- 在既有 personal runner 的**单事务 + 可选 Rust after-hook** 模式内完成。
 
-**同步面（v3 只列了一半）**：两个 allowlist、`PersonalTableCounts`、
-`PersonalResetResult`、schema 子串守卫（新表同样不得含
-connection/active_watch 字样）、Rust `PersonalStateSnapshot` 与
-`DesiredWatch` 形状、`bcsp-local-runtime` 的 bootstrap 编码，**以及
-`frontend/src/ui/local/personal/contracts.ts`**——后者有三处硬阻断：
+**同步面**：两个 allowlist、`PersonalTableCounts`、`PersonalResetResult`、
+schema 子串守卫（新表不得含 connection/active_watch 字样）、Rust
+`PersonalStateSnapshot` 与 `DesiredWatch` 形状、`bcsp-local-runtime` 的
+bootstrap 编码，**以及 `frontend/src/ui/local/personal/contracts.ts`**：
 
-1. `desiredWatches.length <= 9` 的帽：§2.3 保留 tombstone 到 Full Reset，
-   **第 10 个 tombstone 就会让整个 bootstrap 解析失败**。该帽必须改为
-   "`desired = 1` 的条目数 ≤ 9"，总条目数不设产品帽；
+1. `desiredWatches.length <= 9` 必须改为"**`desired = 1` 的条目数 ≤ 9**"
+   ——保留 tombstone 后第 10 个 tombstone 会让整个 bootstrap 解析失败；
 2. `hasKeys` 是**键集全等**检查：新增顶层
    `desiredWatchAuthorityGeneration` 会打挂 `isPersonalStateSnapshot`，
-   每条目新增 `desired`/`revision`/`materializationEpoch` 会打挂
-   `isDesiredWatch`；
-3. 上述改动需同步三处 bootstrap fixtures（S2-PR3.1 的先例）。
+   条目新增字段会打挂 `isDesiredWatch`；
+3. 同步三处 bootstrap fixtures（S2-PR3.1 的先例）。
 
-## 9. 验收映射
+## 9. 验收清单（自包含，A-01..A-36）
 
-清单 S2-D3 的 a–d 继续有效；e–i 中 **f、i 继续有效**，**h 改写为"reset
-进入同一 authority transition barrier"**，e、g 改写。
+**CAS 与身份**
+- A-01 STOP 后延迟旧 START → `STALE_REVISION`，不得重插已停意图；
+- A-02 新 START 后延迟旧 STOP → 对称；
+- A-03 旧 policy 不得覆盖新 policy；
+- A-04 reset 升代后前代写入 → `STALE_GENERATION`；
+- A-05 上述四例中**旧命令必须实际迟到**，不得只模拟入队/SQLite 延迟；
+- A-06 幂等三态：同 id 同 (section, fingerprint) 重放；同 id 异 section
+  或异 fingerprint → `MUTATION_ID_CONFLICT` 且**不插入第二行**；
+- A-07 `STALE_GENERATION` 不落 receipt；**系统 CAS 不落 receipt**；
+- A-08 `AUTHORITY_UNAVAILABLE` 不落 receipt、同 id 重试可成功；
+- A-09 终局拒绝后原因消失，**新手势新 id** 必须能成功；
+- A-10 **客户端收到终局拒绝后不得自动改号重发**（A-09 的反向；
+  与 A-11 的方向相反，是最易实现反的一处）；
+- A-11 系统 CAS 重试每次新铸 id；
+- A-12 receipt 主键为 `(generation, mutationId)`，section 为被比较列；
+- A-13 `basedOnRevision` 只取自投影 store；`MUTATION_RESULT` 不带状态；
 
-| 条目 | 本模型下的形态 |
-| --- | --- |
-| a) STOP 后延迟旧 START | `basedOnRevision` 落后 → `STALE_REVISION`；tombstone 永不回收 |
-| b) 新 START 后延迟旧 STOP | 同上，对称 |
-| c) 旧 policy 覆盖新 policy | 同上 |
-| d) reset 升代后前代写入 | `STALE_GENERATION` |
-| e) 顺序基准 | 改写：客户端携带的 `(generation, revision)` 经 CAS 判定 |
-| f) 旧命令必须实际迟到 | 继续有效 |
-| g) 临界区不得横跨 SQLite | 改写：CAS 在 socket 锁之外的 authority actor 内 |
-| h) reset barrier | 改写：reset 进入同一 authority transition barrier |
-| i) 首个生产调用方与全部反例测试同 PR | 继续有效 |
+**顺序与帧流**
+- A-14 每个 actor 轮次**至多一帧**；无变化则不发帧且 `transitionId`
+  不递增；
+- A-15 前端 reducer **整帧提交**，任何中间态都不得渲染；
+- A-16 actor 故障重建：`++actorIncarnation` 且向现存 audience 广播
+  `kind: FULL`；"COMMIT 后 panic"交错下所有页面收敛；
+- A-17 **帧顺序守卫为 `(actorIncarnation, transitionId)`**：重建后的
+  FULL 帧**不得**被当作倒退丢弃；
+- A-18 缺帧检测：`transitionId` 每化身内连续；客户端缺帧后发
+  `REQUEST_FULL_PROJECTION` 并恢复；
+- A-19 `AttachAudience` 的 FULL 帧在该轮次开始处序列化并**就是该轮的
+  那一帧**；同轮触发的物化变更经自入队的后续轮次发出；
+- A-20 Full Reset 后 epoch 计数器归零，armed 侧仍按
+  `(generation, epoch, attemptToken)` 正确排序；重置前在途的 epoch-1
+  完成回执不得复活 watch；
+- A-21 `attemptToken` 在 manager 副作用**之前**校验（不得先响铃再丢
+  回执），且覆盖 arm/disarm/**policy** 三类尝试；
 
-验收项 N-a..N-n（v2/v3）保留，v4 新增：
+**投影语义**
+- A-22 §0.3 的**有序**判定逐条钉死；特别是 STOP 提交后 `armed` 变
+  false 时**不得**落到"未监控"；
+- A-23 §0.1 严格 `armed`：policy 已提交但未在 manager 生效 ⇒ **非绿**；
+  且四个比较项在 `ProjectionEntry` 上**可计算**；
+- A-24 `pendingDisarm`（自己在拆）与 `blockedOnSlot`（等别人腾槽）是
+  **两个字段**，各自的 UI 文案不同；
+- A-25 迟到的终局拒绝不得把已前进的前端投影拉回；
+- A-26 前端 store 丢弃更旧 generation 的残留状态；
 
-- **N-o**：UI 投影表（§0）逐行钉死，尤其"desired=1 ∧ armed=false ⇒
-  准备中、非绿"与"pendingDisarm ⇒ 停止中"；
-- **N-p**：同一 mutationId 用于两个不同 section ⇒ `MUTATION_ID_CONFLICT`，
-  不得重放另一 section 的回执；
-- **N-q**：终局拒绝后原因消失（腾出名额 / gate 放行），用户**新手势**
-  （新 id）必须能成功——即 §3.1 的"新铸"规则；
-- **N-r**：actor 故障重建向现存 audience 广播完整双 snapshot；
-  "COMMIT 后 panic"交错下两页面收敛到 rev6；
-- **N-s**：Full Reset 后 epoch 计数器归零，armed 侧仍按
-  `(generation, epoch, attempt)` 正确排序；重置前在途的 epoch-1 完成
-  回执不得复活 watch；
-- **N-t**：`RejectedDuplicate` 视为成功、disarm `UnknownWatch` 视为成功；
-- **N-u**：9 门帽单一执行点——"STOP 挂起 + 立刻 START 第 10 门"不得出现
-  UI 显示已监控而 manager 拒绝；
-- **N-v**：owner 合成连接不被心跳回收；
-- **N-w**：policy-only 更新不换 `activeWatchId`、不重复响铃；
-- **N-x**：迟到的 `DESIRED_WATCH_REJECTED` 不得把已前进的前端投影拉回
-  （§3.2 服从单调守卫）。
+**物化与资源**
+- A-27 `ensure` 按 `(generation, epoch)` 幂等：同 key 重试**收养**原
+  `activeWatchId`、零副作用、无重复响铃；
+- A-28 **adopt 路径**：rotation 与 actor 重建换 epoch 时，健康的物理
+  watch **不得**被 `Restarted`（不得结束 episode / 换 ID / 重新响铃）；
+- A-29 **`applyPolicy` 使 policy-only 更新真正生效**：
+  `materialized.policy` 前进、section 转绿（v5 在此活锁）；
+- A-30 **一般暂态 arm 失败不回滚 desired**，reconciler 重试后转 armed；
+- A-31 两个帽两个不变量：9 armed → 9 STOP 全 pending → 再 START 9 个，
+  物理 watch **不得**超过帽；新 section `blockedOnSlot`，**`SlotReleased`
+  到达后立即 arm**，不等退避；
+- A-32 owner 的 `RejectedLimit`：有 pendingDisarm 时是**预期路径不告警**、
+  无 pendingDisarm 时是**不变量告警**；两者都**不**删除 desired；
+- A-33 owner 合成连接豁免心跳过期但**不豁免**物理帽；
+  `ConnectionKind::Owner` 不可由 wire 构造；
+- A-34 `disarm` 用**发起时捕获**的 `activeWatchId`；"STOP → 退避中 →
+  用户又 START"下**不得**拆掉新武装的 watch；
+- A-35 `desired = false` 对过期/不受支持 section 仍成功；永久失败经系统
+  CAS 移出 desired 并通知；`SECTION_NOT_FOUND` 在 gate 未放行时按暂态；
 
-## 10. 仍待裁定 / 开放
+**边界与预算**
+- A-36 §2.5 的**六个冻结数值**逐项生效（2/s·60 突发、512、2048、
+  32 KiB×3、80% 触发）；rotation **保留全部 `desired = 1` 行**、只清
+  tombstone 与 receipt；公网：desired tag 被拒且不进入命令路由/不改
+  watch 状态/不产生 dispatch/sink/reply；capability 行保持 18、marker
+  总数 215、数组顺序与两个摘要同步；local manifest 含
+  `persistent-desired-watches`、public 不含；本地旧三命令被服务端
+  admission filter 拒绝。
 
-- **打包 E2E 非空路径门保持开放**。本地专有 desired 路由落地后，冒烟可
-  直连提交一次 CAS；但**要验 `desired = true`，冒烟环境必须先播种一个
-  已发布 section**，否则准入直接拒，只有 `desired = false` 的弱覆盖。
-  播种方案属独立工作项，请裁定优先级。
-- **已批准设计的测试 1c（"leader 关闭 → 另一 tab 接管并 re-arm"）应声明
-  被本设计取代**：本模型下 watch 由服务端 connection-independent 持有，
-  leader 转移不触发任何 re-arm（§1）。请确认后在该文档标注。
+## 10. 已裁定 + 写回义务
+
+- **打包冒烟播种：P1 release gate**。必须在**首个生产 writer / 整批发布
+  之前**完成；使用**确定性的 PUBLISHED section fixture**并确保 S1 gate
+  放行；`desired = false` 的 tombstone 提交**不能**替代 true-path 验收。
+- **写回 `2026-08-20-alert-delivery-integrity.md` 两条**：
+  1. 测试 1c 取代但**翻译**：leader 关闭且仍有 audience 时，
+     `activeWatchId` / `materializationEpoch` / manager watch 计数**均
+     不变**，**无 re-arm、无重复 episode**；新 leader **只**接管音频；
+     跨 tab 的 STOP 仍收敛；
+  2. **9 门帽的两类事件区分**（§5.3）：面向用户的 CAS `LIMIT_EXCEEDED`
+     仍属 admission 类永久拒绝；owner 连接上的物理 `RejectedLimit` 是
+     内部槽条件，**不**移除 desired。
