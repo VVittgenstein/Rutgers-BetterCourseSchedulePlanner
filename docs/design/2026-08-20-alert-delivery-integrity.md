@@ -59,13 +59,17 @@ D7 Caddy reload 切断长连接。
   在途重试）；**暂态拒绝**（TARGET_UNAVAILABLE 等）重试，**永久拒绝**
   （admission 类：非产品校区/超学期窗口/超 9 门上限）从 desired 移除并
   以常驻通知告知用户，不无限重试。
-- **本地多标签页所有权（v3 新增）**：desired 表持久化后，若每个 tab 都
-  自动 START，会产生重复 watch、重复响铃与跨 tab STOP 不一致。采用
-  **leader tab** 方案：Web Locks API 抢占单一锁（`navigator.locks`，
-  锁随 tab 关闭自动释放、天然故障转移），仅 leader 建 watch 连接、跑
-  调和循环、放声音与通知；非 leader 通过 BroadcastChannel 镜像状态、
-  可编辑 desired 表（编辑广播给 leader 执行）。公网版无持久 desired，
-  单 tab 即单连接，维持现状。
+- **本地多标签页所有权（v3 提出，v4 由 CAS 设计取代）**：desired 表
+  持久化后，若每个 tab 都自动 START，会产生重复 watch、重复响铃与跨 tab
+  STOP 不一致。v3 曾采用 **leader tab 拥有监控**的方案（Web Locks 选举，
+  仅 leader 建连接、跑调和循环、发声）。
+  **该方案已被 `2026-08-22-desired-watch-revision-cas.md` 取代**：
+  监控由**服务端 connection-independent 的逻辑 owner 持有**，
+  **所有标签页平权编辑** desired 表（revision/CAS），
+  **leader 只剩一件用户看不见的事：避免多个页面同时响铃**。
+  因此不再有"仅 leader 武装""leader 转移后 re-arm""BroadcastChannel
+  镜像/转发编辑"这三件事。公网版无持久 desired，单 tab 即单连接，
+  维持现状。
 - 重连后对仍开放课节再响一轮 = 产品决策接受（v1.1，维持）。
 
 **2b. 公网会话票（v2 重写：403 分支不可实现）**
@@ -201,7 +205,7 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 | 本地状态(L1) | `bcsp-local-user-state` | 持久化期望监控表 + 加载自动 START |
 | **共享 host seam** | `bcsp-application/src/host.rs:366`（v3 新增触点） | 第二个可选 WS 路由注册 seam（target 注入制） |
 | 本地 presence(L2) | `bcsp-local-runtime`（经 seam 注册 `/api/v1/local/presence`）+ 前端页面级接入 | 每 tab presence 连接；count+generation+phase 状态机 → 60s 倒计时 → 到期复验 → 退出 |
-| 本地多 tab | 前端（Web Locks + BroadcastChannel） | leader 选举；仅 leader 武装/发声；非 leader 镜像与转发编辑 |
+| 本地多 tab | 前端（Web Locks）+ 服务端 authority | 所有 tab 平权编辑 desired（CAS）；监控由服务端逻辑 owner 持有；leader **只**决定谁播放声音 |
 | 本地日志(L3) | `bcsp-local-runtime`（tracing stdout） | 关键事件 + 倒计时 |
 | 政策 | `public-source-deny.json`、两 verifier、两 manifest、相关测试 | 通知家族拆分（批准的修订） |
 | 测试翻转 | `live-watch-provider.test.tsx:860-932` | 改为"意外断自动重连、显式断不重连" |
@@ -210,11 +214,18 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 
 1. 意外断 → 退避重连 → 按期望监控表 re-arm（已手动 STOP 的课**不**复活）；
    显式 Disconnect → 不重连；
-1b. **调和循环（v3）**：连接健康但 START 返回 TARGET_UNAVAILABLE →
-   退避重试至武装成功；永久拒绝（admission 类）→ 移出 desired + 常驻
-   通知；STOP/policy 变更作废在途 retry-epoch；
-1c. **多 tab（v3）**：双 tab 同 desired 表 → 仅 leader 武装、单一响铃；
-   leader 关闭 → 另一 tab 接管（锁转移）并 re-arm；跨 tab STOP 一致；
+1b. **调和循环（v3；v4 归属服务端 authority）**：物化健康但 arm 返回
+   TARGET_UNAVAILABLE → 退避重试至武装成功；永久拒绝（admission 类）→
+   移出 desired + 常驻通知；STOP/policy 变更作废在途 retry-epoch。
+   **9 门帽自 v4 起是两类事件，不可混淆**：CAS 上面向用户的
+   `LIMIT_EXCEEDED` 仍属 admission 类**永久拒绝**；而服务端 owner 连接
+   上的物理 `RejectedLimit` 只是**内部物理槽条件**（旧槽尚未拆完），
+   **不得**移除 desired；
+1c. **多 tab（v3 表述已被 v4 取代，此处为翻译版）**：双 tab 同 desired
+   表 → **单一响铃**；**leader 关闭且仍有 audience 时：不发生 re-arm，
+   `activeWatchId` / `materializationEpoch` / manager watch 计数均
+   不变，无重复 episode**，新 leader **只**接管音频职责；跨 tab STOP
+   仍然收敛；
 2. 公网换证：nonce 失效 → validate 换新（旧 nonce 废弃）→ 重连成功；
    validate single-flight 并发只发一次；服务器重启（registry 清空）→
    自动换证恢复；WS 心跳续期使挂机 nonce 不过期；

@@ -22,8 +22,11 @@
 6. ~~app 层心跳**不得依赖 hidden-tab 会被节流的客户端定时器**：服务端~~
    ~~驱动 PING，页面在消息处理器内被动 ACK。~~ **S2-PR4 已关闭
    （56a9f70，Codex 批准）**；25s Readiness 判定仍属 PR6。
-7. leader tab 接管后从**持久期望监控表**重水合（不信任 BroadcastChannel
-   缓存）；BroadcastChannel 消息带 revision/ACK，或明确持久表为唯一真相。
+7. ~~leader tab 接管后从持久期望监控表重水合~~ **（v4 CAS 设计改写）**：
+   监控由**服务端逻辑 owner** 持有，leader 转移**不触发任何 re-arm**；
+   持久 desired 表是唯一真相，所有 tab 经 CAS 平权编辑，投影由服务端
+   单一原子帧下发。leader 只决定谁播放声音。见
+   `2026-08-22-desired-watch-revision-cas.md` §1、§5、§10。
 
 ## 加固（P2 实现 PR）
 
@@ -256,6 +259,35 @@ S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
        **必须按序数序插入**、冻结到数组顺序，总数 **212→215**。
        验收清单扩至 **A-01..A-36**，补回 v5 漏掉的"客户端不得自动改号
        重发"与"一般暂态 arm 失败不回滚 desired"两项。
+       **v6 又被驳回 3 组（§0.3 顺序、§2.5 六值、§7.7 数组/去重/215
+       已获批准且不再重开），v7 逐条闭合**：① **帧流不可靠恢复**——
+       补 §0.3 最高优先级第 0 条（未同步 ⇒ 重连中/同步中、非绿、
+       **禁止用缓存 revision 发 mutation**）、`blockedOnSlot` 三项
+       不变量、**定向 FULL 不消费全局 `transitionId`** 而携带
+       `throughTransitionId`（否则 B Attach 会让 A 误判缺帧）、冻结
+       接收状态机 R1–R7（含"FULL 必须删除帧中缺席的本地 entry"）、
+       FULL 超时/single-flight/退避、`REQUEST_FULL_PROJECTION` 独立
+       限流与合并、**audience registry 必须活在 actor 之外**、分块与
+       "每轮至多一帧"统一为**共享 `transitionId` 的分块**、
+       **`armed` 改为前端派生不上 wire**；② **owner 副作用幂等**——
+       freshness token ≠ effect idempotency，新增稳定 `operationId` 与
+       **manager 侧 effect batch**（原 action/episode/cue ID 保留到
+       history 与 audience 双确认，actor 重建时用**原 ID 重放交接**），
+       adopt 增五项前置校验，`applyPolicy` 按 `sectionRevision` 作
+       稳定键且同 revision 重试不重复写 history，**`armAttempt` 与
+       `disarmOperationId` 拆分**，`SlotReleased` 降为唤醒提示并新增
+       **30s 周期 reconcile** 作独立活性源，**9 门帽改按 post-state
+       判定**（否则满门时 policy-only 更新被误拒）；③ **端口两个承重
+       面**——新增 `subscribeEvents`（否则警报与声音整体消失）、
+       `setDesired` 返回 handle 且非终局由 adapter **以同一 mutationId**
+       内部重试、公网 adapter 明示 STOP/UPDATE_POLICY 的退化完成语义。
+       另：`RATE_LIMITED` 入 wire 且为非终局；§2.5 补执行合同
+       （UTF-8 整信封计数、`floor(cap*4/5)` 三点边界、Retry-After、
+       rotation 保留 incarnation、Full Reset 不重置 `transitionId`）；
+       **所有本地 wire variant 统一加 `DESIRED_WATCH_` 前缀**并补
+       "孤儿 tag 泄漏"负例（原名不含任何 marker，会从负控漏出）；
+       两个 SHA 由复审方按冻结数组算出并写入设计文档。
+       验收清单扩至 **A-01..A-44**。
        wire 名冻结为 **`authorityGeneration`**。
        **§10 两项已裁定**：打包冒烟播种为 **P1 release gate**（首个生产
        writer/整批发布前必须完成，需确定性 PUBLISHED fixture 且 S1 gate
@@ -264,9 +296,11 @@ S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
        计数不变、无 re-arm、无重复 episode，新 leader 只接管音频，跨 tab
        STOP 仍收敛），须写回 alert-delivery-integrity.md。
        本硬门在 CAS 路线落地并复审通过前保持关闭。
-       **打包 E2E 非空路径门保持开放**（Codex 本轮明确）：待本地专有
-       desired 路由落地后，打包冒烟可直连该路由提交一次 CAS 再走
-       写入 → 重启恢复 → reset 删除计数 → 再重启为空。
+       **打包 E2E 非空路径门保持开放，且已被裁定为 P1 release gate**
+       （Codex 2026-08-23）：必须在**首个生产 writer / 整批发布之前**
+       完成，需**确定性的 PUBLISHED section fixture** 且 S1 gate 放行；
+       `desired = false` 的 tombstone 提交**不能**替代 true-path 验收。
+       （早前"路由落地即可关闭该门"的说法作废——路由只是使其**可达**。）
 
 ## 通用
 
@@ -342,8 +376,8 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
 - [~] S2-PR5——第一版按 fenced sequencer 实现，自查三镜头实跑复现 2 项
       P1（活跃/持久反向错位；重放 START 重新落库），**未提交即作废**；
       路线改判为 revision/CAS。设计 v1（e53f525）驳回 5 组阻断 → v2
-      （d798f9d）驳回 4 组 → v3 自查再挖 11 项 → v4（278fc9b）驳回 5 组
-      → **v5 逐条闭合**，见
+      （d798f9d）驳回 4 组 → v3 自查 11 项 → v4（278fc9b）驳回 5 组 →
+      v5 自查 15 项 → v6（17066d9）驳回 3 组 → **v7 逐条闭合**，见
       `2026-08-22-desired-watch-revision-cas.md`；待设计复审通过后实现。
 - [x] S2-PR4（应用层心跳，56a9f70）——**Codex 批准**，清单第 6 条关闭
       （三项披露获追认；新增携带项 S2f/S2g 归 PR6；扫描 0 findings）

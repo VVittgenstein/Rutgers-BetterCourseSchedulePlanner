@@ -71,9 +71,13 @@ frozen/discarded 页面为 residual risk）。v3 增 desired→armed 调和循�
 持久化 **期望监控表**（section+policy；v2 修正：不是"selection+活跃
 布尔"，不含 activeWatchId/响铃消耗）；页面加载后按表自动 START，已手动
 STOP 的课不复活。有意修订 `bcsp-local-user-state` 的原设计声明。
-**多标签页所有权（v3）**：Web Locks 选举 leader tab——仅 leader 武装
-监控与发声，非 leader 经 BroadcastChannel 镜像状态、转发编辑；leader
-关闭自动转移。杜绝重复 watch/重复响铃/跨 tab STOP 不一致。
+**多标签页所有权（v3 提出，v4 由 CAS 设计取代）**：监控改由**服务端
+connection-independent 的逻辑 owner** 持有，**所有 tab 平权编辑**
+desired 表（revision/CAS，持久表为唯一真相）；Web Locks 选出的 leader
+**只**决定谁播放声音，转移时**不触发 re-arm**、`activeWatchId` 与
+watch 计数不变。仍然杜绝重复 watch/重复响铃/跨 tab STOP 不一致，但不再
+依赖 BroadcastChannel 镜像与转发编辑。见
+`2026-08-22-desired-watch-revision-cas.md`。
 
 ### L2. 关闭浏览器 = 60 秒可见倒计时后退出
 
