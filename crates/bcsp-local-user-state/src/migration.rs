@@ -58,6 +58,12 @@ pub(crate) fn apply_migrations(connection: &mut Connection) -> PersonalStateResu
     }
 
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // Re-read the ledger now that we hold the write lock. The check above ran
+    // unlocked, so a second opener could have applied the pending migrations
+    // in between; without this, the loser of that race re-runs them and the
+    // process fails to start.
+    let applied = read_migration_records(&transaction)?;
+    verify_applied_prefix(&applied)?;
     for migration in MIGRATIONS.iter().skip(applied.len()) {
         transaction.execute_batch(migration.sql)?;
         if let Some(after_sql) = migration.after_sql {

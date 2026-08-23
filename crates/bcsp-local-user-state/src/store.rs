@@ -492,18 +492,25 @@ impl PersonalStateStore {
     }
 
     pub fn personal_table_counts(&self) -> PersonalStateResult<PersonalTableCounts> {
+        // Eight independent COUNT(*)s can straddle a concurrent Full Reset and
+        // add up to a state that never existed.
+        self.consistent_read(|store| {
+            Self::table_counts_within_snapshot(&store.connection)
+        })
+    }
+
+    fn table_counts_within_snapshot(
+        connection: &Connection,
+    ) -> PersonalStateResult<PersonalTableCounts> {
         Ok(PersonalTableCounts {
-            settings: table_count(&self.connection, "personal_settings_v1")?,
-            current_filters: table_count(&self.connection, "personal_current_filters_v1")?,
-            saved_views: table_count(&self.connection, "personal_saved_views_v1")?,
-            selected_sections: table_count(&self.connection, "personal_selected_sections_v1")?,
-            desired_watches: table_count(&self.connection, "personal_desired_watches_v1")?,
-            desired_watch_receipts: table_count(
-                &self.connection,
-                "personal_desired_watch_receipts_v1",
-            )?,
-            episode_summaries: table_count(&self.connection, "personal_episode_summaries_v1")?,
-            episode_actions: table_count(&self.connection, "personal_episode_actions_v1")?,
+            settings: table_count(connection, "personal_settings_v1")?,
+            current_filters: table_count(connection, "personal_current_filters_v1")?,
+            saved_views: table_count(connection, "personal_saved_views_v1")?,
+            selected_sections: table_count(connection, "personal_selected_sections_v1")?,
+            desired_watches: table_count(connection, "personal_desired_watches_v1")?,
+            desired_watch_receipts: table_count(connection, "personal_desired_watch_receipts_v1")?,
+            episode_summaries: table_count(connection, "personal_episode_summaries_v1")?,
+            episode_actions: table_count(connection, "personal_episode_actions_v1")?,
         })
     }
 

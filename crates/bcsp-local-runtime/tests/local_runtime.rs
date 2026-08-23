@@ -1749,6 +1749,7 @@ async fn reset_http_routes_keep_three_scopes_distinct_and_guard_the_destructive_
     assert_eq!(confirmed["deletedSavedViews"], 1);
     assert_eq!(confirmed["deletedSelectedSections"], 1);
     assert_eq!(confirmed["deletedDesiredWatches"], 0);
+    assert_eq!(confirmed["deletedDesiredWatchReceipts"], 0);
 
     let reused = raw_api(
         authority,

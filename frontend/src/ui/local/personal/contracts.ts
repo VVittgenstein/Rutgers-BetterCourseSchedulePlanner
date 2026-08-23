@@ -254,6 +254,7 @@ export interface PersonalResetResult {
   readonly deletedSavedViews: number;
   readonly deletedSelectedSections: number;
   readonly deletedDesiredWatches: number;
+  readonly deletedDesiredWatchReceipts: number;
   readonly deletedEpisodeSummaries: number;
   readonly deletedEpisodeActions: number;
 }

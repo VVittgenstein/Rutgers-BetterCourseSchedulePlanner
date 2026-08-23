@@ -572,6 +572,10 @@ try {
         ([long]$confirmedReset.data.deletedDesiredWatches -eq 0)
     ) 'Full Reset did not report a desired-watch deletion count.'
     Assert-Condition (
+        ($null -ne $confirmedReset.data.deletedDesiredWatchReceipts) -and
+        ([long]$confirmedReset.data.deletedDesiredWatchReceipts -eq 0)
+    ) 'Full Reset did not report a desired-watch receipt deletion count.'
+    Assert-Condition (
         [long]$confirmedReset.data.stateRevision -gt [long]$second.data.state.stateRevision
     ) 'Full Reset did not advance the user-state revision.'
 
