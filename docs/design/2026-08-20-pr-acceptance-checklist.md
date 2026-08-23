@@ -653,6 +653,27 @@ tombstone，只有**未来的** authority bootstrap / projection 才会携带它
 3. （沿用 PR5c）post-state 帽换成 pre-state → cap 测试 FAILED。
 4. （沿用 PR5c）反转 epoch 保留条件 → policy 编辑测试 FAILED。
 
+## 范围缩减（产品所有者 2026-08-23 裁定）
+
+"像 B 站那样"= **多页面共同编辑同一份服务端状态**，B 站的语义是"另一个
+页面操作后本页面需要刷新才看得到"，**不要求实时推送**。实现方此前读成
+"共同编辑 + 实时推送"，据此建的帧流/分块/双 ACK/化身/听众登记/leader
+选举**全部作废**。同轮确认：浏览器只是展示面，本地端关掉浏览器即无响铃
+通道，不响铃是正确行为。
+
+新设计见 `2026-08-23-desired-watch-reduced-scope.md`；
+`2026-08-22-desired-watch-revision-cas.md` 标记 SUPERSEDED 并列明哪些节
+仍有效、哪些作废。
+
+**作废对已完成工作的影响**：
+- PR5a / PR5c / PR5d（存储、CAS、receipt、上限、rotation）**全部保留**
+  ——它们是"两页各自提交不能互相覆盖"本身要求的，与推送无关；
+- **PR5b 的路由集合对本功能不再需要**：期望监控改走 HTTP，与 settings /
+  selection 同一处注册，不触及共享 host 路由表。PR5b 中仍有价值的是
+  S2c 的 64 KiB 帧上限（已惠及既有 watch 路由）与 S2b 的 404 钉死；
+  路由集合本身保留在代码中但**本功能不使用**。
+- S2-D3 关闭条件改为新设计 §9 的第 3–6 项。
+
 ## 进度
 
 - [x] S1-PR1（gate 决策核心，8e83ee4）——**Codex 已批准 v5.1 迟滞追认**
