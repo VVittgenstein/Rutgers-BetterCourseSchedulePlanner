@@ -27,18 +27,19 @@ mod store;
 pub use error::{PersonalStateError, PersonalStateResult, SettingValueError};
 pub use model::{
     CatalogRefreshMinutes, CurrentFilters, CurrentFiltersRevision, DesiredWatch,
-    DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchCommand, DesiredWatchCommitted,
-    DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome, DesiredWatchReceipt,
-    DesiredWatchReceiptOutcome, DesiredWatchRejection, DesiredWatchRetirementOutcome,
-    EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition,
-    EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput, FilterAssociation,
-    HistoryFilter, HistoryPage, HistoryWriteOutcome, LocalSettings, LocaleOverride,
-    OpenRefreshSeconds, PageRequest, PersonalMigrationRecord, PersonalResetResult,
-    PersonalStateSnapshot, PersonalTableCounts, SavedViewContent, SavedViewDefinition,
-    SavedViewDeleteResult, SavedViewIncompatibility, SavedViewMatch, SavedViewMutation,
-    SavedViewReviewCode, SavedViewReviewReason, SavedViewRevision, SavedViewsDeleteAllResult,
-    SelectionMutation, SettingsRevision, SqliteConfiguration, StoredCurrentFilters, StoredSettings,
-    UnixMillis, UserStateRevision, VolumePercent, WalCheckpoint, WatchFastLaneSeconds,
+    DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchBudget, DesiredWatchBudgetKind,
+    DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry,
+    DesiredWatchMutationOutcome, DesiredWatchReceipt, DesiredWatchReceiptOutcome,
+    DesiredWatchRejection, DesiredWatchRetirementOutcome, DesiredWatchRotation, EpisodeActionInput,
+    EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition, EpisodeHistoryIdentity,
+    EpisodeHistorySummary, EpisodeSummaryInput, FilterAssociation, HistoryFilter, HistoryPage,
+    HistoryWriteOutcome, LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest,
+    PersonalMigrationRecord, PersonalResetResult, PersonalStateSnapshot, PersonalTableCounts,
+    SavedViewContent, SavedViewDefinition, SavedViewDeleteResult, SavedViewIncompatibility,
+    SavedViewMatch, SavedViewMutation, SavedViewReviewCode, SavedViewReviewReason,
+    SavedViewRevision, SavedViewsDeleteAllResult, SelectionMutation, SettingsRevision,
+    SqliteConfiguration, StoredCurrentFilters, StoredSettings, UnixMillis, UserStateRevision,
+    VolumePercent, WalCheckpoint, WatchFastLaneSeconds,
 };
 pub use store::PersonalStateStore;
 
@@ -71,6 +72,22 @@ pub const MAX_SELECTED_SECTIONS: usize = bcsp_contracts::MAX_ACTIVE_WATCHES as u
 /// The product admission cap on desired watches, tested against the state a
 /// mutation would LEAVE BEHIND rather than the state it found.
 pub const MAX_DESIRED_WATCHES: usize = bcsp_contracts::MAX_ACTIVE_WATCHES as usize;
+/// Frozen hard cap on removal history. A tombstone holds a section's revision
+/// so a delayed command cannot be mistaken for a fresh one, so they can only
+/// be cleared by raising the generation -- which is what rotation does.
+pub const MAX_DESIRED_WATCH_TOMBSTONES: u64 = 512;
+/// Frozen hard cap on the receipt ledger.
+pub const MAX_DESIRED_WATCH_RECEIPTS: u64 = 2048;
+/// Rotation is due at 80% of a budget, floored: `512 * 4 / 5 == 409`.
+pub const DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD: u64 = MAX_DESIRED_WATCH_TOMBSTONES * 4 / 5;
+/// `2048 * 4 / 5 == 1638`.
+pub const DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD: u64 = MAX_DESIRED_WATCH_RECEIPTS * 4 / 5;
+/// The most authority rows that can legally exist at once: every desired
+/// section plus a full removal history. This is the number a frame-size proof
+/// has to be made against, which is why the caps above are enforced in the
+/// writer rather than left to a reconciler that might miss a round.
+pub const MAX_DESIRED_WATCH_AUTHORITY_ROWS: u64 =
+    MAX_DESIRED_WATCH_TOMBSTONES + MAX_DESIRED_WATCHES as u64;
 
 pub fn boundary_marker() -> &'static str {
     let _ = (

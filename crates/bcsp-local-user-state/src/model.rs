@@ -7,7 +7,11 @@ use bcsp_contracts::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::{PersonalStateError, PersonalStateResult, SettingValueError};
+use crate::{
+    DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD, DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD,
+    MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES, PersonalStateError,
+    PersonalStateResult, SettingValueError,
+};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum LocaleOverride {
@@ -890,6 +894,65 @@ pub struct DesiredWatchReceipt {
     pub outcome: DesiredWatchReceiptOutcome,
 }
 
+/// Which frozen resource budget a write ran into.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DesiredWatchBudgetKind {
+    /// Rows the removal history is allowed to keep.
+    Tombstones,
+    /// Rows the receipt ledger is allowed to keep.
+    Receipts,
+}
+
+/// How full the two rotation budgets are.
+///
+/// The actor reads this to decide when to rotate. The store does not rotate
+/// on its own: rotation raises the authority generation, which invalidates
+/// every client's `basedOnRevision` and owes them a FULL frame, and neither
+/// of those is a decision a storage call can make on a caller's behalf.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DesiredWatchBudget {
+    pub tombstones: u64,
+    pub receipts: u64,
+}
+
+impl DesiredWatchBudget {
+    /// True once either budget has reached its rotation threshold. Crossing
+    /// it is not an error -- it is the signal that leaves enough headroom for
+    /// the writes still in flight while a rotation is arranged.
+    pub const fn rotation_due(&self) -> bool {
+        self.tombstones >= DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD
+            || self.receipts >= DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD
+    }
+
+    /// The budget that is at its hard cap, if either is.
+    ///
+    /// Receipts are reported first, matching the order the writer checks
+    /// them in. With both budgets full the two would otherwise name
+    /// different culprits for the same database, and a caller comparing
+    /// what it was told against what it observed would conclude the
+    /// authority was inconsistent when it was only asked twice.
+    pub const fn exhausted(&self) -> Option<DesiredWatchBudgetKind> {
+        if self.receipts >= MAX_DESIRED_WATCH_RECEIPTS {
+            Some(DesiredWatchBudgetKind::Receipts)
+        } else if self.tombstones >= MAX_DESIRED_WATCH_TOMBSTONES {
+            Some(DesiredWatchBudgetKind::Tombstones)
+        } else {
+            None
+        }
+    }
+}
+
+/// What a rotation did, so the caller can broadcast the new generation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesiredWatchRotation {
+    pub authority_generation: u64,
+    pub deleted_tombstones: u64,
+    pub deleted_receipts: u64,
+    /// Every surviving `desired = 1` row, renumbered into the new
+    /// generation, in section order.
+    pub retained: Vec<DesiredWatchEntry>,
+}
+
 /// A caller's verdict on whether a section may be armed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DesiredWatchAdmission {
@@ -935,6 +998,16 @@ pub enum DesiredWatchMutationOutcome {
     /// NON-TERMINAL. Nothing was written and no receipt was left; the same
     /// id may be presented again.
     Unavailable,
+    /// NON-TERMINAL. A frozen resource budget is at its hard cap, so this
+    /// write is refused rather than allowed to exceed it. Nothing is
+    /// written and no receipt is left; the same id may be presented again
+    /// once the authority has been rotated.
+    ///
+    /// This is deliberately not a terminal rejection. Refusing a STOP
+    /// forever would leave a watch the user cannot turn off, which is worse
+    /// than any silence; refusing it until maintenance runs leaves the page
+    /// visibly out of sync instead, which is the honest state.
+    AuthorityFull(DesiredWatchBudgetKind),
 }
 
 impl From<DesiredWatchReceiptOutcome> for DesiredWatchMutationOutcome {
@@ -979,6 +1052,9 @@ pub enum DesiredWatchRetirementOutcome {
     /// section first. The retirement stops here rather than writing a second
     /// tombstone over the user's own.
     NothingToRetire,
+    /// The tombstone budget is at its hard cap. Retirement is a retry loop
+    /// already, so it simply keeps its row and comes back after a rotation.
+    AuthorityFull(DesiredWatchBudgetKind),
 }
 
 /// The four persisted authority counters.

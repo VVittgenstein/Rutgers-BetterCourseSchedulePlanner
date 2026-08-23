@@ -8,15 +8,18 @@ use bcsp_contracts::{
     WatchNotificationMode, WatchPolicyV1,
 };
 use bcsp_local_user_state::{
-    CatalogRefreshMinutes, CurrentFiltersRevision, DesiredWatch, DesiredWatchAdmission,
-    DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchMutationOutcome,
-    DesiredWatchReceiptOutcome, DesiredWatchRejection, DesiredWatchRetirementOutcome,
-    EpisodeActionInput, EpisodeActionKind, EpisodeDisposition, EpisodeHistoryIdentity,
-    EpisodeSummaryInput, FilterAssociation, HistoryFilter, HistoryWriteOutcome, LocalSettings,
-    LocaleOverride, MAX_DESIRED_WATCHES, MAX_SELECTED_SECTIONS, OpenRefreshSeconds, PageRequest,
-    PersonalStateError, PersonalStateStore, SavedViewContent, SavedViewIncompatibility,
-    SavedViewMatch, SavedViewRevision, SelectionMutation, SettingsRevision, UnixMillis,
-    UserStateRevision, VolumePercent, WatchFastLaneSeconds,
+    CatalogRefreshMinutes, CurrentFiltersRevision, DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD,
+    DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD, DesiredWatch, DesiredWatchAdmission,
+    DesiredWatchBudgetKind, DesiredWatchCommand, DesiredWatchCommitted,
+    DesiredWatchMutationOutcome, DesiredWatchReceiptOutcome, DesiredWatchRejection,
+    DesiredWatchRetirementOutcome, EpisodeActionInput, EpisodeActionKind, EpisodeDisposition,
+    EpisodeHistoryIdentity, EpisodeSummaryInput, FilterAssociation, HistoryFilter,
+    HistoryWriteOutcome, LocalSettings, LocaleOverride, MAX_DESIRED_WATCH_AUTHORITY_ROWS,
+    MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES, MAX_DESIRED_WATCHES,
+    MAX_SELECTED_SECTIONS, OpenRefreshSeconds, PageRequest, PersonalStateError, PersonalStateStore,
+    SavedViewContent, SavedViewIncompatibility, SavedViewMatch, SavedViewRevision,
+    SelectionMutation, SettingsRevision, UnixMillis, UserStateRevision, VolumePercent,
+    WatchFastLaneSeconds,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -2040,4 +2043,435 @@ fn every_recorded_answer_survives_closing_and_reopening_the_database() {
         reopened.desired_watches().unwrap().len(),
         MAX_DESIRED_WATCHES,
     );
+}
+
+/// Bulk-seeds tombstones directly, because these budgets are only reachable
+/// at a scale that would otherwise make the setup the slowest part of the
+/// test. The rows are exactly what a stop writes.
+fn seed_tombstones(path: &Path, count: u64) {
+    seed_tombstones_from(path, 1, count);
+}
+
+fn seed_tombstones_from(path: &Path, first: u64, count: u64) {
+    // The schema has to exist before rows can be put in it.
+    drop(PersonalStateStore::open(path).unwrap());
+    let connection = Connection::open(path).unwrap();
+    connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+    for index in first..first + count {
+        connection
+            .execute(
+                "INSERT INTO personal_desired_watches_v1
+                     (term_id, campus_code, section_index, desired, policy_json,
+                      revision, materialization_epoch)
+                 VALUES ('T2026F', 'CAMPUS_A', ?1, 0, NULL, ?2, ?2)",
+                rusqlite::params![format!("{index:05}"), index as i64],
+            )
+            .unwrap();
+    }
+    connection
+        .execute(
+            "UPDATE personal_state_metadata_v1
+                SET desired_watch_revision_counter = MAX(desired_watch_revision_counter, ?1),
+                    desired_watch_materialization_counter =
+                        MAX(desired_watch_materialization_counter, ?1)",
+            [(first + count - 1) as i64],
+        )
+        .unwrap();
+    connection.execute_batch("COMMIT").unwrap();
+}
+
+fn seed_receipts(path: &Path, count: u64) {
+    seed_receipts_from(path, 1, count);
+}
+
+fn seed_receipts_from(path: &Path, first: u64, count: u64) {
+    drop(PersonalStateStore::open(path).unwrap());
+    let connection = Connection::open(path).unwrap();
+    connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+    for index in first..first + count {
+        connection
+            .execute(
+                r#"INSERT INTO personal_desired_watch_receipts_v1
+                     (authority_generation, mutation_id, term_id, campus_code,
+                      section_index, fingerprint, outcome_json)
+                 VALUES (1, ?1, 'T2026F', 'CAMPUS_A', '00001', ?2,
+                         '{"outcome":"STALE_REVISION","current":0}')"#,
+                rusqlite::params![trace(1_000_000 + index).to_string(), format!("{index:064}")],
+            )
+            .unwrap();
+    }
+    connection.execute_batch("COMMIT").unwrap();
+}
+
+#[test]
+fn the_rotation_thresholds_are_the_frozen_eighty_percent_floors() {
+    // Frozen values. They are pinned as literals rather than recomputed,
+    // because a proof about the largest legal state is only as good as the
+    // numbers it was made against.
+    assert_eq!(MAX_DESIRED_WATCH_TOMBSTONES, 512);
+    assert_eq!(MAX_DESIRED_WATCH_RECEIPTS, 2048);
+    assert_eq!(DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD, 409);
+    assert_eq!(DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD, 1638);
+    // Floored, not rounded: 512 * 4 / 5 is 409.6 and 2048 * 4 / 5 is 1638.4.
+    assert_eq!(DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD, 512 * 4 / 5);
+    assert_eq!(DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD, 2048 * 4 / 5);
+}
+
+#[test]
+fn the_budget_reader_composes_inside_a_callers_consistent_read() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let store = PersonalStateStore::open(&path).unwrap();
+
+    // One statement, so it carries its own snapshot AND nests. Giving it a
+    // transaction of its own would be the same regression that broke
+    // `personal_table_counts` once already: a caller holding a snapshot
+    // would get "cannot start a transaction within a transaction".
+    let (budget, counts) = store
+        .consistent_read(|store| {
+            Ok((
+                store.desired_watch_budget()?,
+                store.personal_table_counts()?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(budget.tombstones, 0);
+    assert_eq!(budget.receipts, counts.desired_watch_receipts);
+}
+
+#[test]
+fn the_tombstone_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+
+    seed_tombstones(&path, DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD - 1);
+    let store = PersonalStateStore::open(&path).unwrap();
+    assert_eq!(
+        store.desired_watch_budget().unwrap().tombstones,
+        DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD - 1,
+    );
+    assert!(!store.desired_watch_budget().unwrap().rotation_due());
+    drop(store);
+
+    seed_tombstones_from(&path, DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD, 1);
+    let store = PersonalStateStore::open(&path).unwrap();
+    assert!(
+        store.desired_watch_budget().unwrap().rotation_due(),
+        "rotation is due AT the threshold, not one past it",
+    );
+    drop(store);
+
+    // Fill to the hard cap and give the user one armed section to stop.
+    seed_tombstones_from(
+        &path,
+        DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD + 1,
+        MAX_DESIRED_WATCH_TOMBSTONES - DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD,
+    );
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    assert_eq!(
+        store.desired_watch_budget().unwrap().tombstones,
+        MAX_DESIRED_WATCH_TOMBSTONES,
+    );
+    let armed = committed(
+        store
+            .commit_desired_watch_mutation(&start(section(9000), 0, 1), admit)
+            .unwrap(),
+    );
+
+    // The stop is refused, and refused NON-terminally: no receipt, nothing
+    // written, and the section is still armed rather than reported stopped.
+    let before = receipt_count(&store);
+    assert_eq!(
+        store
+            .commit_desired_watch_mutation(&stop(section(9000), armed.revision, 2), never)
+            .unwrap(),
+        DesiredWatchMutationOutcome::AuthorityFull(DesiredWatchBudgetKind::Tombstones),
+    );
+    assert_eq!(
+        receipt_count(&store),
+        before,
+        "a non-terminal answer is not recorded"
+    );
+    assert_eq!(
+        store.desired_watch_budget().unwrap().tombstones,
+        MAX_DESIRED_WATCH_TOMBSTONES,
+        "the 513th tombstone must not land",
+    );
+    assert_eq!(store.desired_watches().unwrap().len(), 1);
+
+    // Rotation is what unblocks it. The stop then goes through -- against the
+    // new generation, because the old one is exactly what rotation retired.
+    let rotation = store.rotate_desired_watch_authority().unwrap();
+    assert_eq!(rotation.deleted_tombstones, MAX_DESIRED_WATCH_TOMBSTONES);
+    let mut retry = stop(section(9000), rotation.retained[0].revision, 3);
+    retry.authority_generation = rotation.authority_generation;
+    committed(store.commit_desired_watch_mutation(&retry, never).unwrap());
+    assert_eq!(store.desired_watches().unwrap(), Vec::new());
+}
+
+#[test]
+fn a_system_retirement_also_stops_at_the_tombstone_cap() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    seed_tombstones(&path, MAX_DESIRED_WATCH_TOMBSTONES);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    let armed = committed(
+        store
+            .commit_desired_watch_mutation(&start(section(9000), 0, 1), admit)
+            .unwrap(),
+    );
+
+    // The retirement is the other writer that turns a desired row into a
+    // tombstone, so the cap has to hold on this path too -- a reconciler
+    // looping on a section it can never arm must not be the thing that
+    // walks the table past its bound.
+    assert_eq!(
+        store
+            .retire_desired_watch(&section(9000), armed.revision, 1)
+            .unwrap(),
+        DesiredWatchRetirementOutcome::AuthorityFull(DesiredWatchBudgetKind::Tombstones),
+    );
+    assert_eq!(
+        store.desired_watch_budget().unwrap().tombstones,
+        MAX_DESIRED_WATCH_TOMBSTONES,
+    );
+    assert_eq!(
+        store.desired_watches().unwrap().len(),
+        1,
+        "the row it could not retire is untouched"
+    );
+
+    // After a rotation it completes, against the generation rotation made.
+    let rotation = store.rotate_desired_watch_authority().unwrap();
+    assert!(matches!(
+        store
+            .retire_desired_watch(
+                &section(9000),
+                rotation.retained[0].revision,
+                rotation.authority_generation,
+            )
+            .unwrap(),
+        DesiredWatchRetirementOutcome::Retired(_),
+    ));
+}
+
+#[test]
+fn the_budget_reader_names_the_same_culprit_the_writer_does() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    seed_tombstones(&path, MAX_DESIRED_WATCH_TOMBSTONES);
+    seed_receipts(&path, MAX_DESIRED_WATCH_RECEIPTS);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+
+    // Both budgets full at once. The reader an actor consults and the writer
+    // it is trying to unblock have to agree on which one is in the way;
+    // disagreeing would send it rotating for a reason the store never gave.
+    let budget = store.desired_watch_budget().unwrap();
+    assert_eq!(budget.exhausted(), Some(DesiredWatchBudgetKind::Receipts));
+    assert_eq!(
+        store
+            .commit_desired_watch_mutation(&stop(section(9000), 0, 1), never)
+            .unwrap(),
+        DesiredWatchMutationOutcome::AuthorityFull(DesiredWatchBudgetKind::Receipts),
+    );
+}
+
+#[test]
+fn the_receipt_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+
+    seed_receipts(&path, DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD - 1);
+    let store = PersonalStateStore::open(&path).unwrap();
+    assert!(!store.desired_watch_budget().unwrap().rotation_due());
+    drop(store);
+
+    seed_receipts_from(&path, DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD, 1);
+    let store = PersonalStateStore::open(&path).unwrap();
+    assert!(store.desired_watch_budget().unwrap().rotation_due());
+    drop(store);
+
+    seed_receipts_from(
+        &path,
+        DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD + 1,
+        MAX_DESIRED_WATCH_RECEIPTS - DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD,
+    );
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    assert_eq!(
+        store.desired_watch_budget().unwrap().receipts,
+        MAX_DESIRED_WATCH_RECEIPTS,
+    );
+
+    // Refused before the command is decided at all. Deciding first and then
+    // failing to record it would hand out an answer a retry could contradict.
+    assert_eq!(
+        store
+            .commit_desired_watch_mutation(&start(section(1), 0, 1), never)
+            .unwrap(),
+        DesiredWatchMutationOutcome::AuthorityFull(DesiredWatchBudgetKind::Receipts),
+    );
+    assert_eq!(
+        store.desired_watch_budget().unwrap().receipts,
+        MAX_DESIRED_WATCH_RECEIPTS,
+        "the 2049th receipt must not land",
+    );
+    assert_eq!(store.desired_watches().unwrap(), Vec::new());
+
+    let rotation = store.rotate_desired_watch_authority().unwrap();
+    assert_eq!(rotation.deleted_receipts, MAX_DESIRED_WATCH_RECEIPTS);
+    let mut retry = start(section(1), 0, 1);
+    retry.authority_generation = rotation.authority_generation;
+    committed(store.commit_desired_watch_mutation(&retry, admit).unwrap());
+}
+
+#[test]
+fn a_replay_still_answers_when_the_ledger_is_full() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+
+    let first = committed(
+        store
+            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .unwrap(),
+    );
+    drop(store);
+    seed_receipts_from(&path, 1, MAX_DESIRED_WATCH_RECEIPTS - 1);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    assert_eq!(
+        store.desired_watch_budget().unwrap().receipts,
+        MAX_DESIRED_WATCH_RECEIPTS,
+    );
+
+    // A client whose response was lost retries. It needs no new ledger row,
+    // so a full ledger must not turn its recorded answer into "come back
+    // later" -- that would be the authority forgetting something it knows.
+    assert_eq!(
+        store
+            .commit_desired_watch_mutation(&start(section(1), 0, 1), never)
+            .unwrap(),
+        DesiredWatchMutationOutcome::Replayed(DesiredWatchReceiptOutcome::committed(first)),
+    );
+}
+
+#[test]
+fn rotation_carries_intent_into_a_new_generation_and_frees_both_budgets() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+
+    let armed = committed(
+        store
+            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .unwrap(),
+    );
+    committed(
+        store
+            .commit_desired_watch_mutation(&start(section(2), 0, 2), admit)
+            .unwrap(),
+    );
+    committed(
+        store
+            .commit_desired_watch_mutation(&stop(section(1), armed.revision, 3), admit)
+            .unwrap(),
+    );
+    // Give the incarnation a value only a running actor would have. Left at
+    // the schema default this assertion compares 1 to 1 and would still pass
+    // against a rotation that reset it.
+    drop(store);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE personal_state_metadata_v1 SET desired_watch_actor_incarnation = 7",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+
+    let before = store.desired_watch_authority().unwrap();
+    assert_eq!(before.counters.authority_generation, 1);
+    assert_eq!(before.counters.actor_incarnation, 7);
+    assert_eq!(before.entries.len(), 2);
+
+    let rotation = store.rotate_desired_watch_authority().unwrap();
+    assert_eq!(rotation.authority_generation, 2);
+    assert_eq!(rotation.deleted_tombstones, 1);
+    assert_eq!(rotation.deleted_receipts, 3);
+    assert_eq!(
+        rotation
+            .retained
+            .iter()
+            .map(|e| e.section.clone())
+            .collect::<Vec<_>>(),
+        vec![section(2)],
+        "only live intent survives; the removal history is what rotation is for",
+    );
+    assert_eq!(rotation.retained[0].revision, 1);
+    assert_eq!(rotation.retained[0].materialization_epoch, 1);
+
+    let after = store.desired_watch_authority().unwrap();
+    assert_eq!(after.counters.authority_generation, 2);
+    assert_eq!(after.counters.revision_counter, 1);
+    assert_eq!(after.counters.materialization_counter, 1);
+    assert_eq!(
+        after.counters.actor_incarnation, 7,
+        "rotation is authority maintenance, not a new actor",
+    );
+    assert_eq!(after.entries, rotation.retained);
+    assert_eq!(store.desired_watch_budget().unwrap().tombstones, 0);
+    assert_eq!(store.desired_watch_budget().unwrap().receipts, 0);
+
+    // Anything still holding the old generation is refused at step one, which
+    // is what makes renumbering inside the new generation safe.
+    assert_eq!(
+        store
+            .commit_desired_watch_mutation(&start(section(3), 0, 4), never)
+            .unwrap(),
+        DesiredWatchMutationOutcome::StaleGeneration { current: 2 },
+    );
+}
+
+#[test]
+fn the_largest_legal_authority_state_is_bounded_by_the_two_caps() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    seed_tombstones(&path, MAX_DESIRED_WATCH_TOMBSTONES);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    for index in 1..=MAX_DESIRED_WATCHES as u16 {
+        committed(
+            store
+                .commit_desired_watch_mutation(
+                    &start(section(9000 + index), 0, u64::from(index)),
+                    admit,
+                )
+                .unwrap(),
+        );
+    }
+
+    // This is the number a frame-size proof has to be made against: every
+    // section the product allows watched, plus a full removal history. It is
+    // a bound only because the writer enforces both caps -- a reconciler that
+    // skipped a round would otherwise leave it open-ended.
+    let authority = store.desired_watch_authority().unwrap();
+    assert_eq!(
+        authority.entries.len() as u64,
+        MAX_DESIRED_WATCH_AUTHORITY_ROWS,
+    );
+    assert_eq!(MAX_DESIRED_WATCH_AUTHORITY_ROWS, 521);
+    assert_eq!(
+        store
+            .commit_desired_watch_mutation(&start(section(8000), 0, 100), never)
+            .unwrap(),
+        DesiredWatchMutationOutcome::LimitExceeded { maximum: 9 },
+        "no tenth watch",
+    );
+    assert_eq!(
+        store
+            .commit_desired_watch_mutation(&stop(section(8000), 0, 101), never)
+            .unwrap(),
+        DesiredWatchMutationOutcome::AuthorityFull(DesiredWatchBudgetKind::Tombstones),
+        "no 513th tombstone",
+    );
+    assert_eq!(store.desired_watch_authority().unwrap().entries.len(), 521);
 }

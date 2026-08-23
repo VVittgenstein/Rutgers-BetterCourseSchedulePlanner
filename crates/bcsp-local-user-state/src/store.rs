@@ -14,15 +14,17 @@ use sha2::{Digest, Sha256};
 
 use crate::migration::{apply_migrations, read_migration_records};
 use crate::{
-    DesiredWatch, DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchCommand,
-    DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome,
-    DesiredWatchReceipt, DesiredWatchReceiptOutcome, DesiredWatchRetirementOutcome,
+    DesiredWatch, DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchBudget,
+    DesiredWatchBudgetKind, DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchCounters,
+    DesiredWatchEntry, DesiredWatchMutationOutcome, DesiredWatchReceipt,
+    DesiredWatchReceiptOutcome, DesiredWatchRetirementOutcome, DesiredWatchRotation,
     EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition,
     EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput, HistoryFilter, HistoryPage,
-    HistoryWriteOutcome, LocalSettings, MAX_DESIRED_WATCHES, MAX_SELECTED_SECTIONS, PageRequest,
-    PersonalMigrationRecord, PersonalResetResult, PersonalStateError, PersonalStateResult,
-    PersonalStateSnapshot, PersonalTableCounts, SelectionMutation, SettingsRevision,
-    SqliteConfiguration, StoredSettings, UnixMillis, UserStateRevision, WalCheckpoint,
+    HistoryWriteOutcome, LocalSettings, MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES,
+    MAX_DESIRED_WATCHES, MAX_SELECTED_SECTIONS, PageRequest, PersonalMigrationRecord,
+    PersonalResetResult, PersonalStateError, PersonalStateResult, PersonalStateSnapshot,
+    PersonalTableCounts, SelectionMutation, SettingsRevision, SqliteConfiguration, StoredSettings,
+    UnixMillis, UserStateRevision, WalCheckpoint,
 };
 
 // A first-load Catalog publication can hold SQLite's single writer slot for
@@ -289,7 +291,20 @@ impl PersonalStateStore {
             );
         }
 
-        // 3. Revision. An absent row reads as 0, and a tombstone does not,
+        // 3. Ledger budget. Every path from here on writes a receipt --
+        //    commits and terminal rejections alike -- so a full ledger has to
+        //    stop the mutation BEFORE it is decided. Deciding first and then
+        //    failing to record it would hand out an answer that a retry could
+        //    contradict, which is the whole reason the ledger exists. Replays
+        //    are already past this point: they need no new row.
+        let budget = desired_watch_budget_within(&transaction)?;
+        if budget.receipts >= MAX_DESIRED_WATCH_RECEIPTS {
+            return Ok(DesiredWatchMutationOutcome::AuthorityFull(
+                DesiredWatchBudgetKind::Receipts,
+            ));
+        }
+
+        // 4. Revision. An absent row reads as 0, and a tombstone does not,
         //    which is the whole reason removals leave one behind.
         let existing = load_desired_watch_row(&transaction, &command.section)?;
         let current_revision = existing.as_ref().map_or(0, |row| row.revision);
@@ -305,7 +320,7 @@ impl PersonalStateStore {
             );
         }
 
-        // 4. Admission, for a command that asks to watch.
+        // 5. Admission, for a command that asks to watch.
         if command.desired() {
             // A POST-STATE test, deliberately: only 0 -> 1 consumes a slot,
             // so editing the policy of one of nine armed sections still
@@ -342,7 +357,20 @@ impl PersonalStateStore {
             }
         }
 
-        // 5. Write.
+        // 6. Removal-history budget, for a write that adds to it. A STOP is
+        //    refused here rather than allowed to exceed the cap, and refused
+        //    NON-terminally: a watch the user cannot turn off is worse than
+        //    any silence, so the answer is "not until the authority is
+        //    rotated", not "no".
+        if adds_a_tombstone(existing.as_ref(), command.desired())
+            && budget.tombstones >= MAX_DESIRED_WATCH_TOMBSTONES
+        {
+            return Ok(DesiredWatchMutationOutcome::AuthorityFull(
+                DesiredWatchBudgetKind::Tombstones,
+            ));
+        }
+
+        // 7. Write.
         let committed = apply_desired_watch_write(
             &transaction,
             &command.section,
@@ -401,10 +429,112 @@ impl PersonalStateStore {
                 current: row.revision,
             });
         }
+        // A retirement is a retry loop by construction, so it keeps its row
+        // and comes back after a rotation rather than exceeding the cap.
+        if desired_watch_budget_within(&transaction)?.tombstones >= MAX_DESIRED_WATCH_TOMBSTONES {
+            return Ok(DesiredWatchRetirementOutcome::AuthorityFull(
+                DesiredWatchBudgetKind::Tombstones,
+            ));
+        }
         let committed =
             apply_desired_watch_write(&transaction, section, None, Some(&row), &counters)?;
         transaction.commit()?;
         Ok(DesiredWatchRetirementOutcome::Retired(committed))
+    }
+
+    /// How full the two rotation budgets are, read in one snapshot.
+    ///
+    /// Read separately they could straddle a rotation and report a pair that
+    /// never existed together, which is exactly the kind of number a caller
+    /// would act on by rotating again.
+    pub fn desired_watch_budget(&self) -> PersonalStateResult<DesiredWatchBudget> {
+        let counts = self.connection.query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM personal_desired_watches_v1 WHERE desired = 0),
+                 (SELECT COUNT(*) FROM personal_desired_watch_receipts_v1)",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        Ok(DesiredWatchBudget {
+            tombstones: nonnegative_i64_to_u64(counts.0)?,
+            receipts: nonnegative_i64_to_u64(counts.1)?,
+        })
+    }
+
+    /// Rotates the authority: a new generation, the desired rows carried over
+    /// and renumbered, and the removal history and ledger cleared.
+    ///
+    /// This is the only operation that can free either budget, because a
+    /// tombstone and a receipt are both only safe to drop once no client can
+    /// still be holding a number that refers to them -- which raising the
+    /// generation is what guarantees. All of it is one transaction: a
+    /// generation raised without the rows carried over would drop live intent
+    /// on the floor.
+    ///
+    /// `actor_incarnation` is deliberately untouched: rotation is authority
+    /// maintenance, not a new actor, and the frame sequence the actor keeps
+    /// under that incarnation must not restart.
+    pub fn rotate_desired_watch_authority(&mut self) -> PersonalStateResult<DesiredWatchRotation> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let counters = load_desired_watch_counters(&transaction)?;
+        let authority_generation = next_counter(counters.authority_generation)?;
+        let survivors = load_desired_watch_entries(&transaction)?
+            .into_iter()
+            .filter(|entry| !entry.is_tombstone())
+            .collect::<Vec<_>>();
+        let deleted_tombstones = u64::try_from(transaction.execute(
+            "DELETE FROM personal_desired_watches_v1 WHERE desired = 0",
+            [],
+        )?)
+        .map_err(|_| PersonalStateError::StoredIntegerOutOfRange)?;
+        let deleted_receipts = u64::try_from(
+            transaction.execute("DELETE FROM personal_desired_watch_receipts_v1", [])?,
+        )
+        .map_err(|_| PersonalStateError::StoredIntegerOutOfRange)?;
+
+        // A new generation starts its numbering over: every client has to
+        // re-read anyway, because anything still holding an old generation is
+        // refused at step one.
+        let mut retained = Vec::with_capacity(survivors.len());
+        for (index, entry) in survivors.into_iter().enumerate() {
+            let number = u64::try_from(index + 1)
+                .map_err(|_| PersonalStateError::StoredIntegerOutOfRange)?;
+            transaction.execute(
+                "UPDATE personal_desired_watches_v1
+                    SET revision = ?4, materialization_epoch = ?4
+                  WHERE term_id = ?1 AND campus_code = ?2 AND section_index = ?3",
+                params![
+                    entry.section.term().as_str(),
+                    entry.section.campus().as_str(),
+                    entry.section.index().as_str(),
+                    u64_to_i64(number)?,
+                ],
+            )?;
+            retained.push(DesiredWatchEntry {
+                revision: number,
+                materialization_epoch: number,
+                ..entry
+            });
+        }
+        let allocated = u64::try_from(retained.len())
+            .map_err(|_| PersonalStateError::StoredIntegerOutOfRange)?;
+        transaction.execute(
+            "UPDATE personal_state_metadata_v1
+                SET desired_watch_authority_generation = ?1,
+                    desired_watch_revision_counter = ?2,
+                    desired_watch_materialization_counter = ?2
+              WHERE singleton_id = 1",
+            params![u64_to_i64(authority_generation)?, u64_to_i64(allocated)?],
+        )?;
+        transaction.commit()?;
+        Ok(DesiredWatchRotation {
+            authority_generation,
+            deleted_tombstones,
+            deleted_receipts,
+            retained,
+        })
     }
 
     pub fn upsert_episode_summary(
@@ -1091,6 +1221,27 @@ fn load_desired_watch_receipt(
         })
     })
     .transpose()
+}
+
+/// True when writing `desired` over `existing` grows the removal history.
+/// Overwriting a tombstone with another tombstone does not, and neither does
+/// any write that leaves the section desired.
+fn adds_a_tombstone(existing: Option<&DesiredWatchRow>, desired: bool) -> bool {
+    !desired && !existing.is_some_and(|row| !row.desired)
+}
+
+fn desired_watch_budget_within(connection: &Connection) -> PersonalStateResult<DesiredWatchBudget> {
+    let counts = connection.query_row(
+        "SELECT
+             (SELECT COUNT(*) FROM personal_desired_watches_v1 WHERE desired = 0),
+             (SELECT COUNT(*) FROM personal_desired_watch_receipts_v1)",
+        [],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )?;
+    Ok(DesiredWatchBudget {
+        tombstones: nonnegative_i64_to_u64(counts.0)?,
+        receipts: nonnegative_i64_to_u64(counts.1)?,
+    })
 }
 
 /// Records a terminal rejection and commits the transaction. The ledger row
