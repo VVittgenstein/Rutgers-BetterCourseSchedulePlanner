@@ -323,8 +323,45 @@ S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
        使前缀规则字面成立；补做三处跨文档残留（alert 的客户端调和循环与
        页面自动 START、"本设计无服务端持久个人状态新增"断言、
        review-package-local 的页面自动 START）。
-       验收清单扩至 **A-01..A-46**。
-       wire 名冻结为 **`authorityGeneration`**。
+       **v7.1 被驳回 4 组，v7.2 窄修闭合**：
+       ① **分块的"整组原子提交"在 v7.1 重写 §2.2 时被误删**——恢复并
+       加强为 C0/C0b：全部块校验+集齐+按索引拼接后**只提交一次**、
+       **部分组绝不触碰 store**、**R5 只对完整 FULL 组的并集执行一次**
+       （否则 `[A]`/`[B]` 两块互删）、**首块到达即 ASSEMBLING**（不是
+       等 10s 超时才降级）；C2 同组五元组补 `authorityGeneration` 与
+       `throughTransitionId`；C6 同时只装一组、异 DELTA 组到达则两者
+       皆弃；C7 更旧的同化身 FULL 不得回退 `last`/不得作废更新的在装组；
+       C8 每组 **256 KiB / 16 块**（单块帽不约束组装内存）；
+       ② **effect 真正上 wire**——原稿要客户端按
+       `(effectBatchId, effectIndex)` 去重，服务端事件却不带这些字段；
+       新增**本地专有** `DESIRED_WATCH_EFFECT` wrapper（
+       `audienceBindingId`/`effectBatchId`/`effectSequence`/
+       `effectIndex`/`effectCount`/`projectionFence`/`watchEvent`），
+       客户端**集齐并按序处理完整 batch 才 ACK**；wrapper 不进
+       `bcsp-contracts`，marker 计数不变；
+       ③ **双 socket 的绑定与跨流因果序**——FULL 走 desired、effect 走
+       watch，两条 TCP 流之间**没有"先发即先到"**；新增
+       `audienceBindingId` 成对、`AttachAudience` 须待两半成对**且首个
+       FULL 已应用**、任一半断开 pair 失效且**只产生一次 Detach**、
+       `EFFECT_ACK` 校验 required set 归属、effect 按 `projectionFence`
+       缓存;**同步态改为 composite**（两 socket OPEN + 首 FULL 已应用 +
+       非 DESYNCED + 非 ASSEMBLING），raw OPEN 不算；
+       ④ **非 ACK audience 可永久钉死系统**——容量帽只解决内存不解决
+       活性；新增**每 audience 30s ACK deadline + 超时判 detach**、
+       精确 GC 条件 `historyAck ∧ (每个 required audience 已 ACK 或已
+       detach)`、以及 **STOP/Full Reset/`1→0` disarm 的独立预算**
+       （16 个 / 64 KiB），普通 effect backlog **不得阻塞物理拆除**。
+       **PR5/PR6 切分裁定**（设计文档新增 §10）：PR5 **不是可独立启用
+       件**（filter 先启用→旧前端监控失效；PR6 先启用→desired route
+       404 永不同步；先要求 EFFECT_ACK→旧前端永不 ACK 触发背压），
+       故 **PR5 以完全 dormant 形态合并**（不注册路由/不启用 filter/
+       不启动 owner 物化/不关闭 S2-D3），**激活必须与 PR6 原子发布**或
+       引入明确的协议版本-能力握手；release-gate E2E 须覆盖新旧四组合
+       与单边 socket flap。
+       另：公网文案改为**"已发送，协议不提供确认"**（不是"等待确认"，
+       公网 wire 上根本不会再来确认）；验收清单**连续重编为
+       A-01..A-53**（原 A-31b 与错位的 A-45 已消除）；alert 文档补做
+       触点表 L1、测试 5 的"加载自动 START"与"第二 WS 路由"单数表述。
        **§10 两项已裁定**：打包冒烟播种为 **P1 release gate**（首个生产
        writer/整批发布前必须完成，需确定性 PUBLISHED fixture 且 S1 gate
        放行，`desired=false` 不可替代）；已批准设计测试 1c **取代但需
@@ -413,8 +450,8 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
       P1（活跃/持久反向错位；重放 START 重新落库），**未提交即作废**；
       路线改判为 revision/CAS。设计 v1（e53f525）驳回 5 组阻断 → v2
       （d798f9d）驳回 4 组 → v3 自查 11 项 → v4（278fc9b）驳回 5 组 →
-      v5 自查 15 项 → v6 驳回 3 组 → v7（136eaf3）驳回 5 组 →
-      **v7.1 窄修闭合**，见
+      v5 自查 15 项 → v6 驳回 3 组 → v7 驳回 5 组 → v7.1（fdf0f24）
+      驳回 4 组 → **v7.2 窄修闭合**，见
       `2026-08-22-desired-watch-revision-cas.md`；待设计复审通过后实现。
 - [x] S2-PR4（应用层心跳，56a9f70）——**Codex 批准**，清单第 6 条关闭
       （三项披露获追认；新增携带项 S2f/S2g 归 PR6；扫描 0 findings）

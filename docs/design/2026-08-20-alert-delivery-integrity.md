@@ -208,7 +208,7 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 | 前端通知 | 新 `watch/notification.ts` | 权限/发送/去重/设置；cue 失败补发 |
 | 公网服务端 | `bcsp-public-runtime` | WS 活动续期 nonce；`POST /api/v1/session/validate`（签新废旧） |
 | 公网客户端 | bootstrap/NonceHolder | nonce 可变持有 + 换证环 |
-| 本地状态(L1) | `bcsp-local-user-state` | 持久化期望监控表 + 加载自动 START |
+| 本地状态(L1) | `bcsp-local-user-state` | 持久化期望监控表（revision/CAS + tombstone + receipt）；**物化由服务端 owner 负责，非"加载自动 START"** |
 | **共享 host seam** | `bcsp-application/src/host.rs:366`（v3 新增触点） | 第二个可选 WS 路由注册 seam（target 注入制） |
 | 本地 presence(L2) | `bcsp-local-runtime`（经 seam 注册 `/api/v1/local/presence`）+ 前端页面级接入 | 每 tab presence 连接；count+generation+phase 状态机 → 60s 倒计时 → 到期复验 → 退出 |
 | 本地多 tab | 前端（Web Locks）+ 服务端 authority | 所有 tab 平权编辑 desired（CAS）；监控由服务端逻辑 owner 持有；leader **只**决定谁播放声音 |
@@ -243,7 +243,8 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 3. 音频 suspended → 自动 resume；被拒 → DEGRADED + 兜底；
 4. 通知触发矩阵：hidden+opened / visible+cue-failure 补发 / 去重 /
    权限 denied 时 Readiness 如实降级；
-5. L1：监控中刷新 → 期望监控表恢复且自动 START；已 STOP 的不恢复；
+5. L1：监控中刷新 → 期望监控表恢复，**由服务端 owner 物化**（不是页面
+   自动 START）；已 STOP 的不恢复；
 6. Readiness 完整真值表：五环 × 各失效态逐一断言，UI 永不虚绿；
    心跳陈旧 >25s 降黄；跨 SPA 路由常驻；
 7. L2：仅浏览页（无 watch）存活 → 不倒计时；全部页面关闭 → 倒计时 →
@@ -268,7 +269,12 @@ presence+状态机 2 天；L3 0.5–1 天。合计 **11–13.5 天**。顺序在
    作废）；本地多 tab 采用 Web Locks leader 方案；
 2. validate 请求合同冻结（体/locale/Host-Origin/体帽/状态码矩阵/与首页
    同桶限流/锁内原子）；WS 握手 reserve_ws RAII 租约消除 TOCTOU；
-3. presence 依赖共享 host 新增第二 WS 路由 seam（host.rs:366 列入触点）；
+3. presence 依赖共享 host 新增第二 WS 路由 seam（按符号名引用
+   `spawn_loopback_server_with_socket` / `handle_secondary_socket`，
+   **行号已漂移，勿按行号引用**）。**v4 起该 seam 承载不止一条路由**：
+   改为**受校验的路由集合**（presence `/api/v1/local/presence` 与
+   desired `/api/v1/local/desired-watch`），见
+   `2026-08-22-desired-watch-revision-cas.md` §7.2；
    倒计时改 count+generation+phase 状态机，到期复验；
 4. 政策同步面补全为八项清单（slug/marker 分区/markerSetVersion、双摘要、
    rust verifier+测试、release gate 清单、CI 入口、四层正反例）；

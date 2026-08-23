@@ -1,6 +1,6 @@
 # 期望监控：revision/CAS 共同编辑模型（S2-D3 路线改判）
 
-状态：ACTIVE，**v7.1**。路线由产品所有者 2026-08-22 裁定：取代 fenced
+状态：ACTIVE，**v7.2**。路线由产品所有者 2026-08-22 裁定：取代 fenced
 sequencer，走 **持久化 revision + tombstone + CAS**。
 S2-D3 硬门在本设计实现并复审通过前**保持关闭**。
 
@@ -9,8 +9,8 @@ S2-D3 硬门在本设计实现并复审通过前**保持关闭**。
 `SET_DESIRED_WATCH` 更名为 **`DESIRED_WATCH_SET`**，字面与规则一致。
 
 **修订史**：v1 五组 → v2 四组 → v3 自查十一项 → v4 五组 → v5 自查十五项
-→ v6 三组 → v7 五组 → **v7.1 窄修逐条闭合**（复审明示无需 v8 大循环，
-本轮只冻结行为契约，类型/锁/channel/函数签名转入 PR 验收）。
+→ v6 三组 → v7 五组 → v7.1 四组 → **v7.2 窄修逐条闭合**（复审明示无需
+v8 大循环；本轮只冻结行为契约，类型/锁/channel/函数签名转入 PR 验收）。
 **v6 已获批准且不再重开**：§0.3 的同步态判定顺序、§2.5 六个首发数值、
 §7.7 的 16 项数组/去重论证/`212+3=215`。
 
@@ -47,8 +47,10 @@ armed(section) ≡ materialized ≠ null
 ### 0.3 投影判定（**有序**求值，第一条命中即止）
 
 ```
-0. 连接非 OPEN ∨ 尚未收到首个 FULL ∨ 处于 DESYNCED
-   → 「重连中 / 同步中」，非绿，**禁止用缓存 revision 发 mutation**
+0. ¬composite-synced  → 「重连中 / 同步中」，非绿，
+   **禁止用缓存 revision 发 mutation**
+   （composite-synced ≡ **两条 socket 均 OPEN** ∧ **首个 FULL 已应用**
+    ∧ **非 DESYNCED** ∧ **非 ASSEMBLING**；raw OPEN 不等于已同步）
 1. pendingDisarm      → desired=0 ? 「停止中」 : 「准备中（旧槽拆除中）」   非绿
 2. blockedOnSlot      → 「准备中（等待旧槽释放）」                          非绿
 3. desired = 0        → 「未监控」                                          —
@@ -132,12 +134,16 @@ T12；**A 误判缺帧并触发无意义重同步**。裁定采用第三种方�
 
 | 规则 | 内容 |
 | --- | --- |
-| C1 | 每个投影更新有一个 **`frameGroupId`（UUIDv4）**；同组各块共享它。**不同 `frameGroupId` 的块一律不得混装** |
-| C2 | 块头严格校验：`chunkIndex < chunkCount`、同组 `chunkCount` 一致、同组 `actorIncarnation`/`kind`/`transitionId` 一致；任一不符 → 丢弃该组并进入 **DESYNCED** |
+| **C0** | **整组原子提交**（v7 有、v7.1 误删，此处恢复并加强）：全部块通过校验、集齐、**按 `chunkIndex` 升序拼接**后**只提交一次**；**部分组绝不触碰 store**。**R5 只对完整 FULL 组的 entry 并集执行一次**——否则 `[A]`、`[B]` 两块会互相把对方删掉 |
+| **C0b** | **首块到达即进入 ASSEMBLING**（并入 §0.3 第 0 条：非绿、禁止发 mutation）。**不是等 10s 超时后才降级** |
+| C1 | 每个投影更新有一个 **`frameGroupId`（UUIDv4）**；同组各块共享它。不同 `frameGroupId` 的块**一律不得混装** |
+| C2 | 块头严格校验：`chunkIndex < chunkCount`、同组 `chunkCount` 一致，且同组 **`actorIncarnation` / `kind` / `transitionId` / `authorityGeneration` / `throughTransitionId`** 五元组全部一致；任一不符 → 丢弃该组并进入 **DESYNCED** |
 | C3 | **重复 `chunkIndex`** → 丢弃该组并 DESYNCED |
 | C4 | **旧 incarnation 的块**一律丢弃（不影响当前组） |
 | C5 | **组装超时 10s**（自首块起）未集齐 → 丢弃该组并 DESYNCED。这是"actor 中途崩溃、末块永不到达"时页面不会**永久保留旧绿态**的唯一保证 |
-| C6 | 新的 **FULL 组作废任何在装组**（FULL 是权威替换） |
+| C6 | **同时只允许装一个组**。在装期间到达**异 `frameGroupId` 的 DELTA 组** → 丢弃**两者**并 DESYNCED（DELTA 之间无权威性可言，不能择一） |
+| C7 | **FULL 组作废在装组**，但**仅当它更新**：`(actorIncarnation, throughTransitionId 或 transitionId)` 不低于在装组；**更旧的同化身 FULL 一律丢弃**，**不得回退 `last`**、**不得作废更新的在装组** |
+| **C8** | **每组容量帽**：单组**总字节 ≤ 256 KiB**、**块数 ≤ 16**；任一超出 → 丢弃该组并 DESYNCED。32 KiB 是**单块**帽，**不约束组装内存** |
 
 ### 2.3 desired 表（迁移 10004 重建）
 
@@ -177,6 +183,7 @@ metadata 四个持久标量，**四者都带同一上界 CHECK**：
 | receipt 行数硬上限 | **2048** |
 | FULL / DELTA **单块** wire 帧上限 | 各 **32 KiB**（**是单块帽，不是逻辑更新总帽**；逻辑更新可跨块，无独立总帽） |
 | bootstrap 序列化上限 | **32 KiB**（单次 HTTP 响应，不分块） |
+| **单个投影更新组**上限 | **总字节 256 KiB / 块数 16**（§2.2 C8；单块帽不约束组装内存） |
 | rotation 触发阈值 | 任一预算达 **80%** |
 
 **执行合同（v6 缺失）**：
@@ -325,9 +332,42 @@ actor 在 history 与 audience 交接之前崩溃
 - **客户端先按 `(effectBatchId, effectIndex)` 去重再发声**，随后 ACK。
   重放到达时若已去重命中，**仍须 ACK**（否则重放永不收敛）；
 - **容量与背压**：未确认 batch **至多 64 个 / 合计 256 KiB**；达帽即
-  **背压**（暂停新的 arm，置 `blockedOnSlot` 之外的 `lastFailure`
-  分类为 TRANSIENT）；**回收只允许在 history 已 ACK 之后**发生——
-  audience 可以永远不回，但 history 不能。
+  **背压**（暂停新的 arm，`lastFailure` 分类为 TRANSIENT）；
+- **GC 条件（精确）**：
+
+  ```
+  historyAck ∧ (每个 required audience 均已 ACK 或已 detach)
+  ```
+
+- **ACK deadline 与超时 detach（v7.1 的活性洞）**：仅有容量帽只解决
+  内存无界，**不解决活性**——冻结或恶意页面可以保持连接却永不 ACK，
+  最终把新 arm 全部堵死。因此每个 batch 对每个 required audience 设
+  **ACK deadline 30s**；超时即**把该 audience 判为 detach**（移出
+  required set 并触发一次 Detach 流程），batch 据此推进；
+- **拆除路径必须有独立且有界的容量**：`STOP`、Full Reset、
+  `1→0` 的 disarm 各自走**独立预算**（每类 16 个 / 64 KiB），
+  **普通 effect backlog 不得阻塞物理拆除**——否则"停不下来"会变成
+  比"没响"更糟的谎。
+
+#### 5.2.2 effect 的 wire 形态（v7.1 只有客户端 ACK，服务端没带字段）
+
+§5.2.1 要求客户端按 `(effectBatchId, effectIndex)` 去重，但 v7.1 的
+服务端事件合同**不携带这些字段**。补**本地专有 wrapper**（**不进
+`bcsp-contracts`**，marker 计数不变）：
+
+```
+DESIRED_WATCH_EFFECT {
+  audienceBindingId,          // §7.6.1 的 pair 身份
+  effectBatchId,
+  effectSequence,             // batch 之间的全序
+  effectIndex, effectCount,   // batch 内的序与总数
+  projectionFence,            // 见 §7.6.1：应用前必须已达到的投影位置
+  watchEvent                  // 被包裹的既有 watch 事件
+}
+```
+
+**客户端集齐整个 batch 并按 `effectIndex` 顺序处理完之后才 ACK**；
+命中去重仍须 ACK（§5.2.1）。
 
 ### 5.3 owner API（三个）
 
@@ -536,7 +576,8 @@ watch: {
   裁定采纳可接受方案之二：公网 adapter 对这两条返回
   **`SENT_UNCONFIRMED`**，端口 outcome 枚举相应扩为
   `COMMITTED | REJECTED | SENT_UNCONFIRMED`；**UI 不得据此显示权威
-  成功**（显示"已发送，等待确认"）。若将来公网 wire 补上 STOP/UPDATE 的
+  成功**。文案冻结为 **"已发送，协议不提供确认"**——不是"等待确认"，
+  因为公网 wire 上**根本不会再来**任何确认。若将来公网 wire 补上 STOP/UPDATE 的
   成功/拒绝 ACK，可再收敛为 `COMMITTED`。
 
 ### 7.6.1 本地 episode 控制与事件通道（v7 只列了端口方法，没落线）
@@ -559,7 +600,27 @@ watch: {
   完整事件流，是否发声由 leader 决定；
 - **本地 admission filter 只拒绝旧三条** `START_WATCH` /
   `STOP_WATCH` / `UPDATE_POLICY`，其余命令照常；
-- **一个 tab 只有两条 socket 都 OPEN 才算已同步**（喂给 §0.3 第 0 条）。
+#### 7.6.1.1 audience 绑定与跨流因果序（v7.1 的洞）
+
+FULL 走 desired socket、effect 走 watch socket，**两条 TCP 流之间不存在
+"先发即先到"的保证**。冻结：
+
+- **`audienceBindingId`**：把两条连接绑成**同一 tab 的同一连接代**的
+  稳定身份。客户端在两条 socket 上各出示一次；服务端仅在**两半都出示
+  且匹配**时成对；
+- **`AttachAudience` 只在"两半已成对 **且** 首个 FULL 已被客户端应用"
+  之后发生**（客户端以 projection-ready ACK 告知）——在此之前该 tab
+  不进入任何 batch 的 required set；
+- **任一半断开即 pair 失效**，并**只产生一次 Detach**（不得两半各触发
+  一次）；
+- **ACK 校验**：`DESIRED_WATCH_EFFECT_ACK` 必须校验该 audience
+  **确实属于该 batch 的 required set**，否则忽略并计数；
+- **effect 携带 `projectionFence`**（§5.2.2）：客户端在对应的
+  FULL/DELTA 应用之前**必须缓存该 effect**，不得提前处理；服务端亦可
+  选择在收到 projection-ready ACK 之后才投递该 fence 之后的 effect。
+  二者取其一，**实现时冻结为前者 + 服务端不主动提前投递**；
+- **一个 tab 的同步态是 composite 的**（§0.3 第 0 条）：两条 socket
+  OPEN + 首 FULL 已应用 + 非 DESYNCED/ASSEMBLING。**raw OPEN 不算**。
 
 ### 7.7 public marker 计账（**冻结**）
 
@@ -614,7 +675,7 @@ schema 子串守卫、Rust `PersonalStateSnapshot`/`DesiredWatch` 形状、
 2. `hasKeys` 是**键集全等**检查，新增顶层字段与条目字段都会打挂它；
 3. 同步三处 bootstrap fixtures。
 
-## 9. 验收清单（自包含，A-01..A-44）
+## 9. 验收清单（自包含，**A-01..A-53**，连续编号）
 
 **CAS 与身份**
 - A-01 STOP 后延迟旧 START → `STALE_REVISION`；
@@ -680,50 +741,101 @@ schema 子串守卫、Rust `PersonalStateSnapshot`/`DesiredWatch` 形状、
   **未确认 batch 只能 `PENDING_HANDOFF → replay`，绝不落入
   `Restarted`**；容量 64 个 / 256 KiB、达帽背压、**回收仅在 history
   ACK 之后**；
-- A-31b **重建顺序**：audience **先**收新化身 FULL、**再**按原顺序重放
+- A-32 **重建顺序**：audience **先**收新化身 FULL、**再**按原顺序重放
   effect（顺序反了会被 R4 全部丢弃）；history 独立恢复；
-- A-32 `applyPolicy` 使 policy-only 更新真正生效；**同 revision 重试不
+- A-33 `applyPolicy` 使 policy-only 更新真正生效；**同 revision 重试不
   重复写 history**；未武装/blocked 时只更新 desired 侧；
-- A-33 **`armAttempt` 与 `disarmOperationId` 分离**：同一 section 上
+- A-34 **`armAttempt` 与 `disarmOperationId` 分离**：同一 section 上
   "新 epoch 的 arm"与"旧捕获 ID 的 disarm"可并存且互不作废；
-- A-34 rotation 与 actor 重建换 epoch 时走 **adopt**，健康 watch 不得
+- A-35 rotation 与 actor 重建换 epoch 时走 **adopt**，健康 watch 不得
   `Restarted`（不结束 episode / 不换 ID / 不重新响铃）；
-- A-35 一般暂态 arm 失败不回滚 desired，重试后转 armed；
-- A-36 两个帽两个不变量：物理 watch 不得超帽；`SlotReleased` 到达后
+- A-36 一般暂态 arm 失败不回滚 desired，重试后转 armed；
+- A-37 两个帽两个不变量：物理 watch 不得超帽；`SlotReleased` 到达后
   立即 arm；
-- A-37 **周期 reconcile 是独立活性来源**：丢掉 `SlotReleased` 后仍能在
+- A-38 **周期 reconcile 是独立活性来源**：丢掉 `SlotReleased` 后仍能在
   一个周期内自愈；
-- A-38 owner 的 `RejectedLimit` 两种情形分别为"预期路径/不变量告警"，
+- A-39 owner 的 `RejectedLimit` 两种情形分别为"预期路径/不变量告警"，
   两者都不删 desired；
-- A-39 `ConnectionKind::Owner` 不可由 wire 构造；豁免心跳不豁免物理帽；
-- A-40 `disarm` 用**发起时捕获**的 ID；"STOP → 退避中 → 用户又 START"
+- A-40 `ConnectionKind::Owner` 不可由 wire 构造；豁免心跳不豁免物理帽；
+- A-41 `disarm` 用**发起时捕获**的 ID；"STOP → 退避中 → 用户又 START"
   下不得拆掉新武装的 watch；
-- A-41 **满 9 门时的 policy-only 更新必须成功**（post-state 判定）；
+- A-42 **满 9 门时的 policy-only 更新必须成功**（post-state 判定）；
   只有 `0→1` 占额；
 
 **端口与边界**
-- A-42 **本地 episode 通道落线**（§7.6.1）：六条 episode 命令按
+- A-43 **本地 episode 通道落线**（§7.6.1）：六条 episode 命令按
   `activeWatchId` 路由到 synthetic owner；**owner 事件扇出给全部
   audience**（非 unicast）；**leader 只决定是否发声、不截断事件**；
   本地 admission filter **只**拒绝旧三条；两条 socket 都 OPEN 才算已
   同步。端口 `subscribeEvents` 承载 observation/episode/alert/audio/
   cue receipt——缺它则警报与声音整体消失（负例）；
-- A-43 `setDesired` 返回 handle；非终局由 adapter **以同一 mutationId**
+- A-44 `setDesired` 返回 handle；非终局由 adapter **以同一 mutationId**
   内部重试且 Promise 保持 pending；**公网 STOP/UPDATE_POLICY 必须返回
   `SENT_UNCONFIRMED`，绝不得报告 `COMMITTED`**，UI 不得据此显示权威
   成功（负例：断言公网这两条不会产生 `COMMITTED`）；
-- A-45 **零 audience 暂停**（§5.6.1）：`1→0` 拆除全部物理 watch 并
-  保留 desired；`0→1` 从权威 snapshot 重新物化（新 epoch）；
-  `activeWatchId`/episode 重新生成，`ACTIVE_WATCH_STATE_PERSISTENT`
-  仍为 false；
-- A-44 §2.5 六值 + 执行合同（UTF-8 整信封计数、`floor(cap*4/5)` 与
+- A-45 §2.5 六值 + 执行合同（UTF-8 整信封计数、`floor(cap*4/5)` 与
   三点边界、`RATE_LIMITED` 的 wire 结果与 `Retry-After`、rotation 保留
   incarnation、Full Reset 不重置 `transitionId`）；marker：18 行 / 215 项 /
   数组顺序 / 两个摘要 / `markerSetVersion 2` / 测试常量 / 八个断言面
   正反例 / local manifest 含 `persistent-desired-watches` 且 public 不含 /
   **孤儿 tag 泄漏负例**；本地旧三命令被服务端 admission filter 拒绝。
+- A-46 **零 audience 暂停**（§5.6.1）：`1→0` 拆除全部物理 watch 并保留
+  desired；`0→1` 从权威 snapshot 重新物化（新 epoch）；`activeWatchId`
+  与 episode 重新生成，`ACTIVE_WATCH_STATE_PERSISTENT` 仍为 false。
+  **最终验收须覆盖半开 pair、在途旧 disarm、以及容量已满三种情形**；
+- A-47 **整组原子提交**（C0/C0b）：全部块校验+集齐+按 `chunkIndex` 升序
+  拼接后**只提交一次**；**部分组绝不触碰 store**；**R5 只对完整 FULL 组
+  的 entry 并集执行一次**（负例：`[A]`/`[B]` 两块互删）；**首块到达
+  即 ASSEMBLING、非绿、禁 mutation**（不是等 10s 超时才降级）；
+- A-48 **同组五元组一致性**（C2 含 `authorityGeneration` 与
+  `throughTransitionId`）；**同时只装一个组**，在装期间异
+  `frameGroupId` 的 DELTA 组到达 → **两者皆弃并 DESYNCED**（C6）；
+  **更旧的同化身 FULL 不得回退 `last`、不得作废更新的在装组**（C7）；
+  **每组 256 KiB / 16 块**上限（C8，单块帽不约束组装内存）；
+- A-49 **effect 上 wire**（§5.2.2）：`DESIRED_WATCH_EFFECT` 携带
+  `audienceBindingId` / `effectBatchId` / `effectSequence` /
+  `effectIndex` / `effectCount` / `projectionFence` / `watchEvent`；
+  **客户端集齐整个 batch 并按 `effectIndex` 顺序处理完之后才 ACK**；
+  wrapper **不进 `bcsp-contracts`**、marker 计数不变；
+- A-50 **audience 绑定与跨流因果序**（§7.6.1.1）：`audienceBindingId`
+  成对；**`AttachAudience` 只在两半成对且首个 FULL 已应用之后**；任一半
+  断开 → pair 失效且**只产生一次 Detach**；`EFFECT_ACK` 校验该 audience
+  **确属该 batch 的 required set**；effect 按 `projectionFence` **缓存至
+  对应投影帧应用后**才处理；
+- A-51 **ACK 活性**：每个 required audience 的 **ACK deadline 30s**，
+  超时**判为 detach** 并推进 batch（负例：一个永不 ACK 的连接**不得**
+  堵死所有新 arm）；**GC 条件恰为
+  `historyAck ∧ (每个 required audience 已 ACK 或已 detach)`**；
+- A-52 **拆除路径独立预算**：`STOP` / Full Reset / `1→0` 的 disarm 各自
+  **16 个 / 64 KiB**；**普通 effect backlog 达帽时物理拆除仍须畅通**；
+- A-53 **composite 同步态**（§0.3 第 0 条）：两条 socket OPEN + 首 FULL
+  已应用 + 非 DESYNCED + 非 ASSEMBLING；**raw OPEN 不得被当作已同步**。
 
-## 10. 已裁定 + 写回义务
+## 10. PR5 / PR6 切分与激活（复审裁定）
+
+**PR5 不是可独立启用件**——三种单边启用都会直接打挂产品：
+
+| 单边启用 | 后果 |
+| --- | --- |
+| PR5 先启用 admission filter | 旧前端仍发 START/STOP/UPDATE → **监控直接失效** |
+| PR6 先启用 | 旧后端 desired route 为 **404** → **永远不同步** |
+| PR5 先要求 `EFFECT_ACK` | 旧前端永不 ACK → 最终触发**背压** |
+
+**裁定**：PR5 以**完全 dormant** 的形态合并——
+
+- **不注册** desired route；
+- **不启用** 本地 admission filter；
+- **不启动** owner materialization；
+- **不关闭** S2-D3。
+
+**生产激活必须与 PR6 原子发布**，或引入**明确的协议版本 / 能力握手**
+（二选一须在 PR6 前冻结）。
+
+**release-gate E2E 必须覆盖**：新旧四种组合（旧前端×旧后端、旧×新、
+新×旧、新×新）以及**单边 socket flap**（desired 断而 watch 未断、
+反之）。
+
+## 11. 已裁定 + 写回义务
 
 - **打包冒烟播种：P1 release gate**——必须在**首个生产 writer / 整批
   发布之前**完成；确定性 PUBLISHED section fixture 且 S1 gate 放行；
