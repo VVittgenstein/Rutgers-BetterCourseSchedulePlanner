@@ -469,9 +469,16 @@ S2-PR5b.1（Codex 驳回 `a77d9e0` 的 1 项 P2 + 1 项 P3）：
   **实测：仅删 `max_frame_size` 时该测试 2/2 FAILED,恢复 5/5 ok。**
   （1 MiB 而非更大：axum 默认 frame cap 为 16 MiB,更大的声明会被默认值
   拦下,证明不了本 host 设置的帽。）
-- **P3**：`websocket_handshake` 只调用一次 `read`,body 与 headers 同批到达
-  是 TCP 不保证的。改为读满 headers 再按 `content-length` 读满 body；101
-  无 body 即在头终止符处停止（连接保持,不能读到 EOF）。
+- **P3（第一轮:欠读）**：`websocket_handshake` 只调用一次 `read`,body 与
+  headers 同批到达是 TCP 不保证的。改为读满 headers 再按 `content-length`
+  读满 body；101 无 body 即在头终止符处停止（连接保持,不能读到 EOF）。
+- **P3（第二轮:超读,Codex 批准 `3aa4935` 时提出）**：同一次 `read` 也可能
+  把响应之后的字节一并带回——101 之后服务端**立即**发的心跳 Ping
+  `0x89 0x00` 不是合法 UTF-8,`String::from_utf8` 会偶发 panic。退出前
+  `response.truncate(header_end + length)`；helper 随后丢弃 socket,无需
+  保留 remainder。**已确定性复现:握手后强制延迟 100ms 使 Ping 与 headers
+  同批到达,去掉 truncate 即 `FromUtf8Error{ ..., 137, 0 }`(valid_up_to
+  199);加回 truncate 3/3 通过。**
 
 三点披露：
 1. 64 KiB 上限是**入站**约束（tungstenite 仅在 `read_message_frame`

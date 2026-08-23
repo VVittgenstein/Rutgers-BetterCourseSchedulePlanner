@@ -2202,12 +2202,12 @@ fn websocket_handshake(authority: &str, path: &str, origin: &str, nonce: &str) -
     read_http_response(&mut stream)
 }
 
-/// Reads one whole HTTP response: the headers, then exactly the body its
-/// `content-length` promises. One `read` is not enough -- TCP may deliver
-/// the body in a later segment than the headers, and a caller that assumes
-/// otherwise passes or fails by chance. A 101 carries no body, so it stops
-/// at the header terminator; the connection stays open, which rules out
-/// simply reading to EOF.
+/// Reads exactly one HTTP response: the headers, then exactly the body its
+/// `content-length` promises, and nothing past that. One `read` is not
+/// enough -- TCP may deliver the body in a later segment than the headers,
+/// and it may equally deliver the next thing on the wire in the same one.
+/// A 101 carries no body, so it stops at the header terminator; the
+/// connection stays open, which rules out simply reading to EOF.
 fn read_http_response(stream: &mut TcpStream) -> String {
     let mut response = Vec::new();
     let mut buffer = [0_u8; 2_048];
@@ -2223,6 +2223,11 @@ fn read_http_response(stream: &mut TcpStream) -> String {
                 .find_map(|line| line.strip_prefix("content-length:"))
                 .map_or(0, |value| value.trim().parse::<usize>().unwrap());
             if response.len() >= header_end + length {
+                // One read can carry more than this response: on a 101 the
+                // host's heartbeat Ping (0x89 0x00) may share the segment
+                // with the headers, and those bytes are not UTF-8. Cut at
+                // the boundary; the caller drops the socket next.
+                response.truncate(header_end + length);
                 break;
             }
         }
