@@ -287,7 +287,43 @@ S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
        **所有本地 wire variant 统一加 `DESIRED_WATCH_` 前缀**并补
        "孤儿 tag 泄漏"负例（原名不含任何 marker，会从负控漏出）；
        两个 SHA 由复审方按冻结数组算出并写入设计文档。
-       验收清单扩至 **A-01..A-44**。
+       **v7 被驳回 5 组，v7.1 窄修闭合**（复审明示无需 v8 大循环，本轮
+       只冻结行为契约，类型/锁/channel/签名转入 PR 验收）：
+       ① **帧流**补分块组身份 `frameGroupId`、块头严格校验、**10s 组装
+       超时**（防"actor 中途崩溃、末块永不到达"时页面永久保留旧绿态）、
+       旧化身块丢弃、新 FULL 作废在装组；**A-17 更正为"下一广播是 T11
+       且不得判 gap"**（原写 T12，与 R2 直接冲突）；32 KiB 明确为
+       **单块 wire 帽**而非逻辑更新总帽；限流回
+       `DESIRED_WATCH_RESYNC_REJECTED { retryAfterSeconds }`（非静默
+       丢弃），否则 R6 重试时序不可确定；
+       ② **effect batch 的"确认"给出可执行定义**——history ACK =
+       **SQLite commit 或 `AlreadyPresent`**（现接缝返回 void、失败只
+       记日志，不算）；audience ACK = 客户端显式
+       **`DESIRED_WATCH_EFFECT_ACK`**（入队/`send()` 不算，那只到无界
+       发送队列）；必需集合按 batch 创建时刻取、detach 视为满足、集合空
+       则仅凭 history；客户端按 `(effectBatchId, effectIndex)` **先去重
+       再发声且仍须 ACK**；未确认 batch **只能 `PENDING_HANDOFF →
+       replay`，绝不落入 `Restarted`**；容量 64 个/256 KiB + 背压，
+       **回收须待 history ACK**；**重建顺序更正为"先投 新化身 FULL、
+       再按原顺序重放 effect"**（v7 写反了，按 R4 会被全部丢弃）；
+       ③ **本地 episode 通道落线**（继续双 socket：既有 watch socket 承
+       事件+六条 episode 命令+心跳，desired socket 承 CAS+投影+effect
+       ACK；命令按 `activeWatchId` 路由到 synthetic owner；**owner 事件
+       扇出给全部 audience**；**leader 只决定是否发声、不截断事件**；
+       admission filter **只**拒旧三条；两条 socket 皆 OPEN 才算已同步）；
+       ④ **公网 STOP/UPDATE_POLICY 改为 `SENT_UNCONFIRMED`**——明确
+       禁止报告 `COMMITTED`（socket OPEN + `send()` 只证明浏览器接受了
+       发送；STOP 的 `UnknownWatch` 只写日志；UPDATE 无 episode 时即使
+       成功也无后续事件，会永久返回无法验证的成功）；
+       ⑤ 恢复 v7 **误删**的零 audience 暂停语义（`1→0` 拆除物理 watch
+       并保留 desired、`0→1` 从权威 snapshot 重新物化）。
+       另：**终局性与"是否记 receipt"分为两张表**（A-14 与 A-06/A-07
+       冲突的根因——`STALE_GENERATION` 与 `MUTATION_ID_CONFLICT` 都是
+       终局但都不写库）；`SET_DESIRED_WATCH` 更名 **`DESIRED_WATCH_SET`**
+       使前缀规则字面成立；补做三处跨文档残留（alert 的客户端调和循环与
+       页面自动 START、"本设计无服务端持久个人状态新增"断言、
+       review-package-local 的页面自动 START）。
+       验收清单扩至 **A-01..A-46**。
        wire 名冻结为 **`authorityGeneration`**。
        **§10 两项已裁定**：打包冒烟播种为 **P1 release gate**（首个生产
        writer/整批发布前必须完成，需确定性 PUBLISHED fixture 且 S1 gate
@@ -377,7 +413,8 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
       P1（活跃/持久反向错位；重放 START 重新落库），**未提交即作废**；
       路线改判为 revision/CAS。设计 v1（e53f525）驳回 5 组阻断 → v2
       （d798f9d）驳回 4 组 → v3 自查 11 项 → v4（278fc9b）驳回 5 组 →
-      v5 自查 15 项 → v6（17066d9）驳回 3 组 → **v7 逐条闭合**，见
+      v5 自查 15 项 → v6 驳回 3 组 → v7（136eaf3）驳回 5 组 →
+      **v7.1 窄修闭合**，见
       `2026-08-22-desired-watch-revision-cas.md`；待设计复审通过后实现。
 - [x] S2-PR4（应用层心跳，56a9f70）——**Codex 批准**，清单第 6 条关闭
       （三项披露获追认；新增携带项 S2f/S2g 归 PR6；扫描 0 findings）

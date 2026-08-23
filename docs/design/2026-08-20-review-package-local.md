@@ -69,8 +69,12 @@ frozen/discarded 页面为 residual risk）。v3 增 desired→armed 调和循�
 ### L1. 刷新后完整恢复
 
 持久化 **期望监控表**（section+policy；v2 修正：不是"selection+活跃
-布尔"，不含 activeWatchId/响铃消耗）；页面加载后按表自动 START，已手动
-STOP 的课不复活。有意修订 `bcsp-local-user-state` 的原设计声明。
+布尔"，不含 activeWatchId/响铃消耗）；已手动 STOP 的课不复活。有意修订
+`bcsp-local-user-state` 的原设计声明。
+**（v4 由 CAS 设计改写）**：不再是"页面加载后按表自动 START"——该表是
+**服务端权威状态**，**由服务端逻辑 owner 按已提交的 desired 物化**；
+页面只是**编辑者（revision/CAS）与事件 audience**。见
+`2026-08-22-desired-watch-revision-cas.md`。
 **多标签页所有权（v3 提出，v4 由 CAS 设计取代）**：监控改由**服务端
 connection-independent 的逻辑 owner** 持有，**所有 tab 平权编辑**
 desired 表（revision/CAS，持久表为唯一真相）；Web Locks 选出的 leader

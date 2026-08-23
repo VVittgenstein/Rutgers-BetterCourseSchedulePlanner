@@ -47,11 +47,14 @@ D7 Caddy reload 切断长连接。
   **不自动重连**（v2 修正：现有"without automatic restart"测试翻转时必须
   保留用户主动断开分支，Disconnect 按钮不得被自动连回）。
 - 节奏：1s/2s/4s…封顶 30s，无限重试；期间 Readiness=DEGRADED("重连中")。
-- **re-arm 数据源（v2 修正）**：不是 selection。新增 connection 无关的
-  **期望监控表** `desiredWatches: Map<SectionKey, WatchStartItem{policy}>`
-  ——用户 START 即写入、显式 STOP 即移除；不持久化 activeWatchId/响铃
-  消耗。
-- **desired→armed 调和循环（v3 新增，评审指出仅"连上后 START 一轮"不够）**：
+- **re-arm 数据源（v2 修正；v4 由 CAS 设计改写归属）**：不是 selection。
+  connection 无关的**期望监控表** `desiredWatches`——用户 START 即写入、
+  显式 STOP 即移除；不持久化 activeWatchId/响铃消耗。
+  **v4 起该表是服务端权威状态**：所有 tab 经 revision/CAS 平权编辑，
+  **物化由服务端逻辑 owner 负责**，**页面不再"加载后按表自动 START"**。
+  见 `2026-08-22-desired-watch-revision-cas.md`。
+- **desired→armed 调和循环（v3 新增；v4 起由服务端 authority 承担，
+  不再是客户端循环）**：
   连接健康 ≠ 全部武装成功——如 Open 快照未就绪时 START 返回
   `TARGET_UNAVAILABLE`，socket 无事发生、不会再触发 re-arm。改为常驻
   调和循环：`desired − armed` 的差集按退避（5s/10s/20s 封顶 30s）重试；
@@ -188,8 +191,11 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 ## 3. 产品边界
 
 - 通知政策按 §2 第三层正式修订，不再依赖边界解释；
-- 本设计无服务端持久个人状态新增；validate 端点无状态（nonce registry
-  本就存在）；presence 通道为 local-only 路由（架构围栏强制）。
+- **（v4 更正）** 本设计**新增一处本地服务端持久个人状态**：期望监控表
+  `personal_desired_watches_v1` 及其 receipt ledger——**local-only**，
+  公网 target 结构上不存在（`PUBLIC_RUST_ZERO_SURFACE` 强制）。
+  除此之外无新增：validate 端点无状态（nonce registry 本就存在）；
+  presence 与 desired 通道均为 local-only 路由（架构围栏强制）。
 
 ## 4. 触点清单
 

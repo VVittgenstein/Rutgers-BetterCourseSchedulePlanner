@@ -1,14 +1,16 @@
 # 期望监控：revision/CAS 共同编辑模型（S2-D3 路线改判）
 
-状态：ACTIVE，**v7**。路线由产品所有者 2026-08-22 裁定：取代 fenced
+状态：ACTIVE，**v7.1**。路线由产品所有者 2026-08-22 裁定：取代 fenced
 sequencer，走 **持久化 revision + tombstone + CAS**。
 S2-D3 硬门在本设计实现并复审通过前**保持关闭**。
 
-**wire 名冻结**：`authorityGeneration`；**所有本地 wire variant 一律带
-`DESIRED_WATCH_` 前缀**（§7.7 的孤儿 tag 规则）。
+**wire 名冻结**：`authorityGeneration`；**所有本地 wire variant 一律以
+`DESIRED_WATCH_` 开头**（§7.7 孤儿 tag 规则）——因此 v7 的
+`SET_DESIRED_WATCH` 更名为 **`DESIRED_WATCH_SET`**，字面与规则一致。
 
 **修订史**：v1 五组 → v2 四组 → v3 自查十一项 → v4 五组 → v5 自查十五项
-→ v6 三组 → **v7 逐条闭合**。
+→ v6 三组 → v7 五组 → **v7.1 窄修逐条闭合**（复审明示无需 v8 大循环，
+本轮只冻结行为契约，类型/锁/channel/函数签名转入 PR 验收）。
 **v6 已获批准且不再重开**：§0.3 的同步态判定顺序、§2.5 六个首发数值、
 §7.7 的 16 项数组/去重论证/`212+3=215`。
 
@@ -119,13 +121,23 @@ T12；**A 误判缺帧并触发无意义重同步**。裁定采用第三种方�
 | R3 | **同化身的 FULL 即使跨 gap 也作为权威替换**，并把 `last` 设为其 `throughTransitionId`（定向）或自身 `transitionId`（广播） |
 | R4 | **新化身只接受 FULL**；收到新化身的 DELTA 即 DESYNCED |
 | R5 | **FULL 必须删除帧中缺席的本地 entry**（否则删除永远同步不下去） |
-| R6 | DESYNCED 时发 `DESIRED_WATCH_REQUEST_FULL_PROJECTION`，**single-flight**；超时按 1s/2s/4s 封顶 30s 退避重试，连续 5 次失败则主动断连重连 |
+| R6 | DESYNCED 时发 `DESIRED_WATCH_REQUEST_FULL_PROJECTION`，**single-flight**；超时按 1s/2s/4s 封顶 30s 退避重试，连续 5 次失败则主动断连重连。**被限流时服务端回 `DESIRED_WATCH_RESYNC_REJECTED { retryAfterSeconds }`（不是静默丢弃）**，客户端下次重试取 `max(退避, retryAfterSeconds)`——否则 R6 的重试时序不可确定 |
 | R7 | 首个 FULL 亦受 R6 的超时/退避约束 |
 
-**分帧与"每轮至多一帧"的统一**（v6 两处矛盾）：一个 actor 轮次产生
-**至多一个投影更新**；若序列化超过 §2.5 的字节预算，则**分块**为多个
-wire 帧，**共享同一 `transitionId`**，带 `chunkIndex` / `chunkCount`，
-接收方**集齐末块才整体提交**。分块不是多帧，序号不递增。
+**分帧与"每轮至多一帧"的统一**：一个 actor 轮次产生**至多一个投影
+更新**；若序列化超过 §2.5 的**单块**字节帽，则**分块**为多个 wire 帧。
+分块不是多帧，`transitionId` 不递增。
+
+**分块规则（冻结）**：
+
+| 规则 | 内容 |
+| --- | --- |
+| C1 | 每个投影更新有一个 **`frameGroupId`（UUIDv4）**；同组各块共享它。**不同 `frameGroupId` 的块一律不得混装** |
+| C2 | 块头严格校验：`chunkIndex < chunkCount`、同组 `chunkCount` 一致、同组 `actorIncarnation`/`kind`/`transitionId` 一致；任一不符 → 丢弃该组并进入 **DESYNCED** |
+| C3 | **重复 `chunkIndex`** → 丢弃该组并 DESYNCED |
+| C4 | **旧 incarnation 的块**一律丢弃（不影响当前组） |
+| C5 | **组装超时 10s**（自首块起）未集齐 → 丢弃该组并 DESYNCED。这是"actor 中途崩溃、末块永不到达"时页面不会**永久保留旧绿态**的唯一保证 |
+| C6 | 新的 **FULL 组作废任何在装组**（FULL 是权威替换） |
 
 ### 2.3 desired 表（迁移 10004 重建）
 
@@ -163,7 +175,8 @@ metadata 四个持久标量，**四者都带同一上界 CHECK**：
 | `DESIRED_WATCH_REQUEST_FULL_PROJECTION` 限流 | **独立**令牌桶 **0.2/s，突发 3**，且同一 audience 的并发请求**合并**为一次序列化 |
 | tombstone 行数硬上限 | **512** |
 | receipt 行数硬上限 | **2048** |
-| FULL / DELTA / bootstrap 序列化上限 | 各 **32 KiB** |
+| FULL / DELTA **单块** wire 帧上限 | 各 **32 KiB**（**是单块帽，不是逻辑更新总帽**；逻辑更新可跨块，无独立总帽） |
+| bootstrap 序列化上限 | **32 KiB**（单次 HTTP 响应，不分块） |
 | rotation 触发阈值 | 任一预算达 **80%** |
 
 **执行合同（v6 缺失）**：
@@ -231,8 +244,11 @@ receipt → 修复计数器。提交后广播一帧 FULL。
 rotation；**`SlotReleased`**；**周期 reconcile**（§5.8）；reconcile 重试
 完成回执；`REQUEST_FULL_PROJECTION`；启动恢复；**actor 故障重建**。
 
-**actor 故障重建**：`++actorIncarnation` → **枚举 manager 中未确认的
-effect batch 并重放交接**（§5.2）→ 向所有现存 audience 重播 FULL。
+**actor 故障重建（顺序已按复审更正——v7 写反了）**：
+`++actorIncarnation` → **先**向所有现存 audience 投递**新化身的 FULL**
+（否则按 R4"新化身只接受 FULL"，随后重放的 effect 会被全部丢弃）→
+**再**按**原顺序**重放未确认 effect batch（§5.2）。
+**history 侧独立恢复**，不依赖 audience 的进度。
 
 **audience registry 必须活在 actor 之外**（v6 的洞）：持久化身号只解决
 排序，**不能让重建后的 actor 凭空找回仍然存活的 pump**。registry 由
@@ -279,14 +295,39 @@ actor 在 history 与 audience 交接之前崩溃
 因此：
 
 - 每个 owner 操作分配**稳定的 `operationId`**（UUIDv4），**在调用
-  manager 之前**分配；
-- manager **保留该操作的 effect batch**（原 action / episode / cue 的
-  ID 与内容）**直到 actor 确认 history 与 audience 双方均已接收**——
-  模式参照 manager 既有的 message replay cache；
-- actor 重建时**枚举未确认 batch 并重放交接**，用**原 ID**，不新建；
+  manager 之前**分配；每个 batch 有稳定的 **`effectBatchId`**，其中
+  effect **有序**且带下标；
+- manager **保留该 effect batch**（原 action / episode / cue 的 ID 与
+  内容）**直到 actor 确认 history 与 audience 两侧**——模式参照 manager
+  既有的 message replay cache；
+- actor 重建时按 §4.2 的顺序**用原 ID 重放**，不新建；
 - `ensure` 的 **adopt 必须逐项校验**：同一 owner、同一 section、
   `activeWatchId` **仍驻留 manager**、policy 相同、**没有针对该 ID 的
-  disarm 操作**、**没有未确认 effect batch**。任一不满足即不得 adopt。
+  disarm 操作**、**没有未确认 effect batch**。任一不满足即不得 adopt；
+- **存在未确认 batch 时只能走 `PENDING_HANDOFF → replay`，
+  绝不允许落入 `Restarted`**。
+
+#### 5.2.1 "确认"的可执行定义（v7 只说"双确认"，没说什么算确认）
+
+现状：history 接缝返回 `void`、SQLite 失败只记日志；audience 侧的
+"发送成功"只到达无界发送队列，**并不代表浏览器收到**。因此冻结：
+
+| 面 | ACK 的确切含义 |
+| --- | --- |
+| **history** | **SQLite 事务已提交**，或写入被判定为 **`AlreadyPresent`**（幂等重放命中既有行）。除此之外一律**不算**已确认，按退避重试 |
+| **audience** | 客户端显式回 **`DESIRED_WATCH_EFFECT_ACK { effectBatchId }`**。入队/`send()` 返回**不算**确认 |
+
+- **必需 audience 集合** = **batch 创建时刻**已注册的 audience 集合；
+  期间 **detach 的 audience 从必需集合中移除**（视为已满足）；集合变空
+  则**仅凭 history ACK** 即可确认；
+- **leader 语义与 ACK 无关**：leader 只决定**是否播放声音**，不决定
+  是否 ACK，也不得截断事件；
+- **客户端先按 `(effectBatchId, effectIndex)` 去重再发声**，随后 ACK。
+  重放到达时若已去重命中，**仍须 ACK**（否则重放永不收敛）；
+- **容量与背压**：未确认 batch **至多 64 个 / 合计 256 KiB**；达帽即
+  **背压**（暂停新的 arm，置 `blockedOnSlot` 之外的 `lastFailure`
+  分类为 TRANSIENT）；**回收只允许在 history 已 ACK 之后**发生——
+  audience 可以永远不回，但 history 不能。
 
 ### 5.3 owner API（三个）
 
@@ -338,6 +379,16 @@ actor 在 history 与 audience 交接之前崩溃
 **新铸 id 但不记 receipt**，`source = SYSTEM`；并发丢失时重读重试；
 若该 section 已被用户删除则不再提交。
 
+### 5.6.1 零 audience 暂停（既有产品裁定，v7 误删，此处恢复）
+
+- **`1→0`（最后一个 audience 断开）**：**拆除全部物理 watch**（走
+  §5.4 的 disarm，捕获各自 `activeWatchId`），**保留 desired**；
+- **`0→1`（首个 audience 接入）**：**从权威 snapshot 重新物化一次**
+  （新 epoch，走 `ensure`/adopt）；
+- `ACTIVE_WATCH_STATE_PERSISTENT = false` 继续成立：
+  `activeWatchId` 与 episode 下次重新生成；
+- 两个转换都走 §4.2 的同一 inbox。
+
 ### 5.7 两个帽
 
 CAS 是唯一**产品准入帽**（post-state ≤ 9）；manager 保留**物理帽**且
@@ -355,9 +406,10 @@ reconcile**（30s）重新推导 `desired` 与 `materialized` 的差集并**重�
 ### 6.1 命令
 
 ```
-SET_DESIRED_WATCH { section, desired, policy|null,
+DESIRED_WATCH_SET { section, desired, policy|null,
                     basedOnRevision, authorityGeneration, mutationId }
 DESIRED_WATCH_REQUEST_FULL_PROJECTION { }
+DESIRED_WATCH_EFFECT_ACK { effectBatchId }          // §5.2.1 audience ACK
 ```
 
 ### 6.2 事件
@@ -368,7 +420,7 @@ DESIRED_WATCH_PROJECTION_UPDATE {
   kind: FULL | DELTA,
   transitionId | null,          // 广播帧有；定向 FULL 为 null
   throughTransitionId | null,   // 定向 FULL 有
-  chunkIndex, chunkCount,       // 分块；同一 transitionId
+  frameGroupId, chunkIndex, chunkCount,   // §2.2 C1–C6
   entries: [ DesiredWatchProjectionEntry ]
 }
 
@@ -389,13 +441,22 @@ DESIRED_WATCH_MUTATION_RESULT {   // 单播；不含任何状态
 }
 
 DESIRED_WATCH_AUTHORITY_UNAVAILABLE { mutationId }   // 非终局
+DESIRED_WATCH_RESYNC_REJECTED { retryAfterSeconds }  // §2.2 R6 限流结果
 DESIRED_WATCH_SLOT_RELEASED { section }              // 内部；不上 wire
 ```
 
 `reason` ∈ `STALE_GENERATION` / `STALE_REVISION` / `MUTATION_ID_CONFLICT` /
 `LIMIT_EXCEEDED` / `UNSUPPORTED_TARGET` / `TERM_OUT_OF_RANGE` /
 `SECTION_NOT_FOUND` / **`RATE_LIMITED`**。
-**终局集合** = 前七个；`RATE_LIMITED` 与 `AUTHORITY_UNAVAILABLE` **非终局**。
+**两个概念必须分开（v7 把它们混为一谈，导致 A-14 与 A-06/A-07 冲突）**：
+
+| 概念 | 含义 | 集合 |
+| --- | --- | --- |
+| **终局性** | 决定**客户端是否必须终止该 mutation** | **终局** = 上列七项；**非终局** = `RATE_LIMITED`、`AUTHORITY_UNAVAILABLE`（同 id 可重试） |
+| **是否记 receipt** | 决定**重复请求能否重放** | **记**：成功、`STALE_REVISION`、`LIMIT_EXCEEDED`、`UNSUPPORTED_TARGET`、`TERM_OUT_OF_RANGE`、`SECTION_NOT_FOUND`；**不记**：`STALE_GENERATION`（步骤 1 即判定）、`MUTATION_ID_CONFLICT`（由既有行推导，不插第二条）、两个非终局项、系统 CAS |
+
+即：**终局 ≠ 记 receipt**。`STALE_GENERATION` 与
+`MUTATION_ID_CONFLICT` 都是终局但都不写库。
 
 ### 6.3 bootstrap
 
@@ -448,7 +509,8 @@ API 本身不拒绝外部旧命令）。
 ```
 watch: {
   setDesired(section, desired, policy): DesiredMutationHandle
-  //   handle.result: Promise<{ status: COMMITTED | REJECTED, reason? }>
+  //   handle.result: Promise<{ status: COMMITTED | REJECTED
+  //                                   | SENT_UNCONFIRMED, reason? }>
   //   非终局（UNAVAILABLE / RATE_LIMITED）由 adapter **以同一 mutationId**
   //   内部重试，Promise 保持 pending；handle 暴露 retry 状态供 UI 显示
   subscribeProjection(listener): unsubscribe      // §0.3 五态 + 第 0 条
@@ -466,11 +528,38 @@ watch: {
   cue receipt）；
 - **`UNAVAILABLE` 不是终局**，不能作为 Promise 的终值返回（v6 把它列进
   "终局返回"）：改为 handle + 同 id 内部重试；
-- **公网 adapter 必须定义 STOP 与 UPDATE_POLICY 的完成语义**：现行
-  `UPDATE_POLICY` **没有明确的成功 ACK**，仅映射 `START_RESULT` 不够。
-  公网 adapter 以"命令已发出且连接仍 OPEN"为乐观完成，并在
-  `WATCH_STOPPED` / 后续 `EPISODE_UPDATED` 的 policy 字段上做事后校正；
-  该退化语义须在端口文档中明示，避免本地/公网行为被误认为等价。
+- **公网 STOP / UPDATE_POLICY 不得报告为 `COMMITTED`**（v7 的
+  "乐观完成"被复审明确否决）。理由：socket OPEN + `send()` 只证明
+  浏览器**接受了发送**；`STOP` 的 `UnknownWatch` 现只写日志；
+  `UPDATE_POLICY` 在无 episode 时即使成功也没有任何后续事件——于是会
+  **永久返回一个无法验证的 `COMMITTED`**。
+  裁定采纳可接受方案之二：公网 adapter 对这两条返回
+  **`SENT_UNCONFIRMED`**，端口 outcome 枚举相应扩为
+  `COMMITTED | REJECTED | SENT_UNCONFIRMED`；**UI 不得据此显示权威
+  成功**（显示"已发送，等待确认"）。若将来公网 wire 补上 STOP/UPDATE 的
+  成功/拒绝 ACK，可再收敛为 `COMMITTED`。
+
+### 7.6.1 本地 episode 控制与事件通道（v7 只列了端口方法，没落线）
+
+**裁定：继续双 socket**，各自职责冻结如下。
+
+| 本地 socket | 职责 |
+| --- | --- |
+| `/api/v1/watch`（既有） | **audience 事件通道 + episode 控制 + 应用层心跳**（S2-PR4 不变） |
+| `/api/v1/local/desired-watch` | **desired CAS 命令 + 投影帧 + `DESIRED_WATCH_EFFECT_ACK`** |
+
+规定：
+
+- **episode 命令按 `activeWatchId` 路由到 synthetic owner**：
+  `ACKNOWLEDGE_EPISODE` / `ACKNOWLEDGE_ALL_EPISODES` /
+  `RESUME_TIMED_OUT_EPISODE` / `RESET_AUDIBLE_COUNT` /
+  `REPORT_CUE_OUTCOME` / `DISMISS_ALERT` 六条；
+- **owner 产生的事件扇出给全部 audience**（不再 unicast 给发起连接）；
+- **leader 只决定是否播放声音，不得截断事件**：所有 audience 都收到
+  完整事件流，是否发声由 leader 决定；
+- **本地 admission filter 只拒绝旧三条** `START_WATCH` /
+  `STOP_WATCH` / `UPDATE_POLICY`，其余命令照常；
+- **一个 tab 只有两条 socket 都 OPEN 才算已同步**（喂给 §0.3 第 0 条）。
 
 ### 7.7 public marker 计账（**冻结**）
 
@@ -541,19 +630,27 @@ schema 子串守卫、Rust `PersonalStateSnapshot`/`DesiredWatch` 形状、
 - A-11 系统 CAS 重试每次新铸 id；
 - A-12 receipt 主键为 `(generation, mutationId)`；
 - A-13 `basedOnRevision` 只取自投影 store；`MUTATION_RESULT` 不带状态；
-- A-14 **`RATE_LIMITED` 与 `AUTHORITY_UNAVAILABLE` 为非终局、同 id 可
-  重试且不记 receipt**；终局七项反之；
+- A-14 **终局性与"是否记 receipt"是两张表**（§6.2）：非终局 =
+  `RATE_LIMITED` / `AUTHORITY_UNAVAILABLE`（同 id 可重试、不记）；
+  终局七项中 **`STALE_GENERATION` 与 `MUTATION_ID_CONFLICT` 也不记**
+  （分别由步骤 1 判定、由既有行推导）。逐项钉死，不得把两张表合并；
 
 **帧流与接收机**
 - A-15 每轮**至多一个投影更新**；无变化不发帧且序号不递增；
-- A-16 **分块**帧共享 `transitionId`、集齐末块才提交；
+- A-16 **分块规则 C1–C6 逐条钉死**：`frameGroupId` 不混组、块头严格
+  校验、重复块索引、旧 incarnation 块、**10s 组装超时**（"actor 中途
+  崩溃、末块永不到达"时页面**不得永久保留旧绿态**）、新 FULL 组作废
+  在装组；
 - A-17 **定向 FULL 不消费全局序号**，携带 `throughTransitionId`；
-  "A 收 T10 / B Attach / 下一广播 T12"下 **A 不得误判缺帧**；
+  "A 收 T10 → B Attach（定向 FULL，不占号）→ **下一次广播必须是 T11**"，
+  A 按 R2 正常应用、**不得判 gap**（v7 的 A-17 写成 T12，与 R2 直接
+  冲突，此处更正）；
 - A-18 接收状态机 R1–R7 逐条钉死，含 **R5：FULL 必须删除帧中缺席的
   本地 entry**；
 - A-19 新化身只接受 FULL；重建 FULL **不得**被帧顺序守卫丢弃；
 - A-20 `REQUEST_FULL_PROJECTION` **独立限流 + 合并**；小请求不得触发
-  无界序列化；
+  无界序列化；**被限流时回 `DESIRED_WATCH_RESYNC_REJECTED`（非静默
+  丢弃）**，客户端下次重试取 `max(退避, retryAfterSeconds)`；
 - A-21 首个/请求的 FULL **超时 + single-flight + 退避**，连续失败后断连；
 - A-22 **audience registry 活在 actor 之外**：actor 重建后能找回仍存活
   的 pump 并重播 FULL；
@@ -573,9 +670,18 @@ schema 子串守卫、Rust `PersonalStateSnapshot`/`DesiredWatch` 形状、
 - A-29 `ensure` 同 `(generation, epoch)` 重试收养原 ID、零副作用；
 - A-30 **adopt 前置校验五项**（同 owner/section、ID 仍驻留、policy 同、
   无针对该 ID 的 disarm、无未确认 effect batch）逐项钉死；
-- A-31 **effect batch 幂等**：manager 建出 ID/episode/cue 后 actor 崩溃，
-  重建后**用原 ID 重放交接**，cue 与 history **不得丢失**，且**不得**
-  产生第二份；
+- A-31 **effect batch 幂等与可执行确认**（§5.2.1）：manager 建出
+  ID/episode/cue 后 actor 崩溃，重建后**用原 ID 重放交接**，cue 与
+  history 不得丢失、不得产生第二份；**history ACK = SQLite commit 或
+  `AlreadyPresent`**（日志不算）；**audience ACK = 客户端显式
+  `DESIRED_WATCH_EFFECT_ACK`**（入队/`send()` 不算）；detach 的
+  audience 移出必需集合、集合空则仅凭 history ACK；客户端**先按
+  `(effectBatchId, effectIndex)` 去重再发声且仍须 ACK**；
+  **未确认 batch 只能 `PENDING_HANDOFF → replay`，绝不落入
+  `Restarted`**；容量 64 个 / 256 KiB、达帽背压、**回收仅在 history
+  ACK 之后**；
+- A-31b **重建顺序**：audience **先**收新化身 FULL、**再**按原顺序重放
+  effect（顺序反了会被 R4 全部丢弃）；history 独立恢复；
 - A-32 `applyPolicy` 使 policy-only 更新真正生效；**同 revision 重试不
   重复写 history**；未武装/blocked 时只更新 desired 侧；
 - A-33 **`armAttempt` 与 `disarmOperationId` 分离**：同一 section 上
@@ -596,11 +702,20 @@ schema 子串守卫、Rust `PersonalStateSnapshot`/`DesiredWatch` 形状、
   只有 `0→1` 占额；
 
 **端口与边界**
-- A-42 端口 `subscribeEvents` 承载 observation/episode/alert/audio/cue
-  receipt；缺它则警报与声音消失（负例）；
+- A-42 **本地 episode 通道落线**（§7.6.1）：六条 episode 命令按
+  `activeWatchId` 路由到 synthetic owner；**owner 事件扇出给全部
+  audience**（非 unicast）；**leader 只决定是否发声、不截断事件**；
+  本地 admission filter **只**拒绝旧三条；两条 socket 都 OPEN 才算已
+  同步。端口 `subscribeEvents` 承载 observation/episode/alert/audio/
+  cue receipt——缺它则警报与声音整体消失（负例）；
 - A-43 `setDesired` 返回 handle；非终局由 adapter **以同一 mutationId**
-  内部重试且 Promise 保持 pending；公网 adapter 的 STOP/UPDATE_POLICY
-  完成语义按 §7.6 的退化定义并在端口文档明示；
+  内部重试且 Promise 保持 pending；**公网 STOP/UPDATE_POLICY 必须返回
+  `SENT_UNCONFIRMED`，绝不得报告 `COMMITTED`**，UI 不得据此显示权威
+  成功（负例：断言公网这两条不会产生 `COMMITTED`）；
+- A-45 **零 audience 暂停**（§5.6.1）：`1→0` 拆除全部物理 watch 并
+  保留 desired；`0→1` 从权威 snapshot 重新物化（新 epoch）；
+  `activeWatchId`/episode 重新生成，`ACTIVE_WATCH_STATE_PERSISTENT`
+  仍为 false；
 - A-44 §2.5 六值 + 执行合同（UTF-8 整信封计数、`floor(cap*4/5)` 与
   三点边界、`RATE_LIMITED` 的 wire 结果与 `Retry-After`、rotation 保留
   incarnation、Full Reset 不重置 `transitionId`）；marker：18 行 / 215 项 /
@@ -626,3 +741,12 @@ schema 子串守卫、Rust `PersonalStateSnapshot`/`DesiredWatch` 形状、
      （"仅 leader 武装监控与发声"已被本设计取代）；
   4. **清单尾部两处漂移**：`S2-D3` 里"路由落地即可关闭打包门"的说法与
      本节的 **P1 release gate** 裁定冲突，须改写；进度行仍写 v5，须更新。
+     （1–4 已于 v7 执行完毕。）
+  5. **v7.1 补做的三处残留**（复审指出 v7 只完成了一部分）：
+     a) alert 文档仍写 **desired→armed 调和循环归客户端**、
+        **页面加载后自动 START**——两者均已转由**服务端 authority**
+        承担，须改写；
+     b) alert 文档 §3 产品边界仍称 **"本设计无服务端持久个人状态新增"**
+        ——desired 表落地后该断言不成立，须改写；
+     c) `review-package-local.md` L1 仍写**页面加载后按表自动 START**
+        ——改为服务端按已提交 desired 物化，页面只是编辑者与 audience。
