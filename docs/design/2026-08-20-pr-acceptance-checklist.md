@@ -145,7 +145,58 @@ S2-D3. **期望监控表接线硬门（Codex S2-PR3 复审裁定 B2）**：
        bootstrap 顶层必填、轮换广播完整 snapshot、desired=false 免准入、
        数值收敛到 MAX_SAFE_INTEGER）；⑤ 公网边界（desired 命令/事件/
        authority 全部移入本地专有 crate，走 S2-PR1 的 SecondaryWebSocket
-       接缝，公网当未知命令拒绝）。新增验收项 N-a..N-g 见设计文档 §9。
+       接缝，公网当未知命令拒绝）。
+       **v2 设计稿的 4 组阻断已在 v3 闭合**：① per-row mutation 三列
+       无法兑现幂等（改为 generation-scoped **receipt ledger**，记成功
+       与全部**终局**拒绝，重复请求只向提交者重放、不 reconcile 不广播；
+       `AUTHORITY_UNAVAILABLE` 明确为**非终局、不落 receipt、同 id 可
+       重试**）；② actor 覆盖面补全（**每次 Attach/DetachAudience 入
+       inbox 且由 actor 自算连接数与 0↔1 边沿**、启动恢复、actor 故障
+       重建、generation 轮换、reset confirm、reconcile 重试完成），并新增
+       **`materializationEpoch`**——`(G,R)` 排序 desired、epoch 排序
+       armed，二者不可互替；压缩改为**同一 SQLite 事务内升代+清理+修计数**，
+       提交后才广播；③ arm/disarm 失败模型闭合（暂态 5/10/20 封顶 30s
+       不动 desired；永久由 authority **自身走一次 CAS** 移出 desired
+       并通知——与已批准设计第 214/250 行一致，**不构成产品语义修订**；
+       `SECTION_NOT_FOUND` 只有在 S1 gate 放行时才算永久；disarm 失败
+       重试 + 旧 arm 完成防复活 + `pendingDisarm` 不谎报；
+       `activeWatchId` 可空、每新 epoch 换新；ACK/DISMISS/CUE **不是**
+       "既有 WS 不变"，需本地适配层按 `activeWatchId` 路由并向全体
+       audience 扇出）；④ 拓扑抉择——host 单槽改为**受校验的 secondary
+       路由集合**（逐项 S2a 校验 + 集合内路径唯一性），presence 与
+       desired 各占一条本地路由；N-g 措辞按"不进入命令路由/不改 watch
+       状态/不产生 dispatch/sink/reply"更正；绑定 S2b 逐路由 404 与
+       S2c 64 KiB 帽为硬验收；新增前端负控（共享 provider 现仍在
+       `LiveWatchProvider.tsx:412/818/823` 发那三条命令，须拆到本地专有
+       模块 + import 图/manifest/public bundle 三重负控）。
+       **v3 自查三镜头再挖出 11 项，v4 逐条闭合**，其中三项是根子：
+       ⓐ **UI 投影规则完全缺失**——全文只写服务端机制，从未定义
+       `(desired, armed, pendingDisarm)` 到"用户看到什么"的映射，而那
+       恰是本纲领唯一要约束的东西。v4 §0 定死投影表，**唯一绿灯条件为
+       `desired=1 ∧ armed=true ∧ ¬pendingDisarm`**，"已提交但未武装"
+       必须显示为准备中；ⓑ **`mutationId` 的派生读法会永久锁死一个
+       section**（满额被拒 → 名额腾出 → 同手势派生同 id → 永远重放
+       LIMIT_EXCEEDED）——改为**每次用户手势新铸 UUIDv4**，绑定降级为
+       校验规则；ⓒ **epoch 无分配点/无持久化/未按代作用域**——改为在
+       CAS 同事务内分配并落列，armed 侧守卫比较
+       `(generation, epoch, attemptToken)`，并新增不持久的
+       `attemptToken` 解决 arm-vs-arm。
+       其余闭合项：receipt ledger 主键补 section（否则跨 section 重放
+       他人回执）、`MUTATION_ID_CONFLICT` 由已有行推导而非二次插入、
+       `STALE_GENERATION` 不落 receipt、重放走独立帧
+       `DESIRED_WATCH_REPLAYED`、policy-only 更新不换 epoch/不换
+       `activeWatchId`、放弃本仓库不存在的 exactly-once 键改为沿用既有
+       `(section_key, run_id, episode_id)`、`pendingDisarm` 补进 wire、
+       disarm 按 section 寻址、失败分类覆盖 manager 全部 disposition、
+       **9 门帽单一执行点**（CAS 判定，manager 对 owner 合成连接豁免）、
+       owner 合成连接需防心跳回收、系统 CAS 的 id/base/重试语义、
+       actor 故障重建须向现存 audience 重播完整双 snapshot、
+       前端拆分改走 `ProductRuntimePort`（共享 provider 为两 target 共用，
+       不能"不再发"）、public marker 计账（不新增 capability 行，改在
+       `PERSISTENT_ACTIVE_WATCH` 追加并同步 212 常量与两个摘要）、
+       `contracts.ts` 的 9 门帽与 `hasKeys` 全等检查三处硬阻断。
+       验收项扩至 N-a..N-x 见设计文档 §9。wire 名冻结为
+       **`authorityGeneration`**（`resetGeneration` 作废）。
        本硬门在 CAS 路线落地并复审通过前保持关闭。
        **打包 E2E 非空路径门保持开放**（Codex 本轮明确）：待本地专有
        desired 路由落地后，打包冒烟可直连该路由提交一次 CAS 再走
@@ -224,8 +275,8 @@ B2. 无栅栏写入的时序反例（裁定为**延后+硬门**路径）：见 S
       **Codex 批准 81c50b5**（B4 延后至 H4，规格冻结于 S2-D1）
 - [~] S2-PR5——第一版按 fenced sequencer 实现，自查三镜头实跑复现 2 项
       P1（活跃/持久反向错位；重放 START 重新落库），**未提交即作废**；
-      路线改判为 revision/CAS。设计 v1（e53f525）被 Codex 驳回 5 组
-      设计阻断，**v2 已逐条闭合**，见
+      路线改判为 revision/CAS。设计 v1（e53f525）驳回 5 组阻断 → v2
+      （d798f9d）驳回 4 组阻断 → v3 自查再挖 11 项 → **v4 逐条闭合**，见
       `2026-08-22-desired-watch-revision-cas.md`；待设计复审通过后实现。
 - [x] S2-PR4（应用层心跳，56a9f70）——**Codex 批准**，清单第 6 条关闭
       （三项披露获追认；新增携带项 S2f/S2g 归 PR6；扫描 0 findings）
