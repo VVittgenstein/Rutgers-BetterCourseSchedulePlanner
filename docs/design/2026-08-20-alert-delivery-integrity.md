@@ -212,6 +212,7 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 | **共享 host seam** | `bcsp-application/src/host.rs:366`（v3 新增触点） | 第二个可选 WS 路由注册 seam（target 注入制） |
 | 本地 presence(L2) | `bcsp-local-runtime`（经 seam 注册 `/api/v1/local/presence`）+ 前端页面级接入 | 每 tab presence 连接；count+generation+phase 状态机 → 60s 倒计时 → 到期复验 → 退出 |
 | 本地多 tab | 前端（Web Locks）+ 服务端 authority | 所有 tab 平权编辑 desired（CAS）；监控由服务端逻辑 owner 持有；leader **只**决定谁播放声音 |
+| 本地 WS 路由 | 共享 host seam | **受校验的路由集合**（非单条）：presence `/api/v1/local/presence` 与 desired `/api/v1/local/desired-watch` |
 | 本地日志(L3) | `bcsp-local-runtime`（tracing stdout） | 关键事件 + 倒计时 |
 | 政策 | `public-source-deny.json`、两 verifier、两 manifest、相关测试 | 通知家族拆分（批准的修订） |
 | 测试翻转 | `live-watch-provider.test.tsx:860-932` | 改为"意外断自动重连、显式断不重连" |

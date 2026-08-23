@@ -1,6 +1,10 @@
 # 期望监控：revision/CAS 共同编辑模型（S2-D3 路线改判）
 
-状态：ACTIVE，**v7.2**。路线由产品所有者 2026-08-22 裁定：取代 fenced
+状态：ACTIVE，**v7.2（已获批准开工，限 dormant）**。
+复审 2026-08-23 裁定：架构与四项核心修复已达实施水位，**不再需要
+v7.3/v8 文档循环**；PR5 可立即开工，但**严格限定为 dormant 实现**——
+批准开工**不等于**允许单独激活/部署，**S2-D3 不关闭**。
+合并前硬验收见 **§12**。路线由产品所有者 2026-08-22 裁定：取代 fenced
 sequencer，走 **持久化 revision + tombstone + CAS**。
 S2-D3 硬门在本设计实现并复审通过前**保持关闭**。
 
@@ -181,7 +185,7 @@ metadata 四个持久标量，**四者都带同一上界 CHECK**：
 | `DESIRED_WATCH_REQUEST_FULL_PROJECTION` 限流 | **独立**令牌桶 **0.2/s，突发 3**，且同一 audience 的并发请求**合并**为一次序列化 |
 | tombstone 行数硬上限 | **512** |
 | receipt 行数硬上限 | **2048** |
-| FULL / DELTA **单块** wire 帧上限 | 各 **32 KiB**（**是单块帽，不是逻辑更新总帽**；逻辑更新可跨块，无独立总帽） |
+| FULL / DELTA **单块** wire 帧上限 | 各 **32 KiB**（**单块帽**；逻辑更新可跨块） |
 | bootstrap 序列化上限 | **32 KiB**（单次 HTTP 响应，不分块） |
 | **单个投影更新组**上限 | **总字节 256 KiB / 块数 16**（§2.2 C8；单块帽不约束组装内存） |
 | rotation 触发阈值 | 任一预算达 **80%** |
@@ -460,7 +464,7 @@ DESIRED_WATCH_PROJECTION_UPDATE {
   kind: FULL | DELTA,
   transitionId | null,          // 广播帧有；定向 FULL 为 null
   throughTransitionId | null,   // 定向 FULL 有
-  frameGroupId, chunkIndex, chunkCount,   // §2.2 C1–C6
+  frameGroupId, chunkIndex, chunkCount,   // §2.2 C0–C8
   entries: [ DesiredWatchProjectionEntry ]
 }
 
@@ -591,10 +595,11 @@ watch: {
 
 规定：
 
-- **episode 命令按 `activeWatchId` 路由到 synthetic owner**：
-  `ACKNOWLEDGE_EPISODE` / `ACKNOWLEDGE_ALL_EPISODES` /
+- **episode 命令路由**：`ACKNOWLEDGE_EPISODE` /
   `RESUME_TIMED_OUT_EPISODE` / `RESET_AUDIBLE_COUNT` /
-  `REPORT_CUE_OUTCOME` / `DISMISS_ALERT` 六条；
+  `REPORT_CUE_OUTCOME` / `DISMISS_ALERT` **五条按 `activeWatchId`
+  定向路由**到 synthetic owner；**`ACKNOWLEDGE_ALL_EPISODES` 不带
+  `activeWatchId`**，按 **synthetic owner 全域执行**；
 - **owner 产生的事件扇出给全部 audience**（不再 unicast 给发起连接）；
 - **leader 只决定是否播放声音，不得截断事件**：所有 audience 都收到
   完整事件流，是否发声由 leader 决定；
@@ -698,10 +703,12 @@ schema 子串守卫、Rust `PersonalStateSnapshot`/`DesiredWatch` 形状、
 
 **帧流与接收机**
 - A-15 每轮**至多一个投影更新**；无变化不发帧且序号不递增；
-- A-16 **分块规则 C1–C6 逐条钉死**：`frameGroupId` 不混组、块头严格
-  校验、重复块索引、旧 incarnation 块、**10s 组装超时**（"actor 中途
-  崩溃、末块永不到达"时页面**不得永久保留旧绿态**）、新 FULL 组作废
-  在装组；
+- A-16 **分块规则 C0–C8 逐条钉死**：整组原子提交与 ASSEMBLING 降级
+  （C0/C0b，另见 A-46）、`frameGroupId` 不混组、块头五元组严格校验、
+  重复块索引、旧 incarnation 块、**10s 组装超时**（"actor 中途崩溃、
+  末块永不到达"时页面**不得永久保留旧绿态**）、**同时只装一组且异
+  DELTA 组两者皆弃**（C6）、**更旧的同化身 FULL 不回退 `last`/不作废
+  更新在装组**（C7，另见 A-47）、每组 256 KiB/16 块（C8）；
 - A-17 **定向 FULL 不消费全局序号**，携带 `throughTransitionId`；
   "A 收 T10 → B Attach（定向 FULL，不占号）→ **下一次广播必须是 T11**"，
   A 按 R2 正常应用、**不得判 gap**（v7 的 A-17 写成 T12，与 R2 直接
@@ -834,6 +841,66 @@ schema 子串守卫、Rust `PersonalStateSnapshot`/`DesiredWatch` 形状、
 **release-gate E2E 必须覆盖**：新旧四种组合（旧前端×旧后端、旧×新、
 新×旧、新×新）以及**单边 socket flap**（desired 断而 watch 未断、
 反之）。
+
+## 12. PR5 合并硬验收（复审 2026-08-23 转入 PR 级，不再另发设计稿）
+
+**G1 消除"首 FULL / Attach"循环**。§4.4 是 Attach 后发 FULL，
+§7.6.1.1 又要求首 FULL 应用后才 Attach——实现必须走**两阶段**：
+
+```
+UNPAIRED
+  → PAIRED_SYNCING   （注册 pump；不进 required set；发送 FULL）
+  → PROJECTION_READY （客户端回执）
+  → ACTIVE / AttachAudience
+```
+
+本地专有 bind/HELLO 与 **`DESIRED_WATCH_PROJECTION_READY`** wire 必须
+落地；**旧连接代的 READY/ACK 一律无效**。
+
+**G2 冻结可比较的 projection fence**：
+
+```
+{ authorityGeneration, actorIncarnation, throughTransitionId }
+```
+
+广播帧以**自身 `transitionId`** 作为 through 值。**actor 重建时保留
+batch/event ID，但把 wrapper 的 fence 重基到新 FULL 的位置**；客户端
+仅在**当前位置满足 fence 后**才释放 effect。
+
+**G3 effect 边界矩阵**：
+
+- `audienceEffects.isEmpty ⇒ requiredAudienceSet = ∅`；
+- **history-only batch 只等 history ACK**；
+- 两侧都无 effect ⇒ **不创建 batch，或立即完成**；
+- **ACK deadline 自"fence 已满足且完整 batch 首次实际交付"起算**，
+  **不是** 自 batch 创建起算；
+- **ACK 超时必须原子地**：失效 binding、关闭/作废两半连接、产生**一次**
+  Detach，并使 UI **离开 composite-synced**。
+
+**G4 history 故障时禁止重新武装**。仅有 16/64 KiB 的 teardown reserve
+仍可能被反复 `0→1→0` 耗尽。**任何持续未 ACK 的 history 故障都必须
+暂停新的 arm/policy 物化**；**disarm 继续使用保留预算**；history 恢复
+并清账后再重新物化。
+
+**G5 dormant 必须覆盖 migration 与 bootstrap**。PR5 含 10004 与 Rust
+snapshot 变形，而旧前端对 bootstrap/`DesiredWatch` 使用**严格键集**
+校验。PR5-only 构建必须满足其一：
+
+- **不执行/不激活** 10004 与新 bootstrap；**或**
+- 数据库可先升级，但**继续输出与 protocol v1 逐键相同的旧 bootstrap
+  兼容视图**。
+
+**dormant 负控必须证明当前 UI 行为不变**；route / filter / owner /
+新 bootstrap 的**生产激活**仍须与 PR6 原子发布或经明确能力握手。
+
+**G6 帧帽证明与小勘误**：
+
+- 用**最大合法状态**证明 FULL ≤ **256 KiB / 16 块**；**证明失败即阻断
+  PR 合并**，并须补 producer 侧恢复路径；
+- §2.5 与 C8 的表述冲突**以 C8 为准**（已改）；
+- `ACKNOWLEDGE_ALL_EPISODES` 无 `activeWatchId`：**五条定向 + ACK-all
+  全域**（已改）；
+- alert 触点表的单一"第二 WS 路由"残留随 PR 文档同步（非阻断）。
 
 ## 11. 已裁定 + 写回义务
 
