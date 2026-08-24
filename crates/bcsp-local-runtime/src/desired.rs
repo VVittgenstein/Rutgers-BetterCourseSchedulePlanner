@@ -297,8 +297,19 @@ impl DesiredWatchOutcomeV1 {
 /// publishing a section, an integrity gate takes a target back. Checking them
 /// only at arm time turns the first one that changes into a permanent green
 /// light for a watch that is no longer legitimate, so the coordinator keeps
-/// asking. Fifteen seconds is well inside the shortest watch poll interval,
-/// so a revoked target is reported before the next poll it would have driven.
+/// asking.
+///
+/// This is BOUNDED EVENTUAL revalidation, not per-poll revalidation. The
+/// shortest legal local watch interval is
+/// `LOCAL_MINIMUM_WATCH_OPEN_INTERVAL_SECONDS`, three seconds, so a user who
+/// has chosen a fast cadence can see several polls of a revoked target before
+/// this notices -- what is guaranteed is that the green light goes out within
+/// a bounded time, not that no poll happens in between. Shortening it to
+/// match the fastest poll would ask storage and the catalog the same question
+/// every three seconds for every watched section, which is a real load change
+/// and not this milestone's to make.
+/// `the_revalidation_cadence_is_bounded_but_not_per_poll` pins both numbers so
+/// the relationship cannot drift unnoticed.
 pub const DESIRED_WATCH_REVALIDATE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// The physical-watch side of materialization.
@@ -369,6 +380,40 @@ impl DesiredWatchOwner for SharedWatchSocket {
     }
 }
 
+/// A named point inside the coordinator that a test can stand at.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DesiredWatchCheckpoint {
+    /// The store has decided one mutation's outcome. The response it will be
+    /// reported with has not been assembled yet, and no coordinator lock is
+    /// held.
+    MutationDecided,
+    /// The rotation budget has just been read and found due. The rotation
+    /// itself has not happened yet.
+    RotationDue,
+}
+
+/// A seam for standing at a [`DesiredWatchCheckpoint`].
+///
+/// Two of this module's guarantees are about WHEN one thing is read relative
+/// to another -- the rotation budget against the rotation it authorises, a
+/// mutation's outcome against the authority snapshot its answer is stamped
+/// from -- and a window a few instructions wide is not something a test can
+/// reach by sleeping and hoping. Every earlier attempt to prove them ended up
+/// asserting that a guessed delay had been long enough, which passes just as
+/// happily against the implementation it was written to reject.
+///
+/// `exclusive` is what turns "these two happen close together" into "no other
+/// caller can be between them": it reports whether the coordinator's
+/// exclusive domain is held at this point. A check that reads the budget
+/// outside the domain and then takes it arrives here holding nothing, and
+/// says so.
+///
+/// Production installs nothing; the coordinator is built without one.
+pub trait DesiredWatchCheckpoints: Send + Sync + 'static {
+    fn arrive(&self, checkpoint: DesiredWatchCheckpoint, exclusive: bool);
+}
+
 /// What the process currently has running for one section.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ArmedWatch {
@@ -382,18 +427,19 @@ struct ArmedWatch {
 #[derive(Clone, Debug, Default)]
 struct SectionMaterialization {
     armed: Option<ArmedWatch>,
-    pending_disarm: bool,
+    /// A physical watch that should be gone and is not.
+    ///
+    /// A failed teardown is not "already stopped": the watch is still alive
+    /// and can still ring. Its identity moves HERE rather than staying in
+    /// `armed`, because the two are different claims -- `armed` is what makes
+    /// a section green, and a watch being torn down must never be green --
+    /// and rather than being dropped, because that id is the only thing that
+    /// can ever stop it. Everything that finishes a teardown, including the
+    /// STOP the user presses next, addresses the watch from here.
+    stopping: Option<StoppingWatch>,
     blocked_on_slot: bool,
     failure: Option<DesiredWatchFailureV1>,
     retry: Option<RetrySchedule>,
-    /// A teardown that failed, and when it may be attempted again.
-    ///
-    /// A failed teardown is not "already stopped": the physical watch is
-    /// still alive and can still ring, so the record is kept, the state is
-    /// reported as stopping, and something has to come back and finish the
-    /// job. Without this the record would sit at `pendingDisarm` forever
-    /// waiting for a reconcile that nothing schedules.
-    disarm_retry: Option<DisarmRetry>,
 }
 
 /// A scheduled retry, stamped with the authority tuple it was scheduled for.
@@ -411,12 +457,16 @@ struct RetrySchedule {
     due_at: Instant,
 }
 
-/// A teardown retry. Deliberately NOT stamped with an authority tuple: it is
-/// addressed by the watch id captured when the watch was armed, so it can
-/// only ever stop that one watch. A stop that resolved the section again
-/// could kill a watch armed since.
+/// An unfinished teardown, and when it may be attempted again.
+///
+/// Deliberately NOT stamped with an authority tuple, and deliberately holding
+/// the watch id rather than expecting a caller to still have it: it is
+/// addressed by the id captured when the watch was armed, so however late the
+/// retry fires it can only ever stop that one watch. A teardown that
+/// re-resolved the section could kill a watch armed since.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DisarmRetry {
+struct StoppingWatch {
+    active_watch_id: ActiveWatchId,
     attempt: usize,
     due_at: Instant,
 }
@@ -435,6 +485,13 @@ struct Materialization {
     /// caused to exist: an authority that is empty and a process that is
     /// still polling Rutgers for the user.
     resetting: bool,
+    /// A Full Reset that could not finish tearing the watches down.
+    ///
+    /// The barrier stays raised while this is set. An authority that is empty
+    /// while the process still holds a watch nobody can see is precisely the
+    /// state the reset exists to prevent, so the reset has not happened until
+    /// the last one is gone -- and something has to come back and finish it.
+    reset_incomplete: bool,
     /// When the running watches were last re-checked against the world.
     last_revalidated: Option<Instant>,
 }
@@ -446,6 +503,14 @@ pub enum DesiredWatchCoordinatorError {
     Storage(PersonalStateError),
     /// A coordinator lock was poisoned by a panic in another thread.
     Poisoned,
+    /// A Full Reset could not stop every physical watch the process holds.
+    ///
+    /// Reported rather than logged, because the alternative is the one answer
+    /// this surface must never give: "reset succeeded" beside a process that
+    /// is still polling Rutgers for rows it has just deleted. The barrier
+    /// stays raised, the identities stay addressable, and finishing is
+    /// retried -- so this is retryable, not a defect.
+    ResetIncomplete,
 }
 
 impl From<PersonalStateError> for DesiredWatchCoordinatorError {
@@ -468,6 +533,7 @@ pub struct DesiredWatchCoordinator {
     materialization: Mutex<Materialization>,
     backoff: Vec<Duration>,
     revalidate_interval: Duration,
+    checkpoints: Option<Arc<dyn DesiredWatchCheckpoints>>,
 }
 
 impl DesiredWatchCoordinator {
@@ -482,7 +548,17 @@ impl DesiredWatchCoordinator {
             materialization: Mutex::new(Materialization::default()),
             backoff: DESIRED_WATCH_MATERIALIZE_BACKOFF.to_vec(),
             revalidate_interval: DESIRED_WATCH_REVALIDATE_INTERVAL,
+            checkpoints: None,
         }
+    }
+
+    /// Installs somewhere for the coordinator to stand at its checkpoints.
+    ///
+    /// Production never calls this. See [`DesiredWatchCheckpoints`] for why
+    /// the seam exists at all rather than being replaced by a longer sleep.
+    pub fn with_checkpoints(mut self, checkpoints: Arc<dyn DesiredWatchCheckpoints>) -> Self {
+        self.checkpoints = Some(checkpoints);
+        self
     }
 
     /// Replaces the retry schedule.
@@ -545,7 +621,8 @@ impl DesiredWatchCoordinator {
         // both in the other order here would be the one cycle in this
         // module.
         let outcome = self.lock_store()?.commit_desired_watch_mutation(&command)?;
-        let mut result = self.describe(outcome)?;
+        let mut result = describe(outcome);
+        self.arrive(DesiredWatchCheckpoint::MutationDecided);
         if result.outcome == DesiredWatchOutcomeV1::Committed {
             self.reconcile()?;
         }
@@ -556,8 +633,8 @@ impl DesiredWatchCoordinator {
         // rotated, that ledger would reach its hard cap and every later
         // write, including the STOP that would fix it, would be refused
         // forever.
-        let rotated = self.rotate_if_due()?;
-        self.restamp(&mut result, &mutation.section, rotated)?;
+        self.rotate_if_due()?;
+        self.stamp(&mut result, &mutation.section)?;
         Ok(result)
     }
 
@@ -603,10 +680,19 @@ impl DesiredWatchCoordinator {
             tracing::warn!(?error, "desired-watch rotation maintenance failed; will retry");
         }
         let due = {
-            let Ok(materialization) = self.lock_materialization() else {
+            let Ok(mut materialization) = self.lock_materialization() else {
                 return;
             };
             if materialization.resetting {
+                // A Full Reset that could not tear everything down is the one
+                // barrier that must not simply be waited out: the rows are
+                // already gone, so nothing else in the process will ever go
+                // looking for the watches it still holds.
+                if materialization.reset_incomplete
+                    && let Err(error) = self.finish_authority_reset_locked(&mut materialization)
+                {
+                    tracing::warn!(?error, "the Full Reset teardown is unfinished; will retry");
+                }
                 return;
             }
             let now = Instant::now();
@@ -622,7 +708,7 @@ impl DesiredWatchCoordinator {
             let disarm_due = materialization
                 .sections
                 .values()
-                .any(|section| section.disarm_retry.is_some_and(|retry| retry.due_at <= now));
+                .any(|section| section.stopping.is_some_and(|stopping| stopping.due_at <= now));
             // A watch can end without anyone telling the coordinator. This is
             // the cheap half of noticing -- identity against the live set, no
             // storage touched -- and it is what turns a manager-side stop
@@ -658,6 +744,7 @@ impl DesiredWatchCoordinator {
     pub fn begin_authority_reset(&self) -> Result<(), DesiredWatchCoordinatorError> {
         let mut materialization = self.lock_materialization()?;
         materialization.resetting = true;
+        materialization.reset_incomplete = false;
         Ok(())
     }
 
@@ -670,19 +757,64 @@ impl DesiredWatchCoordinator {
     /// called on the failure path as well: a reset that could not clear the
     /// database must not leave the process holding watches it has forgotten
     /// how to address.
+    ///
+    /// The barrier comes down only on an EMPTY process. A teardown that
+    /// failed leaves a watch that is still polling Rutgers and can still
+    /// ring, and forgetting it here would produce the one state this whole
+    /// module exists to prevent: an authority with nothing in it, a page with
+    /// nothing to press, and a watch nobody can address. So the failure is
+    /// reported, the identities are kept, and [`Self::tick`] comes back.
     pub fn finish_authority_reset(&self) -> Result<(), DesiredWatchCoordinatorError> {
         let mut materialization = self.lock_materialization()?;
+        self.finish_authority_reset_locked(&mut materialization)
+    }
+
+    fn finish_authority_reset_locked(
+        &self,
+        materialization: &mut MutexGuard<'_, Materialization>,
+    ) -> Result<(), DesiredWatchCoordinatorError> {
+        let now = Instant::now();
         for target in self.owner.watch_targets() {
-            // Failure here is reported by the read, not by the reset: the
-            // authority really is empty, and the live set is what a page is
-            // shown.
             if let Err(error) = self.owner.stop(target) {
                 tracing::warn!(?error, "a physical watch outlived the Full Reset barrier");
             }
         }
+        // The live set, re-read, is the answer -- not what the stops returned.
+        // A stop that reported an error may still have taken the watch down,
+        // and a stop that reported success cannot be trusted to have covered
+        // a watch armed while this loop was running.
+        let live = live_watches(self.owner.as_ref());
+        if !live.is_empty() {
+            // Re-derived from the live set rather than kept as they were:
+            // what still has to come down is exactly what the owner still
+            // holds, including a watch this coordinator never recorded.
+            let previous = std::mem::take(&mut materialization.sections);
+            materialization.sections = live
+                .into_iter()
+                .map(|(section, active_watch_id)| {
+                    let attempt = previous
+                        .get(&section)
+                        .and_then(|state| state.stopping)
+                        .filter(|stopping| stopping.active_watch_id == active_watch_id)
+                        .map_or(0, |stopping| stopping.attempt + 1);
+                    let state = SectionMaterialization {
+                        stopping: Some(StoppingWatch {
+                            active_watch_id,
+                            attempt,
+                            due_at: now + self.backoff[attempt.min(self.backoff.len() - 1)],
+                        }),
+                        ..SectionMaterialization::default()
+                    };
+                    (section, state)
+                })
+                .collect();
+            materialization.reset_incomplete = true;
+            return Err(DesiredWatchCoordinatorError::ResetIncomplete);
+        }
         materialization.sections.clear();
         materialization.audience = self.owner.audience_connection_count();
         materialization.last_revalidated = None;
+        materialization.reset_incomplete = false;
         materialization.resetting = false;
         Ok(())
     }
@@ -710,6 +842,10 @@ impl DesiredWatchCoordinator {
         if !self.lock_store()?.desired_watch_budget()?.rotation_due() {
             return Ok(false);
         }
+        // Between the answer above and the act below, nothing may enter the
+        // domain -- and a test stands here to prove it, rather than to widen
+        // the window.
+        self.arrive(DesiredWatchCheckpoint::RotationDue);
         let authority = {
             let mut store = self.lock_store()?;
             store.rotate_desired_watch_authority()?;
@@ -723,45 +859,39 @@ impl DesiredWatchCoordinator {
         Ok(true)
     }
 
-    /// Makes one mutation response describe a single authority state.
+    /// Stamps one mutation response from ONE authority snapshot.
     ///
-    /// A rotation triggered by this very submission moves the generation and
-    /// renumbers every row, so the numbers `describe` read before it are no
-    /// longer the authority's. Reporting them next to a `state` taken after
-    /// the rotation would hand a page two different answers in one body: a
-    /// generation it must not write with, beside the rows it would write
-    /// against.
-    fn restamp(
+    /// Every number a page could write with next comes from here, and from
+    /// the same read: the generation it must present, the revision it must
+    /// present for this section, and -- for a commit -- the rows it will
+    /// render. The store's own answer is not used for any of them.
+    ///
+    /// Not "restamp only if this caller rotated". Whether THIS caller was the
+    /// one to rotate says nothing about whether the authority moved: a second
+    /// caller crossing the same threshold, or committing to the same section,
+    /// moves it just as well, and a response assembled from the numbers read
+    /// before that would hand the page a generation from one authority beside
+    /// a revision from another. The page would then re-read with a pair no
+    /// authority ever held, and be refused for as long as it kept trying.
+    fn stamp(
         &self,
         result: &mut DesiredWatchMutationResultV1,
         section: &SectionKey,
-        rotated: bool,
     ) -> Result<(), DesiredWatchCoordinatorError> {
+        let state = self.read()?;
+        result.authority_generation = state.authority_generation;
+        let entry = state.entries.iter().find(|entry| &entry.section == section);
         if result.outcome != DesiredWatchOutcomeV1::Committed {
-            if !rotated {
-                return Ok(());
-            }
             // A refusal answers with the numbers the page needs to re-read
-            // with, so those numbers have to be the current ones.
-            let state = self.read()?;
-            result.authority_generation = state.authority_generation;
+            // with, so those numbers have to be the current ones. An absent
+            // row reads as revision 0, exactly as the writer's own
+            // compare-and-swap reads it.
             if result.current_revision.is_some() {
-                result.current_revision = Some(
-                    state
-                        .entries
-                        .iter()
-                        .find(|entry| &entry.section == section)
-                        .map_or(0, |entry| entry.revision),
-                );
+                result.current_revision = Some(entry.map_or(0, |entry| entry.revision));
             }
             return Ok(());
         }
-        let state = self.read()?;
-        result.authority_generation = state.authority_generation;
-        if let (Some(committed), Some(entry)) = (
-            result.committed.as_mut(),
-            state.entries.iter().find(|entry| &entry.section == section),
-        ) {
+        if let (Some(committed), Some(entry)) = (result.committed.as_mut(), entry) {
             // `epochChanged` is a fact about the COMMIT -- did the desired
             // value change -- and rotation does not change it. The two
             // numbers are the ones rotation renumbers.
@@ -770,6 +900,21 @@ impl DesiredWatchCoordinator {
         }
         result.state = Some(state);
         Ok(())
+    }
+
+    /// Stands at a named point inside the coordinator, for a test that has
+    /// installed somewhere to stand. Production installs nothing and this
+    /// compiles down to one `Option` check.
+    fn arrive(&self, checkpoint: DesiredWatchCheckpoint) {
+        let Some(checkpoints) = self.checkpoints.as_ref() else {
+            return;
+        };
+        // Asked of the mutex rather than passed in by the caller, so it
+        // cannot be claimed: a thread that already holds it is refused here,
+        // which is precisely the question -- is this point inside the
+        // exclusive domain, or merely near it?
+        let exclusive = self.materialization.try_lock().is_err();
+        checkpoints.arrive(checkpoint, exclusive);
     }
 
     fn reconcile_locked(
@@ -801,14 +946,41 @@ impl DesiredWatchCoordinator {
                 state.blocked_on_slot = false;
             }
             // A teardown whose watch is gone has achieved what it wanted,
-            // however it got there.
-            if state.pending_disarm && !live.contains_key(section) {
-                state.pending_disarm = false;
-                state.disarm_retry = None;
+            // however it got there. Compared by identity rather than by
+            // presence: the same section running under a DIFFERENT id is not
+            // this teardown finishing.
+            if state
+                .stopping
+                .is_some_and(|stopping| live.get(section) != Some(&stopping.active_watch_id))
+            {
+                state.stopping = None;
             }
         }
 
         let now = Instant::now();
+
+        // Every teardown that has not finished is retried from the identity
+        // captured when the watch was armed, whatever the authority now says
+        // about the section and whoever is looking. This is the only thing
+        // that can finish one: nothing else in the process holds that id, and
+        // the row it belongs to is no longer green, so no other pass will go
+        // looking for it.
+        let unfinished = materialization
+            .sections
+            .iter()
+            .filter_map(|(section, state)| {
+                state
+                    .stopping
+                    .filter(|stopping| stopping.due_at <= now)
+                    .map(|stopping| (section.clone(), stopping.active_watch_id))
+            })
+            .collect::<Vec<_>>();
+        for (section, active_watch_id) in unfinished {
+            // Deliberately without clearing `failure` or `retry`: finishing a
+            // teardown answers "is it still running", not "why was it taken
+            // down", and the reason is what the page shows the user.
+            self.disarm(materialization, &section, active_watch_id, now);
+        }
 
         // No page is looking. Tear every physical watch down and keep every
         // row: the user's intent did not change when they closed a tab, and
@@ -817,7 +989,6 @@ impl DesiredWatchCoordinator {
             let armed = materialization
                 .sections
                 .iter()
-                .filter(|(_, state)| disarm_allowed(state, now))
                 .filter_map(|(section, state)| {
                     state
                         .armed
@@ -826,7 +997,7 @@ impl DesiredWatchCoordinator {
                 })
                 .collect::<Vec<_>>();
             for (section, active_watch_id) in armed {
-                self.disarm(materialization, &section, active_watch_id, now);
+                self.retire(materialization, &section, active_watch_id, now);
             }
             // Only what actually came down is forgotten. A record whose
             // teardown FAILED still names a physical watch that may be alive
@@ -835,7 +1006,7 @@ impl DesiredWatchCoordinator {
             // section would come back `AlreadyActive`, forever.
             materialization
                 .sections
-                .retain(|_, state| state.armed.is_some() || state.pending_disarm);
+                .retain(|_, state| state.armed.is_some() || state.stopping.is_some());
             return;
         }
 
@@ -881,11 +1052,14 @@ impl DesiredWatchCoordinator {
                 let Some(state) = materialization.sections.get_mut(&section) else {
                     continue;
                 };
-                // The teardown may itself have failed, in which case the
-                // watch is still alive and `pendingDisarm` says so. Either
-                // way the row keeps its intent and gains the reason.
-                state.armed = None;
-                state.blocked_on_slot = false;
+                // NOT `state.armed = None` here. The teardown may itself have
+                // failed, in which case `disarm` has already moved the id
+                // into `stopping` -- the one place that keeps a still-live
+                // watch addressable while keeping it out of the green light.
+                // Zeroing the record on top of that would throw the only
+                // address away and leave a watch that polls Rutgers forever,
+                // answers every later arm with `AlreadyActive`, and cannot be
+                // reached by the STOP the user presses.
                 let classification = reason.classification();
                 let retry_scheduled = classification == DesiredWatchFailureClassV1::Transient;
                 state.failure = Some(DesiredWatchFailureV1 {
@@ -908,7 +1082,6 @@ impl DesiredWatchCoordinator {
             .sections
             .iter()
             .filter(|(section, _)| !desired.contains_key(*section))
-            .filter(|(_, state)| disarm_allowed(state, now))
             .filter_map(|(section, state)| {
                 state
                     .armed
@@ -917,10 +1090,10 @@ impl DesiredWatchCoordinator {
             })
             .collect::<Vec<_>>();
         for (section, active_watch_id) in retired {
-            self.disarm(materialization, &section, active_watch_id, now);
+            self.retire(materialization, &section, active_watch_id, now);
         }
         materialization.sections.retain(|section, state| {
-            desired.contains_key(section) || state.armed.is_some() || state.pending_disarm
+            desired.contains_key(section) || state.armed.is_some() || state.stopping.is_some()
         });
 
         let mut to_arm = Vec::new();
@@ -998,8 +1171,11 @@ impl DesiredWatchCoordinator {
                     });
                     // A retry scheduled under a stamp the authority has since
                     // moved past is not a reason to wait: the question has
-                    // changed, so ask it again now.
-                    if !permanent && !waiting && !state.pending_disarm {
+                    // changed, so ask it again now. An unfinished teardown IS
+                    // a reason to wait: the section still has a physical
+                    // watch, and arming a second one would answer
+                    // `AlreadyActive` and leave two ids for one section.
+                    if !permanent && !waiting && state.stopping.is_none() {
                         to_arm.push((section.clone(), entry, policy));
                     }
                 }
@@ -1102,139 +1278,79 @@ impl DesiredWatchCoordinator {
     /// stopping, the same section can have been armed again under a new id,
     /// and a stop that resolved late would kill the new watch instead of the
     /// old one.
+    ///
+    /// Whether it succeeded or not, the id leaves `armed`: a watch that is
+    /// being torn down is not a watch the page may be shown a green light
+    /// for. Where it goes is the whole difference. On success it is gone; on
+    /// failure it moves to `stopping`, which reports the section as stopping,
+    /// keeps it out of every arm decision, and keeps the one address that can
+    /// still finish the job.
+    ///
+    /// Returns whether the watch is gone.
     fn disarm(
         &self,
         materialization: &mut MutexGuard<'_, Materialization>,
         section: &SectionKey,
         active_watch_id: ActiveWatchId,
         now: Instant,
-    ) {
+    ) -> bool {
         let target = ActiveWatchTargetV1 {
             active_watch_id,
             section_key: section.clone(),
         };
         let outcome = self.owner.stop(target);
         let Some(state) = materialization.sections.get_mut(section) else {
-            return;
+            return matches!(outcome, Ok(()) | Err(WatchManagerError::UnknownWatch));
         };
+        state.armed = None;
+        state.blocked_on_slot = false;
         match outcome {
             // An unknown watch has already achieved what the teardown wanted.
             Ok(()) | Err(WatchManagerError::UnknownWatch) => {
-                state.armed = None;
-                state.pending_disarm = false;
-                state.blocked_on_slot = false;
-                state.failure = None;
-                state.retry = None;
-                state.disarm_retry = None;
+                state.stopping = None;
+                true
             }
             Err(error) => {
                 // The physical watch may still be alive and may still ring,
                 // so this is never reported as stopped -- and something has
-                // to come back and finish the teardown, or the record sits
-                // at `pendingDisarm` for the rest of the process's life. The
-                // retry is addressed by the same captured id, so however late
-                // it fires it can only ever stop the watch it was meant to.
+                // to come back and finish the teardown, or the record sits at
+                // `pendingDisarm` for the rest of the process's life. The
+                // retry carries the same captured id, so however late it
+                // fires it can only ever stop the watch it was meant to.
                 tracing::warn!(?error, "failed to tear down a desired watch");
-                state.pending_disarm = true;
-                let attempt = state.disarm_retry.map_or(0, |retry| retry.attempt + 1);
-                state.disarm_retry = Some(DisarmRetry {
+                let attempt = state.stopping.map_or(0, |stopping| stopping.attempt + 1);
+                state.stopping = Some(StoppingWatch {
+                    active_watch_id,
                     attempt,
                     due_at: now + self.backoff[attempt.min(self.backoff.len() - 1)],
                 });
+                false
             }
         }
     }
 
-    fn describe(
+    /// Tears one physical watch down because the process no longer wants it
+    /// there -- the user stopped it, or the last page left.
+    ///
+    /// The difference from a bare [`Self::disarm`] is what a SUCCESS means
+    /// here: the section's problem and its retry described a watch that is
+    /// now gone, so keeping them would make a page that comes back wait out a
+    /// backoff scheduled for a question nobody is asking any more.
+    fn retire(
         &self,
-        outcome: DesiredWatchMutationOutcome,
-    ) -> Result<DesiredWatchMutationResultV1, DesiredWatchCoordinatorError> {
-        let generation = self
-            .lock_store()?
-            .desired_watch_authority()?
-            .counters
-            .authority_generation;
-        let mut result = DesiredWatchMutationResultV1 {
-            contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
-            outcome: DesiredWatchOutcomeV1::Committed,
-            replayed: false,
-            authority_generation: generation,
-            current_revision: None,
-            maximum: None,
-            committed: None,
-            state: None,
-        };
-        let settled = match outcome {
-            DesiredWatchMutationOutcome::Committed(commit) => {
-                Some(DesiredWatchReceiptOutcome::committed(commit))
-            }
-            DesiredWatchMutationOutcome::Replayed(receipt) => {
-                result.replayed = true;
-                Some(receipt)
-            }
-            DesiredWatchMutationOutcome::MutationIdConflict(_) => {
-                result.outcome = DesiredWatchOutcomeV1::MutationIdConflict;
-                None
-            }
-            DesiredWatchMutationOutcome::StaleGeneration { current } => {
-                result.outcome = DesiredWatchOutcomeV1::StaleGeneration;
-                result.authority_generation = current;
-                None
-            }
-            DesiredWatchMutationOutcome::StaleRevision { current } => {
-                result.outcome = DesiredWatchOutcomeV1::StaleRevision;
-                result.current_revision = Some(current);
-                None
-            }
-            DesiredWatchMutationOutcome::LimitExceeded { maximum } => {
-                result.outcome = DesiredWatchOutcomeV1::LimitExceeded;
-                result.maximum = Some(u32::try_from(maximum).unwrap_or(u32::MAX));
-                None
-            }
-            DesiredWatchMutationOutcome::AuthorityFull(kind) => {
-                result.outcome = DesiredWatchOutcomeV1::AuthorityFull;
-                result.maximum = Some(match kind {
-                    DesiredWatchBudgetKind::Tombstones => {
-                        u32::try_from(bcsp_local_user_state::MAX_DESIRED_WATCH_TOMBSTONES)
-                            .unwrap_or(u32::MAX)
-                    }
-                    DesiredWatchBudgetKind::Receipts => {
-                        u32::try_from(bcsp_local_user_state::MAX_DESIRED_WATCH_RECEIPTS)
-                            .unwrap_or(u32::MAX)
-                    }
-                });
-                None
-            }
-        };
-        // A replayed answer is reported with the status the ORIGINAL answer
-        // earned. The alternative -- 200 because the outer shape says
-        // "replayed" -- would tell a page that lost its response that a
-        // refused command had succeeded.
-        if let Some(settled) = settled {
-            match settled {
-                DesiredWatchReceiptOutcome::Committed {
-                    revision,
-                    materialization_epoch,
-                    epoch_changed,
-                } => {
-                    result.outcome = DesiredWatchOutcomeV1::Committed;
-                    result.committed = Some(DesiredWatchCommittedV1 {
-                        revision,
-                        materialization_epoch,
-                        epoch_changed,
-                    });
-                }
-                DesiredWatchReceiptOutcome::StaleRevision { current } => {
-                    result.outcome = DesiredWatchOutcomeV1::StaleRevision;
-                    result.current_revision = Some(current);
-                }
-                DesiredWatchReceiptOutcome::LimitExceeded { maximum } => {
-                    result.outcome = DesiredWatchOutcomeV1::LimitExceeded;
-                    result.maximum = Some(u32::try_from(maximum).unwrap_or(u32::MAX));
-                }
-            }
+        materialization: &mut MutexGuard<'_, Materialization>,
+        section: &SectionKey,
+        active_watch_id: ActiveWatchId,
+        now: Instant,
+    ) {
+        if !self.disarm(materialization, section, active_watch_id, now) {
+            return;
         }
-        Ok(result)
+        let Some(state) = materialization.sections.get_mut(section) else {
+            return;
+        };
+        state.failure = None;
+        state.retry = None;
     }
 
     fn lock_store(&self) -> Result<MutexGuard<'_, PersonalStateStore>, DesiredWatchCoordinatorError> {
@@ -1252,6 +1368,97 @@ impl DesiredWatchCoordinator {
     }
 }
 
+/// Turns one storage decision into the shape of an answer.
+///
+/// Deliberately without reading the authority: every number a page could act
+/// on is filled in later, from a single snapshot, by
+/// [`DesiredWatchCoordinator::stamp`]. Reading here as well is what let a
+/// generation from before a concurrent rotation reach the wire beside a
+/// revision from after it.
+fn describe(outcome: DesiredWatchMutationOutcome) -> DesiredWatchMutationResultV1 {
+    let mut result = DesiredWatchMutationResultV1 {
+        contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+        outcome: DesiredWatchOutcomeV1::Committed,
+        replayed: false,
+        authority_generation: 0,
+        current_revision: None,
+        maximum: None,
+        committed: None,
+        state: None,
+    };
+    let settled = match outcome {
+        DesiredWatchMutationOutcome::Committed(commit) => {
+            Some(DesiredWatchReceiptOutcome::committed(commit))
+        }
+        DesiredWatchMutationOutcome::Replayed(receipt) => {
+            result.replayed = true;
+            Some(receipt)
+        }
+        DesiredWatchMutationOutcome::MutationIdConflict(_) => {
+            result.outcome = DesiredWatchOutcomeV1::MutationIdConflict;
+            None
+        }
+        DesiredWatchMutationOutcome::StaleGeneration { current } => {
+            result.outcome = DesiredWatchOutcomeV1::StaleGeneration;
+            result.authority_generation = current;
+            None
+        }
+        DesiredWatchMutationOutcome::StaleRevision { current } => {
+            result.outcome = DesiredWatchOutcomeV1::StaleRevision;
+            result.current_revision = Some(current);
+            None
+        }
+        DesiredWatchMutationOutcome::LimitExceeded { maximum } => {
+            result.outcome = DesiredWatchOutcomeV1::LimitExceeded;
+            result.maximum = Some(u32::try_from(maximum).unwrap_or(u32::MAX));
+            None
+        }
+        DesiredWatchMutationOutcome::AuthorityFull(kind) => {
+            result.outcome = DesiredWatchOutcomeV1::AuthorityFull;
+            result.maximum = Some(match kind {
+                DesiredWatchBudgetKind::Tombstones => {
+                    u32::try_from(bcsp_local_user_state::MAX_DESIRED_WATCH_TOMBSTONES)
+                        .unwrap_or(u32::MAX)
+                }
+                DesiredWatchBudgetKind::Receipts => {
+                    u32::try_from(bcsp_local_user_state::MAX_DESIRED_WATCH_RECEIPTS)
+                        .unwrap_or(u32::MAX)
+                }
+            });
+            None
+        }
+    };
+    // A replayed answer is reported with the status the ORIGINAL answer
+    // earned. The alternative -- 200 because the outer shape says
+    // "replayed" -- would tell a page that lost its response that a
+    // refused command had succeeded.
+    if let Some(settled) = settled {
+        match settled {
+            DesiredWatchReceiptOutcome::Committed {
+                revision,
+                materialization_epoch,
+                epoch_changed,
+            } => {
+                result.outcome = DesiredWatchOutcomeV1::Committed;
+                result.committed = Some(DesiredWatchCommittedV1 {
+                    revision,
+                    materialization_epoch,
+                    epoch_changed,
+                });
+            }
+            DesiredWatchReceiptOutcome::StaleRevision { current } => {
+                result.outcome = DesiredWatchOutcomeV1::StaleRevision;
+                result.current_revision = Some(current);
+            }
+            DesiredWatchReceiptOutcome::LimitExceeded { maximum } => {
+                result.outcome = DesiredWatchOutcomeV1::LimitExceeded;
+                result.maximum = Some(u32::try_from(maximum).unwrap_or(u32::MAX));
+            }
+        }
+    }
+    result
+}
+
 /// The physical watches the process holds right now, by section.
 fn live_watches(owner: &dyn DesiredWatchOwner) -> BTreeMap<SectionKey, ActiveWatchId> {
     owner
@@ -1259,17 +1466,6 @@ fn live_watches(owner: &dyn DesiredWatchOwner) -> BTreeMap<SectionKey, ActiveWat
         .into_iter()
         .map(|target| (target.section_key, target.active_watch_id))
         .collect()
-}
-
-/// Whether a failed teardown may be attempted again yet.
-///
-/// A record with no failed teardown behind it is always allowed; one that has
-/// failed waits out a bounded backoff, so a reconcile driven by something
-/// else does not turn a stuck teardown into a hot loop against the manager.
-fn disarm_allowed(state: &SectionMaterialization, now: Instant) -> bool {
-    state
-        .disarm_retry
-        .is_none_or(|retry| retry.due_at <= now)
 }
 
 /// Why an already-running watch may no longer be run, or `None` when it may.
@@ -1345,7 +1541,7 @@ fn project(
                                 active_watch_id: armed.active_watch_id,
                             })
                     }),
-                    pending_disarm: state.is_some_and(|state| state.pending_disarm),
+                    pending_disarm: state.is_some_and(|state| state.stopping.is_some()),
                     blocked_on_slot: state.is_some_and(|state| state.blocked_on_slot),
                     failure: state.and_then(|state| state.failure),
                 }

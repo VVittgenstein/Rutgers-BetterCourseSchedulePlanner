@@ -22,7 +22,8 @@ pub use bootstrap::{
     LocalBootstrapError, LocalPrimaryDatabase, LocalRuntimeState, OperationalGate,
 };
 pub use desired::{
-    DESIRED_WATCH_MATERIALIZE_BACKOFF, DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchCommittedV1,
+    DESIRED_WATCH_MATERIALIZE_BACKOFF, DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchCheckpoint,
+    DesiredWatchCheckpoints, DesiredWatchCommittedV1,
     DesiredWatchCoordinator, DesiredWatchCoordinatorError, DesiredWatchEntryV1,
     DesiredWatchFailureClassV1, DesiredWatchFailureReasonV1, DesiredWatchFailureV1,
     DesiredWatchMaterializedV1, DesiredWatchMutationResultV1, DesiredWatchMutationV1,

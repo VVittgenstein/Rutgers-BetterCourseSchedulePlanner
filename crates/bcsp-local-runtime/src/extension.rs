@@ -76,6 +76,10 @@ pub enum LocalApiErrorCode {
     ResetConfirmationRequired,
     ResetConfirmationInvalid,
     ResetConfirmationExpired,
+    /// A Full Reset cleared the rows but could not stop every physical watch
+    /// it had to. Retryable: the process keeps finishing the teardown, and
+    /// the caller asks again rather than being told the reset is done.
+    ResetIncomplete,
     InvalidLocalState,
     TermOutOfRange,
     TermNotPublished,
@@ -103,6 +107,7 @@ impl LocalApiErrorCode {
         Self::ResetConfirmationRequired,
         Self::ResetConfirmationInvalid,
         Self::ResetConfirmationExpired,
+        Self::ResetIncomplete,
         Self::InvalidLocalState,
         Self::TermOutOfRange,
         Self::TermNotPublished,
@@ -127,6 +132,7 @@ impl LocalApiErrorCode {
             Self::ResetConfirmationRequired => "local.error.reset_confirmation_required",
             Self::ResetConfirmationInvalid => "local.error.reset_confirmation_invalid",
             Self::ResetConfirmationExpired => "local.error.reset_confirmation_expired",
+            Self::ResetIncomplete => "local.error.reset_incomplete",
             Self::InvalidLocalState => "local.error.invalid_state",
             Self::TermOutOfRange => "local.error.term_out_of_range",
             Self::TermNotPublished => "local.error.term_not_published",
@@ -152,6 +158,7 @@ impl LocalApiErrorCode {
             Self::ResetConfirmationRequired => "RESET_CONFIRMATION_REQUIRED",
             Self::ResetConfirmationInvalid => "RESET_CONFIRMATION_INVALID",
             Self::ResetConfirmationExpired => "RESET_CONFIRMATION_EXPIRED",
+            Self::ResetIncomplete => "RESET_INCOMPLETE",
             Self::InvalidLocalState => "INVALID_LOCAL_STATE",
             Self::TermOutOfRange => "TERM_OUT_OF_RANGE",
             Self::TermNotPublished => "TERM_NOT_PUBLISHED",

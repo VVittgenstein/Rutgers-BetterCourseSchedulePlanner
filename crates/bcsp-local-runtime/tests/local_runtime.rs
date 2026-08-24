@@ -22,7 +22,8 @@ use bcsp_contracts::{
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_runtime::{
-    DesiredWatchCoordinator, DesiredWatchMutationV1, LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+    DesiredWatchCoordinator, DesiredWatchMutationV1, DesiredWatchOwner,
+    LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
     LOCAL_DESIRED_WATCH_PATH, LOCAL_PRESENCE_SOCKET_PATH, LocalRuntimeError, LocalRuntimePaths,
     LocalSurfaceState, LocalWatchRoute, PersonalSurface, PreparedLocalRuntime,
     prepare_and_start_with,
@@ -40,7 +41,7 @@ use bcsp_watch::WatchStartAdmission;
 
 mod support;
 
-use support::seed_ready_query_scope;
+use support::{FaultOwner, OwnerFaults, seed_ready_query_scope};
 use rusqlite::{Connection, TransactionBehavior};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -2707,6 +2708,154 @@ fn a_reset_that_cannot_commit_lowers_its_barrier_and_materializes_again() {
     );
     let state = coordinator.read().unwrap();
     assert!(state.entries[0].materialized.is_some());
+}
+
+/// A Full Reset whose final teardown fails is never reported to the page as
+/// a completed reset.
+///
+/// The rows are gone by then, which is exactly what makes the honest answer
+/// matter: a "done" here would leave the user looking at an empty list while
+/// the process kept polling Rutgers for the sections that used to be in it,
+/// with no row left to show and no control left to press. So the surface
+/// reports a retryable failure, the barrier stays up, the identity stays
+/// addressable, and maintenance finishes the job.
+#[test]
+fn a_full_reset_that_cannot_stop_a_watch_reports_a_retryable_failure() {
+    let temp = TestDirectory::new("reset-teardown-fault");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let database = prepared.operational().database();
+    let admission = Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None));
+    let watch =
+        Arc::new(SharedWatchSocket::try_new(admission, Arc::new(NoopWatchDispatchSink)).unwrap());
+    let faults = Arc::new(OwnerFaults::default());
+    let owner: Arc<dyn DesiredWatchOwner> = Arc::new(FaultOwner::new(watch.clone(), faults.clone()));
+    let coordinator = Arc::new(DesiredWatchCoordinator::with_owner(
+        PersonalStateStore::open(prepared.paths().database()).unwrap(),
+        owner,
+    ));
+    let route = Arc::new(LocalWatchRoute::new(watch.clone(), coordinator.clone()));
+    let surface = PersonalSurface::new(
+        database,
+        PersonalStateStore::open(prepared.paths().database()).unwrap(),
+        watch.clone(),
+    )
+    .with_desired_watch(coordinator.clone());
+
+    let section = SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap();
+    let (outbound, _frames) = mpsc::unbounded_channel();
+    assert!(route.connect(trace(400), outbound));
+    let generation = coordinator.read().unwrap().authority_generation;
+    assert_eq!(
+        coordinator
+            .submit(&DesiredWatchMutationV1 {
+                contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+                section: section.clone(),
+                policy: Some(watch_policy()),
+                based_on_revision: 0,
+                authority_generation: generation,
+                mutation_id: trace(401),
+            })
+            .unwrap()
+            .outcome,
+        bcsp_local_runtime::DesiredWatchOutcomeV1::Committed,
+    );
+    assert_eq!(watch.total_active_watch_count(), 1);
+
+    // A physical watch that clearing the connections does not take with it,
+    // and that will not stop. This is the teardown of last resort's whole
+    // reason for existing, and a healthy socket cannot produce one.
+    let stranded = coordinator
+        .read()
+        .unwrap()
+        .entries
+        .iter()
+        .find(|entry| entry.section == section)
+        .and_then(|entry| entry.materialized.as_ref())
+        .expect("the section is materialized")
+        .active_watch_id;
+    faults.retain(bcsp_contracts::ActiveWatchTargetV1 {
+        active_watch_id: stranded,
+        section_key: section.clone(),
+    });
+    faults.fail_stops(true);
+
+    let prepare = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"expectedUserStateRevision": 1},
+    })
+    .to_string();
+    let prepared_reset: serde_json::Value = serde_json::from_slice(
+        &surface
+            .prepare_local_user_data_reset(prepare.as_bytes())
+            .unwrap(),
+    )
+    .unwrap();
+    let token = prepared_reset["data"]["confirmationToken"].clone();
+    let confirm = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"confirmationToken": token},
+    })
+    .to_string();
+
+    assert_eq!(
+        surface.confirm_local_user_data_reset(confirm.as_bytes()),
+        Err(bcsp_local_runtime::LocalSurfaceFailure::service_unavailable(
+            bcsp_local_runtime::LocalApiErrorCode::ResetIncomplete,
+        )),
+        "a reset that left a watch running must not be reported as done",
+    );
+    assert!(
+        faults.stopped_ids().contains(&stranded),
+        "the stranded watch was addressed, not ignored",
+    );
+    assert!(
+        faults
+            .retained()
+            .iter()
+            .any(|target| target.active_watch_id == stranded),
+        "and it really is still there",
+    );
+
+    // The barrier is still up: a page that attaches now must not be given a
+    // materialization on top of a reset that has not finished.
+    let (second_outbound, _second_frames) = mpsc::unbounded_channel();
+    assert!(route.connect(trace(402), second_outbound));
+    assert_eq!(
+        watch.total_active_watch_count(),
+        0,
+        "nothing may arm behind an unfinished reset",
+    );
+
+    // The fault clears and maintenance completes the teardown.
+    faults.fail_stops(false);
+    coordinator.tick();
+    assert!(
+        faults.retained().is_empty(),
+        "the last physical watch has to actually go",
+    );
+
+    // And the socket is usable again: new intent materializes normally.
+    let generation = coordinator.read().unwrap().authority_generation;
+    assert_eq!(
+        coordinator
+            .submit(&DesiredWatchMutationV1 {
+                contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+                section: section.clone(),
+                policy: Some(watch_policy()),
+                based_on_revision: 0,
+                authority_generation: generation,
+                mutation_id: trace(403),
+            })
+            .unwrap()
+            .outcome,
+        bcsp_local_runtime::DesiredWatchOutcomeV1::Committed,
+    );
+    assert_eq!(
+        watch.total_active_watch_count(),
+        1,
+        "a barrier is a moment, not a mode",
+    );
 }
 
 fn open_observation_for(section: &SectionKey) -> bcsp_contracts::OpenObservationV1 {

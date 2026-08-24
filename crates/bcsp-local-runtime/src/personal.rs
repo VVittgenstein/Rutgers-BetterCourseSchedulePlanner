@@ -830,16 +830,25 @@ impl LocalSurfaceState for PersonalSurface {
         self.watch.stop();
         self.watch.flush_dispatch_sink();
         let reset = mutation_store.clear_personal_data(expected_state_revision);
-        // Lowered on BOTH paths. A reset that could not clear the database
+        // Attempted on BOTH paths. A reset that could not clear the database
         // must not leave the process holding watches whose records it has
         // forgotten, and must not leave materialization frozen for the rest
         // of the process's life either.
-        if let Some(coordinator) = coordinator
-            && let Err(error) = coordinator.finish_authority_reset()
-        {
-            tracing::error!(?error, "failed to lower the desired-watch reset barrier");
-        }
+        let finished = match coordinator {
+            Some(coordinator) => coordinator.finish_authority_reset(),
+            None => Ok(()),
+        };
+        // The storage answer comes first: a clear that was refused is the
+        // more specific thing to tell the user, and the barrier stays raised
+        // for the teardown either way.
         let reset = reset.map_err(map_personal_error)?;
+        // And an unfinished teardown is never reported as a completed reset.
+        // The rows are gone but the watches are not: the process is still
+        // polling Rutgers for sections the user just deleted, with nothing
+        // left on any page to stop them by. Saying "done" here is the exact
+        // shape of lie this surface exists to refuse -- so the caller is told
+        // to try again, and `tick` keeps finishing the job underneath.
+        finished.map_err(map_coordinator_error)?;
         encode(&reset)
     }
 
@@ -1349,6 +1358,12 @@ fn map_coordinator_error(error: DesiredWatchCoordinatorError) -> LocalSurfaceFai
         DesiredWatchCoordinatorError::Storage(error) => map_personal_error(error),
         DesiredWatchCoordinatorError::Poisoned => {
             LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError)
+        }
+        // Retryable, and deliberately not an internal error: nothing is
+        // broken, the process is still trying, and the honest instruction to
+        // the caller is to ask again rather than to assume either outcome.
+        DesiredWatchCoordinatorError::ResetIncomplete => {
+            LocalSurfaceFailure::service_unavailable(LocalApiErrorCode::ResetIncomplete)
         }
     }
 }

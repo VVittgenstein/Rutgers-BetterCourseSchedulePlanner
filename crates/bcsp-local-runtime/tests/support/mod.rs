@@ -15,9 +15,153 @@
 
 #![allow(dead_code)]
 
+// ---------------------------------------------------------------------------
+// The physical-watch seam
+// ---------------------------------------------------------------------------
+
+/// Makes the two physical-watch operations that can fail invisibly actually
+/// fail, and records every teardown that was attempted.
+///
+/// A teardown that will not tear down and a policy edit that will not apply
+/// both leave a watch ALIVE while the coordinator decides what to remember
+/// about it, and neither can be provoked through a healthy socket. Without a
+/// seam the only available "test" would be reading the code -- and these are
+/// precisely the paths that can leave a watch still polling Rutgers with
+/// nothing left able to name it.
+#[derive(Default)]
+pub struct OwnerFaults {
+    stop: AtomicBool,
+    update_policy: AtomicBool,
+    stops: Mutex<Vec<ActiveWatchTargetV1>>,
+    retained: Mutex<Vec<ActiveWatchTargetV1>>,
+}
+
+impl OwnerFaults {
+    pub fn fail_stops(&self, failing: bool) {
+        self.stop.store(failing, Ordering::SeqCst);
+    }
+
+    pub fn fail_policy_edits(&self, failing: bool) {
+        self.update_policy.store(failing, Ordering::SeqCst);
+    }
+
+    /// Adds a physical watch the socket's own bulk `stop()` does not reach.
+    ///
+    /// The Full Reset's teardown of last resort exists for exactly this: a
+    /// watch the process is holding that the coordinator has no record of and
+    /// that clearing the connections did not take with it. A healthy socket
+    /// never produces one, so putting one there is the only way to ask what
+    /// the reset does when its final teardown does not finish.
+    pub fn retain(&self, target: ActiveWatchTargetV1) {
+        self.retained.lock().unwrap().push(target);
+    }
+
+    pub fn retained(&self) -> Vec<ActiveWatchTargetV1> {
+        self.retained.lock().unwrap().clone()
+    }
+
+    /// Every teardown the coordinator attempted, in order.
+    ///
+    /// A retry is only safe because it names the id captured when the watch
+    /// was armed. Nothing about the resulting STATE tells that apart from a
+    /// teardown that re-resolved the section and stopped whatever is running
+    /// now, so the attempts themselves are what a test has to look at.
+    pub fn stop_attempts(&self) -> Vec<ActiveWatchTargetV1> {
+        self.stops.lock().unwrap().clone()
+    }
+
+    pub fn stopped_ids(&self) -> Vec<ActiveWatchId> {
+        self.stop_attempts()
+            .into_iter()
+            .map(|target| target.active_watch_id)
+            .collect()
+    }
+}
+
+/// A [`DesiredWatchOwner`] over a real shared socket, with those two
+/// operations made reachable.
+pub struct FaultOwner {
+    inner: Arc<SharedWatchSocket>,
+    faults: Arc<OwnerFaults>,
+}
+
+impl FaultOwner {
+    pub fn new(inner: Arc<SharedWatchSocket>, faults: Arc<OwnerFaults>) -> Self {
+        Self { inner, faults }
+    }
+}
+
+impl DesiredWatchOwner for FaultOwner {
+    fn audience_connection_count(&self) -> usize {
+        self.inner.audience_connection_count()
+    }
+
+    fn watch_targets(&self) -> Vec<ActiveWatchTargetV1> {
+        let mut targets = self.inner.owner_watch_targets();
+        for retained in self.faults.retained.lock().unwrap().iter() {
+            if !targets
+                .iter()
+                .any(|target| target.active_watch_id == retained.active_watch_id)
+            {
+                targets.push(retained.clone());
+            }
+        }
+        targets
+    }
+
+    fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission {
+        self.inner.admission_for(section)
+    }
+
+    fn start(
+        &self,
+        items: WatchStartItemsV1,
+    ) -> Result<Vec<WatchStartItemResultV1>, WatchManagerError> {
+        self.inner.owner_start(items)
+    }
+
+    fn stop(&self, target: ActiveWatchTargetV1) -> Result<(), WatchManagerError> {
+        self.faults.stops.lock().unwrap().push(target.clone());
+        if self.faults.stop.load(Ordering::SeqCst) {
+            // Deliberately without touching the manager: the watch is still
+            // running, which is exactly what makes a forgotten id dangerous.
+            return Err(WatchManagerError::TargetMismatch);
+        }
+        let mut retained = self.faults.retained.lock().unwrap();
+        if let Some(index) = retained
+            .iter()
+            .position(|candidate| candidate.active_watch_id == target.active_watch_id)
+        {
+            retained.remove(index);
+            return Ok(());
+        }
+        drop(retained);
+        self.inner.owner_stop(target)
+    }
+
+    fn update_policy(
+        &self,
+        target: ActiveWatchTargetV1,
+        policy: WatchPolicyV1,
+    ) -> Result<(), WatchManagerError> {
+        if self.faults.update_policy.load(Ordering::SeqCst) {
+            return Err(WatchManagerError::TargetMismatch);
+        }
+        self.inner.owner_update_policy(target, policy)
+    }
+}
+
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use bcsp_application::SharedWatchSocket;
 use bcsp_catalog::{normalize_target, to_catalog_refresh_command, to_discovery_refresh_command};
-use bcsp_contracts::{CampusCode, SectionKey, TermCampusKey, TermId, TraceId};
-use bcsp_local_runtime::PreparedLocalRuntime;
+use bcsp_contracts::{
+    ActiveWatchId, ActiveWatchTargetV1, CampusCode, SectionKey, TermCampusKey, TermId, TraceId,
+    WatchPolicyV1, WatchStartItemResultV1, WatchStartItemsV1,
+};
+use bcsp_local_runtime::{DesiredWatchOwner, PreparedLocalRuntime};
 use bcsp_operational_storage::{
     BeginOpenPullAttemptCommand, EmptySnapshotDecision, FinishOpenPullSuccessCommand,
     OpenCacheStatus, OpenHttpAuditMetadata, OpenRequestLane, PublishOutcome,
@@ -26,6 +170,7 @@ use bcsp_rutgers_client::{
     DiscoverySnapshot as RutgersDiscoverySnapshot, DiscoverySourceInput, SourceProvenance,
     decode_catalog_payload, decode_discovery_payload,
 };
+use bcsp_watch::{WatchManagerError, WatchStartAdmission};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
