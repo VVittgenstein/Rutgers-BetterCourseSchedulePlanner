@@ -1,8 +1,8 @@
 # 设计方案：Open 快照完整性安全门（Snapshot Integrity Gate）
 
-状态：v5 —— **已批准**（Codex 终审 2026-08-20）。进入实现阶段；遗留
-细节按 `2026-08-20-pr-acceptance-checklist.md` 在 PR 中验收。
-日期：2026-08-20
+状态：v5.1 —— **已批准**（Codex 终审 2026-08-20；v5.1 实现侧窄修 2026-08-23）。
+实现阶段；遗留细节按 `2026-08-20-pr-acceptance-checklist.md` 在 PR 中验收。
+日期：2026-08-20（v5.1：2026-08-23）
 作者：Claude；评审：Codex（v1：5 项阻断；v2 复审：5 项遗留，本版逐项闭合）
 
 ## 1. 背景与证据
@@ -270,6 +270,22 @@ v2 既有测试（回放、漏洞序列、确认边界、fork 共享、提交失
   按 section-set 身份键控、以 serving LKG ∩ candidate 目录播种、Hold 跨
   重试累计、发布时在串行锁内原子提升为 serving；新增 A→B 残缺首拉钉死
   测试；§8.7 并发测试措辞按强串行语义修正。
+
+### v4 → v5.1 变更记录（2026-08-23，实现侧窄修）
+
+1. **隔离探测节奏改为精确值**：§4 的
+   `QUARANTINE_PROBE_SECONDS = min(30, 正常 watch 间隔)` 是**上界合同**，
+   不是"退避基数"。实现曾在选出基数后再叠加与其他重试路径共用的
+   `deterministic_jitter_v1`（0–10% 正抖动），30s 档因此可派发到约 33s，
+   越过已批准的上界，并白白吃掉与 `MAX_GAP = 120s` 之间的余量。隔离中的
+   目标是**单目标对单来源**探测，没有需要错峰的机群，抖动在此路径上没有
+   收益。裁定：**该路径删除正抖动，派发值恒为
+   `min(30s, 有效 watch 间隔)`**（`GATE_QUARANTINE_PROBE_CAP_SECONDS`
+   成为该值的唯一来源）；
+2. **其余重试路径不变**：Transient / Content / FatalProtocol 仍保留
+   `deterministic_jitter_v1`，`RateLimited` 仍走 origin circuit 且不受
+   间隔钳制。窄修范围仅限 `OpenFailureKind::SuspectPartial`；
+3. 遗留的 N1–N3 迁移测试加固仍是**非阻断技术债**，不随本次窄修实施。
 
 ### v3 → v4 变更记录（2026-08-20，回应 Codex 三审 Gate 侧 3 项阻断）
 

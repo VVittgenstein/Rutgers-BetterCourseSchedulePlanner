@@ -206,26 +206,33 @@ pub enum OpenFailureKind {
     FatalProtocol,
 }
 
-/// Quarantine probe cadence: fixed `min(30s, effective interval)` for every
+/// Quarantine probe cadence: exactly `min(30s, effective interval)` for every
 /// campus, deliberately NOT a backoff ladder -- adjacent samples must stay
 /// well inside the gate's 120s max gap or confirmation would be unreachable
 /// (the NK/CM transient ladder exceeds it, per review).
+///
+/// The cadence is also NOT jittered. Every other retry path spreads its
+/// delay by up to +10% so a fleet of targets does not resynchronize on the
+/// origin, but this path is a bounded contract, not a backoff: the gate
+/// design fixes the probe at `min(30s, watch interval)`, and adding positive
+/// jitter on top of a 30s selection produces up to 33s. That is a cadence the
+/// approved design does not permit, and it eats headroom against the 120s max
+/// sample gap for nothing -- a quarantined target is a single target probing
+/// a single origin, so there is no fleet to de-synchronize.
 fn quarantine_probe_directive(
-    target: &TermCampusKey,
     requested_effective: Duration,
     current_failure_streak: u32,
 ) -> RetryDirective {
-    let cap = Duration::from_secs(30);
+    let cap = Duration::from_secs(crate::GATE_QUARANTINE_PROBE_CAP_SECONDS);
     let base = if requested_effective.is_zero() {
         cap
     } else {
         requested_effective.min(cap)
     };
-    let next_failure_streak = current_failure_streak.saturating_add(1);
     RetryDirective {
-        delay: base + deterministic_jitter_v1(target, next_failure_streak, base),
+        delay: base,
         mode: RetryMode::Automatic,
-        next_failure_streak,
+        next_failure_streak: current_failure_streak.saturating_add(1),
         clears_fatal_diagnostic: true,
     }
 }
@@ -289,7 +296,7 @@ pub fn retry_directive(
             target_retry_directive(target, current_failure_streak, TargetRetryClass::Transient)
         }
         OpenFailureKind::SuspectPartial => {
-            quarantine_probe_directive(target, requested_effective, current_failure_streak)
+            quarantine_probe_directive(requested_effective, current_failure_streak)
         }
         OpenFailureKind::UnsafeEmpty | OpenFailureKind::UnsafeZeroIntersection => {
             let mut directive =
@@ -351,6 +358,7 @@ const fn hex_nibble(byte: u8) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{GATE_MAX_SAMPLE_GAP_SECONDS, GATE_QUARANTINE_PROBE_CAP_SECONDS};
 
     fn target() -> TermCampusKey {
         TermCampusKey::try_new("92026", "NB").expect("synthetic target")
@@ -485,6 +493,112 @@ mod tests {
         assert!(fatal.delay >= Duration::from_secs(60));
         assert!(fatal.delay <= Duration::from_secs(66));
         assert_eq!(fatal.mode, RetryMode::Automatic);
+    }
+
+    /// S1 gate contract: the quarantine probe is `min(30s, effective watch
+    /// interval)` EXACTLY -- an upper bound, not a target to jitter around.
+    ///
+    /// This is written as an exact equality on purpose. The shipped code
+    /// selected the same base and then added `deterministic_jitter_v1`, which
+    /// is up to +10%, so a 30s selection could be dispatched at up to 33s.
+    /// The first assertion below proves the jitter this path used to add is
+    /// genuinely non-zero for at least one of these streaks, so the equality
+    /// assertions cannot pass by coincidence: restoring the jitter term makes
+    /// them fail.
+    #[test]
+    fn the_quarantine_probe_is_exactly_min_thirty_and_the_interval_without_jitter() {
+        let nb = target();
+        let cap = Duration::from_secs(GATE_QUARANTINE_PROBE_CAP_SECONDS);
+        assert!(
+            (0..6).any(|streak| {
+                deterministic_jitter_v1(&nb, streak + 1, cap) > Duration::ZERO
+            }),
+            "the removed jitter term must be non-zero somewhere in this range,              otherwise the equality assertions below prove nothing",
+        );
+
+        for (requested, expected) in [
+            (Duration::ZERO, cap),
+            (Duration::from_secs(3), Duration::from_secs(3)),
+            (Duration::from_secs(10), Duration::from_secs(10)),
+            (Duration::from_secs(29), Duration::from_secs(29)),
+            (Duration::from_secs(30), cap),
+            (Duration::from_secs(31), cap),
+            (Duration::from_secs(60), cap),
+            (Duration::from_secs(3_600), cap),
+        ] {
+            for streak in 0..6 {
+                let directive =
+                    retry_directive(&nb, requested, streak, OpenFailureKind::SuspectPartial);
+                assert_eq!(
+                    directive.delay, expected,
+                    "requested={requested:?} streak={streak}"
+                );
+                assert_eq!(directive.next_failure_streak, streak + 1);
+                assert_eq!(directive.mode, RetryMode::Automatic);
+                assert!(directive.clears_fatal_diagnostic);
+            }
+        }
+    }
+
+    /// Every campus, every legal local watch interval: the dispatched probe
+    /// delay never exceeds `min(30s, interval)`. `<=` rather than `==` here so
+    /// the bound itself is pinned independently of the exact-value test above.
+    #[test]
+    fn no_campus_and_no_legal_interval_can_push_the_probe_past_its_bound() {
+        for campus in ["NB", "NK", "CM"] {
+            let target = TermCampusKey::try_new("92026", campus).expect("target");
+            for seconds in LOCAL_MINIMUM_WATCH_OPEN_INTERVAL_SECONDS
+                ..=LOCAL_MAXIMUM_WATCH_OPEN_INTERVAL_SECONDS
+            {
+                let requested = Duration::from_secs(u64::from(seconds));
+                let bound = requested.min(Duration::from_secs(GATE_QUARANTINE_PROBE_CAP_SECONDS));
+                for streak in 0..4 {
+                    let delay =
+                        retry_directive(&target, requested, streak, OpenFailureKind::SuspectPartial)
+                            .delay;
+                    assert!(
+                        delay <= bound,
+                        "{campus} interval={seconds}s streak={streak} delay={delay:?} > {bound:?}"
+                    );
+                    assert!(
+                        delay < Duration::from_secs(GATE_MAX_SAMPLE_GAP_SECONDS as u64),
+                        "{campus} probe must stay inside the gate max sample gap"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The fix is narrow: only the quarantine probe path loses its jitter.
+    /// Transient, content, fatal and rate-limited retries are untouched.
+    #[test]
+    fn removing_the_probe_jitter_does_not_disturb_the_other_retry_paths() {
+        let nb = target();
+        for streak in 0..5 {
+            let base = Duration::from_secs(u64::from(NB_TRANSIENT_BACKOFF_SECONDS[
+                usize::try_from(streak).expect("streak")
+            ]));
+            assert_eq!(
+                retry_directive(&nb, Duration::from_secs(30), streak, OpenFailureKind::Transient)
+                    .delay,
+                base + deterministic_jitter_v1(&nb, streak + 1, base),
+            );
+        }
+        let content_base = Duration::from_secs(u64::from(CONTENT_BACKOFF_SECONDS[0]));
+        assert_eq!(
+            retry_directive(&nb, Duration::from_secs(30), 0, OpenFailureKind::UnsafeEmpty).delay,
+            content_base + deterministic_jitter_v1(&nb, 1, content_base),
+        );
+        let limited = retry_directive(
+            &nb,
+            Duration::from_secs(30),
+            0,
+            OpenFailureKind::RateLimited {
+                retry_after: Some(Duration::from_secs(7)),
+            },
+        );
+        assert_eq!(limited.delay, Duration::from_secs(7));
+        assert_eq!(limited.mode, RetryMode::OriginCircuit);
     }
 
     #[test]
