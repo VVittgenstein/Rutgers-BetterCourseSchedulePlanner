@@ -1,9 +1,9 @@
 # RBCSP 当前工作总账与 Codex–Claude 协作协议
 
-状态：**ACTIVE — 当前唯一的工作恢复入口**  
-最后更新：2026-08-23（America/New_York）  
-维护者：Codex（orchestrator）  
-产品决策者：用户  
+状态：**ACTIVE — 当前唯一的工作恢复入口**
+最后更新：2026-08-24（America/New_York）
+维护者：Codex（orchestrator）
+产品决策者：用户
 实现者：Claude
 
 ## 0. 本文用途
@@ -315,15 +315,18 @@ PUT /api/v1/local/desired-watch
 
 ## 12. 当前仓库检查点
 
-记录日期：2026-08-23。
+记录日期：2026-08-24。
 
 ```text
-当前检出：main@ae65958
+当前检出：feat/s2-alert-delivery@107f3e5
 origin/main：ae65958
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
-S2 分支：feat/s2-alert-delivery@a4f8d22
-S2 相对 main：领先 30 commits，尚未合并
-当前源码工作树：无未提交源码；conversation 归档目录未跟踪
+M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
+Claude 报告 head：107f3e5
+Codex 审查范围：a4f8d22..107f3e5
+S2 分支：尚未合并、尚未发布
+当前产品源码工作树：无未提交源码；两个 conversation 归档目录未跟踪
+Codex orchestration 文档：正在记录 CHANGES_REQUIRED 与 R1 修复任务
 现有 release/0.1.0：sourceCommit=7d5debef（2026-07-15，早于本轮工作）
 ```
 
@@ -333,13 +336,13 @@ S2 相对 main：领先 30 commits，尚未合并
 
 | 工作 | 状态 | 当前事实 |
 |---|---|---|
-| S1 | 代码完成并已合入 main | Gate、三条生产路径、迁移、重启、投影、前端均已接线；尚无新 release |
-| S2 | 部分完成，仅 feature | 心跳、64 KiB 帽、desired 存储地基完成；重连、Readiness、音频、通知、materializer、UI 均缺 |
+| S1 | 代码完成并已合入 main；M0 窄修已写入 feature | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter；尚无新 release |
+| S2 | desired 纵向闭环已实现但验收驳回，仅 feature | HTTP/coordinator/UI 已落地；仍存在假绿、rotation、reset 和前端时序阻断；自动重连、完整 Readiness、音频、通知仍未做 |
 | S3 | 未开始正式实现 | 没有 GridAnchor/RebuildProfile；仅有不足以冻结参数的单校区数据 |
 | S4 | 未开始 | 代码中没有 `prepare_cached` |
 | P1 | 服务端半边完成，仅 feature | validate、reserve lease、session 保护完成；浏览器不会调用或自动重连 |
 | P2 | 大部分未开始 | H5 基本完成、H4 只有 per-session cap；其余重新上线门未完成 |
-| L1 | 存储地基完成，产品不可用 | 无 HTTP、生产 writer、materializer、UI 和非空 E2E |
+| L1 | 纵向代码已落地但未通过验收 | desired 可持久化、GET/PUT、materializer 和 UI 已存在；`M0-M1-001-R1` 关闭前不得称可发布或完成 |
 | L2 | 只有通用 route seam | 无 presence、60 秒状态机或自动退出 |
 | L3 | 未开始 | 无可见业务日志与控制台倒计时 |
 
@@ -347,24 +350,32 @@ S2 相对 main：领先 30 commits，尚未合并
 
 ### S1
 
-- 设计要求 Gate 隔离探测严格不超过 `min(30s, watch interval)`；
-- 当前实现取 30 秒上限后又加 0–10% 正 jitter，可能约 33 秒；
-- 建议删除 Gate probe 路径的正 jitter并补精确测试；
+- `3f4ebb0` 已把 Gate 隔离探测修为严格 `min(30s, watch interval)`，并有可打挂旧 jitter 的反例；
+- Codex 在 `107f3e5` 独立复跑相关测试通过；
 - N1–N3 三项迁移测试加固是明确非阻断技术债，不得阻塞当前主线。
 
 ### S2/L1
 
-- feature 的 writer 仍要求 admission callback；
-- 仍保留 `Rejected`、`Unavailable`、`DesiredWatchRejection`；
-- 仍有系统自动 `retire_desired_watch()`；
-- 这些与最终“CAS 不查目录、失败不撤销意图”冲突；
-- `/api/v1/local/desired-watch` 尚无 HTTP 路由；
-- 现有测试仍要求普通 GET 该路径返回 404；
-- bootstrap 只有 `{section, policy}`，不足以做 CAS；
-- 没有 production rotation owner；
-- 没有 materialization/failure HTTP 读取合同；
-- 当前物理 watch 仍由 connection 自己持有；
-- Windows verifier 明确把非空 desired→重启→reset→再重启流程标为 OPEN。
+- `c113a2f..b30e024` 已删除 writer admission/自动 retirement，落地 local GET/PUT、
+  coordinator、synthetic owner、前端五态、边界 marker 和文档；这些方向与最终合同一致；
+- `107f3e5` 尚不能验收，Codex 已冻结 `M0-M1-001-R1` 集中修复；
+- synthetic owner 不参与完整的持续 admission/live-set 校验：已 armed section 后来从 Catalog
+  消失或离开 term/campus 范围时，物理 watch 与 GET 可能永久假绿；
+- terminal stale/limit refusal 会增长 receipt，但 production rotation 只在 `COMMITTED` 后运行；
+  账本可被填到 2048，随后正确 STOP 也永久 503，重启不恢复；
+- rotation 的 check/act 不原子，两个并发 caller 可旋转两次；触发 rotation 的成功响应还可能同时携带
+  旧顶层 generation/revision 与新 `state` generation/revision；
+- Full Reset 的 `stop → SQLite clear → 只清 materialization record` 与在途 reconcile/connect 有竞态，
+  可留下 authority 已空但仍运行的 orphan owner watch；
+- 前端 GET 与 PUT 不在同一响应顺序域，旧响应可覆盖新 tombstone 并重新显示“监控中”；
+- retry 成功或物理 stop 的 owner WS 事件不会刷新 authority GET，页面可能永久“准备中”或保留旧绿态；
+- selection removal 仍依赖旧 `active[]`，晚加入页面或 authority 读取失败时可把仍 desired/运行的 section
+  从唯一管理列表移除；
+- Windows verifier 已由 Codex 在新构建的 `107f3e5` 候选上真实执行并通过，但脚本使用未发布 marker，
+  重启后明确断言 `materialized = null`；它只证明 persistence/reset，没有完成任务 A9.19 的
+  “恢复并装配”；
+- `frontend/src/ui/shared/watch/intent.ts` 含两个原始 NUL 字节，Git 将源码视为 binary；
+- 上述问题关闭前，S2-D3、M1 和迁移发布门保持开放。
 
 ### P1/S2
 
@@ -393,9 +404,10 @@ S2 相对 main：领先 30 commits，尚未合并
 
 ## 16. 当前拟定的下一里程碑
 
-状态：**已授权开始；任务 `M0-M1-001` 已生成，等待 Claude 完成。**
+状态：**`M0-M1-001` 已交付但 Codex 判定 `CHANGES_REQUIRED`；集中修复任务
+`M0-M1-001-R1` 已生成，等待用户转发给 Claude。**
 
-推荐里程碑：**S1 窄修 + reduced S2/L1 第一个可用纵向闭环**。
+当前里程碑不扩展范围：**先把 reduced S2/L1 纵向闭环修到可信、可打包验收。**
 
 用户可见目标：
 
@@ -406,18 +418,16 @@ S2 相对 main：领先 30 commits，尚未合并
 - 多页面共享状态但不实时推送；
 - Full Reset 后再次重启仍为空。
 
-建议包含：
+R1 必须包含：
 
-1. S1 Gate probe 的 30 秒精确修复；
-2. 同步最终 S2 文档与 checklist；
-3. 删除 CAS admission、旧 rejection 和自动 retirement；
-4. 冻结 authority + materialization/failure HTTP DTO 与状态码；
-5. 实现本地 `DesiredWatchCoordinator`；
-6. 实现 desired GET/PUT；
-7. 实现本地前端读取、提交、冲突重读和真实状态展示；
-8. 实现非空 desired→重启恢复→Full Reset→再重启为空的 Windows E2E；
-9. 保持公网 desired 零表面；
-10. 不发布未闭合中间构建。
+1. 修复 owner 持续 admission、live-set drift 与假绿；
+2. 修复 refusal receipt rotation、并发双 rotation 与响应自相矛盾；
+3. 修复 Full Reset/reconcile orphan watch 竞态及 sealed owner 复活；
+4. 统一前端 GET/PUT 响应顺序，owner 状态改变后刷新，所有 selection removal fail closed；
+5. 修复 raw NUL、严格 mutation codec 和 late-page active/action 投影；
+6. 用 deterministic published + Gate-pass fixture 让真实 Windows 候选在重启后附页并完成物化；
+7. 让全量 diff-check、workspace/frontend/architecture 和真实 packaging E2E 全绿；
+8. 保持公网 desired 零表面，不发布中间构建。
 
 建议不包含：
 
@@ -465,6 +475,15 @@ M8：最终 Windows/Linux 候选、打包、soak、发布
 
 ## 19. 变更日志
 
+### 2026-08-24 — M0-M1-001 独立验收
+
+- Claude 在 `a4f8d22..107f3e5` 落地 S1 窄修和 desired-watch 纵向实现；
+- Codex 独立复跑 workspace、frontend 和 architecture 门；
+- Codex 使用本机已有锁定工具真实构建并验证 Windows 候选，确认当前脚本能通过但没有证明重启物化；
+- 完成 28 个自动 inventory 文件加 1 个 binary-classified TypeScript 源码的安全差异扫描；
+- 安全扫描封存为 0 个传统可报告漏洞；4 个同用户/本地正确性候选被安全策略排除，仍作为产品阻断；
+- 验收结论为 `CHANGES_REQUIRED`，生成 `M0-M1-001-R1` 集中修复任务。
+
 ### 2026-08-23 — 初始版本
 
 - 记录 Codex orchestrator / 用户转发 / Claude implementer 的真实通信方式；
@@ -485,11 +504,13 @@ Milestone: M0 S1 窄修与合同同步 + M1 reduced S2/L1 本地 desired 纵向�
 Claude prompt issued: YES — 由用户复制转发
 Prompt/version: M0-M1-001/v1
 Expected base: feat/s2-alert-delivery@a4f8d22
-Claude reported head: NONE
-Codex review range: NONE
-Codex verdict: IN_PROGRESS
-Blocking findings: NONE
-Next authorized action: 用户将 docs/orchestration/tasks/M0-M1-001.md 中的 Claude Prompt 原样转发给 Claude；等待其完整回报
+Claude reported head: 107f3e5
+Codex review range: a4f8d22..107f3e5
+Codex verdict: CHANGES_REQUIRED
+Blocking findings: owner 失效假绿；receipt rotation 永久锁死；reset orphan；前端旧响应/状态刷新/selection orphan；packaging 未证明重启物化
+Repair task: M0-M1-001-R1/v1
+Repair expected base: feat/s2-alert-delivery@107f3e5
+Next authorized action: 用户将 docs/orchestration/tasks/M0-M1-001-R1.md 中的 Claude Prompt 原样转发给 Claude
 ```
 
 验收结论只允许使用：
