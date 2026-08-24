@@ -97,6 +97,38 @@ function Read-Bootstrap {
     return Invoke-RestMethod -UseBasicParsing -Method Get -Uri ($Origin + 'api/v1/local/bootstrap') -TimeoutSec 10
 }
 
+function Read-DesiredWatch {
+    param([Parameter(Mandatory = $true)][string]$Origin)
+
+    return Invoke-RestMethod -UseBasicParsing -Method Get `
+        -Uri ($Origin + 'api/v1/local/desired-watch') -TimeoutSec 10
+}
+
+function Write-DesiredWatch {
+    param(
+        [Parameter(Mandatory = $true)][string]$Origin,
+        [Parameter(Mandatory = $true)][hashtable]$Headers,
+        [Parameter(Mandatory = $true)]$Section,
+        [Parameter(Mandatory = $true)][long]$AuthorityGeneration,
+        [Parameter(Mandatory = $true)][long]$BasedOnRevision,
+        $Policy
+    )
+
+    $payload = [ordered]@{
+        contractVersion = 1
+        section = $Section
+        policy = $Policy
+        basedOnRevision = $BasedOnRevision
+        authorityGeneration = $AuthorityGeneration
+        mutationId = [guid]::NewGuid().ToString()
+    }
+    $body = [ordered]@{ protocolVersion = 1; payload = $payload } |
+        ConvertTo-Json -Depth 8 -Compress
+    return Invoke-RestMethod -UseBasicParsing -Method Put `
+        -Uri ($Origin + 'api/v1/local/desired-watch') -Headers $Headers `
+        -ContentType 'application/json' -Body $body -TimeoutSec 10
+}
+
 function Read-ServiceStatus {
     param([Parameter(Mandatory = $true)][string]$Origin)
 
@@ -500,6 +532,34 @@ try {
         -ContentType 'application/json' -Body $selectionBody -TimeoutSec 10
     Assert-Condition ([int]$selectionResponse.protocolVersion -eq 1) 'Selection update did not return protocol version 1.'
 
+    # Standing watch intent, written the way a page writes it. The authority
+    # deliberately does not consult the catalog, so this commits in a
+    # catalog-less smoke run -- which is the point: the non-empty restore and
+    # reset paths are the ones that can be wrong, and an empty-table
+    # rehearsal exercises neither.
+    $emptyAuthority = Read-DesiredWatch $run.Origin
+    Assert-Condition ([int]$emptyAuthority.protocolVersion -eq 1) 'Desired-watch read did not return protocol version 1.'
+    Assert-Condition ([int]$emptyAuthority.data.contractVersion -eq 1) 'Desired-watch read did not return contract version 1.'
+    Assert-Condition (@($emptyAuthority.data.entries).Count -eq 0) 'First-run desired-watch authority is not empty.'
+    $firstGeneration = [long]$emptyAuthority.data.authorityGeneration
+    Assert-Condition ($firstGeneration -ge 1) 'Desired-watch authority generation is not positive.'
+
+    $markerPolicy = [ordered]@{
+        notificationMode = 'ONE_SHOT'
+        maxAudible = 3
+        continuousDuration = [ordered]@{ kind = 'FINITE'; seconds = 600 }
+    }
+    $committedIntent = Write-DesiredWatch $run.Origin $headers $marker $firstGeneration 0 $markerPolicy
+    Assert-Condition ([string]$committedIntent.data.outcome -ceq 'COMMITTED') 'Desired-watch write was not committed.'
+    Assert-Condition ($committedIntent.data.replayed -eq $false) 'A first desired-watch write reported itself as a replay.'
+    Assert-Condition (@($committedIntent.data.state.entries).Count -eq 1) 'The desired-watch write did not return the state it produced.'
+
+    $firstAuthority = Read-DesiredWatch $run.Origin
+    Assert-Condition (@($firstAuthority.data.entries).Count -eq 1) 'Desired-watch intent was not stored.'
+    Assert-Condition ($null -ne $firstAuthority.data.entries[0].policy) 'Stored desired-watch intent is a tombstone.'
+    $firstBootstrap = Read-Bootstrap $run.Origin
+    Assert-Condition (@($firstBootstrap.data.state.desiredWatches).Count -eq 1) 'Bootstrap did not expose the stored desired watch.'
+
     $databasePath = Join-Path $candidateRoot 'data\rbcsp.sqlite'
     Assert-Condition (Test-Path -LiteralPath $databasePath -PathType Leaf) 'First run did not create data/rbcsp.sqlite.'
 
@@ -529,6 +589,23 @@ try {
     ) 'Restart did not restore the package-local synthetic selection marker.'
     $sqliteFiles = @(Get-ChildItem -LiteralPath $candidateRoot -Recurse -File | Where-Object { $_.Name -match '(?i)\.(db|sqlite|sqlite3)$' })
     Assert-Condition ($sqliteFiles.Count -eq 1 -and $sqliteFiles[0].FullName -eq $databasePath) 'The candidate did not use exactly one package-local database.'
+
+    # The intent survived the restart, under the same authority generation --
+    # a restart is not a reset, so nothing a page read before it has become
+    # stale. Nothing is materialized, because no page has attached, and the
+    # read says so plainly rather than implying a watch is running.
+    $secondAuthority = Read-DesiredWatch $run.Origin
+    Assert-Condition (@($secondAuthority.data.entries).Count -eq 1) 'Restart did not restore the stored desired watch.'
+    $restored = $secondAuthority.data.entries[0]
+    Assert-Condition (
+        [string]$restored.section.term -ceq $marker.term -and
+        [string]$restored.section.campus -ceq $marker.campus -and
+        [string]$restored.section.index -ceq $marker.index
+    ) 'Restart restored a different desired-watch Section.'
+    Assert-Condition ($null -ne $restored.policy) 'Restart turned the stored intent into a tombstone.'
+    Assert-Condition ($null -eq $restored.materialized) 'Nothing has attached, so nothing may be reported as materialized.'
+    Assert-Condition ([long]$secondAuthority.data.authorityGeneration -eq $firstGeneration) 'A restart moved the desired-watch authority generation.'
+    Assert-Condition (@((Read-Bootstrap $run.Origin).data.state.desiredWatches).Count -eq 1) 'Restart bootstrap lost the stored desired watch.'
 
     $secondHeaders = @{
         Origin = $run.Origin.TrimEnd('/')
@@ -563,18 +640,23 @@ try {
     # Presence plus value, not value alone: [long]$null is 0, so a field that
     # exists but is null would slip past the count check. (A field that is
     # absent entirely already throws under Set-StrictMode -Version Latest.)
-    # This still only covers the empty state. The non-empty path -- production
-    # writer commits intent, ordinary restart restores it, Full Reset reports
-    # one deletion, next restart is empty -- needs a desired-watch write path
-    # this catalog-less smoke run does not yet have, and remains OPEN.
+    # These are the counts migration 10004 introduced, and this is the run
+    # that can find them wrong: the table is NOT empty, so a deletion that
+    # silently did nothing would report one here.
     Assert-Condition (
         ($null -ne $confirmedReset.data.deletedDesiredWatches) -and
-        ([long]$confirmedReset.data.deletedDesiredWatches -eq 0)
-    ) 'Full Reset did not report a desired-watch deletion count.'
+        ([long]$confirmedReset.data.deletedDesiredWatches -eq 1)
+    ) 'Full Reset did not delete the stored desired watch.'
     Assert-Condition (
         ($null -ne $confirmedReset.data.deletedDesiredWatchReceipts) -and
-        ([long]$confirmedReset.data.deletedDesiredWatchReceipts -eq 0)
-    ) 'Full Reset did not report a desired-watch receipt deletion count.'
+        ([long]$confirmedReset.data.deletedDesiredWatchReceipts -eq 1)
+    ) 'Full Reset did not delete the desired-watch receipt.'
+    $resetAuthority = Read-DesiredWatch $run.Origin
+    Assert-Condition (@($resetAuthority.data.entries).Count -eq 0) 'Full Reset left desired-watch rows behind.'
+    Assert-Condition (
+        [long]$resetAuthority.data.authorityGeneration -gt $firstGeneration
+    ) 'Full Reset did not raise the desired-watch authority generation.'
+    $resetGeneration = [long]$resetAuthority.data.authorityGeneration
     Assert-Condition (
         [long]$confirmedReset.data.stateRevision -gt [long]$second.data.state.stateRevision
     ) 'Full Reset did not advance the user-state revision.'
@@ -593,6 +675,11 @@ try {
     Assert-Condition ($thirdNonce -match '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') 'Third-launch session nonce is not a UUIDv4.'
     Assert-Condition ($thirdNonce -ne $firstNonce -and $thirdNonce -ne $secondNonce) 'Third launch reused an earlier local session nonce.'
     Assert-EmptyPersonalState $third 'Restart-after-Reset'
+    $thirdAuthority = Read-DesiredWatch $run.Origin
+    Assert-Condition (@($thirdAuthority.data.entries).Count -eq 0) 'Restart after full Reset restored desired-watch rows.'
+    Assert-Condition (
+        [long]$thirdAuthority.data.authorityGeneration -eq $resetGeneration
+    ) 'Restart after full Reset did not keep the raised authority generation.'
     Assert-Condition (Test-Path -LiteralPath $databasePath -PathType Leaf) 'Restart after full Reset lost the package-local database.'
     $finalSqliteFiles = @(Get-ChildItem -LiteralPath $candidateRoot -Recurse -File | Where-Object { $_.Name -match '(?i)\.(db|sqlite|sqlite3)$' })
     Assert-Condition ($finalSqliteFiles.Count -eq 1 -and $finalSqliteFiles[0].FullName -eq $databasePath) 'Restart after full Reset did not retain exactly one package-local database.'
@@ -607,6 +694,7 @@ try {
         sha256 = $archiveHash
         files = $expectedFiles.Count
         restarts = 2
+        desiredWatchCycle = 'NON_EMPTY'
     } | ConvertTo-Json -Compress
 }
 finally {
