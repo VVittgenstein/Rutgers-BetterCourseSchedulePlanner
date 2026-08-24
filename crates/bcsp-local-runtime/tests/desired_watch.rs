@@ -113,6 +113,11 @@ impl WatchAdmissionSource for Admission {
 struct OwnerFaults {
     stop: AtomicBool,
     update_policy: AtomicBool,
+    /// Held by a test to keep one caller inside the coordinator's exclusive
+    /// domain while others pile up behind it. Without a way to WIDEN that
+    /// window, the interleaving a check-then-act race depends on is a few
+    /// instructions long and no amount of repetition reaches it reliably.
+    hold: Mutex<()>,
 }
 
 struct FaultOwner {
@@ -122,6 +127,9 @@ struct FaultOwner {
 
 impl DesiredWatchOwner for FaultOwner {
     fn audience_connection_count(&self) -> usize {
+        // The first thing a reconcile asks the owner, and therefore the
+        // place a test can stand to hold the exclusive domain open.
+        let _held = self.faults.hold.lock().unwrap();
         self.inner.audience_connection_count()
     }
 
@@ -1300,11 +1308,14 @@ fn terminal_refusal_receipts_alone_rotate_the_authority_exactly_once() {
 }
 
 /// A database that comes back at the hard cap has to be recoverable by the
-/// process alone. Nothing the user can do would fix it: every write,
-/// including the STOP, is refused until the ledger is freed, and only a
-/// rotation frees it.
+/// process alone, on maintenance, with nothing else happening.
+///
+/// Nothing the user can do would fix it: every write, including the STOP, is
+/// refused until the ledger is freed, and only a rotation frees it. So the
+/// tick has to rotate whether or not anything was committed -- there is no
+/// commit left that could.
 #[test]
-fn a_restart_at_the_receipt_hard_cap_recovers_and_the_stop_finally_commits() {
+fn a_restart_at_the_receipt_hard_cap_recovers_on_maintenance_alone() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
     assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
@@ -1316,27 +1327,11 @@ fn a_restart_at_the_receipt_hard_cap_recovers_and_the_stop_finally_commits() {
     );
     assert_eq!(receipt_count(&fixture.path), MAX_DESIRED_WATCH_RECEIPTS);
 
-    // A fresh coordinator over the same database: a restart.
-    let restarted = fixture.restarted_coordinator();
-    let stale = restarted.read().unwrap();
-    let stop = DesiredWatchMutationV1 {
-        contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
-        section: section(1),
-        policy: None,
-        based_on_revision: revision(&stale, &section(1)),
-        authority_generation: stale.authority_generation,
-        mutation_id: trace(901),
-    };
-    assert_eq!(
-        restarted.submit(&stop).unwrap().outcome,
-        DesiredWatchOutcomeV1::AuthorityFull,
-        "a full ledger refuses the write rather than guessing",
-    );
-
-    // Maintenance alone brings it back, with nothing else happening: no
-    // audience change, no scheduled retry, no commit.
+    // A fresh coordinator over the same database -- a restart -- and one
+    // maintenance step. No audience change, no scheduled retry, no commit.
     let recovered = fixture.restarted_coordinator();
     recovered.tick();
+
     let state = recovered.read().unwrap();
     assert_eq!(
         state.authority_generation,
@@ -1344,31 +1339,88 @@ fn a_restart_at_the_receipt_hard_cap_recovers_and_the_stop_finally_commits() {
         "startup maintenance must recover a database at the hard cap",
     );
     assert_eq!(receipt_count(&fixture.path), 0);
-
-    // And now the correct STOP commits.
-    let stop = DesiredWatchMutationV1 {
-        contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
-        section: section(1),
-        policy: None,
-        based_on_revision: revision(&state, &section(1)),
-        authority_generation: state.authority_generation,
-        mutation_id: trace(902),
-    };
     assert_eq!(
-        recovered.submit(&stop).unwrap().outcome,
-        DesiredWatchOutcomeV1::Committed,
-        "a watch the user asked to stop must eventually stop",
+        fixture.watch.owner_watched_sections(),
+        vec![section(1)],
+        "and maintenance did not tear a healthy watch down on its way",
     );
 }
 
-/// Two callers, one threshold, one rotation.
+/// A full ledger refuses the write rather than guessing, and the STOP the
+/// user pressed still eventually commits. Refusing it forever would leave a
+/// watch they cannot turn off, which is worse than any silence.
+#[test]
+fn a_full_ledger_refuses_the_stop_and_the_next_attempt_commits() {
+    let fixture = Fixture::new();
+    let (_page, _frames) = fixture.attach(100);
+    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    let generation = fixture.read().authority_generation;
+    seed_receipts(
+        &fixture.path,
+        generation,
+        MAX_DESIRED_WATCH_RECEIPTS - receipt_count(&fixture.path),
+    );
+
+    let stale = fixture.read();
+    assert_eq!(
+        fixture
+            .coordinator
+            .submit(&DesiredWatchMutationV1 {
+                contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+                section: section(1),
+                policy: None,
+                based_on_revision: revision(&stale, &section(1)),
+                authority_generation: stale.authority_generation,
+                mutation_id: trace(901),
+            })
+            .unwrap()
+            .outcome,
+        DesiredWatchOutcomeV1::AuthorityFull,
+        "a full ledger refuses the write rather than writing a false answer",
+    );
+
+    // The refusal is not terminal: nothing was written, no receipt was left,
+    // and the maintenance the refusal itself triggered freed the ledger.
+    let state = fixture.read();
+    assert_eq!(state.authority_generation, generation + 1);
+    assert_eq!(receipt_count(&fixture.path), 0);
+    assert_eq!(
+        fixture
+            .coordinator
+            .submit(&DesiredWatchMutationV1 {
+                contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+                section: section(1),
+                policy: None,
+                based_on_revision: revision(&state, &section(1)),
+                authority_generation: state.authority_generation,
+                mutation_id: trace(902),
+            })
+            .unwrap()
+            .outcome,
+        DesiredWatchOutcomeV1::Committed,
+        "a watch the user asked to stop must eventually stop",
+    );
+    assert!(fixture.watch.owner_watched_sections().is_empty());
+}
+
+/// Concurrent callers, one threshold, one rotation.
 ///
 /// Rotation raises the generation, so a second one for the same crossing
 /// invalidates the `basedOnRevision` every page has just re-read with -- for
-/// nothing. Checking the budget outside the exclusive domain and acting
-/// inside it is what lets both callers decide "due" from the same state.
+/// nothing. The race is between deciding "due" and acting on it: a caller
+/// that read the budget before someone else's rotation committed rotates
+/// again unless it re-reads inside the exclusive domain.
+///
+/// The window is forced rather than hoped for. One thread is parked INSIDE
+/// the domain -- a reconcile, held at the first thing it asks the physical
+/// owner -- so every rotating caller reaches its decision while the domain is
+/// occupied, which is exactly the interleaving a check taken outside it
+/// loses. Repetition could not reach this reliably: without the hold the
+/// window is a few instructions wide.
 #[test]
 fn concurrent_callers_crossing_one_threshold_rotate_once() {
+    const CALLERS: usize = 6;
+
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
     assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
@@ -1379,7 +1431,14 @@ fn concurrent_callers_crossing_one_threshold_rotate_once() {
         DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD - receipt_count(&fixture.path),
     );
 
-    const CALLERS: usize = 4;
+    let held = fixture.faults.hold.lock().unwrap();
+    let occupant = {
+        let coordinator = fixture.coordinator.clone();
+        std::thread::spawn(move || coordinator.reconcile().unwrap())
+    };
+    // Let the occupant take the domain and park there.
+    std::thread::sleep(Duration::from_millis(150));
+
     let barrier = Arc::new(std::sync::Barrier::new(CALLERS));
     let workers = (0..CALLERS)
         .map(|_| {
@@ -1391,9 +1450,14 @@ fn concurrent_callers_crossing_one_threshold_rotate_once() {
             })
         })
         .collect::<Vec<_>>();
+    // Every caller has now decided whether a rotation is due, with the domain
+    // still occupied.
+    std::thread::sleep(Duration::from_millis(300));
+    drop(held);
+    occupant.join().unwrap();
+
     let rotated = workers
         .into_iter()
-        .filter(|worker| worker.is_finished() || true)
         .map(|worker| worker.join().unwrap())
         .filter(|rotated| *rotated)
         .count();
@@ -1404,7 +1468,10 @@ fn concurrent_callers_crossing_one_threshold_rotate_once() {
         generation + 1,
         "and the generation moves exactly once",
     );
-    assert!(armed(&fixture.read(), &section(1)));
+    assert!(
+        armed(&fixture.read(), &section(1)),
+        "and the running watch survived it",
+    );
 }
 
 /// A response that triggered a rotation must describe ONE authority.
