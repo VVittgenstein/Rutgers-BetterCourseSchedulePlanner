@@ -220,6 +220,18 @@ export interface LiveWatchValue {
   retryTelemetryResource(key: string): Promise<void>;
 }
 
+/**
+ * What kind of question an authority answer is the answer to.
+ *
+ * `READ` is this page asking the server what is running, right now, over the
+ * connection it holds. `MUTATION` is the server reporting what one write
+ * left behind. The page applies both -- they carry the same snapshot shape,
+ * and either can settle a Section whose outcome was unknown -- but only a
+ * `READ` is evidence about the CONNECTION, and the socket-wide cutoff is
+ * lifted by nothing else.
+ */
+type WatchAuthorityEvidence = 'READ' | 'MUTATION';
+
 const LiveWatchContext = createContext<LiveWatchValue | null>(null);
 
 function sectionIdentity(sectionKey: SectionKey): string {
@@ -695,11 +707,21 @@ export function LiveWatchProvider({
     return run;
   }, []);
 
-  /** Applies one authority answer, unless a later one has already landed. */
+  /**
+   * Applies one authority answer, unless a later one has already landed.
+   *
+   * `evidence` is what the answer IS, not merely where it came from. A read
+   * is this page asking the server what is running now; a mutation answer is
+   * the server reporting what one write left behind, and it is issued
+   * whether or not this page has a connection to hear an alert over. Both
+   * carry an authority snapshot and both may settle uncertainty, but only
+   * the first is evidence about the connection -- see the cutoff below.
+   */
   const applyAuthority = useCallback((
     sequence: number,
     snapshot: WatchIntentSnapshot | null,
     status: WatchIntentStatus,
+    evidence: WatchAuthorityEvidence,
   ) => {
     if (sequence < authorityApplied.current) return;
     authorityApplied.current = sequence;
@@ -729,11 +751,18 @@ export function LiveWatchProvider({
     if (settled) {
       setUncertain([...uncertainAt.current.values()].map((pending) => pending.section));
     }
-    // The socket-wide cutoff is lifted only by a read this page asked for
-    // after the socket was open again. A read that crossed the close, however
-    // late it lands, is an answer about a connection that no longer exists.
+    // The socket-wide cutoff is lifted only by a READ this page asked for
+    // after the socket was open again. Two things it is not. A read that
+    // crossed the close, however late it lands, is an answer about a
+    // connection that no longer exists. And a mutation's answer is not this
+    // evidence at all, whenever it was issued: a PUT says what the authority
+    // now holds, which is a statement about the server's intent and not about
+    // whether THIS page can hear the watch it describes. Letting a write
+    // relight the desk would mean a user who pressed a button over a dead
+    // socket got a green light for it.
     if (
-      socketCutoffRef.current
+      evidence === 'READ'
+      && socketCutoffRef.current
       && cutoffReleaseAt.current !== null
       && sequence > cutoffReleaseAt.current
     ) {
@@ -810,9 +839,9 @@ export function LiveWatchProvider({
     setIntentStatus((current) => (current === 'READY' ? current : 'LOADING'));
     await runAuthority(async (sequence) => {
       try {
-        applyAuthority(sequence, await intent.read(), 'READY');
+        applyAuthority(sequence, await intent.read(), 'READY', 'READ');
       } catch {
-        applyAuthority(sequence, null, 'FAILED');
+        applyAuthority(sequence, null, 'FAILED', 'READ');
         addNotice('COMMAND_FAILED', 'ALERT');
       }
     });
@@ -862,7 +891,11 @@ export function LiveWatchProvider({
       markUncertain(section, sequence);
       try {
         const result = await intent.submit({ section, policy }, basis);
-        if (result.snapshot !== null) applyAuthority(sequence, result.snapshot, 'READY');
+        // The answer updates the authority the page renders and settles this
+        // Section, and does not lift the connection cutoff.
+        if (result.snapshot !== null) {
+          applyAuthority(sequence, result.snapshot, 'READY', 'MUTATION');
+        }
         if (result.outcome === 'COMMITTED') return 'COMMITTED' as const;
         addNotice(
           result.outcome === 'AT_CAPACITY'

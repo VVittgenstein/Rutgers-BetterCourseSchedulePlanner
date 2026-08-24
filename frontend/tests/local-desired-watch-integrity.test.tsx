@@ -1139,6 +1139,71 @@ describe('a closed socket is a cutoff over every answer, not a list of sections'
       expect(view.value().active).toHaveLength(1);
     },
   );
+
+  /**
+   * A write is not evidence about the connection.
+   *
+   * The cutoff is measured from the moment the socket reached OPEN, so a PUT
+   * sent after that point is "new enough" by sequence alone. It is still the
+   * wrong KIND of answer: it says what the authority now holds, not that this
+   * page can hear the watch it describes. The window is real -- the socket
+   * opens, the user presses a button, and the read the reconnect asks for has
+   * not been queued yet -- so it is entered here exactly as the page does,
+   * inside one turn, before any effect has run.
+   */
+  it('does not let a write made after the socket reopened lift the cutoff', async () => {
+    const server = authority();
+    const held = deferred<void>();
+    const running = (revision = 1) => snapshot([entry(SECTION, {
+      revision,
+      epoch: revision,
+      running: true,
+    })]);
+    server.queue(
+      async () => ok(running()),
+      async (call) => {
+        // The write answers immediately; the reconnect's own read is held, so
+        // the page has nothing but the write to go on.
+        if (call.method === 'PUT') return ok(committed(running(2), 2));
+        await held.promise;
+        return ok(running(2));
+      },
+    );
+    const view = desk(server.fetchImplementation);
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+
+    await act(async () => { view.watch.setState('CLOSED'); });
+    expect(view.value().intentStateFor(SECTION)).not.toBe('WATCHING');
+
+    await act(async () => {
+      view.watch.setState('OPEN');
+      // Same turn: the reconnect effect has not run, so this write is the
+      // first operation issued on the new connection.
+      void view.value().setSectionIntent(SECTION, POLICY);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(server.writes()).toHaveLength(1));
+    await waitFor(() => expect(server.reads()).toHaveLength(2));
+
+    // The write came back COMMITTED, with a snapshot the server says is
+    // running, and it was issued after the socket reopened. The page still
+    // may not claim to be watching: no read has confirmed this connection.
+    expect(view.value().intentStateFor(SECTION)).not.toBe('WATCHING');
+    expect(view.value().active).toHaveLength(0);
+    expect(view.value().isActive(SECTION)).toBe(false);
+    expect(within(deskRow(SECTION)).queryByText('Watching')).toBeNull();
+
+    // The read issued after OPEN is the evidence that lifts it.
+    await act(async () => {
+      held.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+    expect(view.value().active).toHaveLength(1);
+    expect(server.writes()).toHaveLength(1);
+  });
 });
 
 describe('the search entry says exactly what the desk says', () => {
