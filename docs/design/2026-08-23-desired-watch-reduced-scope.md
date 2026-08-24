@@ -217,7 +217,7 @@ v7.2 的第 0 条（`¬composite-synced`）随帧流一并删除。HTTP 读取�
 `armed` 仍是派生量，**不上 wire**：
 
 ```
-armed ≡ materialized ≠ null
+armed ≡ materialized ≠ null（且该 `activeWatchId` 仍在 owner live set 中）
   ∧ materialized.generation = authorityGeneration
   ∧ materialized.revision   = sectionRevision
   ∧ materialized.epoch      = materializationEpoch
@@ -263,10 +263,18 @@ desired 是"读了才知道"的权威状态，presence 是"断了才知道"的�
    提交后立即生效；每 section 至多一份物理 watch，告警扇出到全部页面。
 5. 前端：读取、显示五态、提交、失败可见；只有四元组全等才显示"监控中"；
    读取失败不保留旧绿态；409 后重读且不自动重放手势。
-6. 打包端到端：写入非空意图 → 重启 → 恢复且能装配 → reset 返回删除
-   计数 → 再重启仍空。**已在 `packaging/windows/verify.ps1` 落地**，
-   同型断言另有 `crates/bcsp-local-runtime/tests/local_runtime.rs` 的
-   三生命周期 HTTP 版本，随 `cargo test --workspace` 常跑。
+6. 打包端到端：写入非空意图 → 普通重启 → **第一页面 WebSocket
+   attach → GET 四元组全等地物化** → Full Reset 报删除 1 + 1、
+   generation 抬升且 `activeWatchCount` 归零 → 再重启仍空且 generation
+   不回退。**已在 `packaging/windows/verify.ps1` 落地**，同型断言另有
+   `crates/bcsp-local-runtime/tests/local_runtime.rs` 的三生命周期 HTTP
+   版本，随 `cargo test --workspace` 常跑。
+   两侧共用同一份确定性 PUBLISHED + S1 Gate-pass fixture
+   （`crates/bcsp-local-runtime/tests/support/mod.rs`），由
+   `tests/desired_watch_fixture.rs` 这个 harness-free 测试目标在两次
+   生命周期之间播种到包内数据库；它是测试产物，不进入 12 文件 archive，
+   也不访问真实 Rutgers。**"恢复但未物化"不构成通过**：那只证明行还在，
+   而里程碑要证明的是行背后确实又有一份真实监控。
 7. 公网零表面：三个 marker 的 Rust 四表面 + 前端 source/bundle 负控。
 
 ### 9.1 迁移 10004 与发布约束

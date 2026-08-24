@@ -9,6 +9,17 @@ param(
     [Parameter(Mandatory = $true)]
     [long]$SourceDateEpoch,
 
+    # The deterministic PUBLISHED + Gate-pass fixture seeder, built from this
+    # repository as a test artifact and never part of the archive.
+    #
+    # Mandatory on purpose. Without it the restart lifetime can only prove
+    # that stored intent SURVIVES, which is a strictly weaker claim than the
+    # one the release gate is about -- that a real candidate puts a real
+    # watch behind it again -- and an optional parameter is exactly how a gate
+    # quietly stops being run.
+    [Parameter(Mandatory = $true)]
+    [string]$FixtureSeederPath,
+
     [string]$DumpBinPath,
 
     [string]$BrowserSmokeScript,
@@ -127,6 +138,96 @@ function Write-DesiredWatch {
     return Invoke-RestMethod -UseBasicParsing -Method Put `
         -Uri ($Origin + 'api/v1/local/desired-watch') -Headers $Headers `
         -ContentType 'application/json' -Body $body -TimeoutSec 10
+}
+
+function Invoke-FixtureSeeder {
+    param(
+        [Parameter(Mandatory = $true)][string]$CandidateRoot,
+        [Parameter(Mandatory = $true)][string]$Term
+    )
+
+    Write-Host '==> Seeding the deterministic PUBLISHED + Gate-pass fixture'
+    $executable = Join-Path $CandidateRoot 'RBCSP.exe'
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $FixtureSeederPath --executable $executable --term $Term 2>&1 |
+            ForEach-Object { Write-Host ([string]$_) }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    Assert-Condition ($exitCode -eq 0) "The desired-watch fixture seeder failed with exit code $exitCode."
+    $sidecars = @(Get-ChildItem -LiteralPath (Join-Path $CandidateRoot 'data') -File |
+        Where-Object { $_.Name -match '(?i)(-wal|-shm)$' })
+    foreach ($sidecar in $sidecars) {
+        Remove-Item -LiteralPath $sidecar.FullName -Force
+    }
+    $extra = @(Get-ChildItem -LiteralPath $CandidateRoot -File | ForEach-Object { $_.Name } | Sort-Object)
+    Assert-Condition (
+        ($extra -join "`n") -eq ($expectedFiles -join "`n")
+    ) 'The fixture seeder left a file in the package root.'
+}
+
+function Open-WatchSocket {
+    param(
+        [Parameter(Mandatory = $true)][string]$Origin,
+        [Parameter(Mandatory = $true)][string]$SessionNonce
+    )
+
+    $trimmed = $Origin.TrimEnd('/')
+    $socketUri = [Uri]($trimmed.Replace('http://', 'ws://') + '/api/v1/watch?session=' + $SessionNonce)
+    $socket = New-Object System.Net.WebSockets.ClientWebSocket
+    $socket.Options.AddSubProtocol('bcsp.v1')
+    $socket.Options.SetRequestHeader('Origin', $trimmed)
+    $cancellation = New-Object System.Threading.CancellationTokenSource
+    $connect = $socket.ConnectAsync($socketUri, $cancellation.Token)
+    Assert-Condition ($connect.Wait(15000)) 'The watch WebSocket did not complete its handshake within 15 seconds.'
+    Assert-Condition (-not $connect.IsFaulted) "The watch WebSocket handshake failed: $($connect.Exception)"
+    Assert-Condition (
+        $socket.State -eq [System.Net.WebSockets.WebSocketState]::Open
+    ) "The watch WebSocket is $($socket.State), not Open."
+    return [pscustomobject]@{ Socket = $socket; Cancellation = $cancellation }
+}
+
+function Close-WatchSocket {
+    param($Attachment)
+
+    if (-not $Attachment) {
+        return
+    }
+    try {
+        $Attachment.Socket.Abort()
+        $Attachment.Socket.Dispose()
+        $Attachment.Cancellation.Dispose()
+    }
+    catch {
+        # Preserve the original verification failure.
+    }
+}
+
+function Wait-DesiredWatchMaterialized {
+    param(
+        [Parameter(Mandatory = $true)][string]$Origin,
+        [Parameter(Mandatory = $true)]$Section
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $last = $null
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $last = Read-DesiredWatch $Origin
+        $entries = @($last.data.entries | Where-Object {
+            [string]$_.section.term -ceq [string]$Section.term -and
+            [string]$_.section.campus -ceq [string]$Section.campus -and
+            [string]$_.section.index -ceq [string]$Section.index
+        })
+        if ($entries.Count -eq 1 -and $null -ne $entries[0].materialized) {
+            return [pscustomobject]@{ State = $last; Entry = $entries[0] }
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    throw "The restored desired watch never materialized: $($last | ConvertTo-Json -Depth 8 -Compress)"
 }
 
 function Read-ServiceStatus {
@@ -343,6 +444,11 @@ if ($runBrowserSmoke) {
     Assert-Condition (Test-Path -LiteralPath $NodePath -PathType Leaf) "Node executable was not found: $NodePath"
 }
 
+$FixtureSeederPath = [System.IO.Path]::GetFullPath($FixtureSeederPath)
+Assert-Condition (
+    Test-Path -LiteralPath $FixtureSeederPath -PathType Leaf
+) "The desired-watch fixture seeder was not found: $FixtureSeederPath"
+
 $tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
 $verificationRoot = Join-Path $tempBase ("rbcsp-package-verify-" + [Guid]::NewGuid().ToString('N'))
 $verificationRoot = [System.IO.Path]::GetFullPath($verificationRoot)
@@ -357,6 +463,7 @@ $outsideTwo = Join-Path $verificationRoot 'outside two'
 $outsideThree = Join-Path $verificationRoot 'outside three'
 $logRoot = Join-Path $verificationRoot 'logs'
 $run = $null
+$attachment = $null
 $verificationSucceeded = $false
 
 New-Item -ItemType Directory -Path $candidateRoot, $upgradeRoot, $outsideOne, $outsideTwo, $outsideThree, $logRoot -Force | Out-Null
@@ -515,7 +622,10 @@ try {
         $first = $postBrowser
     }
 
-    $marker = [ordered]@{ term = $currentWatchableTerm; campus = 'NB'; index = '99999' }
+    # The Section the fixture publishes. Not an arbitrary marker: the restart
+    # lifetime below has to ARM it, and a Section the catalog does not publish
+    # can only ever prove that the intent survived.
+    $marker = [ordered]@{ term = $currentWatchableTerm; campus = 'NB'; index = '10001' }
     $selectionBody = [ordered]@{
         protocolVersion = 1
         payload = [ordered]@{
@@ -576,6 +686,11 @@ try {
     }
     Assert-Condition ((Get-LowerSha256 $databasePath) -ceq $databaseHashBeforeUpgrade) 'Replacing release files changed the package-local database.'
 
+    # Seeded here, with the candidate stopped: after the file-replacement
+    # invariant has been measured on an untouched database, and before the
+    # lifetime that has to materialize the stored intent.
+    Invoke-FixtureSeeder $candidateRoot $currentWatchableTerm
+
     $run = Start-Candidate $candidateRoot $outsideTwo 'second' $logRoot -UseLauncher
     $second = Read-Bootstrap $run.Origin
     $secondNonce = [string]$second.data.sessionNonce
@@ -606,6 +721,41 @@ try {
     Assert-Condition ($null -eq $restored.materialized) 'Nothing has attached, so nothing may be reported as materialized.'
     Assert-Condition ([long]$secondAuthority.data.authorityGeneration -eq $firstGeneration) 'A restart moved the desired-watch authority generation.'
     Assert-Condition (@((Read-Bootstrap $run.Origin).data.state.desiredWatches).Count -eq 1) 'Restart bootstrap lost the stored desired watch.'
+    Assert-Condition (
+        [int](Read-Bootstrap $run.Origin).data.state.activeWatchCount -eq 0
+    ) 'Nothing has attached, so the candidate must hold no watch.'
+
+    # A page attaches. THIS is the restore the milestone is about: the
+    # candidate reads the stored row and puts a real watch behind it, and the
+    # read reports the same generation, revision, epoch and policy the
+    # authority holds. Anything less is "the row survived", which is a
+    # different and much weaker claim.
+    $attachment = Open-WatchSocket $run.Origin $secondNonce
+    $materialization = Wait-DesiredWatchMaterialized $run.Origin $marker
+    $armed = $materialization.Entry
+    $armedState = $materialization.State
+    Assert-Condition ($null -ne $armed.policy) 'A materialized entry must still be a watch, not a tombstone.'
+    Assert-Condition ($null -eq $armed.failure) "The restored watch reported a failure: $($armed | ConvertTo-Json -Depth 8 -Compress)"
+    Assert-Condition ($armed.pendingDisarm -eq $false) 'The restored watch reported itself as stopping.'
+    Assert-Condition (
+        [long]$armed.materialized.authorityGeneration -eq [long]$armedState.data.authorityGeneration -and
+        [long]$armed.materialized.revision -eq [long]$armed.revision -and
+        [long]$armed.materialized.materializationEpoch -eq [long]$armed.materializationEpoch
+    ) 'The materialized stamp does not match the authority it was armed under.'
+    Assert-Condition (
+        [string]$armed.materialized.policy.notificationMode -ceq [string]$armed.policy.notificationMode -and
+        [long]$armed.materialized.policy.maxAudible -eq [long]$armed.policy.maxAudible -and
+        [string]$armed.materialized.policy.continuousDuration.kind -ceq [string]$armed.policy.continuousDuration.kind
+    ) 'The running watch is not running the policy the authority holds.'
+    Assert-Condition (
+        [string]$armed.materialized.activeWatchId -match '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    ) 'The running watch is not addressable.'
+    Assert-Condition (
+        [long]$armedState.data.authorityGeneration -eq $firstGeneration
+    ) 'Materializing moved the desired-watch authority generation.'
+    Assert-Condition (
+        [int](Read-Bootstrap $run.Origin).data.state.activeWatchCount -eq 1
+    ) 'The candidate did not report the watch it is really holding.'
 
     $secondHeaders = @{
         Origin = $run.Origin.TrimEnd('/')
@@ -663,6 +813,11 @@ try {
 
     $afterReset = Read-Bootstrap $run.Origin
     Assert-EmptyPersonalState $afterReset 'Post-Reset'
+    Assert-Condition (
+        [int]$afterReset.data.state.activeWatchCount -eq 0
+    ) 'Full Reset emptied the authority while the candidate kept holding a watch.'
+    Close-WatchSocket $attachment
+    $attachment = $null
     Assert-Condition (Test-Path -LiteralPath $databasePath -PathType Leaf) 'Full Reset deleted the package-local database.'
     $sqliteFilesAfterReset = @(Get-ChildItem -LiteralPath $candidateRoot -Recurse -File | Where-Object { $_.Name -match '(?i)\.(db|sqlite|sqlite3)$' })
     Assert-Condition ($sqliteFilesAfterReset.Count -eq 1 -and $sqliteFilesAfterReset[0].FullName -eq $databasePath) 'Full Reset changed the exactly-one package-local database boundary.'
@@ -694,10 +849,12 @@ try {
         sha256 = $archiveHash
         files = $expectedFiles.Count
         restarts = 2
-        desiredWatchCycle = 'NON_EMPTY'
+        desiredWatchCycle = 'NON_EMPTY_MATERIALIZED'
+        materializedSection = "$($marker.term)/$($marker.campus)/$($marker.index)"
     } | ConvertTo-Json -Compress
 }
 finally {
+    Close-WatchSocket $attachment
     Stop-CandidateAfterFailure $run
     if ($verificationSucceeded -and (Test-Path -LiteralPath $verificationRoot)) {
         $resolved = [System.IO.Path]::GetFullPath($verificationRoot)

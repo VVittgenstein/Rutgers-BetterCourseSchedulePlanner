@@ -737,10 +737,18 @@ Readiness、音频自愈、页面级通知）与 P1/P2 一条未做，不得因�
 **打包门**
 
 18. `packaging/windows/verify.ps1` 走**非空**循环：写入意图 → 重启 →
-    同 generation 恢复且未物化 → Full Reset 报删除 1 + 1 且抬 generation
-    → 再重启为空且 generation 不回退。同型断言另有
-    `crates/bcsp-local-runtime/tests/local_runtime.rs` 的三生命周期
-    HTTP 版本，随 `cargo test --workspace` 常跑；
+    同 generation 恢复且尚未物化（还没有页面 attach）→ **第一页面
+    WebSocket attach → GET 报 materialized 且四元组全等、`activeWatchId`
+    可寻址、`activeWatchCount` 为 1** → Full Reset 报删除 1 + 1、抬
+    generation 且 `activeWatchCount` 归零 → 再重启为空且 generation 不
+    回退。同型断言另有 `crates/bcsp-local-runtime/tests/local_runtime.rs`
+    的三生命周期 HTTP 版本，随 `cargo test --workspace` 常跑；两侧共用
+    `crates/bcsp-local-runtime/tests/support/mod.rs` 的确定性 PUBLISHED +
+    S1 Gate-pass fixture，由 harness-free 的
+    `tests/desired_watch_fixture.rs` 播种（测试产物，不入 12 文件
+    archive，不访问真实 Rutgers）。`-FixtureSeederPath` 是**必填**参数：
+    可选参数正是一道门悄悄不再被跑的方式，而"恢复但未物化"是比本门弱
+    得多的结论，不接受作为通过；
 19. 迁移 10004 一旦升级即**不可回滚**（旧二进制拒绝未知迁移），因此
     不得发布未闭合的中间构建。
 
@@ -783,3 +791,35 @@ Readiness、音频自愈、页面级通知）与 P1/P2 一条未做，不得因�
       详见下节
 - [~] S2-PR5c（CAS 写入器，72c6383）——驳回 1 P1 + 3 P2 + 2 非阻断；
       经 PR5c.1 修复，见下节；待复审
+
+## M0-M1-001-R1：reduced S2/L1 纵向闭环集中修复
+
+Codex 对 `a4f8d22..107f3e5` 的独立验收结论是 `CHANGES_REQUIRED`。方向被
+接受，五组阻断都是"页面可能在事实之外显示绿色，或用户失去关掉它的办法"。
+下表记录每一项由哪个判别测试关闭；每条测试都对修复前的实现失败。
+
+| R1 项 | 缺口 | 关闭它的判别测试 |
+|---|---|---|
+| A3 | arm 成功后 Catalog 撤下/term 滚出/campus 离开产品，物理 watch 与 GET 仍绿 | `desired_watch.rs::a_section_that_leaves_the_catalog_after_arming_is_taken_down_and_reported`、`::a_target_that_stops_being_watchable_after_arming_is_taken_down_and_reported`、`watch_socket.rs::the_maintenance_sweep_stops_an_owner_held_watch_that_leaves_the_term_window` |
+| A3 | watch 在 coordinator 背后结束（或同 section 换了新 id）仍报 materialized | `desired_watch.rs::a_watch_that_ended_underneath_the_coordinator_is_never_reported_as_running`、`watch_socket.rs::owner_watch_targets_report_the_identity_of_each_running_watch` |
+| A3 | 暂态撤销后不能自愈；健康 watch 被复核重启 | `::a_transient_revocation_clears_the_green_light_and_recovers_by_itself`、`::repeated_maintenance_never_restarts_a_healthy_watch` |
+| A4 | 只增长 receipt 的终局拒绝不触发 rotation，账本可填满后永久 503 | `::terminal_refusal_receipts_alone_rotate_the_authority_exactly_once`、`::a_restart_at_the_receipt_hard_cap_recovers_and_the_stop_finally_commits` |
+| A4 | check/act 不在同一排他域，一次跨阈两次 rotation | `::concurrent_callers_crossing_one_threshold_rotate_once` |
+| A4 | 触发 rotation 的响应同时携带新旧两套 generation/revision | `::a_response_that_triggered_a_rotation_reports_one_authority_state` |
+| A4 | 重放的终局拒绝必须仍是拒绝 | `::a_replayed_terminal_refusal_is_still_the_refusal_it_was` |
+| A5 | reset 在 SQLite 上等待时 attach/reconcile 可留下 orphan watch | `local_runtime.rs::a_full_reset_blocked_in_sqlite_leaves_no_orphan_watch`、`desired_watch.rs::the_reset_barrier_stops_every_physical_watch_including_one_it_never_armed` |
+| A5 | `seal_and_stop` 之后 synthetic owner 可被重建；普通 reset 必须仍可用 | `watch_socket.rs::a_sealed_socket_refuses_to_rebuild_the_owner_but_an_ordinary_stop_does_not` |
+| A6 | 旧 GET / 旧 PUT 覆盖新 tombstone | `local-desired-watch-integrity.test.tsx::never lets an older read put back intent a newer write removed`、`::never lets an older write put back a section a newer write removed` |
+| A6 | 后台 retry 武装成功或 watch 意外停止后投影不刷新 | `::re-reads through the same domain when a retry finally arms the watch`、`::stops showing a watch as running after an unexpected stop` |
+| A7 | 晚加入页面把仍 desired/运行的 section 移出唯一管理列表 | `::counts, describes and can act on a watch it never saw start`、`::fails closed while the authority is unreadable` |
+| A7 | desired 与 selection 历史不一致时形成不可管理的孤儿 | `::shows and can stop a saved watch that is no longer in the selection` |
+| A8 | `intent.ts` 的原始 NUL 让 Git/rg/安全清单看不见该文件 | `verify-import-graph.test.mjs::rejects a raw NUL byte in an active source file`、`::the shipped active sources contain no raw NUL bytes` |
+| A8 | mutation 响应解码过松 | `::the mutation answer is decoded as strictly as the read`（8 条反例 + 2 条正例） |
+| A8 | 拆除失败后永久 `pendingDisarm`；policy 编辑失败丢掉仍活 watch 的地址 | `desired_watch.rs::a_failed_teardown_keeps_the_watch_addressable_and_a_later_tick_finishes_it`、`::a_failed_policy_edit_keeps_the_running_watch_addressable`（经 `DesiredWatchOwner` fault seam） |
+| A9 | 打包门只证明持久化/reset，重启后要求 `materialized = null` | `packaging/windows/verify.ps1` 的 attach + 四元组物化断言，与 `local_runtime.rs::desired_intent_survives_a_restart_and_a_full_reset_clears_it` 共用同一 fixture |
+
+R1 引入的两处新机制值得单独记：`DESIRED_WATCH_REVALIDATE_INTERVAL` 让
+"仍然可以监控吗"成为一个持续问题而不是 arm 时的一次性结论；
+`DesiredWatchOwner` 是一个 seam，唯一目的是让两条**只有失败时才有意义**
+的物理路径可被测试——健康的 socket 无法诱发它们，而它们正是会留下
+"仍在响但已无法寻址"的那两条。

@@ -9,6 +9,16 @@ publish.workspace = true
 [lib]
 path = "src/lib.rs"
 
+# Harness-free on purpose: this target is BOTH the packaging fixture seeder
+# the release rehearsal invokes with arguments and, run with none, its own
+# negative control. `cargo test` runs the second half; the release script
+# runs the first against a real candidate. It is a test artifact and never
+# enters the twelve-file archive.
+[[test]]
+name = "desired_watch_fixture"
+path = "tests/desired_watch_fixture.rs"
+harness = false
+
 [dependencies]
 bcsp-application = { version = "=0.1.0", path = "../bcsp-application" }
 bcsp-contracts = { version = "=0.1.0", path = "../bcsp-contracts" }

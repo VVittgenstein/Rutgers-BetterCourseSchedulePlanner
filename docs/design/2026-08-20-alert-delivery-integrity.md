@@ -253,9 +253,15 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 
 1. 意外断 → 退避重连 → 按期望监控表 re-arm（已手动 STOP 的课**不**复活）；
    显式 Disconnect → 不重连；
-1b. **调和循环（v3；v4 归属服务端 authority）**：物化健康但 arm 返回
-   TARGET_UNAVAILABLE → 退避重试至武装成功；永久拒绝（admission 类）→
-   移出 desired + 常驻通知；STOP/policy 变更作废在途 retry-epoch。
+1b. **调和循环（v3；v4 归属服务端 authority；R1 扩为持续复核）**：
+   物化健康但 arm 返回 TARGET_UNAVAILABLE → 退避重试至武装成功；
+   永久拒绝（admission 类）→ **保留 desired 并暴露原因**，服务端不代
+   用户撤销；STOP/policy 变更作废在途 retry-epoch。
+   **arm 成功不是永久结论**：coordinator 按 `DESIRED_WATCH_REVALIDATE_INTERVAL`
+   重问同一 admission，Catalog 撤下、term 滚出窗口、campus 离开产品
+   目标都会撤下物理 watch 并改报失败；shared maintenance 的 term/campus
+   sweep 覆盖 synthetic owner；owner live set 以 `(section, activeWatchId)`
+   比较，watch 在 coordinator 背后结束时读取立即不再报 materialized。
    **9 门帽自 v4 起是两类事件，不可混淆**：CAS 上面向用户的
    `LIMIT_EXCEEDED` 仍属 admission 类**永久拒绝**；而服务端 owner 连接
    上的物理 `RejectedLimit` 只是**内部物理槽条件**（旧槽尚未拆完），
@@ -278,9 +284,15 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 4. 通知触发矩阵：hidden+opened / visible+cue-failure 补发 / 去重 /
    权限 denied 时 Readiness 如实降级；
 5. L1：监控中刷新 → 期望监控表恢复，**由服务端 coordinator 物化**
-   （不是页面自动 START）；已 STOP 的不恢复；非空意图 → 重启 → 恢复 →
-   Full Reset 报删除 1 → 再重启为空（打包门与 workspace 测试各一份）；
+   （不是页面自动 START）；已 STOP 的不恢复；非空意图 → 重启 →
+   **第一页面 attach 后四元组全等地物化** → Full Reset 报删除 1 + 1、
+   generation 抬升且物理 owner 为空 → 再重启为空（打包门与 workspace
+   测试各一份，两侧共用同一份 PUBLISHED + Gate-pass fixture）；
    永久装配失败保留 desired 并暴露原因，**服务端不代用户撤销**；
+5b. **Full Reset 屏障（R1）**：reset 期间不得物化；成功前旧 generation
+   的在途 reconcile 已失效，并在同一屏障内按 identity 停掉进程仍持有的
+   每一份物理 watch（含 coordinator 无记录的那份）；`seal_and_stop`
+   之后 synthetic owner 不可重建，普通 reset 之后 socket 仍可用；
 6. Readiness 完整真值表：五环 × 各失效态逐一断言，UI 永不虚绿；
    心跳陈旧 >25s 降黄；跨 SPA 路由常驻；
 7. L2：仅浏览页（无 watch）存活 → 不倒计时；全部页面关闭 → 倒计时 →

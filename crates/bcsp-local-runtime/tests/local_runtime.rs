@@ -14,7 +14,6 @@ use bcsp_application::{
     RequestMethod, RouteExtension, ServiceStatusRegistry, SharedWatchSocket, TargetRefreshDemand,
     TargetWorkActivity, WebSocketExtension,
 };
-use bcsp_catalog::{normalize_target, to_catalog_refresh_command, to_discovery_refresh_command};
 use bcsp_contracts::{
     CampusCode, CatalogDiscoveryRequestV1, FilterRequestV1, FilterValuesInputV1,
     HttpRequestEnvelope, NormalizedFilterValuesV1, SectionKey, ServiceOperationStageV2,
@@ -34,16 +33,14 @@ use bcsp_local_user_state::{
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_operational_storage::{
-    BeginOpenPullAttemptCommand, DiscoveredCampus, DiscoveredTerm, DiscoveryRefreshCommand,
-    DiscoverySnapshot, DiscoverySourceKind, DiscoverySourceVersion, EmptySnapshotDecision,
-    FinishOpenPullSuccessCommand, OpenCacheStatus, OpenHttpAuditMetadata, OpenRequestLane,
-    PublishOutcome,
-};
-use bcsp_rutgers_client::{
-    DiscoverySnapshot as RutgersDiscoverySnapshot, DiscoverySourceInput, SourceProvenance,
-    decode_catalog_payload, decode_discovery_payload,
+    DiscoveredCampus, DiscoveredTerm, DiscoveryRefreshCommand, DiscoverySnapshot,
+    DiscoverySourceKind, DiscoverySourceVersion,
 };
 use bcsp_watch::WatchStartAdmission;
+
+mod support;
+
+use support::seed_ready_query_scope;
 use rusqlite::{Connection, TransactionBehavior};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -137,172 +134,6 @@ fn manual_term_discovery(term: TermId) -> DiscoverySnapshot {
         }],
         campuses: vec![campus("NB"), campus("ONLINE_NB")],
         subjects: Vec::new(),
-    }
-}
-
-fn seed_ready_query_scope(prepared: &PreparedLocalRuntime, terms: &[&str]) {
-    let completed = (OffsetDateTime::now_utc() - time::Duration::seconds(1))
-        .format(&Rfc3339)
-        .expect("fixture completion timestamp");
-    let started = (OffsetDateTime::now_utc() - time::Duration::seconds(2))
-        .format(&Rfc3339)
-        .expect("fixture start timestamp");
-    let terms = terms
-        .iter()
-        .map(|term| TermId::try_from(*term).unwrap())
-        .collect::<Vec<_>>();
-    let discovery_body = serde_json::to_vec(&serde_json::json!({
-        "sourceVersion": "local-runtime-ready-fixture-v1",
-        "terms": terms.iter().map(|term| {
-            let raw = term.as_str();
-            serde_json::json!({
-                "termId": raw,
-                "year": raw[1..].parse::<u16>().expect("fixture term year"),
-                "termCode": &raw[..1],
-                "display": raw,
-                "published": true
-            })
-        }).collect::<Vec<_>>(),
-        "campuses": [{
-            "campusCode": "NB",
-            "display": "New Brunswick",
-            "enabled": true
-        }],
-        "targets": terms.iter().map(|term| serde_json::json!({
-            "termId": term.as_str(),
-            "campusCode": "NB",
-            "enabled": true
-        })).collect::<Vec<_>>(),
-        "subjects": []
-    }))
-    .expect("synthetic discovery JSON");
-    let snapshot = RutgersDiscoverySnapshot::try_from_bundle(vec![DiscoverySourceInput::selector(
-        decode_discovery_payload(&discovery_body).expect("decode synthetic discovery"),
-        SourceProvenance::from_body("LOCAL_RUNTIME_READY_DISCOVERY", &started, &discovery_body),
-    )])
-    .expect("normalize synthetic discovery");
-    let database = prepared.operational().database();
-    let mut database = database.lock().unwrap();
-    database
-        .operational_mut()
-        .apply_discovery_refresh(
-            to_discovery_refresh_command(&snapshot, trace(0x800), &started, &completed)
-                .expect("build synthetic discovery command"),
-        )
-        .expect("publish ready-scope discovery fixture");
-    for (position, term) in terms.iter().enumerate() {
-        let target =
-            TermCampusKey::new(term.clone(), CampusCode::try_from("NB").expect("NB Campus"));
-        let body = serde_json::to_vec(&serde_json::json!([{
-            "campusCode": "NB",
-            "courseString": "01:198:111",
-            "subject": "198",
-            "subjectDescription": "Computer Science",
-            "courseNumber": "111",
-            "title": "Synthetic Course",
-            "sections": [{
-                "campusCode": "NB",
-                "index": "10001",
-                "number": "01",
-                "sectionCourseType": "LECTURE",
-                "openStatus": false,
-                "meetingTimes": [],
-                "instructors": []
-            }]
-        }]))
-        .expect("synthetic Catalog JSON");
-        let normalized = normalize_target(
-            target.clone(),
-            decode_catalog_payload(&body).expect("decode synthetic Catalog"),
-            SourceProvenance::from_body("LOCAL_RUNTIME_READY_FIXTURE", &started, &body),
-        )
-        .expect("normalize synthetic Catalog");
-        let observation = trace(0x820 + u64::try_from(position).unwrap());
-        let outcome = database
-            .operational_mut()
-            .apply_catalog_refresh(
-                to_catalog_refresh_command(&normalized, observation, &started, &completed)
-                    .expect("build synthetic Catalog command"),
-                EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
-            )
-            .expect("publish synthetic Catalog");
-        let content_version = match outcome {
-            PublishOutcome::AppliedChanged {
-                content_version, ..
-            }
-            | PublishOutcome::AppliedUnchanged {
-                content_version, ..
-            } => content_version,
-            other => panic!("unexpected fixture Catalog outcome: {other:?}"),
-        };
-        assert_eq!(content_version, 1, "fixture Catalog content version");
-        let attempt_id = trace(0x840 + u64::try_from(position).unwrap());
-        let run_id = trace(0x850 + u64::try_from(position).unwrap());
-        let section =
-            SectionKey::try_new(term.as_str(), "NB", "10001").expect("synthetic section key");
-        database
-            .operational_mut()
-            .begin_open_pull_attempt(&BeginOpenPullAttemptCommand {
-                attempt_id,
-                run_id,
-                target,
-                captured_catalog_content_version: content_version,
-                rutgers_day: "2026-07-17".to_owned(),
-                started_at: started.clone(),
-                lane: OpenRequestLane::ActiveWatch,
-                requested_interval_seconds: Some(30),
-                effective_interval_seconds: Some(10),
-                schedule_lag_ms: Some(0),
-            })
-            .expect("begin synthetic Open attempt");
-        database
-            .operational_mut()
-            .finish_open_pull_success(FinishOpenPullSuccessCommand {
-                gate_hold: false,
-                gate_catalog_set_identity: None,
-                attempt_id,
-                completed_at: completed.clone(),
-                open_sections: vec![section.clone()],
-                source_value_count: 1,
-                watched_sections: vec![section],
-                http: OpenHttpAuditMetadata {
-                    http_status: Some(200),
-                    cache_status: Some(OpenCacheStatus::Miss),
-                    decoded_bytes: Some(2),
-                    decoded_body_sha256: Some("c".repeat(64)),
-                    content_type: Some("application/json".to_owned()),
-                    etag: None,
-                    cache_control: Some("no-store".to_owned()),
-                    date: None,
-                    age_seconds: None,
-                    last_modified: None,
-                    retry_after: None,
-                    retry_after_seconds: None,
-                },
-            })
-            .expect("publish synthetic Open set");
-    }
-    drop(database);
-    let database = prepared.operational().database();
-    let database = database.lock().unwrap();
-    let discovered = database
-        .operational()
-        .discovered_targets()
-        .expect("read fixture discovery targets");
-    for term in terms {
-        let target = TermCampusKey::new(term, CampusCode::try_from("NB").expect("NB Campus"));
-        assert!(
-            discovered.contains(&target),
-            "fixture target must be discovered"
-        );
-        assert!(
-            database
-                .operational()
-                .complete_target_snapshot_state(&target)
-                .expect("read fixture complete target state")
-                .ready,
-            "fixture target must be READY"
-        );
     }
 }
 
@@ -1184,7 +1015,12 @@ async fn desired_intent_survives_a_restart_and_a_full_reset_clears_it() {
     let window = RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Public)
         .expect("test execution date is covered by the bundled calendar");
     let term = window.current_term().as_str().to_owned();
-    let section = SectionKey::try_new(&term, "NB", "10001").unwrap();
+    let section = SectionKey::try_new(
+        &term,
+        support::FIXTURE_CAMPUS,
+        support::FIXTURE_SECTION_INDEX,
+    )
+    .unwrap();
     let prepared = PreparedLocalRuntime::from_executable(&executable).unwrap();
     seed_ready_query_scope(&prepared, &[term.as_str()]);
     drop(prepared);
