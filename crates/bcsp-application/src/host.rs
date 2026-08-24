@@ -1459,7 +1459,7 @@ mod tests {
             ("/api/v1/*rest", SecondaryRoutePathRejection::NotLiteral),
             ("/api/v1/:kind", SecondaryRoutePathRejection::NotLiteral),
             (
-                "/api/v1/desired%2Dwatch",
+                "/api/v1/local/pre%2Dsence",
                 SecondaryRoutePathRejection::NotLiteral,
             ),
             (
@@ -1483,8 +1483,10 @@ mod tests {
             assert_eq!(rejection, expected, "{path}");
         }
 
-        // The two paths frozen for the local desired-watch topology.
-        for path in ["/api/v1/local/presence", "/api/v1/local/desired-watch"] {
+        // The path frozen for the local page-presence topology, plus a
+        // second literal: the seam carries a validated SET, so accepting one
+        // path proves nothing about accepting two.
+        for path in ["/api/v1/local/presence", "/api/v1/local/probe"] {
             let route = SecondaryWebSocketRoute::new(path, socket()).expect(path);
             assert_eq!(route.path(), path);
         }
@@ -1536,14 +1538,13 @@ mod tests {
         });
         let watch = Arc::new(CountingSocket::default());
         let presence = Arc::new(RecordingSocket::default());
-        let desired = Arc::new(RecordingSocket::default());
+        let probe = Arc::new(RecordingSocket::default());
         let server = spawn_loopback_server_with_sockets(
             extension,
             watch,
             vec![
                 SecondaryWebSocketRoute::new("/api/v1/local/presence", presence.clone()).unwrap(),
-                SecondaryWebSocketRoute::new("/api/v1/local/desired-watch", desired.clone())
-                    .unwrap(),
+                SecondaryWebSocketRoute::new("/api/v1/local/probe", probe.clone()).unwrap(),
             ],
             SessionNonce::generate(),
         )
@@ -1580,27 +1581,22 @@ mod tests {
             .unwrap();
         await_count(&presence.texts, 1, "the presence socket receives its frame").await;
         assert_eq!(
-            desired.connects.load(Ordering::SeqCst),
+            probe.connects.load(Ordering::SeqCst),
             0,
             "one path in the set must not be served by another path's socket",
         );
 
-        let desired_stream = speak("/api/v1/local/desired-watch", r#"{"type":"START"}"#)
+        let probe_stream = speak("/api/v1/local/probe", r#"{"type":"PROBE"}"#)
             .await
             .unwrap();
-        await_count(
-            &desired.texts,
-            1,
-            "the desired socket receives its own frame",
-        )
-        .await;
+        await_count(&probe.texts, 1, "the second socket receives its own frame").await;
         assert_eq!(
             presence.texts.load(Ordering::SeqCst),
             1,
             "the second route's traffic must not reach the first route's socket",
         );
 
-        drop((presence_stream, desired_stream));
+        drop((presence_stream, probe_stream));
         server.shutdown().await.unwrap();
     }
 

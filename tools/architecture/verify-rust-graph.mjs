@@ -16,8 +16,8 @@ const NORMAL = 'normal';
 const DEV = 'dev';
 const CRATES_IO_SOURCE = 'registry+https://github.com/rust-lang/crates.io-index';
 const PUBLIC_SOURCE_DENY_PATH = 'tools/architecture/public-source-deny.json';
-const PUBLIC_SOURCE_DENY_SEMANTIC_SHA256 = 'AB9DA4D89B9F0DFBDC1DEF4D07FEDC79231DF2175182D9BB167CDDDED30C88DB';
-const PUBLIC_SOURCE_MARKER_COUNT = 212;
+const PUBLIC_SOURCE_DENY_SEMANTIC_SHA256 = '20B38DE008B28197879D536D85E44A0D32EE88BF5A25ED24C15B9CE396DBEA0D';
+const PUBLIC_SOURCE_MARKER_COUNT = 215;
 
 const external = (req, usesDefaultFeatures, features = []) => Object.freeze({
   features: Object.freeze(features),
@@ -569,7 +569,7 @@ export function validatePublicSourceDenyDocument(document) {
   if (JSON.stringify(Object.keys(document)) !== JSON.stringify(expectedTopLevelKeys)) {
     errors.push('public SOURCE deny document top-level keys or key order mismatch');
   }
-  if (document.schemaVersion !== 2 || document.markerSetVersion !== 1) errors.push('public SOURCE deny document version mismatch');
+  if (document.schemaVersion !== 2 || document.markerSetVersion !== 2) errors.push('public SOURCE deny document version mismatch');
   if (document.kind !== 'PUBLIC_SOURCE_DENY_POLICY') errors.push('public SOURCE deny document kind mismatch');
   if (document.surface !== 'SOURCE') errors.push('public SOURCE deny document surface mismatch');
   if (document.isCapabilityManifest !== false) errors.push('public SOURCE deny document must not be a capability manifest');

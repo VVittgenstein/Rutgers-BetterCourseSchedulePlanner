@@ -82,6 +82,25 @@ assert.ok(packageFilename.violations.some((violation) => (
   violation.denyId === 'P4-D-SAVED_VIEWS-PACKAGE'
 )));
 
+// The desired-watch authority is local-only by construction, and these three
+// markers are what keeps it that way once the construction stops being
+// obvious. Each one is a distinct way the authority could leak into the
+// public closure: its route or its types, the generation barrier it is
+// versioned by, and the epoch its materialization is keyed on.
+for (const [file, contents, marker] of [
+  ['crates/public/src/host.rs', 'const PATH: &str = "/api/v1/local/desired-watch";', 'desired_watch'],
+  ['crates/public/src/wire.rs', 'struct Bootstrap { authority_generation: u64 }', 'authority_generation'],
+  ['crates/public/src/wire.rs', 'struct Row { materialization_epoch: u64 }', 'materialization_epoch'],
+]) {
+  const leaked = auditSurface(new Map([[file, contents]]), DENY_DOCUMENT, 'SOURCE');
+  assert.ok(
+    leaked.violations.some((violation) => (
+      violation.denyId === 'P4-D-PERSISTENT_ACTIVE_WATCH-SOURCE' && violation.marker === marker
+    )),
+    `the public SOURCE surface must reject ${marker}`,
+  );
+}
+
 const invalidSurface = auditSurface(new Map(), DENY_DOCUMENT, 'DOM');
 assert.ok(invalidSurface.errors.some((error) => /unsupported public Rust zero surface/u.test(error)));
 

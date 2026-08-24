@@ -67,9 +67,9 @@ export const EXPECTED_PUBLIC_SOURCE_DENIES = Object.freeze([
   ['P4-D-LOCAL_RESET-SOURCE', 'LOCAL_RESET'],
 ]);
 
-const EXPECTED_PUBLIC_SOURCE_MARKER_COUNT = 212;
+const EXPECTED_PUBLIC_SOURCE_MARKER_COUNT = 215;
 const EXPECTED_PUBLIC_SOURCE_ROWS_SHA256 =
-  '521CFF222462CC06D015A2954B5D317B5B1CBE7047E27945E0374F3122E74593';
+  'F78B7BB698BBED4F146DFE1AF7248A312A036F457D2D0809B4DD6FBC46219989';
 
 const ALLOWED_EDGE_TARGETS = Object.freeze({
   'local-entry': new Set(['local', 'shared']),
@@ -845,8 +845,8 @@ export function validateDenyDocument(denyDocument) {
     errors.push('deny document fields/order do not match the frozen schema');
   }
   if (denyDocument.schemaVersion !== 2) errors.push('deny document schemaVersion must be 2');
-  if (denyDocument.markerSetVersion !== 1) {
-    errors.push('deny document markerSetVersion must be 1');
+  if (denyDocument.markerSetVersion !== 2) {
+    errors.push('deny document markerSetVersion must be 2');
   }
   if (denyDocument.kind !== 'PUBLIC_SOURCE_DENY_POLICY') {
     errors.push('deny document kind is invalid');

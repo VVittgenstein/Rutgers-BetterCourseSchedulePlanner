@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "markerSetVersion": 1,
+  "markerSetVersion": 2,
   "kind": "PUBLIC_SOURCE_DENY_POLICY",
   "surface": "SOURCE",
   "isCapabilityManifest": false,
@@ -90,8 +90,11 @@
       "markers": [
         "active_watch_persistence",
         "active_watch_store",
+        "authority_generation",
         "auto_rewatch",
         "automatic_rewatch",
+        "desired_watch",
+        "materialization_epoch",
         "persisted_active_watch",
         "persistent_active_watch",
         "restore_subscription",

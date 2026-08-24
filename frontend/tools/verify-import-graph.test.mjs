@@ -61,12 +61,12 @@ function analyze(files = baselineFiles(), publicSourceDeny = denyInput()) {
   });
 }
 
-test('accepts the explicit dual-entry shared graph and 18/212 deny policy', () => {
+test('accepts the explicit dual-entry shared graph and 18/215 deny policy', () => {
   const report = analyze();
   assert.equal(report.state, 'PASS', report.errors.join('\n'));
   assert.equal(report.activeUniverse.fileCount, 5);
   assert.equal(report.publicSourceDeny.checkedCount, 18);
-  assert.equal(report.publicSourceDeny.checkedMarkerCount, 212);
+  assert.equal(report.publicSourceDeny.checkedMarkerCount, 215);
   assert.deepEqual(report.closures.local, [
     'src/entry.local.tsx',
     'src/ui/local/LocalCompositionRoot.tsx',
@@ -77,6 +77,45 @@ test('accepts the explicit dual-entry shared graph and 18/212 deny policy', () =
     'src/ui/public/PublicCompositionRoot.tsx',
     'src/ui/shared/SharedApplication.tsx',
   ]);
+});
+
+test('rejects the desired-watch authority from shared and public source', () => {
+  // The authority is a local-only capability: its rows live in the local
+  // database, its route is a local route, and the public build has no
+  // durable per-user state to hold intent in. These three markers are what
+  // keeps that true once it stops being obvious -- the authority itself, the
+  // generation barrier it is versioned by, and the epoch its materialization
+  // is keyed on. Shared is inside the public closure, so a helper parked
+  // there leaks just as surely as one written in a public file.
+  for (const [file, source, marker] of [
+    [
+      'src/ui/shared/SharedApplication.tsx',
+      'export const desiredWatchPath = "/api/v1/local/desired-watch";\n',
+      'desired_watch',
+    ],
+    [
+      'src/ui/public/PublicCompositionRoot.tsx',
+      "import { SharedApplication } from '../shared/SharedApplication';\n"
+        + 'export const PublicCompositionRoot = SharedApplication;\n'
+        + 'export const authorityGeneration = 1;\n',
+      'authority_generation',
+    ],
+    [
+      'src/ui/shared/SharedApplication.tsx',
+      'export function SharedApplication() { return null; }\n'
+        + 'export const materializationEpoch = 1;\n',
+      'materialization_epoch',
+    ],
+  ]) {
+    const files = baselineFiles();
+    files.set(file, source);
+    const report = analyze(files);
+    assert.equal(report.state, 'FAIL', `${marker} must be refused`);
+    assert.ok(
+      report.errors.some((error) => error.includes(marker)),
+      `${marker}: ${report.errors.join('\n')}`,
+    );
+  }
 });
 
 test('accepts only the self-contained deny policy identity', () => {
