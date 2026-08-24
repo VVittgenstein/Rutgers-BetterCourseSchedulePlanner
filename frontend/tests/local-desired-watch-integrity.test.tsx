@@ -993,13 +993,13 @@ describe('a mutation whose outcome is unknown withdraws what it was about', () =
 
 describe('a closed socket is a cutoff over every answer, not a list of sections', () => {
   it.each([
-    ['a snapshot that had not landed yet', 'NONE', 'CLOSED'],
-    ['a snapshot that had not landed yet', 'NONE', 'ERROR'],
-    ['a snapshot whose row was still preparing', 'PREPARING', 'CLOSED'],
-    ['a snapshot whose row was still preparing', 'PREPARING', 'ERROR'],
+    ['CLOSED', 'a snapshot that had not landed yet', 'NONE'],
+    ['ERROR', 'a snapshot that had not landed yet', 'NONE'],
+    ['CLOSED', 'a snapshot whose only row was still preparing', 'PREPARING'],
+    ['ERROR', 'a snapshot whose only row was still preparing', 'PREPARING'],
   ] as const)(
-    'does not let a read issued before %s went %s light the page back up',
-    async (_label, before, state) => {
+    'a read in flight when the socket went %s cannot light up %s',
+    async (state, _label, before) => {
       const server = authority();
       const held = deferred<void>();
       const running = () => ok(snapshot([entry(SECTION, { running: true })]));
