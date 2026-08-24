@@ -14,10 +14,10 @@ use sha2::{Digest, Sha256};
 
 use crate::migration::{apply_migrations, read_migration_records};
 use crate::{
-    DesiredWatch, DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchBudget,
-    DesiredWatchBudgetKind, DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchCounters,
-    DesiredWatchEntry, DesiredWatchMutationOutcome, DesiredWatchReceipt,
-    DesiredWatchReceiptOutcome, DesiredWatchRetirementOutcome, DesiredWatchRotation,
+    DesiredWatch, DesiredWatchAuthority, DesiredWatchBudget, DesiredWatchBudgetKind,
+    DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry,
+    DesiredWatchMutationOutcome, DesiredWatchReceipt, DesiredWatchReceiptOutcome,
+    DesiredWatchRotation,
     EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition,
     EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput, HistoryFilter, HistoryPage,
     HistoryWriteOutcome, LocalSettings, MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES,
@@ -242,18 +242,19 @@ impl PersonalStateStore {
     /// the first is decided before the ledger is consulted at all, and the
     /// second is derived from a row that already exists.
     ///
-    /// `admission` is consulted lazily, and only for a command that asks to
-    /// watch and has already passed generation, receipt, revision, and the
-    /// cap. A command that asks to STOP skips admission entirely: a section
-    /// that has since become unsupported must still be stoppable.
-    pub fn commit_desired_watch_mutation<A>(
+    /// Nothing here asks whether the section can actually be WATCHED. The
+    /// target's campus, its term window, whether the catalog publishes it and
+    /// whether the integrity gate has released it are all conditions of
+    /// MATERIALIZING the intent, and every one of them can change after the
+    /// user has expressed it. Deciding them at write time would either freeze
+    /// a passing condition into a permanent receipted refusal or throw away a
+    /// user's intent because a snapshot happened to be rebuilding. The
+    /// authority stores what the user asked for; the coordinator reports what
+    /// it could do about it.
+    pub fn commit_desired_watch_mutation(
         &mut self,
         command: &DesiredWatchCommand,
-        admission: A,
-    ) -> PersonalStateResult<DesiredWatchMutationOutcome>
-    where
-        A: FnOnce(&SectionKey) -> DesiredWatchAdmission,
-    {
+    ) -> PersonalStateResult<DesiredWatchMutationOutcome> {
         let policy_json = command
             .policy
             .as_ref()
@@ -320,11 +321,14 @@ impl PersonalStateStore {
             );
         }
 
-        // 5. Admission, for a command that asks to watch.
+        // 5. The product cap, for a command that asks to watch. This is the
+        //    only admission rule the authority has, and it is about the
+        //    authority's own contents rather than about the world.
+        //
+        //    A POST-STATE test, deliberately: only 0 -> 1 consumes a slot, so
+        //    editing the policy of one of nine watched sections still
+        //    commits. Testing "count < 9" instead would refuse it.
         if command.desired() {
-            // A POST-STATE test, deliberately: only 0 -> 1 consumes a slot,
-            // so editing the policy of one of nine armed sections still
-            // commits. Testing "count < 9" instead would refuse it.
             let already_desired = existing.as_ref().is_some_and(|row| row.desired);
             if !already_desired && desired_watch_count(&transaction)? >= MAX_DESIRED_WATCHES as u64
             {
@@ -337,23 +341,6 @@ impl PersonalStateStore {
                         maximum: MAX_DESIRED_WATCHES,
                     },
                 );
-            }
-            match admission(&command.section) {
-                DesiredWatchAdmission::Admit | DesiredWatchAdmission::PendingGate => {}
-                // Non-terminal, so nothing is written and no receipt is left:
-                // recording it would freeze a busy lock into a permanent no.
-                DesiredWatchAdmission::Unavailable => {
-                    return Ok(DesiredWatchMutationOutcome::Unavailable);
-                }
-                DesiredWatchAdmission::Reject(reason) => {
-                    return record_terminal_rejection(
-                        transaction,
-                        &counters,
-                        command,
-                        &fingerprint,
-                        DesiredWatchReceiptOutcome::Rejected { reason },
-                    );
-                }
             }
         }
 
@@ -387,59 +374,6 @@ impl PersonalStateStore {
         )?;
         transaction.commit()?;
         Ok(DesiredWatchMutationOutcome::Committed(committed))
-    }
-
-    /// Retires a section the authority itself can never arm -- an unsupported
-    /// target, a term that fell out of the window -- by committing a
-    /// `desired = false` row on its own behalf.
-    ///
-    /// Deliberately not a flag on [`Self::commit_desired_watch_mutation`].
-    /// A system retirement obeys different rules at every step, and a shared
-    /// entry point would leave each of them to a caller's discipline: it can
-    /// only ever clear intent, never create it; it refuses to write over a
-    /// tombstone the user made first; it consults no admission source, since
-    /// the reason it exists is that admission said no; and it leaves no
-    /// receipt, because it mints a fresh id per attempt and a ledger row that
-    /// will never be presented again is just an unbounded source of rows.
-    pub fn retire_desired_watch(
-        &mut self,
-        section: &SectionKey,
-        based_on_revision: u64,
-        authority_generation: u64,
-    ) -> PersonalStateResult<DesiredWatchRetirementOutcome> {
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let counters = load_desired_watch_counters(&transaction)?;
-        if authority_generation != counters.authority_generation {
-            return Ok(DesiredWatchRetirementOutcome::StaleGeneration {
-                current: counters.authority_generation,
-            });
-        }
-        // The user wins this race. Once the section is gone the retirement
-        // has nothing left to do, and writing a second tombstone over the
-        // user's own would move the revision under a page that is already
-        // showing the right answer.
-        let Some(row) = load_desired_watch_row(&transaction, section)?.filter(|row| row.desired)
-        else {
-            return Ok(DesiredWatchRetirementOutcome::NothingToRetire);
-        };
-        if based_on_revision != row.revision {
-            return Ok(DesiredWatchRetirementOutcome::StaleRevision {
-                current: row.revision,
-            });
-        }
-        // A retirement is a retry loop by construction, so it keeps its row
-        // and comes back after a rotation rather than exceeding the cap.
-        if desired_watch_budget_within(&transaction)?.tombstones >= MAX_DESIRED_WATCH_TOMBSTONES {
-            return Ok(DesiredWatchRetirementOutcome::AuthorityFull(
-                DesiredWatchBudgetKind::Tombstones,
-            ));
-        }
-        let committed =
-            apply_desired_watch_write(&transaction, section, None, Some(&row), &counters)?;
-        transaction.commit()?;
-        Ok(DesiredWatchRetirementOutcome::Retired(committed))
     }
 
     /// How full the two rotation budgets are, read in one snapshot.

@@ -804,9 +804,11 @@ impl DesiredWatchEntry {
 /// a tombstone still fails a caller that saw nothing, which is exactly what
 /// stops a delayed START from resurrecting intent the user cancelled.
 ///
-/// There is no `source` field. The system's own retirement of a section it
-/// can never arm is a different operation with different rules, and it has
-/// its own entry point rather than a flag on this one.
+/// There is no `source` field, and there is no system-authored variant of
+/// this command. Every row in the table is something the user asked for:
+/// the authority never withdraws intent on the user's behalf, not even for
+/// a section it has proven it can never arm. It reports the reason and
+/// leaves the decision where it belongs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DesiredWatchCommand {
     pub section: SectionKey,
@@ -836,29 +838,25 @@ pub struct DesiredWatchCommitted {
     pub epoch_changed: bool,
 }
 
-/// Why a section cannot be watched at all. Permanent for this section: the
-/// campus is not a product target, the term is outside the window, or the
-/// section is not in the published catalog.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DesiredWatchRejection {
-    UnsupportedTarget,
-    TermOutOfRange,
-    SectionNotFound,
-}
-
 /// What a receipt records, and therefore what a repeated mutation replays.
 ///
 /// This is a PERSISTED format: it is stored as the ledger's `outcome_json`
 /// and read back by later builds, so the tag and field names are part of the
 /// on-disk contract, not an implementation detail.
 ///
-/// Terminal REJECTIONS are recorded here alongside commits, and that is the
-/// point. A rejection that left no trace could be retried later against a
-/// world that had changed -- a slot freed, a row created by another tab --
-/// and the same mutation the user was told was refused would quietly
-/// succeed. A receipted rejection is the answer forever; only a new gesture
-/// with a new id may ask again.
+/// The two terminal rejections recorded here -- a stale revision and the
+/// product cap -- are recorded on purpose. A rejection that left no trace
+/// could be retried later against a world that had changed (a slot freed, a
+/// row written by another tab) and the same mutation the user was told was
+/// refused would quietly succeed. A receipted rejection is the answer
+/// forever; only a new gesture with a new id may ask again.
+///
+/// What is deliberately NOT here is any verdict about whether the section
+/// can be WATCHED. The authority records intent; whether a target is
+/// supported, in term, published, or released by the integrity gate is
+/// decided when the intent is materialized, and it can change afterwards.
+/// Freezing such a verdict into a receipt would turn a passing condition
+/// into a permanent answer.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DesiredWatchReceiptOutcome {
@@ -872,8 +870,6 @@ pub enum DesiredWatchReceiptOutcome {
     StaleRevision { current: u64 },
     #[serde(rename_all = "camelCase")]
     LimitExceeded { maximum: usize },
-    #[serde(rename_all = "camelCase")]
-    Rejected { reason: DesiredWatchRejection },
 }
 
 impl DesiredWatchReceiptOutcome {
@@ -953,23 +949,6 @@ pub struct DesiredWatchRotation {
     pub retained: Vec<DesiredWatchEntry>,
 }
 
-/// A caller's verdict on whether a section may be armed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DesiredWatchAdmission {
-    Admit,
-    /// The section exists but the publication gate has not released it yet.
-    /// This COMMITS. Refusing here would turn a temporary hold into lost user
-    /// intent; the arm side retries the materialization instead.
-    PendingGate,
-    /// The answer is not knowable right now -- an unavailable snapshot, a
-    /// projection that will not build, a database lock held elsewhere.
-    /// NON-TERMINAL: nothing is written, no receipt is left, and the same id
-    /// may be retried. Reporting a permanent rejection here would throw away
-    /// the user's intent because a lock was busy.
-    Unavailable,
-    Reject(DesiredWatchRejection),
-}
-
 /// What the authority decided about one command.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DesiredWatchMutationOutcome {
@@ -994,10 +973,6 @@ pub enum DesiredWatchMutationOutcome {
     LimitExceeded {
         maximum: usize,
     },
-    Rejected(DesiredWatchRejection),
-    /// NON-TERMINAL. Nothing was written and no receipt was left; the same
-    /// id may be presented again.
-    Unavailable,
     /// NON-TERMINAL. A frozen resource budget is at its hard cap, so this
     /// write is refused rather than allowed to exceed it. Nothing is
     /// written and no receipt is left; the same id may be presented again
@@ -1028,33 +1003,8 @@ impl From<DesiredWatchReceiptOutcome> for DesiredWatchMutationOutcome {
             DesiredWatchReceiptOutcome::LimitExceeded { maximum } => {
                 Self::LimitExceeded { maximum }
             }
-            DesiredWatchReceiptOutcome::Rejected { reason } => Self::Rejected(reason),
         }
     }
-}
-
-/// What the authority decided about a system retirement.
-///
-/// A retirement has no receipt and no admission check: it always asks for
-/// `desired = false`, it mints a fresh id per attempt so a ledger entry would
-/// never be presented again, and a section that cannot be armed must still be
-/// stoppable.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DesiredWatchRetirementOutcome {
-    Retired(DesiredWatchCommitted),
-    StaleGeneration {
-        current: u64,
-    },
-    StaleRevision {
-        current: u64,
-    },
-    /// There is no desired row left to retire, because the user removed the
-    /// section first. The retirement stops here rather than writing a second
-    /// tombstone over the user's own.
-    NothingToRetire,
-    /// The tombstone budget is at its hard cap. Retirement is a retry loop
-    /// already, so it simply keeps its row and comes back after a rotation.
-    AuthorityFull(DesiredWatchBudgetKind),
 }
 
 /// The four persisted authority counters.

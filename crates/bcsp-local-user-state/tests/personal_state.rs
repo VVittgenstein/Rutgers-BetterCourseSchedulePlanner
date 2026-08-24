@@ -9,10 +9,9 @@ use bcsp_contracts::{
 };
 use bcsp_local_user_state::{
     CatalogRefreshMinutes, CurrentFiltersRevision, DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD,
-    DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD, DesiredWatch, DesiredWatchAdmission,
-    DesiredWatchBudgetKind, DesiredWatchCommand, DesiredWatchCommitted,
-    DesiredWatchMutationOutcome, DesiredWatchReceiptOutcome, DesiredWatchRejection,
-    DesiredWatchRetirementOutcome, EpisodeActionInput, EpisodeActionKind, EpisodeDisposition,
+    DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD, DesiredWatch, DesiredWatchBudgetKind,
+    DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchMutationOutcome,
+    DesiredWatchReceiptOutcome, EpisodeActionInput, EpisodeActionKind, EpisodeDisposition,
     EpisodeHistoryIdentity, EpisodeSummaryInput, FilterAssociation, HistoryFilter,
     HistoryWriteOutcome, LocalSettings, LocaleOverride, MAX_DESIRED_WATCH_AUTHORITY_ROWS,
     MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES, MAX_DESIRED_WATCHES,
@@ -1192,15 +1191,6 @@ fn loud_policy() -> WatchPolicyV1 {
     )
 }
 
-fn admit(_section: &SectionKey) -> DesiredWatchAdmission {
-    DesiredWatchAdmission::Admit
-}
-
-/// An admission source that must never be reached.
-fn never(_section: &SectionKey) -> DesiredWatchAdmission {
-    panic!("admission was consulted")
-}
-
 fn committed(outcome: DesiredWatchMutationOutcome) -> DesiredWatchCommitted {
     match outcome {
         DesiredWatchMutationOutcome::Committed(commit) => commit,
@@ -1243,7 +1233,7 @@ fn the_cas_refusals_are_ordered_so_one_answer_never_hides_another() {
     from_the_past.authority_generation = 7;
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&from_the_past, admit)
+            .commit_desired_watch_mutation(&from_the_past)
             .unwrap(),
         DesiredWatchMutationOutcome::StaleGeneration { current: 1 },
     );
@@ -1257,20 +1247,31 @@ fn the_cas_refusals_are_ordered_so_one_answer_never_hides_another() {
     // either way, and a cap message would send it looking for the wrong fix.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(1), 4, 2), admit)
+            .commit_desired_watch_mutation(&start(section(1), 4, 2))
             .unwrap(),
         DesiredWatchMutationOutcome::StaleRevision { current: 0 },
     );
 
-    // Admission runs last, so a command that fails the revision check never
-    // reaches it. The panicking source proves it was not consulted.
+    // The product cap is checked last, so a command that fails the revision
+    // check is never told it is at the cap instead. Nine sections are
+    // desired by the time the last assertion runs, so the cap WOULD fire if
+    // the two checks were reordered.
+    for index in 1..=MAX_DESIRED_WATCHES as u16 {
+        committed(
+            store
+                .commit_desired_watch_mutation(&start(section(index), 0, 100 + u64::from(index)))
+                .unwrap(),
+        );
+    }
+    let mut past_the_cap = start(section(50), 4, 3);
+    past_the_cap.policy = Some(loud_policy());
     assert_eq!(
-        store
-            .commit_desired_watch_mutation(&start(section(1), 4, 3), never)
-            .unwrap(),
+        store.commit_desired_watch_mutation(&past_the_cap).unwrap(),
         DesiredWatchMutationOutcome::StaleRevision { current: 0 },
+        "a stale revision outranks the cap: the caller has to re-read either way, \
+         and a cap message would send it looking for the wrong fix",
     );
-    assert_eq!(store.desired_watches().unwrap(), Vec::new());
+    assert_eq!(store.desired_watches().unwrap().len(), MAX_DESIRED_WATCHES);
 }
 
 #[test]
@@ -1283,7 +1284,7 @@ fn a_terminal_rejection_is_recorded_so_the_world_cannot_change_the_answer() {
     // is no row, so this is refused, terminally.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(1), 1, 1), admit)
+            .commit_desired_watch_mutation(&start(section(1), 1, 1))
             .unwrap(),
         DesiredWatchMutationOutcome::StaleRevision { current: 0 },
     );
@@ -1304,7 +1305,7 @@ fn a_terminal_rejection_is_recorded_so_the_world_cannot_change_the_answer() {
     // Another tab now creates that row, so revision 1 exists after all.
     committed(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 2), admit)
+            .commit_desired_watch_mutation(&start(section(1), 0, 2))
             .unwrap(),
     );
 
@@ -1314,7 +1315,7 @@ fn a_terminal_rejection_is_recorded_so_the_world_cannot_change_the_answer() {
     // row someone else created.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(1), 1, 1), admit)
+            .commit_desired_watch_mutation(&start(section(1), 1, 1))
             .unwrap(),
         DesiredWatchMutationOutcome::Replayed(DesiredWatchReceiptOutcome::StaleRevision {
             current: 0
@@ -1334,10 +1335,7 @@ fn a_freed_slot_cannot_turn_a_recorded_limit_rejection_into_a_commit() {
         revisions.push(
             committed(
                 store
-                    .commit_desired_watch_mutation(
-                        &start(section(index), 0, u64::from(index)),
-                        admit,
-                    )
+                    .commit_desired_watch_mutation(&start(section(index), 0, u64::from(index)))
                     .unwrap(),
             )
             .revision,
@@ -1345,7 +1343,7 @@ fn a_freed_slot_cannot_turn_a_recorded_limit_rejection_into_a_commit() {
     }
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 10), never)
+            .commit_desired_watch_mutation(&start(section(10), 0, 10))
             .unwrap(),
         DesiredWatchMutationOutcome::LimitExceeded { maximum: 9 },
     );
@@ -1353,12 +1351,12 @@ fn a_freed_slot_cannot_turn_a_recorded_limit_rejection_into_a_commit() {
     // Free a slot, then present the refused mutation again unchanged.
     committed(
         store
-            .commit_desired_watch_mutation(&stop(section(1), revisions[0], 11), admit)
+            .commit_desired_watch_mutation(&stop(section(1), revisions[0], 11))
             .unwrap(),
     );
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 10), admit)
+            .commit_desired_watch_mutation(&start(section(10), 0, 10))
             .unwrap(),
         DesiredWatchMutationOutcome::Replayed(DesiredWatchReceiptOutcome::LimitExceeded {
             maximum: 9
@@ -1370,72 +1368,123 @@ fn a_freed_slot_cannot_turn_a_recorded_limit_rejection_into_a_commit() {
     // A new gesture, with a new id, is admitted into the slot that opened.
     committed(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 12), admit)
+            .commit_desired_watch_mutation(&start(section(10), 0, 12))
             .unwrap(),
     );
     assert_eq!(store.desired_watches().unwrap().len(), 9);
 }
 
+/// The authority is blind to the catalog, the term window and the campus
+/// list, and that is the contract rather than an omission.
+///
+/// Every one of those conditions is revocable: a campus can leave the product
+/// target list, a term can fall out of the window, a section can vanish from a
+/// rebuild, the integrity gate can hold a snapshot. None of them is the user's
+/// intent changing. Deciding them here would either freeze a passing condition
+/// into a receipted permanent refusal -- the user is told "no", the section is
+/// published a minute later, and the same id must still be answered "no"
+/// forever -- or throw the intent away because a snapshot was rebuilding.
+/// They are checked when the intent is MATERIALIZED, where the answer is
+/// allowed to change back.
 #[test]
-fn a_section_that_becomes_admissible_cannot_undo_a_recorded_rejection() {
+fn the_writer_never_asks_whether_a_section_can_actually_be_watched() {
     let directory = TempDir::new().unwrap();
     let path = database_path(&directory);
     let mut store = PersonalStateStore::open(&path).unwrap();
 
-    assert_eq!(
+    // Not a product campus, not a term in any window, and an index no
+    // catalog in this database has ever published -- this store holds no
+    // catalog at all. It commits, because the row records what the user
+    // asked for, not what the world currently allows.
+    let nowhere = SectionKey::try_new("90001", "ZZ", "99999").expect("valid SectionKey");
+    let written = committed(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), |_: &SectionKey| {
-                DesiredWatchAdmission::Reject(DesiredWatchRejection::SectionNotFound)
+            .commit_desired_watch_mutation(&DesiredWatchCommand {
+                section: nowhere.clone(),
+                policy: Some(WatchPolicyV1::default()),
+                based_on_revision: 0,
+                authority_generation: 1,
+                mutation_id: trace(1),
             })
             .unwrap(),
-        DesiredWatchMutationOutcome::Rejected(DesiredWatchRejection::SectionNotFound),
+    );
+    assert_eq!(
+        store.desired_watches().unwrap(),
+        vec![DesiredWatch {
+            section: nowhere.clone(),
+            policy: WatchPolicyV1::default(),
+        }],
+    );
+    assert_eq!(
+        stored_receipt(&path, 1).1,
+        format!(
+            r#"{{"outcome":"COMMITTED","revision":{},"materializationEpoch":{},"epochChanged":true}}"#,
+            written.revision, written.materialization_epoch,
+        ),
+        "the ledger records the commit, and no verdict about the section",
     );
 
-    // The catalog later publishes the section. The recorded answer still
-    // stands for this id: a user who was told the section does not exist
-    // must not find it silently watched some minutes later.
+    // And the row stays. Nothing in this crate can withdraw it: the only
+    // writers are a user command, a rotation that renumbers it, and the Full
+    // Reset that clears the whole table.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .commit_desired_watch_mutation(&stop(nowhere, written.revision, 2))
             .unwrap(),
-        DesiredWatchMutationOutcome::Replayed(DesiredWatchReceiptOutcome::Rejected {
-            reason: DesiredWatchRejection::SectionNotFound
+        DesiredWatchMutationOutcome::Committed(DesiredWatchCommitted {
+            revision: written.revision + 1,
+            materialization_epoch: written.materialization_epoch + 1,
+            epoch_changed: true,
         }),
+        "only the user's own STOP clears it",
     );
-    assert_eq!(store.desired_watches().unwrap(), Vec::new());
 }
 
+/// Two pages that read the same revision race one another. Exactly one wins,
+/// and the loser's stale command cannot resurrect what the winner cancelled.
 #[test]
-fn an_unavailable_admission_source_is_retryable_and_leaves_nothing_behind() {
+fn two_pages_holding_the_same_revision_cannot_both_commit() {
     let directory = TempDir::new().unwrap();
     let path = database_path(&directory);
     let mut store = PersonalStateStore::open(&path).unwrap();
 
-    // A held database lock, an unbuilt projection, a snapshot that is not
-    // ready: none of these say anything about the section. Recording one as
-    // an answer would throw the user's intent away because something was
-    // busy for a moment.
-    assert_eq!(
+    let armed = committed(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), |_: &SectionKey| {
-                DesiredWatchAdmission::Unavailable
-            })
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
-        DesiredWatchMutationOutcome::Unavailable,
     );
+
+    // Both pages read `armed.revision`. One of them stops the section.
+    let stopped = committed(
+        store
+            .commit_desired_watch_mutation(&stop(section(1), armed.revision, 2))
+            .unwrap(),
+    );
+
+    // The other page, still holding the pre-stop revision, submits a policy
+    // edit. Without the tombstone this would find no row, read 0, and be
+    // admitted -- re-arming a section the user just cancelled on another tab.
+    let mut edit = start(section(1), armed.revision, 3);
+    edit.policy = Some(loud_policy());
     assert_eq!(
-        receipt_count(&store),
-        0,
-        "a non-terminal answer is not recorded"
+        store.commit_desired_watch_mutation(&edit).unwrap(),
+        DesiredWatchMutationOutcome::StaleRevision {
+            current: stopped.revision
+        },
     );
     assert_eq!(store.desired_watches().unwrap(), Vec::new());
 
-    // So the SAME id may be presented again, and is decided on its merits.
-    committed(
-        store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
-            .unwrap(),
+    // The same id stays refused forever; only re-reading and resubmitting as
+    // a NEW gesture gets the user their way.
+    assert_eq!(
+        store.commit_desired_watch_mutation(&edit).unwrap(),
+        DesiredWatchMutationOutcome::Replayed(DesiredWatchReceiptOutcome::StaleRevision {
+            current: stopped.revision
+        }),
     );
+    let mut fresh = start(section(1), stopped.revision, 4);
+    fresh.policy = Some(loud_policy());
+    committed(store.commit_desired_watch_mutation(&fresh).unwrap());
     assert_eq!(store.desired_watches().unwrap().len(), 1);
 }
 
@@ -1447,7 +1496,7 @@ fn a_repeated_mutation_id_replays_and_a_reused_one_reports_the_row_it_finds() {
 
     let first = committed(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
     );
     assert_eq!(receipt_count(&store), 1);
@@ -1457,7 +1506,7 @@ fn a_repeated_mutation_id_replays_and_a_reused_one_reports_the_row_it_finds() {
     // first attempt never saw.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
         DesiredWatchMutationOutcome::Replayed(DesiredWatchReceiptOutcome::committed(first)),
     );
@@ -1478,7 +1527,7 @@ fn a_repeated_mutation_id_replays_and_a_reused_one_reports_the_row_it_finds() {
     // The same id carrying a different command is a collision, reported from
     // the row already there. A second insert would destroy the evidence.
     let outcome = store
-        .commit_desired_watch_mutation(&start(section(2), 0, 1), admit)
+        .commit_desired_watch_mutation(&start(section(2), 0, 1))
         .unwrap();
     let DesiredWatchMutationOutcome::MutationIdConflict(recorded) = outcome else {
         panic!("expected a conflict, got {outcome:?}");
@@ -1505,7 +1554,7 @@ fn a_repeated_mutation_id_replays_and_a_reused_one_reports_the_row_it_finds() {
     let mut same_section = start(section(1), 0, 1);
     same_section.policy = Some(loud_policy());
     let outcome = store
-        .commit_desired_watch_mutation(&same_section, admit)
+        .commit_desired_watch_mutation(&same_section)
         .unwrap();
     assert!(
         matches!(outcome, DesiredWatchMutationOutcome::MutationIdConflict(_)),
@@ -1522,12 +1571,12 @@ fn a_tombstone_keeps_a_late_start_from_resurrecting_cancelled_intent() {
 
     let armed = committed(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
     );
     let stopped = committed(
         store
-            .commit_desired_watch_mutation(&stop(section(1), armed.revision, 2), admit)
+            .commit_desired_watch_mutation(&stop(section(1), armed.revision, 2))
             .unwrap(),
     );
     assert!(stopped.revision > armed.revision);
@@ -1545,7 +1594,7 @@ fn a_tombstone_keeps_a_late_start_from_resurrecting_cancelled_intent() {
     // be admitted -- re-arming a section the user just cancelled.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(1), armed.revision, 3), admit)
+            .commit_desired_watch_mutation(&start(section(1), armed.revision, 3))
             .unwrap(),
         DesiredWatchMutationOutcome::StaleRevision {
             current: stopped.revision
@@ -1565,10 +1614,7 @@ fn the_cap_counts_the_state_a_mutation_leaves_behind() {
         revisions.push(
             committed(
                 store
-                    .commit_desired_watch_mutation(
-                        &start(section(index), 0, u64::from(index)),
-                        admit,
-                    )
+                    .commit_desired_watch_mutation(&start(section(index), 0, u64::from(index)))
                     .unwrap(),
             )
             .revision,
@@ -1579,7 +1625,7 @@ fn the_cap_counts_the_state_a_mutation_leaves_behind() {
     // A tenth section is refused, and refused before admission.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 10), never)
+            .commit_desired_watch_mutation(&start(section(10), 0, 10))
             .unwrap(),
         DesiredWatchMutationOutcome::LimitExceeded { maximum: 9 },
     );
@@ -1589,7 +1635,7 @@ fn the_cap_counts_the_state_a_mutation_leaves_behind() {
     // and make a full watch list uneditable.
     let mut edit = start(section(1), revisions[0], 100);
     edit.policy = Some(loud_policy());
-    let edited = committed(store.commit_desired_watch_mutation(&edit, admit).unwrap());
+    let edited = committed(store.commit_desired_watch_mutation(&edit).unwrap());
     assert!(edited.revision > revisions[0]);
     assert!(
         !edited.epoch_changed,
@@ -1599,12 +1645,12 @@ fn the_cap_counts_the_state_a_mutation_leaves_behind() {
     // And stopping one frees the slot for a tenth section.
     committed(
         store
-            .commit_desired_watch_mutation(&stop(section(2), revisions[1], 101), admit)
+            .commit_desired_watch_mutation(&stop(section(2), revisions[1], 101))
             .unwrap(),
     );
     committed(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 102), admit)
+            .commit_desired_watch_mutation(&start(section(10), 0, 102))
             .unwrap(),
     );
 }
@@ -1617,14 +1663,14 @@ fn a_policy_edit_keeps_the_epoch_and_a_desired_change_allocates_one() {
 
     let armed = committed(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
     );
     assert!(armed.epoch_changed);
 
     let mut edit = start(section(1), armed.revision, 2);
     edit.policy = Some(loud_policy());
-    let edited = committed(store.commit_desired_watch_mutation(&edit, admit).unwrap());
+    let edited = committed(store.commit_desired_watch_mutation(&edit).unwrap());
     assert!(
         edited.revision > armed.revision,
         "every commit advances the revision"
@@ -1652,95 +1698,53 @@ fn a_policy_edit_keeps_the_epoch_and_a_desired_change_allocates_one() {
     );
 }
 
+/// A STOP is unconditional. There is no state of the world in which the
+/// authority may answer "no, you may not stop watching this" -- a watch the
+/// user cannot turn off is worse than any silence -- so a stop passes the
+/// generation, receipt and revision checks and nothing else. In particular it
+/// skips the product cap: the cap is about how many sections may be watched,
+/// and a stop only ever lowers that number.
 #[test]
-fn stopping_skips_admission_and_a_gate_hold_still_commits() {
+fn a_stop_is_never_refused_for_anything_but_a_stale_read() {
     let directory = TempDir::new().unwrap();
     let path = database_path(&directory);
     let mut store = PersonalStateStore::open(&path).unwrap();
 
-    // A section the gate has not released yet COMMITS. Refusing here would
-    // turn a temporary hold into intent the user has to re-enter.
-    let armed = committed(
-        store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), |_: &SectionKey| {
-                DesiredWatchAdmission::PendingGate
-            })
-            .unwrap(),
+    let mut revisions = Vec::new();
+    for index in 1..=MAX_DESIRED_WATCHES as u16 {
+        revisions.push(
+            committed(
+                store
+                    .commit_desired_watch_mutation(&start(section(index), 0, u64::from(index)))
+                    .unwrap(),
+            )
+            .revision,
+        );
+    }
+    assert_eq!(
+        store.desired_watches().unwrap().len(),
+        MAX_DESIRED_WATCHES,
+        "the cap is full, which is exactly when a cap check would bite",
     );
 
-    // Stopping never consults admission at all: a section that became
-    // unsupported after it was armed must still be stoppable, and asking
-    // would be the one way to answer "no, you may not stop it".
-    committed(
+    let stopped = committed(
         store
-            .commit_desired_watch_mutation(&stop(section(1), armed.revision, 2), never)
+            .commit_desired_watch_mutation(&stop(section(1), revisions[0], 100))
             .unwrap(),
     );
-    assert_eq!(store.desired_watches().unwrap(), Vec::new());
-}
+    assert!(stopped.epoch_changed);
+    assert_eq!(store.desired_watches().unwrap().len(), 8);
 
-#[test]
-fn a_system_retirement_clears_intent_without_a_receipt_and_yields_to_the_user() {
-    let directory = TempDir::new().unwrap();
-    let path = database_path(&directory);
-    let mut store = PersonalStateStore::open(&path).unwrap();
-
-    let armed = committed(
-        store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
-            .unwrap(),
-    );
-    assert_eq!(receipt_count(&store), 1);
-
-    // A retirement that lost the CAS says so, so the caller re-reads rather
-    // than overwriting whatever landed in between.
+    // The only thing that can refuse a stop is a stale read of the row it
+    // names, and that is the tombstone doing its job rather than a policy.
     assert_eq!(
         store
-            .retire_desired_watch(&section(1), armed.revision + 99, 1)
+            .commit_desired_watch_mutation(&stop(section(2), revisions[1] + 99, 101))
             .unwrap(),
-        DesiredWatchRetirementOutcome::StaleRevision {
-            current: armed.revision
+        DesiredWatchMutationOutcome::StaleRevision {
+            current: revisions[1]
         },
     );
-    assert_eq!(
-        store
-            .retire_desired_watch(&section(1), armed.revision, 7)
-            .unwrap(),
-        DesiredWatchRetirementOutcome::StaleGeneration { current: 1 },
-    );
-
-    let retired = match store
-        .retire_desired_watch(&section(1), armed.revision, 1)
-        .unwrap()
-    {
-        DesiredWatchRetirementOutcome::Retired(commit) => commit,
-        other => panic!("expected a retirement, got {other:?}"),
-    };
-    assert!(retired.epoch_changed);
-    assert_eq!(
-        receipt_count(&store),
-        1,
-        "a retirement mints a fresh id per attempt, so a ledger row would never be replayed",
-    );
-    assert_eq!(store.desired_watches().unwrap(), Vec::new());
-
-    // And it never writes over a row the user already cleared: once there is
-    // nothing desired, the retirement stops instead of moving the revision
-    // under a page that is already showing the right answer.
-    assert_eq!(
-        store
-            .retire_desired_watch(&section(1), retired.revision, 1)
-            .unwrap(),
-        DesiredWatchRetirementOutcome::NothingToRetire,
-    );
-    assert_eq!(
-        store.retire_desired_watch(&section(2), 0, 1).unwrap(),
-        DesiredWatchRetirementOutcome::NothingToRetire,
-        "a section that was never desired has nothing to retire either",
-    );
-    let authority = store.desired_watch_authority().unwrap();
-    assert_eq!(authority.entries.len(), 1);
-    assert_eq!(authority.entries[0].revision, retired.revision);
 }
 
 #[test]
@@ -1752,13 +1756,10 @@ fn stopping_a_section_that_was_never_started_still_records_the_cancellation() {
     // Reachable whenever a page cancels before its START commits. The row is
     // written rather than dropped so the revision line starts here: a START
     // still in flight carries `basedOnRevision = 0` and now fails, instead of
-    // arriving after the cancellation and being admitted. The panicking
-    // admission source is the point of this call -- a stop reaches a section
-    // no admission source has ever been asked about, and must not start
-    // asking now.
+    // arriving after the cancellation and being admitted.
     let cancelled = committed(
         store
-            .commit_desired_watch_mutation(&stop(section(1), 0, 1), never)
+            .commit_desired_watch_mutation(&stop(section(1), 0, 1))
             .unwrap(),
     );
     assert!(
@@ -1774,7 +1775,7 @@ fn stopping_a_section_that_was_never_started_still_records_the_cancellation() {
     assert!(authority.entries[0].is_tombstone());
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 2), admit)
+            .commit_desired_watch_mutation(&start(section(1), 0, 2))
             .unwrap(),
         DesiredWatchMutationOutcome::StaleRevision {
             current: cancelled.revision
@@ -1803,7 +1804,7 @@ fn an_exhausted_authority_counter_is_an_error_rather_than_a_wrap() {
 
     let mut store = PersonalStateStore::open(&path).unwrap();
     assert!(matches!(
-        store.commit_desired_watch_mutation(&start(section(1), 0, 1), admit),
+        store.commit_desired_watch_mutation(&start(section(1), 0, 1)),
         Err(PersonalStateError::DesiredWatchCounterExhausted),
     ));
     assert_eq!(
@@ -1828,34 +1829,30 @@ fn the_persisted_receipt_format_is_pinned() {
     //     ‖ desired (1 byte) ‖ policy JSON (empty for a stop)
     // hashed with SHA-256; the digests below are for section T2026F/CAMPUS_A
     // with the default policy unless noted.
+    //
+    // Three outcome shapes exist and all three are pinned below: COMMITTED,
+    // STALE_REVISION and LIMIT_EXCEEDED. Every one of them is a statement
+    // about the AUTHORITY. A receipt never records a verdict about whether a
+    // section can be watched, because that answer is allowed to change.
     let armed = committed(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
     );
     let mut edit = start(section(1), armed.revision, 2);
     edit.policy = Some(loud_policy());
-    let edited = committed(store.commit_desired_watch_mutation(&edit, admit).unwrap());
+    let edited = committed(store.commit_desired_watch_mutation(&edit).unwrap());
     committed(
         store
-            .commit_desired_watch_mutation(&stop(section(1), edited.revision, 3), admit)
+            .commit_desired_watch_mutation(&stop(section(1), edited.revision, 3))
             .unwrap(),
     );
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(2), 5, 4), admit)
+            .commit_desired_watch_mutation(&start(section(2), 5, 4))
             .unwrap(),
         DesiredWatchMutationOutcome::StaleRevision { current: 0 },
     );
-    assert_eq!(
-        store
-            .commit_desired_watch_mutation(&start(section(3), 0, 5), |_: &SectionKey| {
-                DesiredWatchAdmission::Reject(DesiredWatchRejection::TermOutOfRange)
-            })
-            .unwrap(),
-        DesiredWatchMutationOutcome::Rejected(DesiredWatchRejection::TermOutOfRange),
-    );
-
     for (mutation, fingerprint, outcome_json) in [
         (
             1_u64,
@@ -1880,59 +1877,28 @@ fn the_persisted_receipt_format_is_pinned() {
             "c4ff6d260d6a237ac376fd328e0b7a7d806467ee3f629d9af938ceaa6235868a",
             r#"{"outcome":"STALE_REVISION","current":0}"#,
         ),
-        (
-            5,
-            "63f4ea094f029841c3c1a2148961d524a74ce8fe5016f45f0adb1810163dc909",
-            r#"{"outcome":"REJECTED","reason":"TERM_OUT_OF_RANGE"}"#,
-        ),
     ] {
         let stored = stored_receipt(&path, mutation);
         assert_eq!(stored.0, fingerprint, "fingerprint for mutation {mutation}");
         assert_eq!(stored.1, outcome_json, "outcome for mutation {mutation}");
     }
 
-    // Each `reason` spelling is on-disk format too, and a rename of any one
-    // of them orphans every stored receipt of that kind, so pin all three
-    // rather than only the one the outcome shape happened to use.
-    assert_eq!(
-        store
-            .commit_desired_watch_mutation(&start(section(4), 0, 6), |_: &SectionKey| {
-                DesiredWatchAdmission::Reject(DesiredWatchRejection::UnsupportedTarget)
-            })
-            .unwrap(),
-        DesiredWatchMutationOutcome::Rejected(DesiredWatchRejection::UnsupportedTarget),
-    );
-    assert_eq!(
-        stored_receipt(&path, 6).1,
-        r#"{"outcome":"REJECTED","reason":"UNSUPPORTED_TARGET"}"#,
-    );
-    assert_eq!(
-        store
-            .commit_desired_watch_mutation(&start(section(5), 0, 7), |_: &SectionKey| {
-                DesiredWatchAdmission::Reject(DesiredWatchRejection::SectionNotFound)
-            })
-            .unwrap(),
-        DesiredWatchMutationOutcome::Rejected(DesiredWatchRejection::SectionNotFound),
-    );
-    assert_eq!(
-        stored_receipt(&path, 7).1,
-        r#"{"outcome":"REJECTED","reason":"SECTION_NOT_FOUND"}"#,
-    );
-
-    // The fourth outcome shape needs a full watch list of its own.
+    // The third outcome shape needs a full watch list of its own. There is no
+    // fourth: the REJECTED shape the ledger used to carry held a verdict
+    // about the section itself, and the writer no longer forms one.
     let capped = TempDir::new().unwrap();
     let capped_path = database_path(&capped);
     let mut capped_store = PersonalStateStore::open(&capped_path).unwrap();
     for index in 1..=MAX_DESIRED_WATCHES as u16 {
         committed(
             capped_store
-                .commit_desired_watch_mutation(&start(section(index), 0, u64::from(index)), admit)
+                .commit_desired_watch_mutation(&start(section(index), 0, u64::from(index)))
                 .unwrap(),
         );
     }
     assert_eq!(
         capped_store
-            .commit_desired_watch_mutation(&start(section(10), 0, 10), admit)
+            .commit_desired_watch_mutation(&start(section(10), 0, 10))
             .unwrap(),
         DesiredWatchMutationOutcome::LimitExceeded { maximum: 9 },
     );
@@ -1954,15 +1920,12 @@ fn every_recorded_answer_survives_closing_and_reopening_the_database() {
         let mut store = PersonalStateStore::open(&path).unwrap();
         let mut expected = Vec::new();
 
-        // Eight commits, leaving one slot so the rejections below are the
-        // rejections they claim to be rather than the cap firing first.
+        // Eight commits, leaving one slot so the stale-revision refusal below
+        // is the refusal it claims to be rather than the cap firing first.
         for index in 1..=8_u16 {
             let commit = committed(
                 store
-                    .commit_desired_watch_mutation(
-                        &start(section(index), 0, u64::from(index)),
-                        admit,
-                    )
+                    .commit_desired_watch_mutation(&start(section(index), 0, u64::from(index)))
                     .unwrap(),
             );
             expected.push((
@@ -1973,7 +1936,7 @@ fn every_recorded_answer_survives_closing_and_reopening_the_database() {
 
         let stale = start(section(20), 7, 20);
         assert_eq!(
-            store.commit_desired_watch_mutation(&stale, never).unwrap(),
+            store.commit_desired_watch_mutation(&stale).unwrap(),
             DesiredWatchMutationOutcome::StaleRevision { current: 0 },
         );
         expected.push((
@@ -1981,30 +1944,14 @@ fn every_recorded_answer_survives_closing_and_reopening_the_database() {
             DesiredWatchReceiptOutcome::StaleRevision { current: 0 },
         ));
 
-        let refused = start(section(30), 0, 30);
-        assert_eq!(
-            store
-                .commit_desired_watch_mutation(&refused, |_: &SectionKey| {
-                    DesiredWatchAdmission::Reject(DesiredWatchRejection::UnsupportedTarget)
-                })
-                .unwrap(),
-            DesiredWatchMutationOutcome::Rejected(DesiredWatchRejection::UnsupportedTarget),
-        );
-        expected.push((
-            refused,
-            DesiredWatchReceiptOutcome::Rejected {
-                reason: DesiredWatchRejection::UnsupportedTarget,
-            },
-        ));
-
         // Now fill the last slot, so the tenth section meets the cap.
         let ninth = start(section(9), 0, 9);
-        let commit = committed(store.commit_desired_watch_mutation(&ninth, admit).unwrap());
+        let commit = committed(store.commit_desired_watch_mutation(&ninth).unwrap());
         expected.push((ninth, DesiredWatchReceiptOutcome::committed(commit)));
 
         let capped = start(section(10), 0, 10);
         assert_eq!(
-            store.commit_desired_watch_mutation(&capped, never).unwrap(),
+            store.commit_desired_watch_mutation(&capped).unwrap(),
             DesiredWatchMutationOutcome::LimitExceeded {
                 maximum: MAX_DESIRED_WATCHES
             },
@@ -2020,14 +1967,12 @@ fn every_recorded_answer_survives_closing_and_reopening_the_database() {
 
     // A new process, a new connection, the same answers. Replaying from the
     // ledger is the only reason a client that lost its response can retry at
-    // all, so it has to keep working across the restart that lost it. The
-    // panicking admission source also proves a replay short-circuits before
-    // anything is re-decided.
+    // all, so it has to keep working across the restart that lost it.
     let mut reopened = PersonalStateStore::open(&path).unwrap();
     for (command, outcome) in &expected {
         assert_eq!(
             reopened
-                .commit_desired_watch_mutation(command, never)
+                .commit_desired_watch_mutation(command)
                 .unwrap(),
             DesiredWatchMutationOutcome::Replayed(*outcome),
             "replay for {}",
@@ -2174,7 +2119,7 @@ fn the_tombstone_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
     );
     let armed = committed(
         store
-            .commit_desired_watch_mutation(&start(section(9000), 0, 1), admit)
+            .commit_desired_watch_mutation(&start(section(9000), 0, 1))
             .unwrap(),
     );
 
@@ -2183,7 +2128,7 @@ fn the_tombstone_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
     let before = receipt_count(&store);
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&stop(section(9000), armed.revision, 2), never)
+            .commit_desired_watch_mutation(&stop(section(9000), armed.revision, 2))
             .unwrap(),
         DesiredWatchMutationOutcome::AuthorityFull(DesiredWatchBudgetKind::Tombstones),
     );
@@ -2205,54 +2150,8 @@ fn the_tombstone_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
     assert_eq!(rotation.deleted_tombstones, MAX_DESIRED_WATCH_TOMBSTONES);
     let mut retry = stop(section(9000), rotation.retained[0].revision, 3);
     retry.authority_generation = rotation.authority_generation;
-    committed(store.commit_desired_watch_mutation(&retry, never).unwrap());
+    committed(store.commit_desired_watch_mutation(&retry).unwrap());
     assert_eq!(store.desired_watches().unwrap(), Vec::new());
-}
-
-#[test]
-fn a_system_retirement_also_stops_at_the_tombstone_cap() {
-    let directory = TempDir::new().unwrap();
-    let path = database_path(&directory);
-    seed_tombstones(&path, MAX_DESIRED_WATCH_TOMBSTONES);
-    let mut store = PersonalStateStore::open(&path).unwrap();
-    let armed = committed(
-        store
-            .commit_desired_watch_mutation(&start(section(9000), 0, 1), admit)
-            .unwrap(),
-    );
-
-    // The retirement is the other writer that turns a desired row into a
-    // tombstone, so the cap has to hold on this path too -- a reconciler
-    // looping on a section it can never arm must not be the thing that
-    // walks the table past its bound.
-    assert_eq!(
-        store
-            .retire_desired_watch(&section(9000), armed.revision, 1)
-            .unwrap(),
-        DesiredWatchRetirementOutcome::AuthorityFull(DesiredWatchBudgetKind::Tombstones),
-    );
-    assert_eq!(
-        store.desired_watch_budget().unwrap().tombstones,
-        MAX_DESIRED_WATCH_TOMBSTONES,
-    );
-    assert_eq!(
-        store.desired_watches().unwrap().len(),
-        1,
-        "the row it could not retire is untouched"
-    );
-
-    // After a rotation it completes, against the generation rotation made.
-    let rotation = store.rotate_desired_watch_authority().unwrap();
-    assert!(matches!(
-        store
-            .retire_desired_watch(
-                &section(9000),
-                rotation.retained[0].revision,
-                rotation.authority_generation,
-            )
-            .unwrap(),
-        DesiredWatchRetirementOutcome::Retired(_),
-    ));
 }
 
 #[test]
@@ -2270,7 +2169,7 @@ fn the_budget_reader_names_the_same_culprit_the_writer_does() {
     assert_eq!(budget.exhausted(), Some(DesiredWatchBudgetKind::Receipts));
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&stop(section(9000), 0, 1), never)
+            .commit_desired_watch_mutation(&stop(section(9000), 0, 1))
             .unwrap(),
         DesiredWatchMutationOutcome::AuthorityFull(DesiredWatchBudgetKind::Receipts),
     );
@@ -2306,7 +2205,7 @@ fn the_receipt_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
     // failing to record it would hand out an answer a retry could contradict.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), never)
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
         DesiredWatchMutationOutcome::AuthorityFull(DesiredWatchBudgetKind::Receipts),
     );
@@ -2321,7 +2220,7 @@ fn the_receipt_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
     assert_eq!(rotation.deleted_receipts, MAX_DESIRED_WATCH_RECEIPTS);
     let mut retry = start(section(1), 0, 1);
     retry.authority_generation = rotation.authority_generation;
-    committed(store.commit_desired_watch_mutation(&retry, admit).unwrap());
+    committed(store.commit_desired_watch_mutation(&retry).unwrap());
 }
 
 #[test]
@@ -2332,7 +2231,7 @@ fn a_replay_still_answers_when_the_ledger_is_full() {
 
     let first = committed(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
     );
     drop(store);
@@ -2348,7 +2247,7 @@ fn a_replay_still_answers_when_the_ledger_is_full() {
     // later" -- that would be the authority forgetting something it knows.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), never)
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
         DesiredWatchMutationOutcome::Replayed(DesiredWatchReceiptOutcome::committed(first)),
     );
@@ -2362,17 +2261,17 @@ fn rotation_carries_intent_into_a_new_generation_and_frees_both_budgets() {
 
     let armed = committed(
         store
-            .commit_desired_watch_mutation(&start(section(1), 0, 1), admit)
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
     );
     committed(
         store
-            .commit_desired_watch_mutation(&start(section(2), 0, 2), admit)
+            .commit_desired_watch_mutation(&start(section(2), 0, 2))
             .unwrap(),
     );
     committed(
         store
-            .commit_desired_watch_mutation(&stop(section(1), armed.revision, 3), admit)
+            .commit_desired_watch_mutation(&stop(section(1), armed.revision, 3))
             .unwrap(),
     );
     // Give the incarnation a value only a running actor would have. Left at
@@ -2426,7 +2325,7 @@ fn rotation_carries_intent_into_a_new_generation_and_frees_both_budgets() {
     // is what makes renumbering inside the new generation safe.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(3), 0, 4), never)
+            .commit_desired_watch_mutation(&start(section(3), 0, 4))
             .unwrap(),
         DesiredWatchMutationOutcome::StaleGeneration { current: 2 },
     );
@@ -2441,10 +2340,7 @@ fn the_largest_legal_authority_state_is_bounded_by_the_two_caps() {
     for index in 1..=MAX_DESIRED_WATCHES as u16 {
         committed(
             store
-                .commit_desired_watch_mutation(
-                    &start(section(9000 + index), 0, u64::from(index)),
-                    admit,
-                )
+                .commit_desired_watch_mutation(&start(section(9000 + index), 0, u64::from(index)))
                 .unwrap(),
         );
     }
@@ -2461,14 +2357,14 @@ fn the_largest_legal_authority_state_is_bounded_by_the_two_caps() {
     assert_eq!(MAX_DESIRED_WATCH_AUTHORITY_ROWS, 521);
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(8000), 0, 100), never)
+            .commit_desired_watch_mutation(&start(section(8000), 0, 100))
             .unwrap(),
         DesiredWatchMutationOutcome::LimitExceeded { maximum: 9 },
         "no tenth watch",
     );
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&stop(section(8000), 0, 101), never)
+            .commit_desired_watch_mutation(&stop(section(8000), 0, 101))
             .unwrap(),
         DesiredWatchMutationOutcome::AuthorityFull(DesiredWatchBudgetKind::Tombstones),
         "no 513th tombstone",

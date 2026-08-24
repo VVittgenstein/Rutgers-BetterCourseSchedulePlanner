@@ -10,9 +10,19 @@
 //! every row carries a revision and a materialization epoch, a removal leaves a tombstone
 //! rather than vanishing, and repeated mutations -- successes and terminal rejections alike --
 //! are settled against a receipt ledger, so the same mutation id can never be answered two
-//! different ways. The CAS writer lives here; nothing calls it yet, and `desired_watches()`
-//! deliberately hides tombstones so the bootstrap wire stays byte-identical to protocol v1
-//! until the frontend slice consumes the new shape.
+//! different ways.
+//!
+//! The writer enforces only rules about the AUTHORITY: the generation, the receipt ledger, the
+//! based-on revision, the nine-section product cap measured against the state a mutation leaves
+//! behind, and the two resource budgets. It never asks whether a section can be watched. Whether
+//! the campus is a product target, the term is in the window, the catalog publishes the section
+//! and the integrity gate has released it are all conditions of MATERIALIZING an intent, they are
+//! all revocable, and none of them is the user's intent changing. Nothing in this crate can
+//! withdraw intent on the user's behalf either: a section the runtime proves it can never arm
+//! keeps its row, and the reason is reported rather than acted on.
+//!
+//! `desired_watches()` deliberately hides tombstones so the bootstrap wire stays byte-identical
+//! to protocol v1; the authority read that includes them is `desired_watch_authority()`.
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]
@@ -27,10 +37,9 @@ mod store;
 pub use error::{PersonalStateError, PersonalStateResult, SettingValueError};
 pub use model::{
     CatalogRefreshMinutes, CurrentFilters, CurrentFiltersRevision, DesiredWatch,
-    DesiredWatchAdmission, DesiredWatchAuthority, DesiredWatchBudget, DesiredWatchBudgetKind,
-    DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry,
-    DesiredWatchMutationOutcome, DesiredWatchReceipt, DesiredWatchReceiptOutcome,
-    DesiredWatchRejection, DesiredWatchRetirementOutcome, DesiredWatchRotation, EpisodeActionInput,
+    DesiredWatchAuthority, DesiredWatchBudget, DesiredWatchBudgetKind, DesiredWatchCommand,
+    DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome,
+    DesiredWatchReceipt, DesiredWatchReceiptOutcome, DesiredWatchRotation, EpisodeActionInput,
     EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition, EpisodeHistoryIdentity,
     EpisodeHistorySummary, EpisodeSummaryInput, FilterAssociation, HistoryFilter, HistoryPage,
     HistoryWriteOutcome, LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest,
