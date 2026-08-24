@@ -882,3 +882,83 @@ R2 引入两处新机制，同样单独记：
 前端七项修复逐条反转后重跑 `tests/local-desired-watch-integrity.test.tsx`，
 每一项都有对应测试失败；反转项与失败测试一一对应，无"反转后仍全绿"的条目。
 Rust 侧同样逐条反转复验，记录见 Claude 的 R2 回报 Negative proof 一节。
+## M0-M1-001-R3：reduced S2/L1 组合反例收口
+
+Codex 对 `c50499f..2cd54e2` 的独立结论仍是 `CHANGES_REQUIRED`。R2 的每一项机制单独
+看都成立，剩下的全部是**它们彼此组合后的确定性反例**：STOP 与 rotation、失败结论与
+新意图、单条手势 snapshot 与真实批量按钮、mutation 结果未知与旧 READY、socket 关闭与
+在途 GET。R3 只关闭这些组合，不扩展范围。
+
+判别力仍分两类，逐项写明：
+
+- **判别器**：把对应修复反转或删除后，该测试失败（已逐条实测，见下节）；
+- **回归门**：保护 R3 新增的机制本身，`2cd54e2` 里没有这个失效模式可打挂。
+
+| R3 项 | 缺口 | 关闭它的测试 | 判别力 |
+|---|---|---|---|
+| A3 | STOP 自己跨阈值触发的 rotation 删掉 tombstone，健康 200 的 committed 仍是 rotation 前的 revision/epoch，被本地 strict codec 拒绝 | `desired_watch.rs::a_healthy_stop_that_rotates_its_own_tombstone_answers_the_frozen_absent_shape`（同时钉住序列化后的 wire body） | 判别器 |
+| A3 | 另一 caller 在 COMMITTED 与 stamp 之间 rotation/purge，缺行仍报旧数字 | `desired.rs::tests::a_commit_purged_by_another_caller_before_it_is_stamped_reports_the_absent_shape`（`MutationDecided` rendezvous，双向阻塞握手） | 判别器 |
+| A3 | teardown 未完成时 rotation 删掉 tombstone，仍活 watch 从 GET/desk 完全消失 | `desired_watch.rs::a_stop_whose_teardown_is_stuck_survives_the_rotation_it_triggered`（并验证 fault 解除后按原 id 停止、之后的 rotation 才回收） | 判别器 |
+| A3 | writer 侧：rotation 必须只保留 caller 指名的 tombstone，并照常重编号、照常作为 CAS 屏障 | `personal_state.rs::rotation_keeps_the_tombstones_the_caller_is_still_tearing_down` | 判别器 |
+| A3 | 浏览器 codec 必须接受且只接受冻结的 0/0 缺行形态 | `local-desired-watch-integrity.test.tsx::accepts a commit whose row was legitimately collected by a rotation`、`::refuses a commit whose row is gone but which reports the numbers it used to hold`、`::refuses a commit whose row is gone and which reports half of the absent shape` | 判别器 |
+| A4 | 旧 PERMANENT failure 穿过 stuck teardown 与 STOP，永久阻止新的 START | `desired_watch.rs::an_old_permanent_failure_does_not_survive_the_intent_that_earned_it`（arm rev1 → SectionNotFound + stop fault → STOP rev2 → START rev3 → 解除 fault：停旧 id、以新 id 装配 rev3、failure 清空） | 判别器 |
+| A4 | 同型反例，改为 policy edit 跨 stuck teardown（只动 revision，不动 epoch） | `desired_watch.rs::a_policy_edit_across_a_stuck_teardown_is_not_refused_by_the_old_failure` | 判别器 |
+| A4 | 失效结论不得报在已经移动过的行上（tombstone 显示"需要你决定"） | 同上两测试中的 `tombstone.failure.is_none()` / `waiting.failure.is_none()` 断言 | 判别器 |
+| A5 | `LiveWatchProvider.startSelected` 逐项 `await` 后重新捕获 snapshot，把后续 section rebase 到跨 tab 新 revision | `local-desired-watch-integrity.test.tsx::starts every selected section against the revisions the click was made on`（点击真实 `Start selected · 2` 按钮；A 处理期间 B 被别的 tab 改到 rev5，B 请求仍带 rev1 并得到 stale） | 判别器 |
+| A5 | WatchWorkspace 的 Apply policy 同样逐项重新捕获，第一项触发 rotation 后静默采用新 generation | `::applies a policy against the generation the click was made on`（点击真实 `Apply policy to active` 按钮；两条请求的 `authorityGeneration` 都必须是点击时的 1） | 判别器 |
+| A6 | mutation 结果未知时旧 snapshot 继续可绿、可移除、可再提交 | `::withdraws the green light on a lost STOP before the re-read comes back` | 判别器 |
+| A6 | START 已提交但 response 丢失时，旧 snapshot 没有该 section，管理行整个消失 | `::keeps a lost START addressable, ungreen and unsubmittable until a read lands`（行仍在 desk、非绿、`active` 为 0、remove 与再次提交都被拒；held GET 落地后恢复真实 state，且全程只有一次写） | 判别器 |
+| A6 | `intentSaved` 只保留 `policy != null`，STOP fault + 读取失败会隐藏仍在 teardown 的 watch | `::keeps a row whose teardown is still running across a failed read` | 判别器 |
+| A7 | `disprove(null)` 只枚举当时已知 running rows；snapshot 为 null 或全部 PREPARING 时，关闭前 issued 的 GET 在关闭后返回 RUNNING 就能复绿 | `::a read in flight when the socket went CLOSED cannot light up …`（四例矩阵：`CLOSED`/`ERROR` × snapshot 未落地/唯一行仍 PREPARING；随后 OPEN + 新 GET 才允许恢复绿色） | 判别器 |
+| A8 | `Test-SamePolicy` 无精确键集、把一切数字转 `[long]`：extra key、`600.4`、`"600"`、fractional maxAudible 全部判为相同 | `packaging/windows/verify.ps1::Assert-PolicyComparison`（新增 top-level extra、duration extra、`600.4`、`"600"`、fractional/quoted maxAudible、缺 seconds、缺 duration、未知 mode/kind，以及"畸形 body 与自身比较也必须为 false"） | 判别器 |
+| A9 | `DesiredWatchCheckpoint` / `DesiredWatchCheckpoints` / `with_checkpoints` 无条件进入 crate 公开 API，任意回调可在持有 materialization mutex 时执行 | 三者改为 `#[cfg(test)]`，两个原并发测试与新增的 purge 交错测试移入 `desired.rs::tests`；`verify-rust-graph.mjs` 与 `verify-public-rust-zero-surface.mjs` 继续通过 | 回归门（`2cd54e2` 没有可打挂的失效行为，这是 API 面收窄） |
+
+R3 引入的两处新机制单独记：
+
+- `rotate_desired_watch_authority(&preserve_tombstones)`：**提升 generation 让 tombstone
+  可以作为 CAS 屏障被丢弃，但这不是它唯一的用途**。teardown 未完成的 section，其
+  tombstone 同时是 GET 唯一能挂 `pendingDisarm` 的行；丢掉它，一个仍在轮询 Rutgers、
+  仍会响铃的 watch 会同时从 desk、搜索入口和所有控件上消失。哪些 section 处于这个状态
+  只有 coordinator 知道，所以集合在授权 rotation 的同一把锁里算出来再交给 writer。
+- `StampedFailure` 把失败结论绑定到产生它的 `(generation, revision, epoch)`。没有 stamp
+  时，`PERMANENT` 附着在 **section** 上而不是意图上——这正是"永久"在用户没选择的第二
+  层意义上成立的原因。
+
+另有两处**契约冻结**，两侧同时钉住：
+
+- `DESIRED_WATCH_ABSENT_COMMITTED_NUMBER = 0`：commit 写入的行在它自己返回的 authority
+  里合法缺席时，`revision` 与 `materializationEpoch` 只能是 0/0。服务端只为缺行产生这
+  一对数字、绝不为在场行产生；浏览器 codec 也只接受这一对。Rust 侧
+  `a_healthy_stop_that_rotates_its_own_tombstone_answers_the_frozen_absent_shape` 断言
+  序列化后的 body，前端 `accepts a commit whose row was legitimately collected by a
+  rotation` 用同一形态的 body，两边不会各自漂移。
+- 全局 response cutoff：socket 进入 CLOSED/ERROR 时记录的是**对全部 authority 应答的
+  截断**，不是一串 section。前者可以在"没有任何 section 可列"时仍然成立，后者不能。
+
+### 判别力实测
+
+逐条反转后重跑，全部有对应测试失败，无"反转后仍全绿"的条目：
+
+| 反转的修复 | 复跑命令 | 失败的测试 |
+|---|---|---|
+| `stamp` 的缺行归一化 | `cargo test -p bcsp-local-runtime --lib desired:: && … --test desired_watch` | `desired::tests::a_commit_purged_by_another_caller_before_it_is_stamped_reports_the_absent_shape`、`a_healthy_stop_that_rotates_its_own_tombstone_answers_the_frozen_absent_shape` |
+| coordinator 传给 rotation 的 stopping 集合改为空 | `cargo test -p bcsp-local-runtime --test desired_watch` | `a_stop_whose_teardown_is_stuck_survives_the_rotation_it_triggered` |
+| writer 的 preserve 集合改为空 | `cargo test -p bcsp-local-user-state --test personal_state` | `rotation_keeps_the_tombstones_the_caller_is_still_tearing_down` |
+| `permanent` 判定去掉 `describes` stamp 检查 | `cargo test -p bcsp-local-runtime --test desired_watch` | `an_old_permanent_failure_does_not_survive_the_intent_that_earned_it`、`a_policy_edit_across_a_stuck_teardown_is_not_refused_by_the_old_failure` |
+| projection 去掉 stale failure 过滤 | 同上 | 同上两项 |
+| `submitAgainst` 改回读 `intentSnapshotRef.current` | `npx vitest run tests/local-desired-watch-integrity.test.tsx` | `starts every selected section against the revisions the click was made on`、`applies a policy against the generation the click was made on`、以及 R2 的 `never lets a queued gesture start the watch the one before it stopped` |
+| `markUncertain` 改为空操作 | 同上 | `keeps a lost START addressable, ungreen and unsubmittable until a read lands`、`withdraws the green light on a lost STOP before the re-read comes back` |
+| `trustedIdentities` 改回只保留 `policy != null` | 同上 | `keeps a row whose teardown is still running across a failed read` |
+| 全局 cutoff 改回按 section `disprove` | 同上 | 四例 socket cutoff 矩阵全部失败 |
+| codec 改回"缺行即拒绝" | 同上 | `accepts a commit whose row was legitimately collected by a rotation` |
+| `Test-ValidPolicy` 去掉 `seconds` 的整数类型检查 | `Assert-PolicyComparison` | `Policy comparison read a fractional duration as the whole number beside it.` |
+| policy 顶层键集改为"只要求存在" | 同上 | `Policy comparison accepted a policy carrying a field nobody agreed to.` |
+
+### 对 R2 表格的两处更正
+
+- R2 表中 A5 的 `desired_watch.rs::a_terminal_refusal_rotated_by_another_caller_answers_from_one_authority`
+  与 A9.2 的 `desired_watch.rs::concurrent_callers_crossing_one_threshold_rotate_once`
+  现位于 `crates/bcsp-local-runtime/src/desired.rs` 的 `#[cfg(test)] mod tests` 中
+  （A9 要求 checkpoint seam 不得进入生产公开 API）。测试内容与判别力不变。
+- R2 表中 A9.3 的 `Test-SamePolicy` 自校验已按 R3 A8 扩展；R2 记录的三条反例仍在，另
+  增九条。
