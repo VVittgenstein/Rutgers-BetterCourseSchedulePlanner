@@ -54,6 +54,10 @@ pub enum WatchManagerError {
     InitialObservationMismatch,
     #[error("internal watch state could not be represented by the wire contract")]
     InvalidContractProjection,
+    /// The socket has been sealed for shutdown. Nothing may open a connection
+    /// on it again, including a process-owned one.
+    #[error("the shared watch socket is sealed")]
+    SocketSealed,
 }
 
 impl From<CoreManagerError> for WatchManagerError {
@@ -557,6 +561,24 @@ where
 
     pub fn connection_watches(&self, connection_id: TraceId) -> Vec<SectionKey> {
         self.core.connection_watches(connection_id)
+    }
+
+    /// The addressable identity of every watch a connection currently holds.
+    ///
+    /// A caller that remembers which watch it started needs the identity, not
+    /// just the Section: a Section that is watched again under a NEW watch id
+    /// is not the watch the caller is tracking, and treating it as one would
+    /// report a replacement as the original -- or stop the replacement while
+    /// meaning to stop something that is already gone.
+    pub fn connection_watch_targets(&self, connection_id: TraceId) -> Vec<ActiveWatchTargetV1> {
+        self.core
+            .connection_watch_targets(connection_id)
+            .into_iter()
+            .map(|(section_key, watch_id)| ActiveWatchTargetV1 {
+                active_watch_id: ActiveWatchId::new(watch_id),
+                section_key,
+            })
+            .collect()
     }
 
     fn ensure_watch_target(

@@ -23,8 +23,10 @@ use bcsp_contracts::{
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_runtime::{
+    DesiredWatchCoordinator, DesiredWatchMutationV1, LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
     LOCAL_DESIRED_WATCH_PATH, LOCAL_PRESENCE_SOCKET_PATH, LocalRuntimeError, LocalRuntimePaths,
-    LocalSurfaceState, PersonalSurface, PreparedLocalRuntime, prepare_and_start_with,
+    LocalSurfaceState, LocalWatchRoute, PersonalSurface, PreparedLocalRuntime,
+    prepare_and_start_with,
 };
 use bcsp_local_user_state::{
     CatalogRefreshMinutes, LocalSettings, OpenRefreshSeconds, PersonalStateStore, SettingsRevision,
@@ -1160,20 +1162,32 @@ async fn the_desired_watch_cap_refuses_a_tenth_section_with_the_maximum() {
 }
 
 /// The whole local vertical, over HTTP, across three process lifetimes:
-/// write intent, restart, find it restored and materializing, Full Reset,
-/// restart again and find it gone.
+/// write intent, restart, attach a page, find it restored AND really running,
+/// Full Reset, restart again and find it gone.
 ///
 /// This is the shape the Windows packaging gate runs against a real
-/// candidate. Running it here as well pins the behaviour in the ordinary
-/// test suite rather than only in a release rehearsal, and it is what makes
+/// candidate. Running it here as well pins the behaviour in the ordinary test
+/// suite rather than only in a release rehearsal, and it is what makes
 /// migration 10004 safe to ship: the reset counters it introduced are
-/// exercised against a NON-EMPTY table, which is the only case where they
-/// can be wrong.
+/// exercised against a NON-EMPTY table, which is the only case where they can
+/// be wrong.
+///
+/// The section is a PUBLISHED one on a product campus in the current term,
+/// seeded deterministically -- because "restored" and "restored and actually
+/// being watched" are different claims, and only the second is the milestone.
+/// A section the runtime could never arm would let the whole materialization
+/// path stay broken while this test passed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn desired_intent_survives_a_restart_and_a_full_reset_clears_it() {
     let temp = TestDirectory::new("desired-watch-restart");
     let (_root, executable) = package(&temp);
-    let section = SectionKey::try_new("T2026F", "CAMPUS_A", "00001").unwrap();
+    let window = RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Public)
+        .expect("test execution date is covered by the bundled calendar");
+    let term = window.current_term().as_str().to_owned();
+    let section = SectionKey::try_new(&term, "NB", "10001").unwrap();
+    let prepared = PreparedLocalRuntime::from_executable(&executable).unwrap();
+    seed_ready_query_scope(&prepared, &[term.as_str()]);
+    drop(prepared);
 
     // First lifetime: commit intent.
     let running = PreparedLocalRuntime::from_executable(executable.clone())
@@ -1236,31 +1250,47 @@ async fn desired_intent_survives_a_restart_and_a_full_reset_clears_it() {
     );
     assert!(entry["materialized"].is_null());
 
-    // A page attaches and stays. This fixture's section is on a campus the
-    // product does not target, so it can never be armed -- and the honest
-    // report is the intent plus the reason, never a green light, and never a
-    // row the process quietly deleted on the user's behalf.
+    // A page attaches and stays. THIS is the restore the milestone is about:
+    // the process reads stored intent and puts a real watch behind it, and
+    // the read reports the same generation, revision, epoch and policy the
+    // authority holds.
     let socket = open_watch_socket(authority, &origin, &second_nonce);
     let attached = desired_watch_until(authority, &origin, &second_nonce, |state| {
-        desired_entry(state, &section)
-            .is_some_and(|entry| !entry["failure"].is_null())
+        desired_entry(state, &section).is_some_and(|entry| is_armed(state, entry))
     })
     .await;
     let entry = desired_entry(&attached, &section).unwrap();
     assert!(!entry["policy"].is_null(), "the row is never withdrawn");
-    assert!(!is_armed(&attached, entry));
+    assert!(entry["failure"].is_null(), "and nothing went wrong: {entry}");
+    assert_eq!(entry["pendingDisarm"], false);
     assert_eq!(
-        entry["failure"]["classification"], "PERMANENT",
-        "this fixture's campus is not a product target: {entry}",
+        attached["authorityGeneration"], 1,
+        "a restart is not a reset, so the generation did not move",
     );
-    assert_eq!(entry["failure"]["reason"], "UNSUPPORTED_TARGET");
     assert_eq!(
-        entry["failure"]["retryScheduled"], false,
-        "nothing this process does changes that answer, so it stops asking",
+        entry["materialized"]["authorityGeneration"],
+        attached["authorityGeneration"],
     );
+    assert_eq!(entry["materialized"]["revision"], entry["revision"]);
+    assert_eq!(
+        entry["materialized"]["materializationEpoch"],
+        entry["materializationEpoch"],
+    );
+    assert_eq!(entry["materialized"]["policy"], entry["policy"]);
     assert!(
-        !entry["policy"].is_null(),
-        "and it STILL does not withdraw the row: a section the runtime has          proven it cannot arm is the user's to remove, not the process's",
+        !entry["materialized"]["activeWatchId"].is_null(),
+        "and the running watch is addressable",
+    );
+    assert_eq!(
+        response_json(&request(
+            authority,
+            "GET /api/v1/local/bootstrap",
+            &origin,
+            &second_nonce,
+            "",
+        ))["data"]["state"]["activeWatchCount"],
+        1,
+        "the process reports the watch it is really holding",
     );
     drop(socket);
 
@@ -1300,6 +1330,17 @@ async fn desired_intent_survives_a_restart_and_a_full_reset_clears_it() {
     assert_eq!(
         after_reset["authorityGeneration"], 2,
         "a reset raises the generation, so nothing from before it can commit",
+    );
+    assert_eq!(
+        response_json(&request(
+            authority,
+            "GET /api/v1/local/bootstrap",
+            &origin,
+            &second_nonce,
+            "",
+        ))["data"]["state"]["activeWatchCount"],
+        0,
+        "an empty authority and a process still holding a watch is the exact          lie this reset exists to make impossible",
     );
     running.shutdown().await.unwrap();
 
@@ -2499,6 +2540,253 @@ fn confirmed_reset_serializes_a_later_filter_mutation_until_reset_commits() {
     );
     confirm_worker.join().unwrap();
     put_worker.join().unwrap();
+}
+
+/// A Full Reset is one lifecycle barrier over the authority AND the physical
+/// watches, held across a database write that can block for as long as
+/// another writer holds the file.
+///
+/// The window is real: the reset stops the watches, then waits on SQLite, and
+/// a page can attach in between. Under the old ordering that attach read rows
+/// that were about to be deleted, armed them, and the reset then cleared the
+/// records of watches it had just caused to exist -- an authority that is
+/// empty and a process still polling Rutgers on the user's behalf, with no
+/// way left to name what it was holding.
+#[test]
+fn a_full_reset_blocked_in_sqlite_leaves_no_orphan_watch() {
+    let temp = TestDirectory::new("reset-barrier");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let database = prepared.operational().database();
+    let admission = Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None));
+    let watch =
+        Arc::new(SharedWatchSocket::try_new(admission, Arc::new(NoopWatchDispatchSink)).unwrap());
+    let coordinator = Arc::new(DesiredWatchCoordinator::new(
+        PersonalStateStore::open(prepared.paths().database()).unwrap(),
+        watch.clone(),
+    ));
+    let route = Arc::new(LocalWatchRoute::new(watch.clone(), coordinator.clone()));
+    let surface = Arc::new(
+        PersonalSurface::new(
+            database,
+            PersonalStateStore::open(prepared.paths().database()).unwrap(),
+            watch.clone(),
+        )
+        .with_desired_watch(coordinator.clone()),
+    );
+
+    // A page, and standing intent that really is materialized.
+    let section = SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap();
+    let (first_outbound, mut first_frames) = mpsc::unbounded_channel();
+    assert!(route.connect(trace(200), first_outbound));
+    let generation = coordinator.read().unwrap().authority_generation;
+    assert_eq!(
+        coordinator
+            .submit(&DesiredWatchMutationV1 {
+                contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+                section: section.clone(),
+                policy: Some(watch_policy()),
+                based_on_revision: 0,
+                authority_generation: generation,
+                mutation_id: trace(201),
+            })
+            .unwrap()
+            .outcome,
+        bcsp_local_runtime::DesiredWatchOutcomeV1::Committed,
+    );
+    assert_eq!(watch.total_active_watch_count(), 1);
+    while first_frames.try_recv().is_ok() {}
+
+    let prepare = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"expectedUserStateRevision": 1},
+    })
+    .to_string();
+    let prepared_reset: serde_json::Value = serde_json::from_slice(
+        &surface
+            .prepare_local_user_data_reset(prepare.as_bytes())
+            .unwrap(),
+    )
+    .unwrap();
+    let token = prepared_reset["data"]["confirmationToken"].clone();
+
+    // Another writer holds the database, so the reset gets as far as the
+    // teardown and then waits.
+    let mut external_writer = Connection::open(prepared.paths().database()).unwrap();
+    external_writer
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    let transaction = external_writer
+        .transaction_with_behavior(TransactionBehavior::Exclusive)
+        .unwrap();
+    transaction
+        .execute(
+            "UPDATE bcsp_operational_migrations SET name = name WHERE migration_id = 1",
+            [],
+        )
+        .unwrap();
+
+    let confirm_surface = surface.clone();
+    let confirm_body = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"confirmationToken": token},
+    })
+    .to_string()
+    .into_bytes();
+    let (confirm_result, confirm_result_rx) = std::sync::mpsc::channel();
+    let confirm_worker = std::thread::spawn(move || {
+        confirm_result
+            .send(confirm_surface.confirm_local_user_data_reset(&confirm_body))
+            .unwrap();
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while watch.total_active_watch_count() != 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        watch.total_active_watch_count(),
+        0,
+        "the reset tears the watches down before it waits for SQLite",
+    );
+    assert!(matches!(
+        confirm_result_rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+
+    // The window. A page attaches -- which is what materializes stored intent
+    // -- and a reconcile runs, both while the rows are still on disk.
+    let (second_outbound, _second_frames) = mpsc::unbounded_channel();
+    assert!(route.connect(trace(202), second_outbound));
+    route.tick();
+    coordinator.reconcile().unwrap();
+    assert_eq!(
+        watch.total_active_watch_count(),
+        0,
+        "nothing may be armed from rows a reset is in the middle of deleting",
+    );
+    // An in-flight write for a SECOND section, submitted against the
+    // pre-reset generation and on its own thread because it queues behind the
+    // same database lock. If it lands before the clear it commits, and the
+    // reconcile inside it is the one that used to arm a watch the reset was
+    // about to forget.
+    let racing_section = SectionKey::try_new("T2026F", "CAMPUS_A", "54321").unwrap();
+    let racing_coordinator = coordinator.clone();
+    let racing_target = racing_section.clone();
+    let (racing_result, racing_result_rx) = std::sync::mpsc::channel();
+    let racing_worker = std::thread::spawn(move || {
+        racing_result
+            .send(
+                racing_coordinator
+                    .submit(&DesiredWatchMutationV1 {
+                        contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+                        section: racing_target,
+                        policy: Some(watch_policy()),
+                        based_on_revision: 0,
+                        authority_generation: generation,
+                        mutation_id: trace(203),
+                    })
+                    .map(|result| result.outcome),
+            )
+            .unwrap();
+    });
+
+    transaction.rollback().unwrap();
+    let confirmed: serde_json::Value = serde_json::from_slice(
+        &confirm_result_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the reset completes once the writer releases")
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        confirmed["data"]["deletedDesiredWatches"]
+            .as_u64()
+            .is_some_and(|deleted| deleted >= 1),
+        "the non-empty deletion path is the one that can be wrong: {confirmed}",
+    );
+    assert!(
+        confirmed["data"]["deletedDesiredWatchReceipts"]
+            .as_u64()
+            .is_some_and(|deleted| deleted >= 1),
+    );
+    let racing = racing_result_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the racing write settles");
+    racing_worker.join().unwrap();
+    confirm_worker.join().unwrap();
+
+    // Everything the reset promised, checked one by one.
+    let state = coordinator.read().unwrap();
+    assert!(state.entries.is_empty(), "the authority is empty");
+    assert!(
+        state.authority_generation > generation,
+        "and its generation moved, so nothing from before it can commit",
+    );
+    assert!(
+        watch.owner_watch_targets().is_empty(),
+        "no physical watch outlived the reset",
+    );
+    assert_eq!(watch.total_active_watch_count(), 0);
+    // The racing write is serialized on one side of the reset or the other,
+    // and both are correct answers. What is NOT correct is either of them
+    // leaving something running.
+    assert!(
+        matches!(
+            racing,
+            Ok(bcsp_local_runtime::DesiredWatchOutcomeV1::Committed)
+                | Ok(bcsp_local_runtime::DesiredWatchOutcomeV1::StaleGeneration)
+        ),
+        "a pre-reset write either commits before the clear or is refused after it",
+    );
+    assert!(
+        !state
+            .entries
+            .iter()
+            .any(|entry| entry.section == racing_section),
+        "and whichever side it landed on, the authority is empty afterwards",
+    );
+
+    // And nothing rings from the snapshot the old watch was built on.
+    while first_frames.try_recv().is_ok() {}
+    watch
+        .publish(open_observation_for(&section))
+        .expect("publish");
+    assert!(
+        first_frames.try_recv().is_err(),
+        "an authority that is empty must produce no alerts",
+    );
+
+    // The socket is still usable, because the user is still there.
+    let (third_outbound, _third_frames) = mpsc::unbounded_channel();
+    assert!(route.connect(trace(204), third_outbound));
+}
+
+fn open_observation_for(section: &SectionKey) -> bcsp_contracts::OpenObservationV1 {
+    serde_json::from_value(serde_json::json!({
+        "contractVersion": 1,
+        "observationId": "00000000-0000-4000-8000-0000000000b1",
+        "refreshObservationId": "00000000-0000-4000-8000-0000000000b2",
+        "batch": {"term": section.term().as_str(), "campus": section.campus().as_str()},
+        "sectionKey": {
+            "term": section.term().as_str(),
+            "campus": section.campus().as_str(),
+            "index": section.index().as_str(),
+        },
+        "pullSequence": 3,
+        "catalogContentVersion": 2,
+        "state": "OPEN",
+        "observedAt": "1970-01-01T00:00:01Z",
+        "freshUntil": "2099-01-01T00:00:00Z",
+        "schedulerLagMilliseconds": 100,
+        "counterSnapshot": {
+            "runCounts": {"attempted": 1, "succeeded": 1, "failed": 0, "empty": 0},
+            "todayCounts": {"attempted": 1, "succeeded": 1, "failed": 0, "empty": 0},
+            "rutgersDay": "2026-07-17",
+            "dayTimezone": "America/New_York"
+        }
+    }))
+    .expect("synthetic Open observation")
 }
 
 fn request(authority: &str, request_line: &str, origin: &str, nonce: &str, body: &str) -> String {

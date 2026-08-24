@@ -814,19 +814,32 @@ impl LocalSurfaceState for PersonalSurface {
             )?
         };
 
+        // The reset is ONE lifecycle barrier over two owners, not two
+        // independent clean-ups. Between stopping the watches and clearing
+        // the rows, a page can attach and a reconcile can read rows that are
+        // about to be deleted -- and arm them. The barrier is what makes that
+        // impossible: nothing materializes from the moment it is raised, and
+        // it is not lowered until every physical watch the process holds has
+        // been stopped by identity and every record forgotten.
+        let coordinator = self.desired_watch.as_deref();
+        if let Some(coordinator) = coordinator {
+            coordinator
+                .begin_authority_reset()
+                .map_err(map_coordinator_error)?;
+        }
         self.watch.stop();
         self.watch.flush_dispatch_sink();
-        let reset = mutation_store
-            .clear_personal_data(expected_state_revision)
-            .map_err(map_personal_error)?;
-        // Every desired row is gone and the authority generation has moved,
-        // so the coordinator's materialization records now describe watches
-        // that no longer exist under a generation that no longer exists.
-        // Left in place they would be adopted on the next reconcile and the
-        // page would be shown a green light for nothing.
-        if let Some(coordinator) = self.desired_watch.as_deref() {
-            coordinator.on_authority_cleared();
+        let reset = mutation_store.clear_personal_data(expected_state_revision);
+        // Lowered on BOTH paths. A reset that could not clear the database
+        // must not leave the process holding watches whose records it has
+        // forgotten, and must not leave materialization frozen for the rest
+        // of the process's life either.
+        if let Some(coordinator) = coordinator
+            && let Err(error) = coordinator.finish_authority_reset()
+        {
+            tracing::error!(?error, "failed to lower the desired-watch reset barrier");
         }
+        let reset = reset.map_err(map_personal_error)?;
         encode(&reset)
     }
 

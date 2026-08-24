@@ -986,6 +986,29 @@ where
             .unwrap_or_default()
     }
 
+    /// The Sections a connection holds AND the identity of each physical
+    /// watch.
+    ///
+    /// The Section alone cannot tell a caller whether the watch it started is
+    /// the one still running: a watch can be stopped and a new one started for
+    /// the same Section, and a record compared only by Section would call the
+    /// replacement its own.
+    pub(crate) fn connection_watch_targets(
+        &self,
+        connection_id: TraceId,
+    ) -> Vec<(SectionKey, TraceId)> {
+        self.connections
+            .get(&connection_id)
+            .map(|connection| {
+                connection
+                    .watches
+                    .iter()
+                    .map(|(section, watch)| (section.clone(), watch.id))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn watch_id_for_section(
         &self,
         connection_id: TraceId,

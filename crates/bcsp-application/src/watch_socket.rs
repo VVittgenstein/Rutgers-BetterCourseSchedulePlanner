@@ -276,10 +276,16 @@ where
                 if let Some(owner) = state.owner {
                     let _ = state.manager.touch(owner);
                 }
+                // Every connection that can hold a watch, INCLUDING the
+                // owner. A target whose watches all live on the owner would
+                // otherwise never have its term window or campus re-checked,
+                // and a section that rolled out of the window would keep
+                // being polled -- and keep being reported as watched.
                 let candidates = state
                     .connections
                     .keys()
                     .copied()
+                    .chain(state.owner)
                     .flat_map(|connection_id| {
                         state
                             .manager
@@ -389,6 +395,14 @@ where
         let mut state = self
             .lock_state()
             .ok_or(WatchManagerError::InvalidContractProjection)?;
+        // A sealed socket is a process shutting down. Transport reconnects
+        // are already refused there; the owner is refused for the same
+        // reason and with more force, because nothing would ever close it --
+        // it has no socket to drop, so a watch rebuilt here would outlive
+        // the runtime that was tearing itself down.
+        if state.sealed {
+            return Err(WatchManagerError::SocketSealed);
+        }
         if let Some(owner) = state.owner
             && state.manager.touch(owner).is_ok()
         {
@@ -413,6 +427,35 @@ where
                 .map(|owner| state.manager.connection_watches(owner))
                 .unwrap_or_default()
         })
+    }
+
+    /// Every physical watch the owner holds, with the identity a caller needs
+    /// to recognise -- or to stop -- exactly the watch it started.
+    ///
+    /// A coordinator that compared only Sections could not tell "the watch I
+    /// armed is still running" from "that watch ended and something started a
+    /// new one for the same Section". The second is a drift the page must be
+    /// told about, and the id is the only thing that distinguishes them.
+    pub fn owner_watch_targets(&self) -> Vec<ActiveWatchTargetV1> {
+        self.lock_state().map_or_else(Vec::new, |state| {
+            state
+                .owner
+                .map(|owner| state.manager.connection_watch_targets(owner))
+                .unwrap_or_default()
+        })
+    }
+
+    /// Asks the injected admission source whether one Section could be armed
+    /// right now.
+    ///
+    /// Deliberately lock-free with respect to this socket: it consults the
+    /// same authoritative storage view a START would, so a caller can check
+    /// an ALREADY running watch without taking the socket lock and without
+    /// disturbing the manager. Materialization conditions are revocable --
+    /// a term rolls over, a campus stops being a product target, a catalog
+    /// stops publishing a Section -- and something has to keep asking.
+    pub fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission {
+        self.admission.admission_for(section)
     }
 
     /// Starts watches on the owner connection and reports the per-item
@@ -1176,6 +1219,130 @@ mod tests {
             "episode control is what the owner entry point is for",
         );
         assert_eq!(socket.owner_watched_sections(), vec![section(1)]);
+    }
+
+    /// Sealing is for a runtime that is shutting down, and the owner is the
+    /// one connection nothing would ever close: it has no socket to drop, so
+    /// a watch rebuilt on it would outlive the process that was tearing
+    /// itself down and keep polling Rutgers with nobody to tell.
+    ///
+    /// The second half is the control, and it is the difference between the
+    /// two clean-ups: an ORDINARY stop -- what a Full Reset does -- leaves
+    /// the socket usable, because the user is still there and the next page
+    /// must be able to attach and be served.
+    #[test]
+    fn a_sealed_socket_refuses_to_rebuild_the_owner_but_an_ordinary_stop_does_not() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        socket.owner_start(items([section(1)])).expect("owner start");
+        assert_eq!(socket.owner_watched_sections(), vec![section(1)]);
+
+        // An ordinary stop: the owner is forgotten, and asking again opens a
+        // new one.
+        socket.stop();
+        assert_eq!(socket.owner_connection(), None);
+        socket
+            .ensure_owner_connection()
+            .expect("an ordinary stop leaves the socket usable");
+        assert!(
+            socket
+                .owner_start(items([section(1)]))
+                .expect("owner start")[0]
+                .is_active(),
+        );
+        let (outbound, _frames) = mpsc::unbounded_channel();
+        assert!(socket.connect(trace(1), outbound));
+
+        socket.seal_and_stop();
+        assert_eq!(socket.owner_connection(), None);
+        assert_eq!(
+            socket.ensure_owner_connection(),
+            Err(WatchManagerError::SocketSealed),
+        );
+        assert_eq!(
+            socket.owner_start(items([section(1)])).err(),
+            Some(WatchManagerError::SocketSealed),
+        );
+        assert_eq!(
+            socket.owner_stop(ActiveWatchTargetV1 {
+                active_watch_id: bcsp_contracts::ActiveWatchId::new(trace(0xdead)),
+                section_key: section(1),
+            }),
+            Err(WatchManagerError::SocketSealed),
+        );
+        assert_eq!(socket.owner_connection(), None);
+        assert_eq!(socket.total_active_watch_count(), 0);
+    }
+
+    /// Under a coordinator every physical watch is held by the owner. A
+    /// maintenance sweep that only looked at browser connections would
+    /// therefore never stop anything -- a section that rolled out of the term
+    /// window or off a product campus would keep being polled, and keep being
+    /// reported as watched, for as long as the process ran.
+    #[test]
+    fn the_maintenance_sweep_stops_an_owner_held_watch_that_leaves_the_term_window() {
+        let in_range = Arc::new(AtomicBool::new(true));
+        let sink = Arc::new(RecordingSink::default());
+        let socket = socket(
+            Arc::new(MutableRangeAdmission {
+                in_range: in_range.clone(),
+            }),
+            sink.clone(),
+        );
+        let (outbound, mut frames) = mpsc::unbounded_channel();
+        assert!(socket.connect(trace(1), outbound));
+        socket.owner_start(items([section(1)])).expect("owner start");
+        assert_eq!(socket.owner_watched_sections(), vec![section(1)]);
+        while frames.try_recv().is_ok() {}
+
+        in_range.store(false, Ordering::SeqCst);
+        socket.tick();
+
+        assert!(
+            socket.owner_watched_sections().is_empty(),
+            "the sweep must cover the connection that actually holds the watches",
+        );
+        assert_eq!(socket.total_active_watch_count(), 0);
+        // The page hears about it, because the watch was held for the page.
+        let stopped = std::iter::from_fn(|| frames.try_recv().ok())
+            .map(|frame| {
+                serde_json::from_str::<WsServerEnvelope<WatchServerEventV1>>(&frame).unwrap()
+            })
+            .any(|envelope| matches!(
+                envelope.payload(),
+                WatchServerEventV1::WatchStopped { stopped }
+                    if stopped.reason == WatchStopReason::TermOutOfRange
+            ));
+        assert!(stopped, "the owner's forced stop is fanned out to every page");
+    }
+
+    /// The identity of every owner-held watch, which is what tells "the watch
+    /// I armed is still running" apart from "that one ended and something
+    /// started a new one for the same Section".
+    #[test]
+    fn owner_watch_targets_report_the_identity_of_each_running_watch() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let results = socket.owner_start(items([section(1)])).expect("owner start");
+        let WatchStartItemResultV1::Active {
+            active_watch_id, ..
+        } = results[0]
+        else {
+            panic!("the watch must be active");
+        };
+        let targets = socket.owner_watch_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].section_key, section(1));
+        assert_eq!(targets[0].active_watch_id, active_watch_id);
+
+        socket
+            .owner_stop(targets[0].clone())
+            .expect("owner stop");
+        assert!(socket.owner_watch_targets().is_empty());
     }
 
     #[test]
