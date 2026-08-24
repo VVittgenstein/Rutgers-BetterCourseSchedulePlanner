@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use bcsp_contracts::{
-    OpenObservationV1, SectionKey, SystemTraceIdSource, TraceId, TraceIdSource,
-    WatchClientCommandV1, WatchServerEventV1, WatchStopReason, WsClientEnvelope, WsServerEnvelope,
+    ActiveWatchTargetV1, OpenObservationV1, SectionKey, SystemTraceIdSource, TraceId, TraceIdSource,
+    WatchClientCommandV1, WatchPolicyV1, WatchServerEventV1, WatchStartItemResultV1,
+    WatchStartItemsV1, WatchStopReason, WsClientEnvelope, WsServerEnvelope,
     decode_versioned_envelope_json,
 };
 use bcsp_watch::{
@@ -119,6 +120,15 @@ struct SocketState<C, I, E> {
     connections: BTreeMap<TraceId, ConnectionChannel>,
     envelope_ids: E,
     sealed: bool,
+    /// The synthetic connection that holds watches on the PROCESS's behalf
+    /// rather than a browser's, when a target has asked for one.
+    ///
+    /// It is a manager connection like any other -- it obeys the physical
+    /// watch cap -- with two differences that follow from having no socket:
+    /// its heartbeat is refreshed by the maintenance tick rather than by
+    /// inbound frames, and everything it emits is fanned out to every
+    /// audience instead of unicast back to a requester that does not exist.
+    owner: Option<TraceId>,
 }
 
 /// Typed WebSocket adapter around the one shared [`WatchManager`].
@@ -168,6 +178,7 @@ where
                 connections: BTreeMap::new(),
                 envelope_ids,
                 sealed: false,
+                owner: None,
             }),
             admission,
             sink,
@@ -186,15 +197,33 @@ where
     }
 
     /// Returns the number of active connection-to-Section watch entries across all sockets.
+    ///
+    /// The owner connection is counted even though it has no transport
+    /// channel. A page asking how many watches are running wants the answer
+    /// about the process, and under a coordinator every one of them is held
+    /// by the owner -- reporting zero would be the exact kind of comfortable
+    /// lie the watch surface exists to avoid.
     pub fn total_active_watch_count(&self) -> usize {
         self.lock_state().map_or(0, |state| {
             state
                 .connections
                 .keys()
+                .copied()
+                .chain(state.owner)
                 .fold(0usize, |total, connection_id| {
-                    total.saturating_add(state.manager.connection_watches(*connection_id).len())
+                    total.saturating_add(state.manager.connection_watches(connection_id).len())
                 })
         })
+    }
+
+    /// How many BROWSER connections are attached right now.
+    ///
+    /// This is the audience count a coordinator reconciles against, so it
+    /// deliberately excludes the owner: the owner exists to serve the
+    /// audience, and counting it would mean the audience is never empty and
+    /// the physical watches are never torn down.
+    pub fn audience_connection_count(&self) -> usize {
+        self.lock_state().map_or(0, |state| state.connections.len())
     }
 
     /// Returns authoritative shared watch demand for one Open target.
@@ -240,6 +269,13 @@ where
     {
         let (forced, outcome, pings) = match self.lock_state() {
             Some(mut state) => {
+                // The owner has no socket, so no inbound frame ever refreshes
+                // it. Without this the heartbeat sweep below would expire the
+                // connection holding every physical watch, and the watches
+                // would vanish while the pages that wanted them stayed open.
+                if let Some(owner) = state.owner {
+                    let _ = state.manager.touch(owner);
+                }
                 let candidates = state
                     .connections
                     .keys()
@@ -275,6 +311,9 @@ where
                     Ok(outcome) => {
                         for report in &outcome.expired_connections {
                             state.connections.remove(&report.connection_id);
+                            if state.owner == Some(report.connection_id) {
+                                state.owner = None;
+                            }
                         }
                         let pings = Self::due_pings(&mut state);
                         (forced, outcome, pings)
@@ -337,6 +376,160 @@ where
         pings
     }
 
+    /// Returns the owner connection, creating it if this socket does not have
+    /// one yet or has lost it to a process stop.
+    ///
+    /// Idempotent on purpose. `stop()` clears every manager connection, so a
+    /// remembered id can outlive the connection it names; asking the manager
+    /// to refresh it is the only way to tell the two cases apart.
+    pub fn ensure_owner_connection(&self) -> Result<TraceId, WatchManagerError>
+    where
+        E: TraceIdSource,
+    {
+        let mut state = self
+            .lock_state()
+            .ok_or(WatchManagerError::InvalidContractProjection)?;
+        if let Some(owner) = state.owner
+            && state.manager.touch(owner).is_ok()
+        {
+            return Ok(owner);
+        }
+        let owner = state.envelope_ids.next_trace_id();
+        state.manager.connect(owner)?;
+        state.owner = Some(owner);
+        Ok(owner)
+    }
+
+    /// The owner connection, if one has been opened.
+    pub fn owner_connection(&self) -> Option<TraceId> {
+        self.lock_state().and_then(|state| state.owner)
+    }
+
+    /// The Sections the owner currently holds a physical watch on.
+    pub fn owner_watched_sections(&self) -> Vec<SectionKey> {
+        self.lock_state().map_or_else(Vec::new, |state| {
+            state
+                .owner
+                .map(|owner| state.manager.connection_watches(owner))
+                .unwrap_or_default()
+        })
+    }
+
+    /// Starts watches on the owner connection and reports the per-item
+    /// outcome, so the caller can tell "armed" from "the catalog does not
+    /// publish this" without parsing a fanned-out event.
+    pub fn owner_start(
+        &self,
+        items: WatchStartItemsV1,
+    ) -> Result<Vec<WatchStartItemResultV1>, WatchManagerError>
+    where
+        E: TraceIdSource,
+    {
+        let owner = self.ensure_owner_connection()?;
+        let (message_id, dispatch, record) = {
+            let mut state = self
+                .lock_state()
+                .ok_or(WatchManagerError::InvalidContractProjection)?;
+            let message_id = state.envelope_ids.next_trace_id();
+            let outcome = state.manager.start_with_admission(
+                owner,
+                message_id,
+                items,
+                |section| self.admission.admission_for(section),
+            )?;
+            (message_id, outcome.dispatch, !outcome.replayed)
+        };
+        let results = start_item_results(&dispatch);
+        self.deliver(dispatch, Some(message_id), record);
+        Ok(results)
+    }
+
+    /// Stops one owner-held watch. `UnknownWatch` is the caller's to
+    /// interpret: for a teardown it means the goal is already met.
+    pub fn owner_stop(&self, target: ActiveWatchTargetV1) -> Result<(), WatchManagerError>
+    where
+        E: TraceIdSource,
+    {
+        self.owner_dispatch(|manager, owner| manager.stop_watch(owner, target.clone()))
+    }
+
+    /// Applies a new policy to an owner-held watch IN PLACE.
+    ///
+    /// The distinction matters: a policy edit must not end the episode, mint
+    /// a new watch id or re-announce the section, because none of that is
+    /// what the user asked for when they changed how loud it should be.
+    pub fn owner_update_policy(
+        &self,
+        target: ActiveWatchTargetV1,
+        policy: WatchPolicyV1,
+    ) -> Result<(), WatchManagerError>
+    where
+        E: TraceIdSource,
+    {
+        self.owner_dispatch(|manager, owner| {
+            manager.update_policy(owner, target.clone(), policy.clone())
+        })
+    }
+
+    /// Runs one episode-control command against the owner connection.
+    ///
+    /// A target whose watches live on the owner needs this: acknowledging an
+    /// episode, resuming a timed-out one, resetting the audible count,
+    /// reporting a cue outcome or dismissing an alert are all addressed by
+    /// the identity of a watch the page does not hold. Refuses the three
+    /// commands that would create or destroy a watch -- those are the
+    /// coordinator's, driven by durable intent rather than by a frame.
+    pub fn owner_command(&self, command: WatchClientCommandV1) -> Result<(), WatchManagerError>
+    where
+        E: TraceIdSource,
+    {
+        match command {
+            WatchClientCommandV1::StartWatch { .. }
+            | WatchClientCommandV1::StopWatch { .. }
+            | WatchClientCommandV1::UpdatePolicy { .. }
+            | WatchClientCommandV1::HeartbeatAck { .. } => {
+                Err(WatchManagerError::TargetMismatch)
+            }
+            WatchClientCommandV1::AcknowledgeEpisode { episode } => {
+                self.owner_dispatch(|manager, owner| {
+                    manager.acknowledge_episode(owner, episode.clone())
+                })
+            }
+            WatchClientCommandV1::AcknowledgeAllEpisodes {} => {
+                self.owner_dispatch(|manager, owner| manager.acknowledge_all_episodes(owner))
+            }
+            WatchClientCommandV1::ResumeTimedOutEpisode { episode } => {
+                self.owner_dispatch(|manager, owner| {
+                    manager.resume_timed_out_episode(owner, episode.clone())
+                })
+            }
+            WatchClientCommandV1::ResetAudibleCount { watch } => {
+                self.owner_dispatch(|manager, owner| manager.reset_audible_count(owner, watch.clone()))
+            }
+            WatchClientCommandV1::ReportCueOutcome { report } => self
+                .owner_dispatch(|manager, owner| manager.report_cue_outcome(owner, report.clone())),
+            WatchClientCommandV1::DismissAlert { alert } => {
+                self.owner_dispatch(|manager, owner| manager.dismiss_alert(owner, alert.clone()))
+            }
+        }
+    }
+
+    fn owner_dispatch<F>(&self, operation: F) -> Result<(), WatchManagerError>
+    where
+        E: TraceIdSource,
+        F: FnOnce(&mut WatchManager<C, I>, TraceId) -> Result<WatchDispatch, WatchManagerError>,
+    {
+        let owner = self.ensure_owner_connection()?;
+        let dispatch = {
+            let mut state = self
+                .lock_state()
+                .ok_or(WatchManagerError::InvalidContractProjection)?;
+            operation(&mut state.manager, owner)?
+        };
+        self.deliver(dispatch, None, true);
+        Ok(())
+    }
+
     /// Clears active connection state and records cleanup actions without persisting watches.
     /// The adapter remains available for a later connection, as required after a user-data reset.
     pub fn stop(&self) {
@@ -355,6 +548,11 @@ where
                 state.sealed |= seal;
                 let reports = state.manager.process_stop();
                 state.connections.clear();
+                // The manager has forgotten every connection, including the
+                // owner, so the remembered id now names nothing. Clearing it
+                // here keeps `ensure_owner_connection` from handing a
+                // coordinator an id the manager will reject.
+                state.owner = None;
                 reports
             }
             None => return,
@@ -448,16 +646,33 @@ where
         }
     }
 
+    /// Sends one dispatch's events to whoever should see them.
+    ///
+    /// A dispatch produced by a browser connection goes back to that
+    /// connection. A dispatch produced by the OWNER goes to every attached
+    /// page instead: the watch is held for all of them, so an alert on it
+    /// belongs to all of them. Two pages open therefore means two pages ring,
+    /// which is the honest report -- both really are watching.
     fn deliver(&self, dispatch: WatchDispatch, message_id: Option<TraceId>, record: bool)
     where
         E: TraceIdSource,
     {
-        let (sender, frames) = match self.lock_state() {
+        let (senders, frames) = match self.lock_state() {
             Some(mut state) => {
-                let sender = state
-                    .connections
-                    .get(&dispatch.connection_id)
-                    .map(|channel| channel.sender.clone());
+                let senders = if state.owner == Some(dispatch.connection_id) {
+                    state
+                        .connections
+                        .values()
+                        .map(|channel| channel.sender.clone())
+                        .collect::<Vec<_>>()
+                } else {
+                    state
+                        .connections
+                        .get(&dispatch.connection_id)
+                        .map(|channel| channel.sender.clone())
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                };
                 let frames = dispatch
                     .events
                     .iter()
@@ -467,16 +682,16 @@ where
                         serde_json::to_string(&WsServerEnvelope::new(envelope_id, event.clone()))
                     })
                     .collect::<Result<Vec<_>, _>>();
-                (sender, frames)
+                (senders, frames)
             }
             None => return,
         };
 
         match frames {
             Ok(frames) => {
-                if let Some(sender) = sender {
-                    for frame in frames {
-                        if sender.send(frame).is_err() {
+                for sender in senders {
+                    for frame in &frames {
+                        if sender.send(frame.clone()).is_err() {
                             break;
                         }
                     }
@@ -490,6 +705,19 @@ where
     }
 }
 
+/// Pulls the per-item start outcomes out of a dispatch, so a caller that
+/// asked for the start learns what happened to each Section.
+fn start_item_results(dispatch: &WatchDispatch) -> Vec<WatchStartItemResultV1> {
+    dispatch
+        .events
+        .iter()
+        .find_map(|event| match event {
+            WatchServerEventV1::StartResult { result } => Some(result.items().to_vec()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 impl<C, I, E> WebSocketExtension for SharedWatchSocket<C, I, E>
 where
     C: WatchClock + Send + 'static,
@@ -501,6 +729,13 @@ where
             return false;
         };
         if state.sealed {
+            return false;
+        }
+        // The owner is constructed in Rust and holds watches nobody may stop
+        // by naming its id. A transport connection that presented that id
+        // would inherit them.
+        if state.owner == Some(connection_id) {
+            tracing::warn!("refused a transport connection claiming the owner connection id");
             return false;
         }
         if let Err(error) = state.manager.connect(connection_id) {
@@ -764,6 +999,183 @@ mod tests {
         receiver: &mut mpsc::UnboundedReceiver<String>,
     ) -> WsServerEnvelope<WatchServerEventV1> {
         serde_json::from_str(&receiver.try_recv().expect("outbound watch frame")).unwrap()
+    }
+
+    /// A watch the process holds on everyone's behalf must reach everyone.
+    ///
+    /// The alternative is a lie by omission: one page would hear the alert
+    /// and the others, equally attached and equally watching that section,
+    /// would sit silent. Two pages ringing is the honest report.
+    ///
+    /// The second half is the control. A dispatch produced by an ordinary
+    /// connection still goes only to that connection, so this is fan-out for
+    /// the owner rather than broadcast for everything.
+    #[test]
+    fn owner_events_reach_every_audience_and_connection_events_reach_only_one() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let first = trace(1);
+        let second = trace(2);
+        let (first_outbound, mut first_frames) = mpsc::unbounded_channel();
+        let (second_outbound, mut second_frames) = mpsc::unbounded_channel();
+        assert!(socket.connect(first, first_outbound));
+        assert!(socket.connect(second, second_outbound));
+
+        let results = socket.owner_start(items([section(1)])).expect("owner start");
+        assert!(results[0].is_active());
+        assert_eq!(socket.owner_watched_sections(), vec![section(1)]);
+        assert_eq!(socket.audience_connection_count(), 2);
+        assert_eq!(
+            socket.total_active_watch_count(),
+            1,
+            "the owner's watches are counted even though it has no socket",
+        );
+        for frames in [&mut first_frames, &mut second_frames] {
+            assert!(matches!(
+                receive(frames).into_payload(),
+                WatchServerEventV1::StartResult { .. },
+            ));
+        }
+
+        socket.publish(open_observation()).expect("publish");
+        for frames in [&mut first_frames, &mut second_frames] {
+            let mut seen = Vec::new();
+            while let Ok(frame) = frames.try_recv() {
+                let envelope: WsServerEnvelope<WatchServerEventV1> =
+                    serde_json::from_str(&frame).unwrap();
+                seen.push(envelope.into_payload());
+            }
+            assert!(
+                seen.iter()
+                    .any(|event| matches!(event, WatchServerEventV1::AlertUpdated { .. })),
+                "every attached page must receive the owner's alert",
+            );
+        }
+
+        // The control: a connection-scoped START still answers only its own
+        // connection.
+        send(
+            &socket,
+            first,
+            trace(3),
+            WatchClientCommandV1::StartWatch {
+                items: items([section(2)]),
+            },
+        );
+        assert!(matches!(
+            receive(&mut first_frames).into_payload(),
+            WatchServerEventV1::StartResult { .. },
+        ));
+        assert!(
+            second_frames.try_recv().is_err(),
+            "another connection's START must not be broadcast",
+        );
+    }
+
+    /// The owner id is minted in Rust and never travels. A transport
+    /// connection that presented it would inherit every watch the process
+    /// holds -- and could then stop them by naming ids it did not create.
+    #[test]
+    fn a_transport_connection_cannot_claim_the_owner_connection_id() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let owner = socket.ensure_owner_connection().expect("owner");
+        assert_eq!(
+            socket.ensure_owner_connection().expect("owner"),
+            owner,
+            "asking twice must not open a second owner",
+        );
+
+        let (outbound, _frames) = mpsc::unbounded_channel();
+        assert!(
+            !socket.connect(owner, outbound),
+            "a wire connection must not be able to become the owner",
+        );
+    }
+
+    /// The owner has no socket, so no inbound frame ever refreshes it. The
+    /// maintenance tick does instead -- otherwise the heartbeat sweep would
+    /// expire the connection holding every physical watch, and monitoring
+    /// would stop while the pages that asked for it stayed open.
+    #[test]
+    fn the_maintenance_tick_keeps_the_owner_connection_alive() {
+        let (socket, clock) = socket_with_clock(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let (outbound, _frames) = mpsc::unbounded_channel();
+        assert!(socket.connect(trace(1), outbound));
+        socket.owner_start(items([section(1)])).expect("owner start");
+        let owner = socket.owner_connection().expect("owner");
+
+        // Well past the 60s heartbeat timeout, with the owner never having
+        // been sent a frame.
+        for _ in 0..5 {
+            clock.advance(Duration::from_secs(30));
+            socket.tick();
+        }
+        assert_eq!(socket.owner_connection(), Some(owner));
+        assert_eq!(socket.owner_watched_sections(), vec![section(1)]);
+        assert_eq!(socket.total_active_watch_count(), 1);
+    }
+
+    /// A process stop clears the manager, so the remembered owner id names
+    /// nothing. Handing it to a coordinator afterwards would produce an
+    /// unbroken stream of unknown-connection errors; the next request opens
+    /// a fresh one instead.
+    #[test]
+    fn a_process_stop_forgets_the_owner_so_the_next_request_opens_a_new_one() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        socket.owner_start(items([section(1)])).expect("owner start");
+        let first = socket.owner_connection().expect("owner");
+
+        socket.stop();
+        assert_eq!(socket.owner_connection(), None);
+        assert_eq!(socket.total_active_watch_count(), 0);
+
+        let second = socket.ensure_owner_connection().expect("owner");
+        assert_ne!(second, first);
+        assert!(
+            socket
+                .owner_start(items([section(1)]))
+                .expect("owner start")[0]
+                .is_active(),
+        );
+    }
+
+    /// The three commands that create or destroy a watch are refused on the
+    /// owner API too. A target that routes frames to the owner must not be
+    /// able to reintroduce, through that route, the second source of truth
+    /// it refused on the wire.
+    #[test]
+    fn the_owner_command_entry_point_refuses_watch_lifecycle_commands() {
+        let socket = socket(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            Arc::new(NoopWatchDispatchSink),
+        );
+        let (outbound, _frames) = mpsc::unbounded_channel();
+        assert!(socket.connect(trace(1), outbound));
+        socket.owner_start(items([section(1)])).expect("owner start");
+
+        assert_eq!(
+            socket.owner_command(WatchClientCommandV1::StartWatch {
+                items: items([section(2)]),
+            }),
+            Err(WatchManagerError::TargetMismatch),
+        );
+        assert_eq!(
+            socket.owner_command(WatchClientCommandV1::AcknowledgeAllEpisodes {}),
+            Ok(()),
+            "episode control is what the owner entry point is for",
+        );
+        assert_eq!(socket.owner_watched_sections(), vec![section(1)]);
     }
 
     #[test]

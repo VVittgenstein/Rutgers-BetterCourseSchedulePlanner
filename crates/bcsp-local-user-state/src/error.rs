@@ -98,4 +98,28 @@ pub enum PersonalStateError {
     SqliteConfiguration(&'static str),
 }
 
+impl PersonalStateError {
+    /// True when the failure is momentary storage contention rather than a
+    /// fault.
+    ///
+    /// The distinction is visible to the user, so it is worth making here
+    /// rather than at each call site: a busy database means another writer
+    /// holds it and the same request succeeds on retry, while an internal
+    /// error means something is wrong and retrying is pointless. A caller
+    /// that cannot tell them apart has to pick one lie for both.
+    pub const fn is_storage_busy(&self) -> bool {
+        matches!(
+            self,
+            Self::Sqlite(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ErrorCode::DatabaseBusy
+                        | rusqlite::ErrorCode::DatabaseLocked,
+                    ..
+                },
+                _,
+            ))
+        )
+    }
+}
+
 pub type PersonalStateResult<T> = Result<T, PersonalStateError>;

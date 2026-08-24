@@ -14,8 +14,24 @@ use thiserror::Error;
 static WEB_ASSETS: Dir<'_> = include_dir!("$OUT_DIR/web-assets");
 static RUNTIME_TEXT: &[u8] = include_bytes!("../assets/shell/runtime.txt");
 
+/// A response whose status the surface chose.
+///
+/// Most local routes answer 200 or fail, and `Result<Vec<u8>, _>` says that
+/// exactly. The desired-watch write does not fit: its refusals are business
+/// answers with a body worth reading, not transport errors, and which status
+/// each one earns is part of the contract rather than an error mapping.
+pub struct LocalSurfaceOutcome {
+    pub status: u16,
+    pub body: Vec<u8>,
+}
+
 pub trait LocalSurfaceState: Send + Sync + 'static {
     fn bootstrap(&self, nonce: &SessionNonce) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    /// The desired-watch authority read.
+    fn desired_watch(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
+    /// One desired-watch compare-and-swap.
+    fn put_desired_watch(&self, body: &[u8])
+    -> Result<LocalSurfaceOutcome, LocalSurfaceFailure>;
     fn settings(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
     fn put_settings(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
     fn selection(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
@@ -63,6 +79,10 @@ pub enum LocalApiErrorCode {
     InvalidLocalState,
     TermOutOfRange,
     TermNotPublished,
+    /// Local storage is momentarily unavailable -- another writer holds the
+    /// database. Retryable, and deliberately not an internal error: nothing
+    /// is wrong, and a caller that retries succeeds.
+    StorageBusy,
     InternalError,
 }
 
@@ -86,6 +106,7 @@ impl LocalApiErrorCode {
         Self::InvalidLocalState,
         Self::TermOutOfRange,
         Self::TermNotPublished,
+        Self::StorageBusy,
         Self::InternalError,
     ];
 
@@ -109,6 +130,7 @@ impl LocalApiErrorCode {
             Self::InvalidLocalState => "local.error.invalid_state",
             Self::TermOutOfRange => "local.error.term_out_of_range",
             Self::TermNotPublished => "local.error.term_not_published",
+            Self::StorageBusy => "local.error.storage_busy",
             Self::InternalError => "error.internal",
         }
     }
@@ -133,6 +155,7 @@ impl LocalApiErrorCode {
             Self::InvalidLocalState => "INVALID_LOCAL_STATE",
             Self::TermOutOfRange => "TERM_OUT_OF_RANGE",
             Self::TermNotPublished => "TERM_NOT_PUBLISHED",
+            Self::StorageBusy => "STORAGE_BUSY",
             Self::InternalError => "INTERNAL_ERROR",
         }
     }
@@ -211,6 +234,14 @@ impl LocalSurfaceFailure {
         }
     }
 
+    pub const fn service_unavailable(code: LocalApiErrorCode) -> Self {
+        Self {
+            status: 503,
+            code,
+            current_revision: None,
+        }
+    }
+
     pub const fn internal(code: LocalApiErrorCode) -> Self {
         Self {
             status: 500,
@@ -277,6 +308,15 @@ impl RouteExtension for LocalRouteExtension {
             (RequestMethod::Get, "/api/v1/local/bootstrap") => {
                 self.surface_response(|surface| surface.bootstrap(&self.nonce))
             }
+            (RequestMethod::Get, crate::LOCAL_DESIRED_WATCH_PATH) => {
+                self.surface_response(|surface| surface.desired_watch())
+            }
+            (RequestMethod::Put, crate::LOCAL_DESIRED_WATCH_PATH) => {
+                match self.surface.put_desired_watch(request.body()) {
+                    Ok(outcome) => ExtensionResponse::json_bytes(outcome.status, outcome.body),
+                    Err(error) => failure_response(error),
+                }
+            }
             (RequestMethod::Get, "/api/v1/local/settings") => {
                 self.surface_response(|surface| surface.settings())
             }
@@ -340,6 +380,7 @@ impl RouteExtension for LocalRouteExtension {
             | (_, "/runtime.txt")
             | (_, "/api/v1/local/bootstrap")
             | (_, "/api/v1/local/settings")
+            | (_, crate::LOCAL_DESIRED_WATCH_PATH)
             | (_, "/api/v1/local/selection")
             | (_, "/api/v1/local/history")
             | (_, "/api/v1/local/current-filters")

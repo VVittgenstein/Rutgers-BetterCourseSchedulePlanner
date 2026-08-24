@@ -23,7 +23,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use time::OffsetDateTime;
 
-use crate::{LocalApiErrorCode, LocalPrimaryDatabase, LocalSurfaceFailure, LocalSurfaceState};
+use crate::{
+    DesiredWatchCoordinator, DesiredWatchCoordinatorError, DesiredWatchMutationV1,
+    LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LocalApiErrorCode, LocalPrimaryDatabase,
+    LocalSurfaceFailure, LocalSurfaceOutcome, LocalSurfaceState,
+};
 
 const LOCAL_USER_DATA_RESET_TOKEN_TTL: Duration = Duration::from_secs(60);
 
@@ -41,6 +45,7 @@ pub struct PersonalSurface {
     target_refresh_demand: TargetRefreshDemand,
     service_status: Option<Arc<ServiceStatusRegistry>>,
     prepared_serving: Option<Arc<PreparedServingRegistry>>,
+    desired_watch: Option<Arc<DesiredWatchCoordinator>>,
 }
 
 impl PersonalSurface {
@@ -57,7 +62,19 @@ impl PersonalSurface {
             target_refresh_demand: TargetRefreshDemand::default(),
             service_status: None,
             prepared_serving: None,
+            desired_watch: None,
         }
+    }
+
+    /// Attaches the desired-watch coordinator.
+    ///
+    /// Optional so isolated fixtures can build a surface without one; the
+    /// production composition always supplies it, and without it the two
+    /// desired-watch routes report the local build is not configured for
+    /// them rather than inventing an empty authority.
+    pub fn with_desired_watch(mut self, coordinator: Arc<DesiredWatchCoordinator>) -> Self {
+        self.desired_watch = Some(coordinator);
+        self
     }
 
     pub fn with_target_refresh_demand(
@@ -76,6 +93,12 @@ impl PersonalSurface {
     pub fn with_prepared_serving(mut self, prepared: Arc<PreparedServingRegistry>) -> Self {
         self.prepared_serving = Some(prepared);
         self
+    }
+
+    fn coordinator(&self) -> Result<&DesiredWatchCoordinator, LocalSurfaceFailure> {
+        self.desired_watch
+            .as_deref()
+            .ok_or_else(|| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))
     }
 
     fn prepared_snapshot(&self) -> Result<Option<PreparedServingBinding>, LocalSurfaceFailure> {
@@ -177,6 +200,45 @@ impl LocalSurfaceState for PersonalSurface {
             mode: "LOCAL",
             session_nonce: nonce.as_str(),
             state,
+        })
+    }
+
+    /// The desired-watch authority read.
+    ///
+    /// One response, one snapshot, every row: the nine sections a user may
+    /// desire plus the full removal history is 521 rows, and the whole point
+    /// of a tombstone is that a page can tell "removed at revision N" from
+    /// "never existed". Paginating would hand a page a partial view it could
+    /// not distinguish from the complete one, so the response is bounded by
+    /// proof instead -- see `LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES`.
+    fn desired_watch(&self) -> Result<Vec<u8>, LocalSurfaceFailure> {
+        let state = self
+            .coordinator()?
+            .read()
+            .map_err(map_coordinator_error)?;
+        encode(&state)
+    }
+
+    /// One desired-watch compare-and-swap, followed immediately by a
+    /// reconcile, so the response describes what is actually running rather
+    /// than what was asked for.
+    fn put_desired_watch(
+        &self,
+        body: &[u8],
+    ) -> Result<LocalSurfaceOutcome, LocalSurfaceFailure> {
+        let mutation: DesiredWatchMutationV1 = decode_payload(body)?;
+        if mutation.contract_version != LOCAL_DESIRED_WATCH_CONTRACT_VERSION {
+            return Err(LocalSurfaceFailure::bad_request(
+                LocalApiErrorCode::UnsupportedProtocolVersion,
+            ));
+        }
+        let result = self
+            .coordinator()?
+            .submit(&mutation)
+            .map_err(map_coordinator_error)?;
+        Ok(LocalSurfaceOutcome {
+            status: result.outcome.http_status(),
+            body: encode(&result)?,
         })
     }
 
@@ -757,6 +819,14 @@ impl LocalSurfaceState for PersonalSurface {
         let reset = mutation_store
             .clear_personal_data(expected_state_revision)
             .map_err(map_personal_error)?;
+        // Every desired row is gone and the authority generation has moved,
+        // so the coordinator's materialization records now describe watches
+        // that no longer exist under a generation that no longer exists.
+        // Left in place they would be adopted on the next reconcile and the
+        // page would be shown a green light for nothing.
+        if let Some(coordinator) = self.desired_watch.as_deref() {
+            coordinator.on_authority_cleared();
+        }
         encode(&reset)
     }
 
@@ -1255,6 +1325,21 @@ where
         .map_err(|_| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))
 }
 
+/// Maps a coordinator failure onto a status.
+///
+/// A busy database is 503 and not 500: nothing is broken, another writer
+/// simply holds it, and the same request succeeds on retry. Reporting it as
+/// an internal error would tell a page to give up on a command that is still
+/// perfectly submittable -- and, worse, would look identical to a real fault.
+fn map_coordinator_error(error: DesiredWatchCoordinatorError) -> LocalSurfaceFailure {
+    match error {
+        DesiredWatchCoordinatorError::Storage(error) => map_personal_error(error),
+        DesiredWatchCoordinatorError::Poisoned => {
+            LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError)
+        }
+    }
+}
+
 fn map_personal_error(error: PersonalStateError) -> LocalSurfaceFailure {
     match error {
         PersonalStateError::RevisionConflict { actual, .. } => {
@@ -1306,6 +1391,9 @@ fn map_personal_error(error: PersonalStateError) -> LocalSurfaceFailure {
         | PersonalStateError::InvalidPageOffset
         | PersonalStateError::InvalidEpisodeSummary => {
             LocalSurfaceFailure::bad_request(LocalApiErrorCode::InvalidLocalState)
+        }
+        error if error.is_storage_busy() => {
+            LocalSurfaceFailure::service_unavailable(LocalApiErrorCode::StorageBusy)
         }
         _ => LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError),
     }

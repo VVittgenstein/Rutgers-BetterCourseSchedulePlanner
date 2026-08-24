@@ -6,6 +6,7 @@
 pub const PACKAGE_BOUNDARY: &str = "bcsp-local-runtime";
 
 mod bootstrap;
+mod desired;
 mod diagnostic;
 mod extension;
 mod history;
@@ -20,9 +21,18 @@ mod watch;
 pub use bootstrap::{
     LocalBootstrapError, LocalPrimaryDatabase, LocalRuntimeState, OperationalGate,
 };
+pub use desired::{
+    DESIRED_WATCH_MATERIALIZE_BACKOFF, DesiredWatchCommittedV1, DesiredWatchCoordinator, DesiredWatchCoordinatorError,
+    DesiredWatchEntryV1, DesiredWatchFailureClassV1, DesiredWatchFailureReasonV1,
+    DesiredWatchFailureV1, DesiredWatchMaterializedV1, DesiredWatchMutationResultV1,
+    DesiredWatchMutationV1, DesiredWatchOutcomeV1, DesiredWatchStateV1,
+    LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_PATH,
+    LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
+};
 pub use diagnostic::StartupFailureReport;
 pub use extension::{
-    LocalApiErrorCode, LocalRouteExtension, LocalSurfaceFailure, LocalSurfaceState,
+    LocalApiErrorCode, LocalRouteExtension, LocalSurfaceFailure, LocalSurfaceOutcome,
+    LocalSurfaceState,
 };
 pub use instance::{
     ExistingLocalInstance, LOCAL_INSTANCE_LOCK_FILE_NAME, LocalInstanceClaim, LocalInstanceError,
@@ -37,9 +47,7 @@ pub use path::{
 };
 pub use personal::PersonalSurface;
 pub use policy::{LocalRefreshPolicyProvider, LocalRuntimeCore, create_local_runtime_core};
-pub use watch::{
-    LOCAL_DESIRED_WATCH_SOCKET_PATH, LOCAL_PRESENCE_SOCKET_PATH, create_local_watch_socket,
-};
+pub use watch::{LOCAL_PRESENCE_SOCKET_PATH, LocalWatchRoute, create_local_watch_socket};
 
 pub fn boundary_marker() -> &'static str {
     let _ = (

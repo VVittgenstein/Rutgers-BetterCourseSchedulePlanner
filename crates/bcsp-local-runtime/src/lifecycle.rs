@@ -13,10 +13,10 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::{
-    ExistingLocalInstance, LocalBootstrapError, LocalInstanceClaim, LocalInstanceError,
-    LocalPathError, LocalRouteExtension, LocalRuntimeCore, LocalRuntimePaths, LocalRuntimeState,
-    LocalSurfaceFailure, OperationalGate, PersonalSurface, PrimaryInstanceLease,
-    create_local_runtime_core, create_local_watch_socket,
+    DesiredWatchCoordinator, ExistingLocalInstance, LocalBootstrapError, LocalInstanceClaim,
+    LocalInstanceError, LocalPathError, LocalRouteExtension, LocalRuntimeCore, LocalRuntimePaths,
+    LocalRuntimeState, LocalSurfaceFailure, LocalWatchRoute, OperationalGate, PersonalSurface,
+    PrimaryInstanceLease, create_local_runtime_core, create_local_watch_socket,
     product::{
         LocalProductRefreshResources, create_local_product_routes, start_local_product_refresh,
     },
@@ -69,6 +69,8 @@ pub struct PreparedLocalRuntime {
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
     service_status: Arc<ServiceStatusRegistry>,
     watch: Arc<SharedWatchSocket>,
+    watch_route: Arc<LocalWatchRoute>,
+    desired_watch: Arc<DesiredWatchCoordinator>,
     target_refresh_demand: TargetRefreshDemand,
     prepared_serving: Arc<bcsp_application::PreparedServingRegistry>,
     extension: Arc<LocalRouteExtension>,
@@ -99,10 +101,22 @@ impl PreparedLocalRuntime {
         )?;
         let mutation_store = PersonalStateStore::open(operational.paths().database())
             .map_err(LocalBootstrapError::PersonalState)?;
+        // The coordinator gets its own connection. It is written to from the
+        // socket maintenance tick as well as from HTTP, and sharing the
+        // route's connection would serialize a page's ordinary settings save
+        // behind a materialization retry for no reason.
+        let desired_store = PersonalStateStore::open(operational.paths().database())
+            .map_err(LocalBootstrapError::PersonalState)?;
+        let desired_watch = Arc::new(DesiredWatchCoordinator::new(desired_store, watch.clone()));
+        let watch_route = Arc::new(LocalWatchRoute::new(
+            watch.clone(),
+            desired_watch.clone(),
+        ));
         let personal = PersonalSurface::new(database, mutation_store, watch.clone())
             .with_target_refresh_demand(target_refresh_demand.clone())
             .with_service_status(service_status.clone())
-            .with_prepared_serving(prepared_serving.clone());
+            .with_prepared_serving(prepared_serving.clone())
+            .with_desired_watch(desired_watch.clone());
         let nonce = SessionNonce::generate();
         let (shutdown_trigger, shutdown_requests) = local_shutdown_channel();
         let extension = Arc::new(LocalRouteExtension::with_product_routes(
@@ -117,6 +131,8 @@ impl PreparedLocalRuntime {
             open_runtime,
             service_status,
             watch,
+            watch_route,
+            desired_watch,
             target_refresh_demand,
             prepared_serving,
             extension,
@@ -164,6 +180,10 @@ impl PreparedLocalRuntime {
         self.watch.clone()
     }
 
+    pub fn desired_watch(&self) -> Arc<DesiredWatchCoordinator> {
+        self.desired_watch.clone()
+    }
+
     pub const fn core(&self) -> &LocalRuntimeCore {
         &self.core
     }
@@ -186,7 +206,10 @@ impl PreparedLocalRuntime {
             },
         )?;
         let extension: Arc<dyn RouteExtension> = self.extension.clone();
-        let socket: Arc<dyn WebSocketExtension> = self.watch.clone();
+        // The local build serves the shared watch socket THROUGH the local
+        // route, so a page cannot start or stop a watch by sending a frame
+        // and the coordinator learns when the audience changes.
+        let socket: Arc<dyn WebSocketExtension> = self.watch_route.clone();
         let server =
             spawn_loopback_server_with_socket(extension, socket, self.nonce.clone()).await?;
         Ok(RunningLocalRuntime {

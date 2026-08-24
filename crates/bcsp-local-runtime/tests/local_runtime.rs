@@ -23,9 +23,8 @@ use bcsp_contracts::{
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_runtime::{
-    LOCAL_DESIRED_WATCH_SOCKET_PATH, LOCAL_PRESENCE_SOCKET_PATH, LocalRuntimeError,
-    LocalRuntimePaths, LocalSurfaceState, PersonalSurface, PreparedLocalRuntime,
-    prepare_and_start_with,
+    LOCAL_DESIRED_WATCH_PATH, LOCAL_PRESENCE_SOCKET_PATH, LocalRuntimeError, LocalRuntimePaths,
+    LocalSurfaceState, PersonalSurface, PreparedLocalRuntime, prepare_and_start_with,
 };
 use bcsp_local_user_state::{
     CatalogRefreshMinutes, LocalSettings, OpenRefreshSeconds, PersonalStateStore, SettingsRevision,
@@ -989,13 +988,357 @@ async fn loopback_server_exposes_the_local_surface_and_method_boundaries() {
     running.shutdown().await.unwrap();
 }
 
+/// Every desired-watch answer, and the status it earns.
+///
+/// The statuses are the contract, not an error mapping. `409` for the four
+/// terminal refusals, because all four mean the same thing to a page: what
+/// you read is not what is there, re-read before asking again. `503` for a
+/// full authority, because that one is not terminal -- nothing was written
+/// and the same id may be presented again. `400` for a body the route cannot
+/// parse, which is a protocol fault rather than an answer.
+///
+/// The load-bearing assertion is the replay: a refusal replayed from the
+/// receipt ledger comes back with the status the ORIGINAL answer earned. The
+/// tempting alternative -- 200 because the envelope says it was replayed --
+/// would tell a page that lost its response that a refused command had
+/// succeeded, which is precisely the failure the ledger exists to prevent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_desired_watch_outcome_is_reported_with_the_status_it_earned() {
+    let temp = TestDirectory::new("desired-watch-statuses");
+    let (_root, executable) = package(&temp);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let nonce = running.nonce().as_str().to_owned();
+    let nonce = nonce.as_str();
+    let section = SectionKey::try_new("T2026F", "CAMPUS_A", "00001").unwrap();
+    let other = SectionKey::try_new("T2026F", "CAMPUS_A", "00002").unwrap();
+
+    // A commit.
+    let (status_code, committed) = put_desired_watch(
+        authority, &origin, nonce, &section, Some(watch_policy()), 0, 1, trace(1),
+    );
+    assert_eq!(status_code, 200, "{committed}");
+    assert_eq!(committed["outcome"], "COMMITTED");
+    assert_eq!(committed["replayed"], false);
+    assert_eq!(committed["committed"]["epochChanged"], true);
+    assert_eq!(
+        committed["state"]["entries"].as_array().unwrap().len(),
+        1,
+        "a committing page is handed the authority its own write produced",
+    );
+    let revision = committed["committed"]["revision"].as_u64().unwrap();
+
+    // The same id again: the ledger answers, and the answer is the same 200.
+    let (status_code, replayed) = put_desired_watch(
+        authority, &origin, nonce, &section, Some(watch_policy()), 0, 1, trace(1),
+    );
+    assert_eq!(status_code, 200, "{replayed}");
+    assert_eq!(replayed["outcome"], "COMMITTED");
+    assert_eq!(replayed["replayed"], true);
+    assert_eq!(replayed["committed"]["revision"], revision);
+
+    // A stale revision, and then the SAME id replayed. Both 409.
+    let (status_code, stale) = put_desired_watch(
+        authority, &origin, nonce, &section, Some(watch_policy()), 999, 1, trace(2),
+    );
+    assert_eq!(status_code, 409, "{stale}");
+    assert_eq!(stale["outcome"], "STALE_REVISION");
+    assert_eq!(stale["currentRevision"], revision);
+    assert!(stale["state"].is_null(), "a refused page must re-read");
+    let (status_code, stale_replay) = put_desired_watch(
+        authority, &origin, nonce, &section, Some(watch_policy()), 999, 1, trace(2),
+    );
+    assert_eq!(
+        status_code, 409,
+        "a replayed refusal is still a refusal: {stale_replay}",
+    );
+    assert_eq!(stale_replay["outcome"], "STALE_REVISION");
+    assert_eq!(stale_replay["replayed"], true);
+
+    // A generation that no longer exists.
+    let (status_code, stale_generation) = put_desired_watch(
+        authority, &origin, nonce, &other, Some(watch_policy()), 0, 99, trace(3),
+    );
+    assert_eq!(status_code, 409, "{stale_generation}");
+    assert_eq!(stale_generation["outcome"], "STALE_GENERATION");
+    assert_eq!(
+        stale_generation["authorityGeneration"], 1,
+        "and it carries the generation the page has to re-read with",
+    );
+
+    // The same id carrying a different command.
+    let (status_code, conflict) = put_desired_watch(
+        authority, &origin, nonce, &other, Some(watch_policy()), 0, 1, trace(1),
+    );
+    assert_eq!(status_code, 409, "{conflict}");
+    assert_eq!(conflict["outcome"], "MUTATION_ID_CONFLICT");
+
+    // A body the route cannot parse is a protocol fault, and answers in the
+    // shared typed error shape rather than as a desired-watch outcome.
+    let malformed = request(
+        authority,
+        &format!("PUT {LOCAL_DESIRED_WATCH_PATH}"),
+        &origin,
+        nonce,
+        r#"{"protocolVersion":1,"payload":{"contractVersion":1}}"#,
+    );
+    assert_eq!(status(&malformed), 400, "{malformed}");
+    assert_eq!(response_json(&malformed)["error"]["code"], "MALFORMED_REQUEST");
+
+    // A write still needs the Origin and the session nonce the rest of the
+    // local surface needs.
+    let unauthenticated =
+        request_without_session(authority, &format!("PUT {LOCAL_DESIRED_WATCH_PATH}"));
+    assert_eq!(status(&unauthenticated), 403, "{unauthenticated}");
+
+    running.shutdown().await.unwrap();
+}
+
+/// The nine-section product cap, over HTTP, including the shape of the
+/// refusal a page has to render.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_desired_watch_cap_refuses_a_tenth_section_with_the_maximum() {
+    let temp = TestDirectory::new("desired-watch-cap");
+    let (_root, executable) = package(&temp);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let nonce = running.nonce().as_str().to_owned();
+    let nonce = nonce.as_str();
+
+    let mut revisions = Vec::new();
+    for index in 1..=9_u16 {
+        let section = SectionKey::try_new("T2026F", "CAMPUS_A", &format!("{index:05}")).unwrap();
+        let (status_code, committed) = put_desired_watch(
+            authority,
+            &origin,
+            nonce,
+            &section,
+            Some(watch_policy()),
+            0,
+            1,
+            trace(u64::from(index)),
+        );
+        assert_eq!(status_code, 200, "{committed}");
+        revisions.push(committed["committed"]["revision"].as_u64().unwrap());
+    }
+
+    let tenth = SectionKey::try_new("T2026F", "CAMPUS_A", "00010").unwrap();
+    let (status_code, capped) = put_desired_watch(
+        authority, &origin, nonce, &tenth, Some(watch_policy()), 0, 1, trace(10),
+    );
+    assert_eq!(status_code, 409, "{capped}");
+    assert_eq!(capped["outcome"], "LIMIT_EXCEEDED");
+    assert_eq!(capped["maximum"], 9);
+
+    // A policy edit on one of the nine still commits: the cap is measured
+    // against the state a mutation LEAVES, and this one leaves nine.
+    let first = SectionKey::try_new("T2026F", "CAMPUS_A", "00001").unwrap();
+    let (status_code, edited) = put_desired_watch(
+        authority,
+        &origin,
+        nonce,
+        &first,
+        Some(watch_policy()),
+        revisions[0],
+        1,
+        trace(20),
+    );
+    assert_eq!(status_code, 200, "a policy-only edit at the cap: {edited}");
+    assert_eq!(edited["committed"]["epochChanged"], false);
+
+    running.shutdown().await.unwrap();
+}
+
+/// The whole local vertical, over HTTP, across three process lifetimes:
+/// write intent, restart, find it restored and materializing, Full Reset,
+/// restart again and find it gone.
+///
+/// This is the shape the Windows packaging gate runs against a real
+/// candidate. Running it here as well pins the behaviour in the ordinary
+/// test suite rather than only in a release rehearsal, and it is what makes
+/// migration 10004 safe to ship: the reset counters it introduced are
+/// exercised against a NON-EMPTY table, which is the only case where they
+/// can be wrong.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn desired_intent_survives_a_restart_and_a_full_reset_clears_it() {
+    let temp = TestDirectory::new("desired-watch-restart");
+    let (_root, executable) = package(&temp);
+    let section = SectionKey::try_new("T2026F", "CAMPUS_A", "00001").unwrap();
+
+    // First lifetime: commit intent.
+    let running = PreparedLocalRuntime::from_executable(executable.clone())
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let first_nonce = running.nonce().as_str().to_owned();
+    let (status_code, committed) = put_desired_watch(
+        authority,
+        &origin,
+        &first_nonce,
+        &section,
+        Some(watch_policy()),
+        0,
+        1,
+        trace(1),
+    );
+    assert_eq!(status_code, 200, "{committed}");
+    let bootstrap = response_json(&request(
+        authority,
+        "GET /api/v1/local/bootstrap",
+        &origin,
+        &first_nonce,
+        "",
+    ));
+    assert_eq!(
+        bootstrap["data"]["state"]["desiredWatches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "the bootstrap wire keeps its protocol v1 shape and shows the intent",
+    );
+    running.shutdown().await.unwrap();
+
+    // Second lifetime: the intent is still there, under the same generation,
+    // and nothing is armed until a page attaches.
+    let running = PreparedLocalRuntime::from_executable(executable.clone())
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let second_nonce = running.nonce().as_str().to_owned();
+    assert_ne!(second_nonce, first_nonce, "a restart is a new session");
+    let state = read_desired_watch(authority, &origin, &second_nonce);
+    assert_eq!(state["authorityGeneration"], 1);
+    let entry = desired_entry(&state, &section).expect("the intent survived the restart");
+    assert!(
+        !entry["policy"].is_null(),
+        "and it is still a watch, not a tombstone",
+    );
+    assert!(
+        !is_armed(&state, entry),
+        "nothing is armed before a page attaches, and the read says so plainly",
+    );
+    assert!(entry["materialized"].is_null());
+
+    // A page attaches and stays. This fixture's section is on a campus the
+    // product does not target, so it can never be armed -- and the honest
+    // report is the intent plus the reason, never a green light, and never a
+    // row the process quietly deleted on the user's behalf.
+    let socket = open_watch_socket(authority, &origin, &second_nonce);
+    let attached = desired_watch_until(authority, &origin, &second_nonce, |state| {
+        desired_entry(state, &section)
+            .is_some_and(|entry| !entry["failure"].is_null())
+    })
+    .await;
+    let entry = desired_entry(&attached, &section).unwrap();
+    assert!(!entry["policy"].is_null(), "the row is never withdrawn");
+    assert!(!is_armed(&attached, entry));
+    assert_eq!(
+        entry["failure"]["classification"], "PERMANENT",
+        "this fixture's campus is not a product target: {entry}",
+    );
+    assert_eq!(entry["failure"]["reason"], "UNSUPPORTED_TARGET");
+    assert_eq!(
+        entry["failure"]["retryScheduled"], false,
+        "nothing this process does changes that answer, so it stops asking",
+    );
+    assert!(
+        !entry["policy"].is_null(),
+        "and it STILL does not withdraw the row: a section the runtime has          proven it cannot arm is the user's to remove, not the process's",
+    );
+    drop(socket);
+
+    // Full Reset reports the deletion, which is the count migration 10004
+    // added and which an empty-table rehearsal cannot exercise.
+    let state_revision = response_json(&request(
+        authority,
+        "GET /api/v1/local/bootstrap",
+        &origin,
+        &second_nonce,
+        "",
+    ))["data"]["state"]["stateRevision"]
+        .clone();
+    let prepared = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/user-data-reset/prepare",
+        &origin,
+        &second_nonce,
+        serde_json::json!({"expectedUserStateRevision": state_revision}),
+    );
+    let confirmed = post_api(
+        authority,
+        "POST",
+        "/api/v1/local/user-data-reset/confirm",
+        &origin,
+        &second_nonce,
+        serde_json::json!({"confirmationToken": prepared["confirmationToken"]}),
+    );
+    assert_eq!(
+        confirmed["deletedDesiredWatches"], 1,
+        "the non-empty path is the one that can be wrong",
+    );
+    assert_eq!(confirmed["deletedDesiredWatchReceipts"], 1);
+    let after_reset = read_desired_watch(authority, &origin, &second_nonce);
+    assert_eq!(after_reset["entries"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        after_reset["authorityGeneration"], 2,
+        "a reset raises the generation, so nothing from before it can commit",
+    );
+    running.shutdown().await.unwrap();
+
+    // Third lifetime: still empty, and still at the raised generation.
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let third_nonce = running.nonce().as_str().to_owned();
+    let state = read_desired_watch(authority, &origin, &third_nonce);
+    assert_eq!(state["entries"].as_array().unwrap().len(), 0);
+    assert_eq!(state["authorityGeneration"], 2);
+    assert_eq!(
+        response_json(&request(
+            authority,
+            "GET /api/v1/local/bootstrap",
+            &origin,
+            &third_nonce,
+            "",
+        ))["data"]["state"]["desiredWatches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0,
+    );
+    running.shutdown().await.unwrap();
+}
+
 /// S2b. The shared host promises nothing about a path no target injected --
 /// it simply is not in the route table, and what a client sees there is
-/// whatever the local extension fallback does with it. Pin that per route,
-/// for both shapes a page can reach it with, so a future injection is a
+/// whatever the local extension fallback does with it. Presence is still
+/// un-injected (it belongs to the page-lifecycle milestone), so pin it in
+/// both shapes a page can reach it with; a future injection then has to be a
 /// visible behaviour change rather than a silent one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn un_injected_local_socket_paths_are_404_not_a_websocket_route() {
+async fn the_un_injected_presence_path_is_404_not_a_websocket_route() {
     let temp = TestDirectory::new("no-secondary-socket");
     let (_root, executable) = package(&temp);
     let running = PreparedLocalRuntime::from_executable(executable)
@@ -1007,18 +1350,81 @@ async fn un_injected_local_socket_paths_are_404_not_a_websocket_route() {
     let authority = origin.strip_prefix("http://").unwrap();
     let nonce = running.nonce().as_str();
 
-    for path in [LOCAL_PRESENCE_SOCKET_PATH, LOCAL_DESIRED_WATCH_SOCKET_PATH] {
-        let upgrade = websocket_handshake(authority, path, &origin, nonce);
-        assert_eq!(status(&upgrade), 404, "{path} upgrade: {upgrade}");
-        assert_eq!(body(&upgrade), "not found", "{path}");
+    let upgrade = websocket_handshake(authority, LOCAL_PRESENCE_SOCKET_PATH, &origin, nonce);
+    assert_eq!(status(&upgrade), 404, "presence upgrade: {upgrade}");
+    assert_eq!(body(&upgrade), "not found");
 
-        let read = request(authority, &format!("GET {path}"), &origin, nonce, "");
-        assert_eq!(status(&read), 404, "{path} read: {read}");
-        assert_eq!(body(&read), "not found", "{path}");
-    }
+    let read = request(
+        authority,
+        &format!("GET {LOCAL_PRESENCE_SOCKET_PATH}"),
+        &origin,
+        nonce,
+        "",
+    );
+    assert_eq!(status(&read), 404, "presence read: {read}");
+    assert_eq!(body(&read), "not found");
+
     // The built-in route is unaffected by any of this.
     let watch = websocket_handshake(authority, "/api/v1/watch", &origin, nonce);
     assert_eq!(status(&watch), 101, "{watch}");
+
+    running.shutdown().await.unwrap();
+}
+
+/// The desired-watch path is an ordinary local HTTP resource, and a plain
+/// GET on it succeeds. The earlier design put a second WebSocket route here
+/// and an older test pinned the path at 404 for everything; both were
+/// withdrawn when the co-editing model was cut back to "pages read on load
+/// and after their own writes".
+///
+/// What still has to hold is that it is not SECRETLY a socket. A page that
+/// sends an upgrade request here must not get one: it reaches the HTTP
+/// handler, is answered like the GET it syntactically is, and no
+/// `Sec-WebSocket-Accept` comes back. A route that quietly accepted an
+/// upgrade would be a second, unversioned way to reach the authority.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_desired_watch_path_reads_over_http_and_never_upgrades() {
+    let temp = TestDirectory::new("desired-watch-http");
+    let (_root, executable) = package(&temp);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap();
+    let nonce = running.nonce().as_str();
+
+    let read = request(
+        authority,
+        &format!("GET {LOCAL_DESIRED_WATCH_PATH}"),
+        &origin,
+        nonce,
+        "",
+    );
+    assert_eq!(status(&read), 200, "desired-watch read: {read}");
+    let state = desired_watch_data(&read);
+    assert_eq!(state["contractVersion"], 1);
+    assert_eq!(state["authorityGeneration"], 1);
+    assert_eq!(state["entries"].as_array().unwrap().len(), 0);
+
+    let upgrade = websocket_handshake(authority, LOCAL_DESIRED_WATCH_PATH, &origin, nonce);
+    assert_ne!(status(&upgrade), 101, "desired-watch upgrade: {upgrade}");
+    assert!(
+        !upgrade.to_ascii_lowercase().contains("sec-websocket-accept"),
+        "an upgrade must not be completed here: {upgrade}",
+    );
+
+    // Methods the resource does not define are refused by the same route,
+    // rather than falling through to the product routes and 404ing.
+    let posted = request(
+        authority,
+        &format!("POST {LOCAL_DESIRED_WATCH_PATH}"),
+        &origin,
+        nonce,
+        "{}",
+    );
+    assert_eq!(status(&posted), 405, "{posted}");
 
     running.shutdown().await.unwrap();
 }
@@ -2110,6 +2516,143 @@ fn request(authority: &str, request_line: &str, origin: &str, nonce: &str, body:
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
+}
+
+/// Opens a watch socket and HOLDS it, so the caller is a real audience.
+///
+/// `websocket_handshake` drops its stream, which is right for a test that
+/// only wants the status line -- and wrong for anything that then observes
+/// what the process does while a page is attached, because the disconnect
+/// callback fires immediately.
+fn open_watch_socket(authority: &str, origin: &str, nonce: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(authority).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "GET /api/v1/watch?session={nonce} HTTP/1.1\r\nHost: {authority}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: bcsp.v1\r\n\r\n"
+    )
+    .unwrap();
+    stream.flush().unwrap();
+    let response = read_http_response(&mut stream);
+    assert_eq!(status(&response), 101, "{response}");
+    stream
+}
+
+/// Waits for the desired-watch read to satisfy `settled`.
+///
+/// The attach-time reconcile runs on the server's own task after the 101 is
+/// written, so a read taken immediately afterwards can legitimately race it.
+/// Polling a CONDITION rather than sleeping a fixed interval keeps the test
+/// deterministic in what it asserts while tolerating the scheduling.
+async fn desired_watch_until(
+    authority: &str,
+    origin: &str,
+    nonce: &str,
+    settled: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let state = read_desired_watch(authority, origin, nonce);
+        if settled(&state) {
+            return state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the desired-watch read never settled: {state}",
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The `data` object of a local desired-watch response.
+fn desired_watch_data(response: &str) -> serde_json::Value {
+    let envelope: serde_json::Value =
+        serde_json::from_str(body(response)).unwrap_or_else(|error| {
+            panic!("desired-watch response must be JSON ({error}): {response}")
+        });
+    assert_eq!(envelope["protocolVersion"], 1, "{response}");
+    envelope["data"].clone()
+}
+
+/// Reads the desired-watch authority over HTTP.
+fn read_desired_watch(authority: &str, origin: &str, nonce: &str) -> serde_json::Value {
+    let response = request(
+        authority,
+        &format!("GET {LOCAL_DESIRED_WATCH_PATH}"),
+        origin,
+        nonce,
+        "",
+    );
+    assert_eq!(status(&response), 200, "{response}");
+    desired_watch_data(&response)
+}
+
+/// Submits one desired-watch compare-and-swap, returning the status and the
+/// decoded `data` object so a test can assert on both.
+fn put_desired_watch(
+    authority: &str,
+    origin: &str,
+    nonce: &str,
+    section: &SectionKey,
+    policy: Option<WatchPolicyV1>,
+    based_on_revision: u64,
+    authority_generation: u64,
+    mutation_id: TraceId,
+) -> (u16, serde_json::Value) {
+    let payload = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {
+            "contractVersion": 1,
+            "section": {
+                "term": section.term().as_str(),
+                "campus": section.campus().as_str(),
+                "index": section.index().as_str(),
+            },
+            "policy": policy,
+            "basedOnRevision": based_on_revision,
+            "authorityGeneration": authority_generation,
+            "mutationId": mutation_id.to_string(),
+        },
+    })
+    .to_string();
+    let response = request(
+        authority,
+        &format!("PUT {LOCAL_DESIRED_WATCH_PATH}"),
+        origin,
+        nonce,
+        &payload,
+    );
+    (status(&response), desired_watch_data(&response))
+}
+
+/// The authority entry for one section, if the read has one.
+fn desired_entry<'a>(
+    state: &'a serde_json::Value,
+    section: &SectionKey,
+) -> Option<&'a serde_json::Value> {
+    state["entries"].as_array().unwrap().iter().find(|entry| {
+        entry["section"]["term"] == section.term().as_str()
+            && entry["section"]["campus"] == section.campus().as_str()
+            && entry["section"]["index"] == section.index().as_str()
+    })
+}
+
+/// The frontend's rule, in Rust: a section is really being watched only when
+/// a materialization record exists AND its whole stamp equals the
+/// authority's. Anything less is "preparing", never green.
+fn is_armed(state: &serde_json::Value, entry: &serde_json::Value) -> bool {
+    let materialized = &entry["materialized"];
+    !materialized.is_null()
+        && materialized["authorityGeneration"] == state["authorityGeneration"]
+        && materialized["revision"] == entry["revision"]
+        && materialized["materializationEpoch"] == entry["materializationEpoch"]
+        && materialized["policy"] == entry["policy"]
+}
+
+fn watch_policy() -> WatchPolicyV1 {
+    WatchPolicyV1::default()
 }
 
 fn module_script_src(html: &str) -> &str {
