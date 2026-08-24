@@ -1,9 +1,15 @@
 # 设计方案：提醒必达（Alert Delivery Integrity）
 
-状态：v3.1 —— **已批准**（Codex 终审 2026-08-20）。进入实现阶段；遗留
-细节按 `2026-08-20-pr-acceptance-checklist.md` 在 PR 中验收。
-日期：2026-08-20
-作者：Claude；评审：Codex；关联：安全门 v3、公网加固 v2、两份评审总案 v2
+状态：v3.2 —— **已批准**（Codex 终审 2026-08-20；v3.2 于 2026-08-24 按
+M0-M1-001 的实现闭环写回）。实现阶段；遗留细节按
+`2026-08-20-pr-acceptance-checklist.md` 在 PR 中验收。
+日期：2026-08-20（v3.2：2026-08-24）
+作者：Claude；评审：Codex；关联：安全门 v5.1、公网加固 v2、两份评审总案
+
+**v3.2 写回的是本地 L1 那一段，其余各层的要求一条未减。** 自动重连、
+五环 Readiness、AudioContext 自愈、页面级通知、公网换证与 H4 资源边界
+**全部仍然未做**，仍然是本设计的要求；M0-M1-001 只交付了本地 desired
+的读写与物化闭环。不要因为本文这一段变成了"已实现"就以为 S2 收口。
 
 ## 0. 总纲（产品负责人定义）
 
@@ -47,32 +53,41 @@ D7 Caddy reload 切断长连接。
   **不自动重连**（v2 修正：现有"without automatic restart"测试翻转时必须
   保留用户主动断开分支，Disconnect 按钮不得被自动连回）。
 - 节奏：1s/2s/4s…封顶 30s，无限重试；期间 Readiness=DEGRADED("重连中")。
-- **re-arm 数据源（v2 修正；v4 由 CAS 设计改写归属）**：不是 selection。
-  connection 无关的**期望监控表** `desiredWatches`——用户 START 即写入、
-  显式 STOP 即移除；不持久化 activeWatchId/响铃消耗。
-  **v4 起该表是服务端权威状态**：所有 tab 经 revision/CAS 平权编辑，
-  **物化由服务端逻辑 owner 负责**，**页面不再"加载后按表自动 START"**。
-  见 `2026-08-22-desired-watch-revision-cas.md`。
-- **desired→armed 调和循环（v3 新增；v4 起由服务端 authority 承担，
-  不再是客户端循环）**：
-  连接健康 ≠ 全部武装成功——如 Open 快照未就绪时 START 返回
-  `TARGET_UNAVAILABLE`，socket 无事发生、不会再触发 re-arm。改为常驻
-  调和循环：`desired − armed` 的差集按退避（5s/10s/20s 封顶 30s）重试；
-  每轮携带 retry-epoch，STOP/policy 变更/重连即令旧 epoch 作废（取消
-  在途重试）；**暂态拒绝**（TARGET_UNAVAILABLE 等）重试，**永久拒绝**
-  （admission 类：非产品校区/超学期窗口/超 9 门上限）从 desired 移除并
-  以常驻通知告知用户，不无限重试。
-- **本地多标签页所有权（v3 提出，v4 由 CAS 设计取代）**：desired 表
+- **re-arm 数据源（v2 修正；v4 由 CAS 设计改写归属；v3.2 已实现）**：
+  不是 selection。connection 无关的**期望监控表** `desiredWatches`——
+  用户 START 即写入、显式 STOP 即移除；不持久化 activeWatchId/响铃消耗。
+  该表是**服务端权威状态**：所有 tab 经 revision/CAS 平权编辑，
+  **物化由服务端 coordinator 负责**，**页面不再"加载后按表自动 START"**。
+  编辑走本地 HTTP（`GET`/`PUT /api/v1/local/desired-watch`），不走
+  WebSocket；见 `2026-08-23-desired-watch-reduced-scope.md`。
+- **desired→armed 调和循环（v3 新增；v4 起由服务端承担；v3.2 已实现，
+  且永久失败的处置被产品裁定改写）**：
+  连接健康 ≠ 全部武装成功——如 Open 快照未就绪时装配返回
+  `TARGET_UNAVAILABLE`，socket 无事发生、不会再触发 re-arm。服务端
+  coordinator 按 `desired − armed` 的差集退避重试（5s/10s/20s 封顶
+  30s）；每次重试带**发起时的 (generation, revision, epoch) 戳**并在
+  触发时重读 authority，戳不匹配即丢弃——所以 STOP、policy 变更与
+  Full Reset 都会自动作废在途重试。
+  **暂态**（TARGET_UNAVAILABLE、gate 未放行、物理槽被占）重试。
+  **永久**（非产品校区、超学期窗口、目录不发布该 section）**停止重试，
+  但保留 desired**，在读取投影中暴露原因，由用户决定是否 STOP。
+  v3 写的"从 desired 移除并通知用户"已被**用户 2026-08-23 最终裁定
+  删除**：服务端不代用户撤销意图。该 section 下学期可能重新发布，一条
+  自己消失的行只会让用户看到更短的列表且没有解释。
+  9 门上限是另一回事：它是 **CAS 的写入期拒绝**（`LIMIT_EXCEEDED`，
+  409），从来不是装配失败，用户当场就知道。
+- **本地多标签页所有权（v3 提出，v4 取代，v3.2 收尾）**：desired 表
   持久化后，若每个 tab 都自动 START，会产生重复 watch、重复响铃与跨 tab
   STOP 不一致。v3 曾采用 **leader tab 拥有监控**的方案（Web Locks 选举，
   仅 leader 建连接、跑调和循环、发声）。
-  **该方案已被 `2026-08-22-desired-watch-revision-cas.md` 取代**：
-  监控由**服务端 connection-independent 的逻辑 owner 持有**，
-  **所有标签页平权编辑** desired 表（revision/CAS），
-  **leader 只剩一件用户看不见的事：避免多个页面同时响铃**。
-  因此不再有"仅 leader 武装""leader 转移后 re-arm""BroadcastChannel
-  镜像/转发编辑"这三件事。公网版无持久 desired，单 tab 即单连接，
-  维持现状。
+  **leader、Web Locks 与 BroadcastChannel 镜像已全部作废，不得复活。**
+  监控由**服务端 connection-independent 的 owner 连接持有**，
+  **所有标签页平权编辑** desired 表（revision/CAS，走本地 HTTP）。
+  每 section 至多一份物理 watch；它产生的告警**扇出给全部页面**，
+  因此两个页面都会响——这是诚实的报告，两个页面确实都在监控同一门课。
+  "只响一次"是体验优化，**不在本范围内**（见 reduced-scope §6）。
+  跨 tab 不实时同步：另一个 tab 的修改在本 tab **刷新后**可见。
+  公网版无持久 desired，单 tab 即单连接，维持现状。
 - 重连后对仍开放课节再响一轮 = 产品决策接受（v1.1，维持）。
 
 **2b. 公网会话票（v2 重写：403 分支不可实现）**
@@ -106,10 +121,14 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 
 ### 第二层附加：本地版生命周期契约
 
-**L1. 刷新后完整恢复**（产品负责人定义并确认）
+**L1. 刷新后完整恢复**（产品负责人定义并确认；**v3.2 已实现**）
 - 持久化对象 = **期望监控表**（section+policy，2a 同一结构落盘），不是
-  "selection+活跃布尔"，不含 activeWatchId/响铃消耗；页面加载后按表自动
-  START。修订 `bcsp-local-user-state` lib.rs 的"不表示 active watch"声明。
+  "selection+活跃布尔"，不含 activeWatchId/响铃消耗。修订
+  `bcsp-local-user-state` lib.rs 的"不表示 active watch"声明。
+- **v3.2 更正**：v1.2 写的"页面加载后按表自动 START"已作废。页面加载
+  后**读取**权威状态；装配由服务端 coordinator 在**首个页面接入 watch
+  WebSocket 时**完成，最后一个页面离开时拆除物理 watch 而**保留**
+  desired——关掉标签页不是改变主意。页面只是编辑者与 audience。
 
 **L2. 关闭浏览器 = 60 秒可见倒计时后退出**
 - **presence 通道（v2 新增，关键修正）**：watch WS 只在点击 Start 后才
@@ -150,7 +169,13 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
        违背继续禁止 server/native 的边界）：
        - 三个页面级 marker（`browser_notification_api` /
          `notification_permission` / `desktop_notification`）从**共享
-         全局集**移出：全局集 212 → **209**（最终数冻结为 209；v3 所写
+         全局集**移出：全局集 212 → **209**
+         （**v3.2 算术更正**：这条写于全局集为 212 时。M0-M1-001 已把
+         全局集提到 **215**（新增 `desired_watch` / `authority_generation`
+         / `materialization_epoch`，`markerSetVersion` 2），因此这项
+         通知政策修订落地时的结果是 **215 → 212**，减 3 的动作不变；
+         下面的"冻结为 209"指的是减法的形式，不是最终数值。
+         最终数值与两个摘要以修订当时的实际集合重算为准。v3 所写
          "保留 push_notification"有误——该 marker 不存在于现行集合，
          SYSTEM_NOTIFICATIONS 实际剩余为 `native_alert` /
          `os_notification` / `service_worker_notification` /
@@ -191,11 +216,16 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 ## 3. 产品边界
 
 - 通知政策按 §2 第三层正式修订，不再依赖边界解释；
-- **（v4 更正）** 本设计**新增一处本地服务端持久个人状态**：期望监控表
-  `personal_desired_watches_v1` 及其 receipt ledger——**local-only**，
-  公网 target 结构上不存在（`PUBLIC_RUST_ZERO_SURFACE` 强制）。
+- **（v4 更正，v3.2 补强）** 本设计**新增一处本地服务端持久个人状态**：
+  期望监控表 `personal_desired_watches_v1` 及其 receipt ledger——
+  **local-only**，公网 target 结构上不存在。
+  v3.2 起这不再只是一条声明：`desired_watch`、`authority_generation`、
+  `materialization_epoch` 三个 marker 进入公网 SOURCE 负控
+  （PERSISTENT_ACTIVE_WATCH 13 → 16 项，全局 212 → 215，
+  `markerSetVersion` 2），Rust 四表面与前端 source/bundle 均有反例；
+  **前端 shared 属于公网闭包**，所以共享层的端口使用目标中立词汇。
   除此之外无新增：validate 端点无状态（nonce registry 本就存在）；
-  presence 与 desired 通道均为 local-only 路由（架构围栏强制）。
+  desired 走本地 HTTP 路由，presence（L2，未做）走 local-only WS 路由。
 
 ## 4. 触点清单
 
@@ -208,11 +238,13 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 | 前端通知 | 新 `watch/notification.ts` | 权限/发送/去重/设置；cue 失败补发 |
 | 公网服务端 | `bcsp-public-runtime` | WS 活动续期 nonce；`POST /api/v1/session/validate`（签新废旧） |
 | 公网客户端 | bootstrap/NonceHolder | nonce 可变持有 + 换证环 |
-| 本地状态(L1) | `bcsp-local-user-state` | 持久化期望监控表（revision/CAS + tombstone + receipt）；**物化由服务端 owner 负责，非"加载自动 START"** |
+| 本地状态(L1) | `bcsp-local-user-state` | 持久化期望监控表（revision/CAS + tombstone + receipt）；**CAS 不查目录/学期/校区**，那些在装配时才判 |
+| 本地 desired 路由(L1) | `bcsp-local-runtime`（`LocalRouteExtension`） | `GET`/`PUT /api/v1/local/desired-watch`；状态码由业务结果决定，重放沿用原结果的状态码 |
+| 本地 coordinator(L1) | `bcsp-local-runtime`（`DesiredWatchCoordinator`） | 拥有 store/CAS、rotation、物化记录、退避重试、audience 计数、每 section 唯一物理 watch 与告警扇出 |
 | **共享 host seam** | `bcsp-application/src/host.rs:366`（v3 新增触点） | 第二个可选 WS 路由注册 seam（target 注入制） |
 | 本地 presence(L2) | `bcsp-local-runtime`（经 seam 注册 `/api/v1/local/presence`）+ 前端页面级接入 | 每 tab presence 连接；count+generation+phase 状态机 → 60s 倒计时 → 到期复验 → 退出 |
-| 本地多 tab | 前端（Web Locks）+ 服务端 authority | 所有 tab 平权编辑 desired（CAS）；监控由服务端逻辑 owner 持有；leader **只**决定谁播放声音 |
-| 本地 WS 路由 | 共享 host seam | **受校验的路由集合**（非单条）：presence `/api/v1/local/presence` 与 desired `/api/v1/local/desired-watch` |
+| 本地多 tab | 前端 + 服务端 authority | 所有 tab 平权编辑 desired（CAS，走 HTTP）；监控由服务端 owner 连接持有；**无 leader、无 Web Locks、无 BroadcastChannel**；告警扇出给全部页面 |
+| 本地 WS 路由 | 共享 host seam | **受校验的路由集合**（非单条）；本功能**不使用**它——desired 是 HTTP。集合保留给 L2 的 presence `/api/v1/local/presence` |
 | 本地日志(L3) | `bcsp-local-runtime`（tracing stdout） | 关键事件 + 倒计时 |
 | 政策 | `public-source-deny.json`、两 verifier、两 manifest、相关测试 | 通知家族拆分（批准的修订） |
 | 测试翻转 | `live-watch-provider.test.tsx:860-932` | 改为"意外断自动重连、显式断不重连" |
@@ -228,11 +260,12 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
    `LIMIT_EXCEEDED` 仍属 admission 类**永久拒绝**；而服务端 owner 连接
    上的物理 `RejectedLimit` 只是**内部物理槽条件**（旧槽尚未拆完），
    **不得**移除 desired；
-1c. **多 tab（v3 表述已被 v4 取代，此处为翻译版）**：双 tab 同 desired
-   表 → **单一响铃**；**leader 关闭且仍有 audience 时：不发生 re-arm，
-   `activeWatchId` / `materializationEpoch` / manager watch 计数均
-   不变，无重复 episode**，新 leader **只**接管音频职责；跨 tab STOP
-   仍然收敛；
+1c. **多 tab（v3.2 重写；leader 已作废）**：双 tab 同 desired 表 →
+   **每 section 一份物理 watch**，告警**扇出到两个 tab**（两个都响，
+   因为两个确实都在监控）；一个 tab 关闭时**不发生 re-arm**，
+   `activeWatchId` / `materializationEpoch` / manager watch 计数均不变，
+   无重复 episode；**最后一个** tab 关闭才拆除物理 watch 且保留 desired；
+   跨 tab STOP 由 CAS 收敛（旧 revision 的命令被拒，不复活已取消意图）；
 2. 公网换证：nonce 失效 → validate 换新（旧 nonce 废弃）→ 重连成功；
    validate single-flight 并发只发一次；服务器重启（registry 清空）→
    自动换证恢复；WS 心跳续期使挂机 nonce 不过期；
@@ -244,8 +277,10 @@ DEGRADED + 一键恢复 + 兜底通知；visibilitychange/resume/大时钟跳变
 3. 音频 suspended → 自动 resume；被拒 → DEGRADED + 兜底；
 4. 通知触发矩阵：hidden+opened / visible+cue-failure 补发 / 去重 /
    权限 denied 时 Readiness 如实降级；
-5. L1：监控中刷新 → 期望监控表恢复，**由服务端 owner 物化**（不是页面
-   自动 START）；已 STOP 的不恢复；
+5. L1：监控中刷新 → 期望监控表恢复，**由服务端 coordinator 物化**
+   （不是页面自动 START）；已 STOP 的不恢复；非空意图 → 重启 → 恢复 →
+   Full Reset 报删除 1 → 再重启为空（打包门与 workspace 测试各一份）；
+   永久装配失败保留 desired 并暴露原因，**服务端不代用户撤销**；
 6. Readiness 完整真值表：五环 × 各失效态逐一断言，UI 永不虚绿；
    心跳陈旧 >25s 降黄；跨 SPA 路由常驻；
 7. L2：仅浏览页（无 watch）存活 → 不倒计时；全部页面关闭 → 倒计时 →
@@ -263,6 +298,22 @@ validate 合同+租约+NonceHolder 1.5 天；L1 0.5–1 天；L2 host seam+
 presence+状态机 2 天；L3 0.5–1 天。合计 **11–13.5 天**。顺序在安全门之后。
 
 ---
+
+### v3.1 → v3.2 变更记录（2026-08-24，按 M0-M1-001 的实现闭环写回）
+
+1. 本地 L1 的三处旧表述改写：期望监控表编辑走**本地 HTTP** 而非 WS；
+   页面**不再**"加载后按表自动 START"；调和循环归**服务端 coordinator**；
+2. **永久装配失败不再移除 desired**（用户 2026-08-23 最终裁定）：保留
+   意图、暴露原因、由用户决定 STOP。同时把 9 门上限从"永久拒绝"里摘出来
+   ——它是 CAS 的写入期 409，不是装配失败；
+3. **leader / Web Locks / BroadcastChannel 全部作废**，测试 1c 相应重写为
+   "扇出到全部页面、最后一个页面离开才拆除"；
+4. §3 的 local-only 声明补上**强制手段**（三个新 marker、215 项、
+   `markerSetVersion` 2、Rust 四表面 + 前端 source/bundle 反例）；
+5. §4 触点表拆出 desired 路由与 coordinator 两行，并更正 WS 路由集合的
+   用途（本功能不使用；集合留给 L2 presence）；
+6. **未减任何其他要求**：自动重连、五环 Readiness、音频自愈、页面级通知、
+   公网 validate/换证与 H4 资源边界仍未实现，仍是本设计的要求。
 
 ### v2 → v3 变更记录（2026-08-20，回应 Codex 三审 4 项阻断 + 政策同步遗漏）
 

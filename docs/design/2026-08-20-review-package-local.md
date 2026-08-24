@@ -1,7 +1,8 @@
 # 评审总案：本地版（Windows）全部变更
 
-状态：v3 —— **已批准**（Codex 终审 2026-08-20；附录 gate v5 / alert v3.1）
-日期：2026-08-20
+状态：v3.1 —— **已批准**（Codex 终审 2026-08-20；v3.1 于 2026-08-24 按
+M0-M1-001 的实现闭环写回；附录 gate v5.1 / alert v3.2）
+日期：2026-08-20（v3.1：2026-08-24）
 性质：按产品切分的评审总案。`[共享]` 条目两份总案均出现，实现只有一份；
 本文与附录冲突时以附录为准。
 
@@ -28,15 +29,19 @@
   保全/阴性检出）标准从严；
 - 假警报在本地还会污染个人历史，安全门同时保护实时与历史。
 
-### S2. [共享] 提醒必达（附录② v3）
+### S2. [共享] 提醒必达（附录② v3.2）
 
 同公网版总案 S2：五环 Readiness（app 层心跳、≤25s 有界陈旧）、意外断开
 自动重连（显式 Disconnect 不重连；re-arm 自**期望监控表**——不复活已
 手动停止的课）、音频自愈、桌面通知兜底（cue 失败补发 + 去重；
-frozen/discarded 页面为 residual risk）。v3 增 desired→armed 调和循环
-（暂态拒绝退避重试、永久拒绝移除并通知）。
+frozen/discarded 页面为 residual risk）。desired→armed 调和循环由
+**服务端 coordinator** 承担。
 本地注意：断线诱因仅三种（RBCSP 进程重启、睡眠唤醒、标签页冻结/丢弃），
 与路由器/Wi-Fi 无关（本机回环）。
+
+**v3.1 进度更正**：本节里**只有 desired→armed 那一条**随 M0-M1-001 落地
+（并且永久失败改为**保留意图 + 暴露原因**，不再"移除并通知"）。五环
+Readiness、自动重连、音频自愈与桌面通知**一条未做**，仍然是要求。
 
 ### S2-P. [共享] 通知政策修订（产品负责人批准）
 
@@ -69,22 +74,26 @@ frozen/discarded 页面为 residual risk）。v3 增 desired→armed 调和循�
 契约总述：**记忆放哪，页面就是什么**。本地记忆在硬盘，页面可死而复生；
 关闭页面 = 用户明确表达停止。
 
-### L1. 刷新后完整恢复
+### L1. 刷新后完整恢复（**v3.1：已实现**）
 
 持久化 **期望监控表**（section+policy；v2 修正：不是"selection+活跃
 布尔"，不含 activeWatchId/响铃消耗）；已手动 STOP 的课不复活。有意修订
 `bcsp-local-user-state` 的原设计声明。
-**（v4 由 CAS 设计改写）**：不再是"页面加载后按表自动 START"——该表是
-**服务端权威状态**，**由服务端逻辑 owner 按已提交的 desired 物化**；
-页面只是**编辑者（revision/CAS）与事件 audience**。见
-`2026-08-22-desired-watch-revision-cas.md`。
-**多标签页所有权（v3 提出，v4 由 CAS 设计取代）**：监控改由**服务端
-connection-independent 的逻辑 owner** 持有，**所有 tab 平权编辑**
-desired 表（revision/CAS，持久表为唯一真相）；Web Locks 选出的 leader
-**只**决定谁播放声音，转移时**不触发 re-arm**、`activeWatchId` 与
-watch 计数不变。仍然杜绝重复 watch/重复响铃/跨 tab STOP 不一致，但不再
-依赖 BroadcastChannel 镜像与转发编辑。见
-`2026-08-22-desired-watch-revision-cas.md`。
+
+**不是"页面加载后按表自动 START"**——该表是**服务端权威状态**，由
+服务端 **coordinator** 按已提交的 desired 物化；页面只是**编辑者
+（revision/CAS，走本地 HTTP）与事件 audience**。首个页面接入 watch
+WebSocket 时装配，最后一个页面离开时拆除物理 watch 而**保留 desired**
+（关掉标签页不是改变主意），页面回来时重新装配。
+
+**多标签页所有权——leader 方案已作废，不得复活。** v3 曾提出用 Web
+Locks 选出 leader 决定谁响铃，并用 BroadcastChannel 镜像编辑；
+**leader、Web Locks、BroadcastChannel 三者全部取消**。当前模型：所有
+tab 平权编辑 desired（CAS，持久表为唯一真相）；每 section 至多**一份**
+物理 watch，由服务端持有；它的告警**扇出给全部页面**，因此两个页面都会
+响——这是诚实的报告，两个页面确实都在监控同一门课。"只响一次"是体验
+优化，不在本范围内。跨 tab **不实时同步**：另一个 tab 的修改在本 tab
+刷新后可见。见 `2026-08-23-desired-watch-reduced-scope.md`。
 
 ### L2. 关闭浏览器 = 60 秒可见倒计时后退出
 
@@ -109,10 +118,10 @@ locale 设置。
 
 | 用户动作 | 系统行为 |
 |---|---|
-| 刷新页面 | presence 秒回 → 取消倒计时 → 重连 → L1 恢复监控 |
+| 刷新页面 | presence 秒回 → 取消倒计时 → 重连 → 读取 desired，服务端重新装配 |
 | 重启浏览器 | 60s 内回归 → 同上；超时 → 视同关闭退出，重启后 L1 恢复 |
 | 关闭浏览器 | 控制台倒计时 60s → 优雅退出，数据完好在盘 |
-| 重新双击启动 | 进程起 → 开页面 → L1 按期望监控表恢复 |
+| 重新双击启动 | 进程起 → 开页面 → 页面接入即按期望监控表装配 |
 | 电脑睡眠唤醒 | 页面自动重连（S2），监控恢复 |
 | 进程崩溃/升级 | 页面退避重连直至进程回归，自动 re-arm |
 
@@ -126,5 +135,9 @@ locale 设置。
 ## 附录
 
 - ① `docs/design/2026-08-20-open-snapshot-integrity-gate.md`（**v5.1，已批准**）
-- ② `docs/design/2026-08-20-alert-delivery-integrity.md`（**v3.1，已批准**）
+- ② `docs/design/2026-08-20-alert-delivery-integrity.md`（**v3.2，已批准**）
+- ③ `docs/design/2026-08-23-desired-watch-reduced-scope.md`（**v2，ACTIVE**）
+  ——L1 的 desired 合同以本文为准；
+  `docs/design/2026-08-22-desired-watch-revision-cas.md` 保持
+  **SUPERSEDED**，只用于查阅仍在使用的机制的推导过程。
 - 证据：`data/open-sections-repro/20260819T2117Z-original-capture/`

@@ -22,11 +22,14 @@
 6. ~~app 层心跳**不得依赖 hidden-tab 会被节流的客户端定时器**：服务端~~
    ~~驱动 PING，页面在消息处理器内被动 ACK。~~ **S2-PR4 已关闭
    （56a9f70，Codex 批准）**；25s Readiness 判定仍属 PR6。
-7. ~~leader tab 接管后从持久期望监控表重水合~~ **（v4 CAS 设计改写）**：
-   监控由**服务端逻辑 owner** 持有，leader 转移**不触发任何 re-arm**；
-   持久 desired 表是唯一真相，所有 tab 经 CAS 平权编辑，投影由服务端
-   单一原子帧下发。leader 只决定谁播放声音。见
-   `2026-08-22-desired-watch-revision-cas.md` §1、§5、§10。
+7. ~~leader tab 接管后从持久期望监控表重水合~~ **（v4 CAS 设计改写，
+   2026-08-23 范围缩减后撤销，M0-M1-001 已实现替代物）**：
+   **leader / Web Locks / BroadcastChannel 与"单一原子投影帧"全部作废，
+   不得复活。** 持久 desired 表仍是唯一真相，所有 tab 经 CAS 平权编辑，
+   但编辑走**本地 HTTP** 而不是投影帧流；监控由服务端 coordinator 的
+   owner 连接持有，每 section 一份，告警**扇出给全部页面**（两个页面都
+   会响，因为两个确实都在监控）。跨 tab 不实时同步：刷新后可见。
+   见 `2026-08-23-desired-watch-reduced-scope.md`。
 
 ## 加固（P2 实现 PR）
 
@@ -673,6 +676,73 @@ tombstone，只有**未来的** authority bootstrap / projection 才会携带它
   S2c 的 64 KiB 帧上限（已惠及既有 watch 路由）与 S2b 的 404 钉死；
   路由集合本身保留在代码中但**本功能不使用**。
 - S2-D3 关闭条件改为新设计 §9 的第 3–6 项。
+
+## reduced S2/L1 纵向闭环（M0-M1-001，2026-08-24）
+
+新设计 §9 的第 3–6 项由 `M0-M1-001` 一次交付，当前门如下。**这一节只
+覆盖本地 desired 的读写与物化**；S2 的其余各层（自动重连、五环
+Readiness、音频自愈、页面级通知）与 P1/P2 一条未做，不得因本节闭合而
+认为 S2 收口。
+
+**合同门**
+
+1. CAS 只判 generation、receipt/fingerprint、based-on revision、9 门
+   post-state 与两个资源预算；**写入期不查 Catalog/term/campus/Open**；
+2. **服务端不代用户撤销意图**：永久装配失败保留 desired、暴露原因、
+   停止重试；`retire_desired_watch` 与 `DesiredWatchAdmission` /
+   `DesiredWatchRejection` / `Rejected` / `Unavailable` 全部删除；
+3. base-0 STOP 仍写 tombstone；
+4. HTTP 状态由**业务结果**决定，重放沿用**原结果**的状态码
+   （`REPLAYED` 是布尔字段而不是 outcome）：committed 200；
+   stale generation/revision、mutation-id 冲突、limit exceeded 409；
+   authority full 503 且不写伪终局 receipt；协议错误 400/403；
+5. GET 是**版本化、local-only、strict-key** 的读取投影，**不发 `armed`
+   布尔**——四元组由前端派生；不分页、不截断、不丢 tombstone，最大
+   合法状态（9 + 512 = 521 行）以**显式 256 KiB 预算**的序列化测试证明；
+6. rotation 有明确 production owner：coordinator 在提交路径上触发。
+
+**运行时门**
+
+7. 首个页面接入 → 按 desired 装配；PUT 成功 → 先 reconcile 再回响应；
+   最后一个页面离开 → 拆物理 watch、**保留 desired**；
+8. 每 section 至多一份物理 watch；其告警扇出到全部页面；
+9. 暂态失败有界退避（5/10/20 封顶 30s），每次重试带
+   `(generation, revision, epoch)` 戳并在触发时重读 authority，戳不匹配
+   即丢弃；
+10. 本地 socket **fail-closed 拒绝** `START_WATCH` / `STOP_WATCH` /
+    `UPDATE_POLICY`；六条 episode 命令路由到 owner 连接；**公网
+    connection-scoped 行为不变**；
+11. owner 连接不可由 wire 构造，心跳由维护 tick 续期，process stop 后
+    遗忘并重开。
+
+**前端门**
+
+12. 加载读取权威状态；START/STOP/policy 走 PUT，带 UUIDv4 mutation id
+    与当前 generation/revision；
+13. 409 后**重新 GET**，不用缓存 revision 自动重放用户手势；
+14. 只有四元组全等才显示"监控中"；读取失败**不保留旧绿态**；
+15. 跨 tab 不实时同步；告警继续走既有 watch WebSocket。
+
+**边界门**
+
+16. 三个新 marker（`desired_watch` / `authority_generation` /
+    `materialization_epoch`）进入公网 SOURCE 负控：
+    PERSISTENT_ACTIVE_WATCH 13 → 16，全局 212 → **215**，
+    `markerSetVersion` **2**，两个摘要重算；Rust 四表面与前端
+    source/bundle 均有反例。**前端 shared 属于公网闭包**，共享层端口
+    因此使用目标中立词汇；
+17. desired 路径普通 GET 成功，WS upgrade **拿不到 101**；
+    presence 路径未注入，仍钉死 404。
+
+**打包门**
+
+18. `packaging/windows/verify.ps1` 走**非空**循环：写入意图 → 重启 →
+    同 generation 恢复且未物化 → Full Reset 报删除 1 + 1 且抬 generation
+    → 再重启为空且 generation 不回退。同型断言另有
+    `crates/bcsp-local-runtime/tests/local_runtime.rs` 的三生命周期
+    HTTP 版本，随 `cargo test --workspace` 常跑；
+19. 迁移 10004 一旦升级即**不可回滚**（旧二进制拒绝未知迁移），因此
+    不得发布未闭合的中间构建。
 
 ## 进度
 
