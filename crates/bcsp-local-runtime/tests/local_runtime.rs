@@ -2598,6 +2598,117 @@ fn a_full_reset_blocked_in_sqlite_leaves_no_orphan_watch() {
     assert!(route.connect(trace(204), third_outbound));
 }
 
+/// A Full Reset that cannot commit must leave the process in a state the user
+/// can still use.
+///
+/// The barrier stops the watches before it touches the database, so a reset
+/// that then fails has already torn everything down. Leaving the barrier
+/// raised there would be the worst outcome available: the authority still
+/// holds the user's rows, the process holds nothing, and nothing would ever
+/// materialize them again for the rest of the run -- a permanent "preparing"
+/// with no error anywhere.
+#[test]
+fn a_reset_that_cannot_commit_lowers_its_barrier_and_materializes_again() {
+    let temp = TestDirectory::new("reset-abandoned");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let database = prepared.operational().database();
+    let admission = Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None));
+    let watch =
+        Arc::new(SharedWatchSocket::try_new(admission, Arc::new(NoopWatchDispatchSink)).unwrap());
+    let coordinator = Arc::new(DesiredWatchCoordinator::new(
+        PersonalStateStore::open(prepared.paths().database()).unwrap(),
+        watch.clone(),
+    ));
+    let route = Arc::new(LocalWatchRoute::new(watch.clone(), coordinator.clone()));
+    let surface = PersonalSurface::new(
+        database,
+        PersonalStateStore::open(prepared.paths().database()).unwrap(),
+        watch.clone(),
+    )
+    .with_desired_watch(coordinator.clone());
+
+    let section = SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap();
+    let (outbound, _frames) = mpsc::unbounded_channel();
+    assert!(route.connect(trace(300), outbound));
+    let generation = coordinator.read().unwrap().authority_generation;
+    assert_eq!(
+        coordinator
+            .submit(&DesiredWatchMutationV1 {
+                contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+                section: section.clone(),
+                policy: Some(watch_policy()),
+                based_on_revision: 0,
+                authority_generation: generation,
+                mutation_id: trace(301),
+            })
+            .unwrap()
+            .outcome,
+        bcsp_local_runtime::DesiredWatchOutcomeV1::Committed,
+    );
+    assert_eq!(watch.total_active_watch_count(), 1);
+
+    let prepare = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"expectedUserStateRevision": 1},
+    })
+    .to_string();
+    let prepared_reset: serde_json::Value = serde_json::from_slice(
+        &surface
+            .prepare_local_user_data_reset(prepare.as_bytes())
+            .unwrap(),
+    )
+    .unwrap();
+    let token = prepared_reset["data"]["confirmationToken"].clone();
+
+    // The user-state revision moves under the confirmation, so the reset gets
+    // as far as the teardown and then refuses to clear anything.
+    Connection::open(prepared.paths().database())
+        .unwrap()
+        .execute(
+            "UPDATE personal_state_metadata_v1 SET state_revision = 2 WHERE singleton_id = 1",
+            [],
+        )
+        .unwrap();
+    let confirm = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {"confirmationToken": token},
+    })
+    .to_string();
+    assert_eq!(
+        surface.confirm_local_user_data_reset(confirm.as_bytes()),
+        Err(bcsp_local_runtime::LocalSurfaceFailure::revision_conflict(
+            bcsp_local_runtime::LocalApiErrorCode::UserStateRevisionConflict,
+            2,
+        )),
+    );
+    assert_eq!(
+        watch.total_active_watch_count(),
+        0,
+        "the teardown runs before the transaction, so it ran",
+    );
+
+    // The row is still the user's, and the process must be able to act on it
+    // again the moment a page is there to hear it.
+    let state = coordinator.read().unwrap();
+    assert_eq!(state.entries.len(), 1, "a failed reset deleted nothing");
+    assert!(state.entries[0].policy.is_some());
+    assert!(
+        state.entries[0].materialized.is_none(),
+        "and nothing is claimed to be running while nothing is",
+    );
+
+    let (second_outbound, _second_frames) = mpsc::unbounded_channel();
+    assert!(route.connect(trace(302), second_outbound));
+    assert_eq!(
+        watch.total_active_watch_count(),
+        1,
+        "an abandoned reset must not freeze materialization for the rest of the run",
+    );
+    let state = coordinator.read().unwrap();
+    assert!(state.entries[0].materialized.is_some());
+}
+
 fn open_observation_for(section: &SectionKey) -> bcsp_contracts::OpenObservationV1 {
     serde_json::from_value(serde_json::json!({
         "contractVersion": 1,
