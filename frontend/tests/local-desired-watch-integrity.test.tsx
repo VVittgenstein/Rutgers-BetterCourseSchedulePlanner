@@ -134,6 +134,11 @@ class FakeWatch implements WatchClientPort {
     this.#states.add(listener);
     return () => this.#states.delete(listener);
   }
+
+  setState(state: WatchConnectionState): void {
+    this.state = state;
+    for (const listener of this.#states) listener(state);
+  }
 }
 
 function unexpected(): never {
@@ -546,6 +551,280 @@ describe('a page that joined late still sees what is running', () => {
   });
 });
 
+describe('the queue orders answers, it does not re-base gestures', () => {
+  it('never lets a queued gesture start the watch the one before it stopped', async () => {
+    const server = authority();
+    const held = deferred<void>();
+    // The mount read; the STOP, held open; then whatever the second gesture
+    // turns out to be.
+    server.queue(
+      async () => ok(snapshot([entry(SECTION, { running: true })])),
+      async () => {
+        await held.promise;
+        return ok(committed(snapshot([
+          entry(SECTION, { policy: null, revision: 2, epoch: 2 }),
+        ]), 2));
+      },
+      async (call) => {
+        // A real authority: the compare-and-swap is what decides, and it is
+        // decided HERE rather than asserted here, so a re-based gesture is
+        // not merely detected but actually applied -- putting the watch the
+        // user stopped back, which is the failure this test is about.
+        const payload = (call.body as { payload: { basedOnRevision: number } }).payload;
+        if (payload.basedOnRevision !== 1) {
+          return ok(committed(snapshot([entry(SECTION, { revision: 3, epoch: 3 })]), 3));
+        }
+        return ok({
+          contractVersion: 1,
+          outcome: 'STALE_REVISION',
+          replayed: false,
+          authorityGeneration: 1,
+          currentRevision: 2,
+          maximum: null,
+          committed: null,
+          state: null,
+        }, 409);
+      },
+      async () => ok(snapshot([entry(SECTION, { policy: null, revision: 2, epoch: 2 })])),
+    );
+    const view = desk(server.fetchImplementation);
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+
+    // Both gestures are made against rev1: the user pressed Stop, then --
+    // before it came back -- applied a policy to the same Section.
+    let stopped = false;
+    let applied = true;
+    await act(async () => {
+      const stopping = view.value().setSectionIntent(SECTION, null);
+      const second = view.value().setSectionIntent(SECTION, POLICY);
+      held.resolve();
+      [stopped, applied] = await Promise.all([stopping, second]);
+    });
+
+    expect(stopped).toBe(true);
+    expect(applied).toBe(false);
+    // Two writes and no third: a refusal is re-read, never replayed.
+    const writes = server.writes();
+    expect(writes).toHaveLength(2);
+    expect(
+      (writes[1]?.body as { payload: { basedOnRevision: number } }).payload.basedOnRevision,
+    ).toBe(1);
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('NOT_WATCHING'));
+    expect(view.value().intent?.entries[0]?.policy).toBeNull();
+  });
+
+  it('still submits two different sections against the state the user saw', async () => {
+    const server = authority();
+    server.queue(
+      async () => ok(snapshot([entry(SECTION, { policy: null }), entry(OTHER, { policy: null })])),
+      async () => ok(committed(snapshot([
+        entry(SECTION, { revision: 2, epoch: 2 }),
+        entry(OTHER, { policy: null }),
+      ]), 2)),
+      async () => ok(committed(snapshot([
+        entry(SECTION, { revision: 2, epoch: 2 }),
+        entry(OTHER, { revision: 3, epoch: 3 }),
+      ]), 3)),
+    );
+    const view = desk(server.fetchImplementation, { selected: [SECTION, OTHER] });
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('NOT_WATCHING'));
+
+    let settled: readonly boolean[] = [];
+    await act(async () => {
+      const first = view.value().setSectionIntent(SECTION, POLICY);
+      const second = view.value().setSectionIntent(OTHER, POLICY);
+      settled = await Promise.all([first, second]);
+    });
+
+    expect(settled).toEqual([true, true]);
+    const writes = server.writes();
+    expect(writes).toHaveLength(2);
+    for (const write of writes) {
+      expect(
+        (write.body as { payload: { basedOnRevision: number } }).payload.basedOnRevision,
+      ).toBe(1);
+    }
+  });
+});
+
+describe('physical proof withdraws the green light immediately', () => {
+  it('stops showing a watch as running before the re-read comes back', async () => {
+    const server = authority();
+    const held = deferred<void>();
+    server.queue(
+      async () => ok(snapshot([entry(SECTION, { running: true })])),
+      async () => {
+        // Never resolves for the lifetime of the assertions: a read that
+        // hangs must not be what stands between the user and the truth.
+        await held.promise;
+        return ok(snapshot([entry(SECTION)]));
+      },
+    );
+    const view = desk(server.fetchImplementation);
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+    expect(view.value().active).toHaveLength(1);
+
+    await act(async () => {
+      view.watch.emit({
+        type: 'WATCH_STOPPED',
+        stopped: {
+          contractVersion: 1,
+          activeWatchId: WATCH_ID,
+          sectionKey: SECTION,
+          reason: 'TERM_OUT_OF_RANGE',
+          stoppedAt: '2030-01-01T00:00:00.000Z',
+        },
+      } as WatchServerEventV1);
+    });
+
+    expect(view.value().intentStateFor(SECTION)).not.toBe('WATCHING');
+    expect(view.value().active).toHaveLength(0);
+    expect(view.value().isActive(SECTION)).toBe(false);
+    expect(within(deskRow(SECTION)).queryByText('Watching')).toBeNull();
+    // The row is still there, and the intent is still the user's.
+    expect(view.value().intent?.entries[0]?.policy).not.toBeNull();
+    held.resolve();
+  });
+
+  it.each([['CLOSED'], ['ERROR']] as const)(
+    'stops showing a watch as running once the socket is %s',
+    async (state) => {
+      const server = authority();
+      server.queue(async () => ok(snapshot([entry(SECTION, { running: true })])));
+      const view = desk(server.fetchImplementation);
+      await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+
+      await act(async () => { view.watch.setState(state); });
+
+      // No further read was even asked for: the page can say this much on its
+      // own, and saying it later would mean saying nothing now.
+      expect(server.reads()).toHaveLength(1);
+      expect(view.value().intentStateFor(SECTION)).not.toBe('WATCHING');
+      expect(view.value().active).toHaveLength(0);
+      expect(within(deskRow(SECTION)).queryByText('Watching')).toBeNull();
+    },
+  );
+
+  it('keeps a saved row reachable across a failed read and restores it after', async () => {
+    const server = authority();
+    server.queue(
+      async () => ok(snapshot([entry(OTHER, { running: true })])),
+      async () => new Response('nope', { status: 500 }),
+      async () => ok(snapshot([entry(OTHER, { running: true })])),
+      async () => ok(committed(snapshot([
+        entry(OTHER, { policy: null, revision: 2, epoch: 2 }),
+      ]))),
+    );
+    // The user's selection knows nothing about OTHER. The server does.
+    const view = desk(server.fetchImplementation, { selected: [] });
+    await waitFor(() => expect(view.value().intentStateFor(OTHER)).toBe('WATCHING'));
+
+    await act(async () => { await view.value().refreshIntent(); });
+
+    // The read failed, so nothing is green and nothing is counted...
+    expect(view.value().intentStatus).toBe('FAILED');
+    expect(view.value().active).toHaveLength(0);
+    expect(view.value().intentStateFor(OTHER)).toBeNull();
+    // ...but the row is still on screen, because it is the only place this
+    // watch can ever be stopped from.
+    const row = deskRow(OTHER);
+    expect(within(row).getByText('Watch state unreadable')).toBeTruthy();
+    expect(within(row).getByText('Saved watch')).toBeTruthy();
+    // And nothing on it may be submitted against a revision nobody can vouch
+    // for, or quietly removed.
+    expect(view.value().isRemovable(OTHER)).toBe(false);
+    expect(within(row).getByRole('button', { name: 'Remove' }).hasAttribute('disabled')).toBe(true);
+    expect(server.writes()).toHaveLength(0);
+
+    // A successful read restores the real controls.
+    await act(async () => { await view.value().refreshIntent(); });
+    await waitFor(() => expect(view.value().intentStateFor(OTHER)).toBe('WATCHING'));
+    const stop = within(deskRow(OTHER)).getByRole('button', { name: 'Stop' });
+    await act(async () => { stop.click(); });
+    await waitFor(() => expect(view.value().intentStateFor(OTHER)).toBe('NOT_WATCHING'));
+  });
+});
+
+describe('the search entry says exactly what the desk says', () => {
+  function fixtureButton(): HTMLElement {
+    return within(screen.getByLabelText('Section selection fixtures')).getByRole('button');
+  }
+
+  it.each([
+    [
+      'a complete four-part stamp match',
+      () => ok(snapshot([entry(SECTION, { running: true })])),
+      'Watching',
+    ],
+    [
+      'intent with nothing materialized',
+      () => ok(snapshot([entry(SECTION)])),
+      'Preparing',
+    ],
+    [
+      'a watch running under a stamp the intent has moved past',
+      () => ok(snapshot([{ ...entry(SECTION, { running: true }), revision: 5 }])),
+      'Preparing',
+    ],
+    [
+      'a watch running under a policy the user did not ask for',
+      () => ok(snapshot([{
+        ...entry(SECTION, { running: true }),
+        policy: { ...POLICY, maxAudible: 9 },
+      }])),
+      'Preparing',
+    ],
+    [
+      'a permanent failure',
+      () => ok(snapshot([{
+        ...entry(SECTION),
+        failure: { classification: 'PERMANENT', reason: 'SECTION_NOT_FOUND', retryScheduled: false },
+      }])),
+      'Cannot watch · needs your decision',
+    ],
+    [
+      'a teardown still running',
+      () => ok(snapshot([entry(SECTION, { policy: null, pendingDisarm: true })])),
+      'Stopping',
+    ],
+    [
+      'a teardown still running under intent the user has restored',
+      () => ok(snapshot([entry(SECTION, { pendingDisarm: true })])),
+      'Preparing',
+    ],
+    [
+      'no intent at all',
+      () => ok(snapshot([])),
+      'Add to watch list',
+    ],
+  ])('says %s', async (_label, response, expected) => {
+    const server = authority();
+    server.queue(async () => response());
+    const view = desk(server.fetchImplementation, { selected: [], sections: [SECTION] });
+    await waitFor(() => expect(view.value().intentStatus).toBe('READY'));
+    expect(fixtureButton().textContent).toBe(expected);
+  });
+
+  it('says the state is unreadable rather than guessing at it', async () => {
+    const server = authority();
+    server.queue(async () => new Response('nope', { status: 500 }));
+    const view = desk(server.fetchImplementation, { selected: [], sections: [SECTION] });
+    await waitFor(() => expect(view.value().intentStatus).toBe('FAILED'));
+    expect(fixtureButton().textContent).toBe('Watch state unreadable');
+  });
+
+  it('says the state is still being read rather than guessing at it', async () => {
+    const server = authority();
+    const held = deferred<void>();
+    server.queue(async () => {
+      await held.promise;
+      return ok(snapshot([entry(SECTION, { running: true })]));
+    });
+    const view = desk(server.fetchImplementation, { selected: [], sections: [SECTION] });
+    await waitFor(() => expect(fixtureButton().textContent).toBe('Reading watch state…'));
+    held.resolve();
+  });
+});
 describe('the mutation answer is decoded as strictly as the read', () => {
   function port(response: () => Response) {
     return createLocalDesiredWatchApi({
@@ -615,6 +894,102 @@ describe('the mutation answer is decoded as strictly as the read', () => {
         committed: null,
         state,
       }, 503),
+    ],
+    [
+      'an envelope carrying a field nobody agreed to',
+      () => new Response(
+        JSON.stringify({ protocolVersion: 1, data: committed(state), meta: {} }),
+        { headers: { 'content-type': 'application/json' }, status: 200 },
+      ),
+    ],
+    [
+      'an envelope with no data at all',
+      () => new Response(
+        JSON.stringify({ protocolVersion: 1 }),
+        { headers: { 'content-type': 'application/json' }, status: 200 },
+      ),
+    ],
+    [
+      'a commit carrying a currentRevision only a refusal has',
+      () => ok({ ...committed(state), currentRevision: 1 }),
+    ],
+    [
+      'a commit carrying a maximum only a refusal has',
+      () => ok({ ...committed(state), maximum: 9 }),
+    ],
+    [
+      'a stale revision that does not say which revision',
+      () => ok({
+        contractVersion: 1,
+        outcome: 'STALE_REVISION',
+        replayed: false,
+        authorityGeneration: 1,
+        currentRevision: null,
+        maximum: null,
+        committed: null,
+        state: null,
+      }, 409),
+    ],
+    [
+      'a stale generation carrying a revision it cannot have meant',
+      () => ok({
+        contractVersion: 1,
+        outcome: 'STALE_GENERATION',
+        replayed: false,
+        authorityGeneration: 2,
+        currentRevision: 7,
+        maximum: null,
+        committed: null,
+        state: null,
+      }, 409),
+    ],
+    [
+      'a capacity refusal that does not say what the cap is',
+      () => ok({
+        contractVersion: 1,
+        outcome: 'LIMIT_EXCEEDED',
+        replayed: false,
+        authorityGeneration: 1,
+        currentRevision: null,
+        maximum: null,
+        committed: null,
+        state: null,
+      }, 409),
+    ],
+    [
+      'a mutation id conflict carrying a cap it has nothing to do with',
+      () => ok({
+        contractVersion: 1,
+        outcome: 'MUTATION_ID_CONFLICT',
+        replayed: false,
+        authorityGeneration: 1,
+        currentRevision: null,
+        maximum: 9,
+        committed: null,
+        state: null,
+      }, 409),
+    ],
+    [
+      'a commit whose generation is not the generation of the state it returned',
+      () => ok({ ...committed(state), authorityGeneration: 2 }),
+    ],
+    [
+      'a commit whose revision no row in its own state holds',
+      () => ok({
+        ...committed(state),
+        committed: { revision: 3, materializationEpoch: 2, epochChanged: true },
+      }),
+    ],
+    [
+      'a commit whose epoch no row in its own state holds',
+      () => ok({
+        ...committed(state),
+        committed: { revision: 2, materializationEpoch: 3, epochChanged: true },
+      }),
+    ],
+    [
+      'a commit whose state says nothing about the Section it wrote',
+      () => ok(committed(snapshot([entry(OTHER, { revision: 2, epoch: 2 })]))),
     ],
   ])('refuses %s', async (_label, response) => {
     await expect(port(response).submit(

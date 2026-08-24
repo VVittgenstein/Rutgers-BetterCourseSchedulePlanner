@@ -19,7 +19,8 @@ import type {
   SectionKey,
   WatchPolicyV1,
 } from '../product';
-import { findIntentEntry, type WatchIntentState } from './intent';
+import { findIntentEntry } from './intent';
+import { intentStateMessageKeys } from './intentLabels';
 import {
   DEFAULT_WATCH_POLICY,
   MAX_SELECTED_SECTIONS,
@@ -27,14 +28,6 @@ import {
   type ActiveWatchView,
   type WatchTelemetryResourceState,
 } from './LiveWatchProvider';
-
-const intentStateMessageKeys = {
-  NOT_WATCHING: 'watch.intent.not_watching',
-  PREPARING: 'watch.intent.preparing',
-  WATCHING: 'watch.intent.watching',
-  STOPPING: 'watch.intent.stopping',
-  ATTENTION: 'watch.intent.attention',
-} as const satisfies Record<WatchIntentState, string>;
 
 function sectionLabel(sectionKey: SectionKey): string {
   return `${sectionKey.index} / ${sectionKey.term} / ${sectionKey.campus}`;
@@ -323,15 +316,28 @@ function SelectedSectionManager({
   // ringing with nothing to press. So the desk shows the union.
   const managed = useMemo(() => {
     const rows = watch.selected.map((sectionKey) => ({ sectionKey, saved: false }));
-    if (!intentReady) return rows;
     const known = new Set(watch.selected.map(sectionLabel));
-    for (const entry of watch.intent?.entries ?? []) {
-      if (known.has(sectionLabel(entry.section))) continue;
-      const live = entry.policy !== null || entry.stopping || entry.running !== null;
-      if (live) rows.push({ sectionKey: entry.section, saved: true });
+    const add = (sectionKey: SectionKey) => {
+      if (known.has(sectionLabel(sectionKey))) return;
+      known.add(sectionLabel(sectionKey));
+      rows.push({ sectionKey, saved: true });
+    };
+    if (intentReady) {
+      for (const entry of watch.intent?.entries ?? []) {
+        const live = entry.policy !== null || entry.stopping || entry.running !== null;
+        if (live) add(entry.section);
+      }
+      return rows;
     }
+    // The read failed, or has not landed yet. Nothing here may be shown as
+    // running -- the badge says unavailable and every control is closed --
+    // but the IDENTITIES from the last trusted read still belong on screen.
+    // Dropping them is not caution: for a Section the user never selected,
+    // this row is the only STOP control in the product, and the watch behind
+    // it may still be running and still ringing.
+    for (const sectionKey of watch.intentSaved) add(sectionKey);
     return rows;
-  }, [intentReady, watch.intent, watch.selected]);
+  }, [intentReady, watch.intent, watch.intentSaved, watch.selected]);
   const wantedCount = intentEnabled
     ? managed.filter((row) => findIntentEntry(watch.intent, row.sectionKey)?.policy != null).length
     : 0;

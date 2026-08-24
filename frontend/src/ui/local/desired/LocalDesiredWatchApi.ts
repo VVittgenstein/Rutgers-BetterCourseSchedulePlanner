@@ -119,7 +119,11 @@ export class LocalDesiredWatchApi implements WatchIntentPort {
     // deferred -- carries this body, whatever status it earned. A body
     // without it is a protocol or transport failure (a malformed request, a
     // missing session), and those are not answers about the user's intent.
-    return parseMutationResult(body, response.status);
+    //
+    // The Section goes in because half of what makes a commit believable is
+    // whether it agrees with the state it returned ABOUT THAT SECTION, and
+    // the body alone does not say which one was written.
+    return parseMutationResult(body, response.status, submission.section);
   }
 }
 
@@ -152,6 +156,8 @@ const OUTCOMES: Readonly<Record<string, {
   AUTHORITY_FULL: { outcome: 'UNAVAILABLE', status: 503 },
 };
 
+const ENVELOPE_KEYS = ['protocolVersion', 'data'] as const;
+
 const MUTATION_RESULT_KEYS = [
   'contractVersion',
   'outcome',
@@ -166,6 +172,27 @@ const MUTATION_RESULT_KEYS = [
 const COMMITTED_KEYS = ['revision', 'materializationEpoch', 'epochChanged'] as const;
 
 /**
+ * Which of the two optional numbers each answer is required to carry, and
+ * which it is forbidden to.
+ *
+ * Both halves are the point. A `COMMITTED` answer arriving with a
+ * `currentRevision` is not this authority speaking -- nothing it commits has
+ * one -- and a `STALE_REVISION` arriving WITHOUT one leaves the page told to
+ * re-read with no number to re-read against, which is indistinguishable from
+ * "revision 0" and would re-admit a command against a Section that has rows.
+ */
+const REFUSAL_SHAPES: Readonly<Record<string, {
+  readonly currentRevision: boolean;
+  readonly maximum: boolean;
+}>> = {
+  STALE_GENERATION: { currentRevision: false, maximum: false },
+  STALE_REVISION: { currentRevision: true, maximum: false },
+  MUTATION_ID_CONFLICT: { currentRevision: false, maximum: false },
+  LIMIT_EXCEEDED: { currentRevision: false, maximum: true },
+  AUTHORITY_FULL: { currentRevision: false, maximum: true },
+};
+
+/**
  * Strict, exhaustive parsing of one mutation answer.
  *
  * The write path decodes as strictly as the read path, for the same reason:
@@ -173,10 +200,23 @@ const COMMITTED_KEYS = ['revision', 'materializationEpoch', 'epochChanged'] as c
  * effect. A loose decode that accepted a missing `state` on a `COMMITTED`
  * answer, or a negative `maximum`, would let the page render a state nothing
  * on the server ever held.
+ *
+ * Three kinds of check, and the third is the one a field-by-field decoder
+ * still misses: the envelope may carry exactly `protocolVersion` and `data`
+ * and nothing else; each outcome's optional fields are required or forbidden
+ * rather than merely well-typed; and a commit's own numbers must agree with
+ * the state it returned. Fields that are individually plausible and jointly
+ * impossible are exactly what a response spliced across two authorities looks
+ * like, and that is the shape this decode exists to refuse.
  */
-function parseMutationResult(value: unknown, status: number): WatchIntentResult {
+function parseMutationResult(
+  value: unknown,
+  status: number,
+  section: SectionKey,
+): WatchIntentResult {
   if (
     !isRecord(value)
+    || !hasExactKeys(value, ENVELOPE_KEYS)
     || value.protocolVersion !== 1
     || !isRecord(value.data)
     || !hasExactKeys(value.data, MUTATION_RESULT_KEYS)
@@ -197,28 +237,47 @@ function parseMutationResult(value: unknown, status: number): WatchIntentResult 
     throw new LocalDesiredWatchError(status);
   }
   if (known.outcome === 'COMMITTED') {
-    // A commit that does not say what it wrote, or does not carry the state
-    // it produced, is not a commit this page can act on.
+    // A commit that does not say what it wrote, does not carry the state it
+    // produced, or carries numbers only a refusal has, is not a commit this
+    // page can act on.
     if (
-      !isRecord(data.committed)
+      data.currentRevision !== null
+      || data.maximum !== null
+      || !isRecord(data.committed)
       || !hasExactKeys(data.committed, COMMITTED_KEYS)
       || !isSafeCount(data.committed.revision)
       || !isSafeCount(data.committed.materializationEpoch)
       || typeof data.committed.epochChanged !== 'boolean'
-      || data.state === null
-      || data.state === undefined
     ) {
       throw new LocalDesiredWatchError(status);
     }
-    return {
-      outcome: 'COMMITTED',
-      snapshot: parseSnapshotData(data.state),
-      maximum: data.maximum,
-    };
+    const snapshot = parseSnapshotData(data.state);
+    const entry = snapshot.entries.find((candidate) => sameSection(candidate.section, section));
+    // One authority, not two. The generation on the envelope, the revision
+    // and epoch the commit claims, and the row the state actually holds for
+    // this Section all describe the same write -- so a body assembled from
+    // reads taken either side of a rotation contradicts itself here rather
+    // than becoming the page's next `basedOnRevision`.
+    if (
+      data.authorityGeneration !== snapshot.generation
+      || entry === undefined
+      || entry.revision !== data.committed.revision
+      || entry.epoch !== data.committed.materializationEpoch
+    ) {
+      throw new LocalDesiredWatchError(status);
+    }
+    return { outcome: 'COMMITTED', snapshot, maximum: null };
   }
   // A refusal carries no state: the page has to re-read, because what it held
-  // is not what is there.
-  if (data.committed !== null || data.state !== null) {
+  // is not what is there. What it does carry is fixed per outcome.
+  const shape = REFUSAL_SHAPES[data.outcome as string];
+  if (
+    shape === undefined
+    || data.committed !== null
+    || data.state !== null
+    || (data.currentRevision !== null) !== shape.currentRevision
+    || (data.maximum !== null) !== shape.maximum
+  ) {
     throw new LocalDesiredWatchError(status);
   }
   return { outcome: known.outcome, snapshot: null, maximum: data.maximum };
@@ -248,7 +307,12 @@ function sameSection(left: SectionKey, right: SectionKey): boolean {
  * on, and the page would then show a state the server never reported.
  */
 function parseSnapshot(value: unknown): WatchIntentSnapshot {
-  if (!isRecord(value) || value.protocolVersion !== 1 || !isRecord(value.data)) {
+  if (
+    !isRecord(value)
+    || !hasExactKeys(value, ENVELOPE_KEYS)
+    || value.protocolVersion !== 1
+    || !isRecord(value.data)
+  ) {
     throw new LocalDesiredWatchError(200);
   }
   return parseSnapshotData(value.data);

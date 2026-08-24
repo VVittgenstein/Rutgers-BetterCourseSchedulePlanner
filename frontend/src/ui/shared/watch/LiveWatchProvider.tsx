@@ -140,6 +140,17 @@ export interface LiveWatchValue {
    */
   readonly intentStatus: WatchIntentStatus;
   readonly intent: WatchIntentSnapshot | null;
+  /**
+   * The Sections the last TRUSTED read said the server holds intent for.
+   *
+   * Identity only, and deliberately kept when a read fails. It is what stops
+   * a failed read from taking a Section the user never selected off the desk
+   * entirely -- which would remove the only STOP control for a watch that may
+   * still be running. Nothing about it is a claim that anything is running:
+   * while `intentStatus` is not `READY` the row shows as unavailable and
+   * nothing on it may be submitted.
+   */
+  readonly intentSaved: readonly SectionKey[];
   intentStateFor(sectionKey: SectionKey): WatchIntentState | null;
   /**
    * Asks the server to watch a section with `policy`, or to stop watching it
@@ -366,6 +377,26 @@ export function LiveWatchProvider({
   const [intentStatus, setIntentStatus] = useState<WatchIntentStatus>(
     intent === undefined ? 'DISABLED' : 'LOADING',
   );
+  /**
+   * Sections this page has direct physical evidence are no longer running.
+   *
+   * Kept apart from the snapshot rather than folded into it, because they are
+   * different KINDS of statement and one has to be able to overrule the
+   * other. The snapshot is the server's answer; this is what this page saw
+   * happen since. A later answer clears it -- see `applyAuthority`.
+   */
+  const [disproved, setDisproved] = useState<ReadonlySet<string>>(() => new Set());
+  /**
+   * The Sections the last TRUSTED read said the server holds intent for.
+   *
+   * Kept across a failed read on purpose. A failed read means "this page can
+   * no longer say what is running", not "the user never asked for anything":
+   * dropping these takes the desk row -- and with it the only STOP control --
+   * off the screen for exactly the sections the user did not put in their
+   * selection. The row comes back as unavailable rather than green, and
+   * nothing on it may be submitted until a read succeeds again.
+   */
+  const [intentSaved, setIntentSaved] = useState<readonly SectionKey[]>([]);
   const [watchableTerms, setWatchableTerms] = useState<ReadonlySet<string> | null>(() =>
     initialWatchableTerms === undefined ? null : new Set(initialWatchableTerms));
   /**
@@ -379,15 +410,38 @@ export function LiveWatchProvider({
    * blocked, and no way to reach the controls for an episode it can see. The
    * authority read is the same answer for every page, whenever it arrived.
    */
+  /**
+   * The authority read, with this page's own physical evidence applied.
+   *
+   * An authority snapshot is the server's answer as of when it was taken, and
+   * a `WATCH_STOPPED` frame or a socket that closed is newer, first-hand
+   * evidence that the answer is no longer true. Waiting for the next GET to
+   * agree is exactly how a page keeps a green light lit for a watch it has
+   * just been told ended -- and a GET can hang.
+   *
+   * Only the RUNNING half is disproved. Which sections the user wants watched
+   * is not something a stopped watch says anything about, and the rows are
+   * what carry the STOP control.
+   */
+  const disprovedSnapshot = useMemo<WatchIntentSnapshot | null>(() => {
+    if (intentSnapshot === null || disproved.size === 0) return intentSnapshot;
+    return {
+      ...intentSnapshot,
+      entries: intentSnapshot.entries.map((entry) =>
+        entry.running === null || !disproved.has(sectionIdentity(entry.section))
+          ? entry
+          : { ...entry, running: null }),
+    };
+  }, [disproved, intentSnapshot]);
   const intentActive = useMemo<readonly ActiveWatchView[]>(() => {
-    if (intent === undefined || intentSnapshot === null) return [];
-    return intentSnapshot.entries.flatMap((entry) => entry.running === null ? [] : [{
+    if (intent === undefined || disprovedSnapshot === null) return [];
+    return disprovedSnapshot.entries.flatMap((entry) => entry.running === null ? [] : [{
       activeWatchId: entry.running.activeWatchId,
       sectionKey: entry.section,
       startedAt: null,
       policy: entry.running.policy,
     }]);
-  }, [intent, intentSnapshot]);
+  }, [disprovedSnapshot, intent]);
   const effectiveActive = intent === undefined ? active : intentActive;
   const selectedRef = useRef(selected);
   const activeRef = useRef(active);
@@ -427,6 +481,14 @@ export function LiveWatchProvider({
   const authorityQueue = useRef<Promise<unknown>>(Promise.resolve());
   const authorityIssued = useRef(0);
   const authorityApplied = useRef(0);
+  /**
+   * Each disproof, against the operation counter at the moment it arrived.
+   *
+   * A read that was already in flight when the watch stopped is not newer
+   * information about it, however late it lands, so only an answer to an
+   * operation issued AFTER the evidence may clear it.
+   */
+  const disprovedAt = useRef(new Map<string, number>());
 
   useEffect(() => { intentSnapshotRef.current = intentSnapshot; }, [intentSnapshot]);
   useEffect(() => { intentStatusRef.current = intentStatus; }, [intentStatus]);
@@ -507,10 +569,13 @@ export function LiveWatchProvider({
   /**
    * Runs one authority operation in the single ordered domain.
    *
-   * Serial rather than merely stamped: the revision a submission compares
-   * against is read when the operation RUNS, so a gesture queued behind
-   * another one is compared against the state that one produced instead of
-   * against the state the page happened to be showing when it was clicked.
+   * The domain orders ANSWERS. It does not re-base gestures: what a
+   * submission compares against is captured when the user clicks, not when
+   * the operation reaches the front of the queue. Reading the latest snapshot
+   * here instead would quietly apply each gesture to whatever the previous
+   * one produced -- so a STOP still in flight, followed by a policy change on
+   * the same section, would submit the second against the tombstone the first
+   * had just written and start the watch the user had just stopped.
    */
   const runAuthority = useCallback(<T,>(
     operation: (sequence: number) => Promise<T>,
@@ -537,6 +602,36 @@ export function LiveWatchProvider({
     intentStatusRef.current = status;
     setIntentSnapshot(snapshot);
     setIntentStatus(status);
+    if (status !== 'READY' || snapshot === null) return;
+    // A successful read is the newer answer for everything this page saw stop
+    // BEFORE it was asked for. Evidence from after it stands.
+    let cleared = false;
+    for (const [identity, at] of [...disprovedAt.current]) {
+      if (sequence <= at) continue;
+      disprovedAt.current.delete(identity);
+      cleared = true;
+    }
+    if (cleared) setDisproved(new Set(disprovedAt.current.keys()));
+    setIntentSaved(snapshot.entries.flatMap((entry) =>
+      entry.policy === null ? [] : [entry.section]));
+  }, []);
+
+  /**
+   * Records first-hand evidence that a Section is no longer being watched.
+   *
+   * `sections === null` means the whole physical picture is gone -- the
+   * socket this page was watching through closed -- so nothing the last
+   * snapshot said is running can still be asserted by this page.
+   */
+  const disprove = useCallback((sections: readonly SectionKey[] | null) => {
+    const identities = sections === null
+      ? (intentSnapshotRef.current?.entries ?? [])
+        .filter((entry) => entry.running !== null)
+        .map((entry) => sectionIdentity(entry.section))
+      : sections.map(sectionIdentity);
+    if (identities.length === 0) return;
+    for (const identity of identities) disprovedAt.current.set(identity, authorityIssued.current);
+    setDisproved(new Set(disprovedAt.current.keys()));
   }, []);
 
   /**
@@ -561,21 +656,35 @@ export function LiveWatchProvider({
   }, [addNotice, applyAuthority, intent, runAuthority]);
 
   /**
-   * Submits one intent change against the snapshot the page is showing.
+   * Submits one intent change against the snapshot the page was showing when
+   * the user made the gesture.
+   *
+   * The snapshot is captured HERE, synchronously, and not re-read when the
+   * operation runs. That is the whole contract of `WatchIntentPort.submit`: a
+   * compare-and-swap is only a safeguard if it compares against the state the
+   * user was actually looking at. Re-basing onto whatever the queue has since
+   * produced turns "refuse this, the world moved" into "apply it anyway",
+   * which is how a STOP and a policy change clicked in that order end with
+   * the section watched again.
    *
    * A conflict re-reads and stops. It never resubmits: the revision the page
-   * held is stale precisely because someone else changed the same section,
-   * and replaying the user's gesture against the new state would apply a
-   * decision they made about a state that no longer exists.
+   * held is stale precisely because someone changed the same section, and
+   * replaying the user's gesture against the new state would apply a decision
+   * they made about a state that no longer exists.
    */
   const submitIntent = useCallback(async (
     section: SectionKey,
     policy: WatchPolicyV1 | null,
   ): Promise<boolean> => {
     if (intent === undefined) return false;
+    const snapshot = intentSnapshotRef.current;
+    // Nothing trustworthy to compare against, so there is nothing to submit:
+    // re-read and let the user decide again against a state they can see.
+    if (snapshot === null || intentStatusRef.current !== 'READY') {
+      await refreshIntent();
+      return false;
+    }
     const settled = await runAuthority(async (sequence) => {
-      const snapshot = intentSnapshotRef.current;
-      if (snapshot === null) return 'REREAD' as const;
       try {
         const result = await intent.submit({ section, policy }, snapshot);
         if (result.snapshot !== null) applyAuthority(sequence, result.snapshot, 'READY');
@@ -759,10 +868,15 @@ export function LiveWatchProvider({
       setEpisodes((current) => current.filter((episode) => episode.activeWatchId !== event.stopped.activeWatchId));
       setAlerts((current) => current.filter((alert) => alert.episode.activeWatchId !== event.stopped.activeWatchId));
       addNotice('WATCH_STOPPED', 'STATUS', event.stopped.sectionKey, event.stopped.reason);
-      // A watch ending unexpectedly -- a term rollover, a forced stop -- is
-      // exactly the case where a page left holding the old projection would
-      // keep showing a green light for it.
-      if (intent !== undefined) void refreshIntent();
+      // This frame is not a hint that the projection may be stale: it is the
+      // server saying the physical watch ended. The green light goes out on
+      // the frame, and the re-read that follows is how the page learns what
+      // the server intends to do next -- not what it waits for before telling
+      // the truth about what is running. A GET can hang.
+      if (intent !== undefined) {
+        disprove([event.stopped.sectionKey]);
+        void refreshIntent();
+      }
       return;
     }
     if (event.type === 'OPEN_OBSERVATION') {
@@ -865,7 +979,7 @@ export function LiveWatchProvider({
         audioController.stopContinuous();
       }
     }
-  }, [addNotice, audioController, intent, loadBatchStatus, refreshIntent, send, startContinuousAudio]);
+  }, [addNotice, audioController, disprove, intent, loadBatchStatus, refreshIntent, send, startContinuousAudio]);
 
   useEffect(() => {
     const unsubscribeEvents = runtime.watch.subscribe(handleServerEvent);
@@ -891,6 +1005,13 @@ export function LiveWatchProvider({
         setObservations([]);
         setEpisodes([]);
         setAlerts([]);
+        // The durable-intent projection needs the same treatment, and does
+        // not get it from `setActive([])`: the socket this page watched
+        // through is gone, so the last read's `materialized` rows are no
+        // longer something this page can assert. Without this the badge, the
+        // active count and the connection line all keep saying "watching"
+        // over a closed socket until some future GET happens to disagree.
+        disprove(null);
         continuousEpisodeIdsRef.current = [];
         setContinuousEpisodeIds([]);
         audioController.stopContinuous();
@@ -901,7 +1022,7 @@ export function LiveWatchProvider({
       unsubscribeEvents();
       unsubscribeState();
     };
-  }, [addNotice, audioController, handleServerEvent, runtime, sendQueuedStart]);
+  }, [addNotice, audioController, disprove, handleServerEvent, runtime, sendQueuedStart]);
 
   // The first read, and the reconnection of intent to what is running.
   //
@@ -1423,10 +1544,13 @@ export function LiveWatchProvider({
     starting,
     intentStatus,
     intent: intentSnapshot,
+    intentSaved,
+    // Derived from the DISPROVED view, so a section this page has been told
+    // stopped cannot read back as `WATCHING` while a re-read is in flight.
     intentStateFor: (sectionKey) => {
-      if (intentSnapshot === null) return null;
-      const entry = findIntentEntry(intentSnapshot, sectionKey);
-      return entry === null ? 'NOT_WATCHING' : watchIntentState(intentSnapshot, entry);
+      if (disprovedSnapshot === null) return null;
+      const entry = findIntentEntry(disprovedSnapshot, sectionKey);
+      return entry === null ? 'NOT_WATCHING' : watchIntentState(disprovedSnapshot, entry);
     },
     setSectionIntent: submitIntent,
     refreshIntent,
@@ -1467,7 +1591,9 @@ export function LiveWatchProvider({
     disconnect,
     dismissAlert,
     enableSound,
+    disprovedSnapshot,
     episodes,
+    intentSaved,
     intentSnapshot,
     intentStatus,
     muted,
