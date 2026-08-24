@@ -2318,7 +2318,9 @@ mod tests {
                 live: BTreeMap::from([(section(1), original)]),
                 teardowns_asked: 0,
             },
-            "the rotation was authorised while the watch was still live and              before anything had tried to stop it -- so `stopping` was empty              and only the live set could have saved the row",
+            "the rotation was authorised while the watch was still live, \
+             and before anything had tried to stop it -- so `stopping` \
+             was empty and only the live set could have saved the row",
         );
 
         assert_eq!(result.outcome, DesiredWatchOutcomeV1::Committed);
@@ -2339,7 +2341,8 @@ mod tests {
         assert_eq!(
             (committed.revision, committed.materialization_epoch),
             (row.revision, row.materialization_epoch),
-            "the surviving row is renumbered into the new generation, and the              answer describes it rather than the absent shape",
+            "the surviving row is renumbered into the new generation, and \
+             the answer describes it rather than the absent shape",
         );
         assert_ne!(
             committed.revision,
@@ -2349,7 +2352,8 @@ mod tests {
         assert_eq!(
             live_watches(owner.as_ref()),
             BTreeMap::from([(section(1), original)]),
-            "and the watch really is still running under the id it was armed              with",
+            "and the watch really is still running under the id it was \
+             armed with",
         );
 
         // Every page reads the same row, not just the caller that stopped it.
