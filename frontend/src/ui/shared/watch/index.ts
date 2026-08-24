@@ -1,3 +1,4 @@
+export * from './intent';
 export * from './LiveWatchProvider';
 export * from './SectionSelectionAction';
 export * from './WatchToastRegion';

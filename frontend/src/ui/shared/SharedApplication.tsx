@@ -48,6 +48,7 @@ import {
   WatchToastRegion,
   WatchWorkspace,
   WatchWorkspaceStyles,
+  type WatchIntentPort,
 } from './watch';
 
 function retryBootstrap() {
@@ -91,6 +92,12 @@ export interface SharedWorkspaceExtension {
 }
 
 export interface SharedExperienceConfiguration {
+  /**
+   * Supplied by a target whose server keeps standing watch intent. Without
+   * it the watch desk keeps its connection-scoped behaviour, where a watch
+   * lives and dies with the socket that started it.
+   */
+  readonly watchIntent?: WatchIntentPort | undefined;
   readonly initialFilters?: FilterStateV1 | undefined;
   readonly initialSelectedSections?: readonly SectionKey[] | undefined;
   readonly initialVolume?: number | undefined;
@@ -607,6 +614,7 @@ function ReadyProduct({
         initialSelected={experience.initialSelectedSections}
         initialWatchableTerms={[]}
         initialVolume={experience.initialVolume}
+        intent={experience.watchIntent}
         onSelectedChange={experience.onSelectedSectionsChange}
         onVolumeChange={experience.onVolumeChange}
         runtime={runtime}

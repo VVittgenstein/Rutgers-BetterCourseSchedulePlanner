@@ -32,6 +32,15 @@ import {
   type WatchAudioUnlockResult,
 } from './audio';
 
+import {
+  findIntentEntry,
+  watchIntentState,
+  type WatchIntentPort,
+  type WatchIntentSnapshot,
+  type WatchIntentState,
+  type WatchIntentStatus,
+} from './intent';
+
 export type WatchAudioState = WatchAudioUnlockResult | 'MUTED' | 'UNLOCKING';
 
 export const MAX_SELECTED_SECTIONS = 9;
@@ -108,6 +117,31 @@ export interface LiveWatchValue {
   readonly telemetryResources: readonly WatchTelemetryResourceState[];
   readonly telemetryLoading: boolean;
   readonly starting: boolean;
+  /**
+   * The server's standing watch intent, when this target keeps any.
+   *
+   * `DISABLED` says the target has no durable intent at all, which is a
+   * different statement from "there is none right now" -- the Public build
+   * genuinely cannot have any. `FAILED` says the page could not read it, and
+   * the workspace must then show that rather than the last good answer: a
+   * green light left over from a successful read minutes ago is exactly the
+   * comfortable lie this surface exists to avoid.
+   */
+  readonly intentStatus: WatchIntentStatus;
+  readonly intent: WatchIntentSnapshot | null;
+  intentStateFor(sectionKey: SectionKey): WatchIntentState | null;
+  /**
+   * Asks the server to watch a section with `policy`, or to stop watching it
+   * with `null`.
+   *
+   * Addressed by SECTION rather than by a running watch id, because the
+   * intent exists whether or not anything is running for it -- a section the
+   * runtime cannot arm today must still be stoppable.
+   *
+   * A no-op returning `false` on a target without durable intent.
+   */
+  setSectionIntent(sectionKey: SectionKey, policy: WatchPolicyV1 | null): Promise<boolean>;
+  refreshIntent(): Promise<void>;
   isSelected(sectionKey: SectionKey): boolean;
   isActive(sectionKey: SectionKey): boolean;
   isWatchable(sectionKey: SectionKey): boolean;
@@ -258,6 +292,15 @@ export interface LiveWatchProviderProps {
   readonly children: ReactNode;
   readonly runtime: ProductRuntimePort;
   readonly audio?: WatchAudioController | undefined;
+  /**
+   * Supplied by a target that keeps standing watch intent on the server.
+   *
+   * When it is present, starting and stopping a watch is a change to that
+   * intent rather than a command on the socket, and the socket stops being
+   * able to start or stop anything. Two sources of truth for "is this
+   * watched" would disagree the first time one of them was used.
+   */
+  readonly intent?: WatchIntentPort | undefined;
   readonly initialSelected?: readonly SectionKey[] | undefined;
   readonly initialWatchableTerms?: readonly string[] | undefined;
   readonly initialVolume?: number | undefined;
@@ -268,6 +311,7 @@ export interface LiveWatchProviderProps {
 export function LiveWatchProvider({
   audio,
   children,
+  intent,
   initialSelected = [],
   initialWatchableTerms,
   initialVolume = 70,
@@ -297,6 +341,10 @@ export function LiveWatchProvider({
   >([]);
   const [telemetryLoading, setTelemetryLoading] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [intentSnapshot, setIntentSnapshot] = useState<WatchIntentSnapshot | null>(null);
+  const [intentStatus, setIntentStatus] = useState<WatchIntentStatus>(
+    intent === undefined ? 'DISABLED' : 'LOADING',
+  );
   const [watchableTerms, setWatchableTerms] = useState<ReadonlySet<string> | null>(() =>
     initialWatchableTerms === undefined ? null : new Set(initialWatchableTerms));
   const selectedRef = useRef(selected);
@@ -321,7 +369,11 @@ export function LiveWatchProvider({
   const startAttempt = useRef(0);
   const startingRef = useRef(false);
   const watchableTermsRef = useRef(watchableTerms);
+  const intentSnapshotRef = useRef(intentSnapshot);
+  const intentAttempt = useRef(0);
+  const intentConnection = useRef<WatchConnectionState | null>(null);
 
+  useEffect(() => { intentSnapshotRef.current = intentSnapshot; }, [intentSnapshot]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { activeRef.current = active; }, [active]);
   useEffect(() => { pendingRef.current = pending; }, [pending]);
@@ -395,6 +447,78 @@ export function LiveWatchProvider({
       error: telemetryError(error),
     }));
   }, [updateTelemetryResource]);
+
+  /**
+   * Re-reads the server's intent.
+   *
+   * A failure clears the snapshot rather than keeping the last good one. The
+   * whole value of this projection is that it is the server's current answer;
+   * a stale copy would still render a green light, and the user would have no
+   * way to tell it apart from a live one.
+   */
+  const refreshIntent = useCallback(async () => {
+    if (intent === undefined) return;
+    const attempt = intentAttempt.current + 1;
+    intentAttempt.current = attempt;
+    setIntentStatus((current) => (current === 'READY' ? current : 'LOADING'));
+    try {
+      const snapshot = await intent.read();
+      if (intentAttempt.current !== attempt) return;
+      intentSnapshotRef.current = snapshot;
+      setIntentSnapshot(snapshot);
+      setIntentStatus('READY');
+    } catch {
+      if (intentAttempt.current !== attempt) return;
+      intentSnapshotRef.current = null;
+      setIntentSnapshot(null);
+      setIntentStatus('FAILED');
+      addNotice('COMMAND_FAILED', 'ALERT');
+    }
+  }, [addNotice, intent]);
+
+  /**
+   * Submits one intent change against the snapshot the page is showing.
+   *
+   * A conflict re-reads and stops. It never resubmits: the revision the page
+   * held is stale precisely because someone else changed the same section,
+   * and replaying the user's gesture against the new state would apply a
+   * decision they made about a state that no longer exists.
+   */
+  const submitIntent = useCallback(async (
+    section: SectionKey,
+    policy: WatchPolicyV1 | null,
+  ): Promise<boolean> => {
+    if (intent === undefined) return false;
+    const snapshot = intentSnapshotRef.current;
+    if (snapshot === null) {
+      await refreshIntent();
+      return false;
+    }
+    try {
+      const result = await intent.submit({ section, policy }, snapshot);
+      if (result.snapshot !== null) {
+        intentSnapshotRef.current = result.snapshot;
+        setIntentSnapshot(result.snapshot);
+        setIntentStatus('READY');
+      }
+      if (result.outcome === 'COMMITTED') return true;
+      addNotice(
+        result.outcome === 'AT_CAPACITY'
+          ? 'SELECTION_LIMIT'
+          : result.outcome === 'CONFLICT'
+            ? 'START_REJECTED'
+            : 'COMMAND_FAILED',
+        'ALERT',
+        section,
+      );
+      if (result.snapshot === null) await refreshIntent();
+      return false;
+    } catch {
+      addNotice('COMMAND_FAILED', 'ALERT', section);
+      await refreshIntent();
+      return false;
+    }
+  }, [addNotice, intent, refreshIntent]);
 
   const send = useCallback((command: WatchClientCommandV1): boolean => {
     try {
@@ -686,6 +810,43 @@ export function LiveWatchProvider({
     };
   }, [addNotice, audioController, handleServerEvent, runtime, sendQueuedStart]);
 
+  // The first read, and the reconnection of intent to what is running.
+  //
+  // The second half matters as much as the first. The server materializes
+  // stored intent when a page ATTACHES, which happens after this component
+  // has already read once -- so the first read legitimately shows sections
+  // as preparing. Re-reading when the socket reaches OPEN is what turns them
+  // green, and it is driven by this page's own connection rather than by
+  // anything another tab did, so it introduces no cross-tab live sync.
+  useEffect(() => {
+    if (intent === undefined) return;
+    void refreshIntent();
+  }, [intent, refreshIntent]);
+
+  useEffect(() => {
+    if (intent === undefined) return;
+    const previous = intentConnection.current;
+    intentConnection.current = connection;
+    // The mount read above covers the state the page started in. Only a
+    // TRANSITION into OPEN is new information: the server materializes
+    // stored intent when a page attaches, so this is the read that turns a
+    // restored section green.
+    if (previous !== null && previous !== 'OPEN' && connection === 'OPEN') {
+      void refreshIntent();
+    }
+  }, [connection, intent, refreshIntent]);
+
+  // A page with standing intent is an audience for it: the server tears every
+  // physical watch down when the last page leaves, so a restored session only
+  // comes back to life because a page attached.
+  useEffect(() => {
+    if (intent === undefined || intentStatus !== 'READY') return;
+    const wanted = intentSnapshot?.entries.some((entry) => entry.policy !== null) === true;
+    if (wanted && runtime.watch.state !== 'OPEN' && runtime.watch.state !== 'CONNECTING') {
+      runtime.watch.connect();
+    }
+  }, [intent, intentSnapshot, intentStatus, runtime]);
+
   useEffect(() => {
     audioProviderMounted.current = true;
     return () => {
@@ -780,6 +941,34 @@ export function LiveWatchProvider({
 
   const startSelected = useCallback(async (policy: WatchPolicyV1) => {
     if (startingRef.current) return;
+    // With durable intent, starting is a change to what the user WANTS
+    // watched. The socket does not carry it: the server decides what is
+    // running from the stored rows, so a page that also sent a START would
+    // be asserting a second answer to the same question.
+    if (intent !== undefined) {
+      const snapshot = intentSnapshotRef.current;
+      const wanted = selectedRef.current.filter((sectionKey) => {
+        const entry = snapshot === null ? null : findIntentEntry(snapshot, sectionKey);
+        return entry === null || entry.policy === null;
+      });
+      if (wanted.length === 0) return;
+      startingRef.current = true;
+      setStarting(true);
+      try {
+        if (audioStateRef.current !== 'READY') await enableSound();
+        // Sequential on purpose: each submission compares against the
+        // revision the previous one produced, so a batch that raced itself
+        // would have every entry after the first refused as stale.
+        for (const sectionKey of wanted) {
+          if (!await submitIntent(sectionKey, policy)) break;
+        }
+        if (runtime.watch.state !== 'OPEN') runtime.watch.connect();
+      } finally {
+        startingRef.current = false;
+        setStarting(false);
+      }
+      return;
+    }
     const inactive = selectedRef.current.filter((sectionKey) =>
       watchableTermsRef.current?.has(sectionKey.term) !== false
       &&
@@ -812,13 +1001,25 @@ export function LiveWatchProvider({
         setStarting(false);
       }
     }
-  }, [addNotice, enableSound, runtime, sendQueuedStart]);
+  }, [addNotice, enableSound, intent, runtime, sendQueuedStart, submitIntent]);
+
+  /** Stops watching one section the page is currently showing as watched. */
+  const stopSection = useCallback((sectionKey: SectionKey) => {
+    if (intent === undefined) return false;
+    void submitIntent(sectionKey, null);
+    return true;
+  }, [intent, submitIntent]);
 
   const stop = useCallback((watch: ActiveWatchView) => {
+    if (stopSection(watch.sectionKey)) return;
     send({ type: 'STOP_WATCH', watch: { activeWatchId: watch.activeWatchId, sectionKey: watch.sectionKey } });
-  }, [send]);
+  }, [send, stopSection]);
 
   const updatePolicy = useCallback((watch: ActiveWatchView, policy: WatchPolicyV1) => {
+    if (intent !== undefined) {
+      void submitIntent(watch.sectionKey, policy);
+      return;
+    }
     if (send({
       type: 'UPDATE_POLICY',
       watch: { activeWatchId: watch.activeWatchId, sectionKey: watch.sectionKey },
@@ -828,7 +1029,7 @@ export function LiveWatchProvider({
       setActive((current) => current.map((value) =>
         value.activeWatchId === watch.activeWatchId ? { ...value, policy } : value));
     }
-  }, [send]);
+  }, [intent, send, submitIntent]);
 
   const acknowledge = useCallback((episode: OpenEpisodeV1) => {
     send({
@@ -1096,6 +1297,15 @@ export function LiveWatchProvider({
     telemetryResources,
     telemetryLoading,
     starting,
+    intentStatus,
+    intent: intentSnapshot,
+    intentStateFor: (sectionKey) => {
+      if (intentSnapshot === null) return null;
+      const entry = findIntentEntry(intentSnapshot, sectionKey);
+      return entry === null ? 'NOT_WATCHING' : watchIntentState(intentSnapshot, entry);
+    },
+    setSectionIntent: submitIntent,
+    refreshIntent,
     isSelected: (sectionKey) => selected.some((value) => sameSection(value, sectionKey)),
     isActive: (sectionKey) => active.some((watch) => sameSection(watch.sectionKey, sectionKey)),
     isWatchable: (sectionKey) => watchableTerms?.has(sectionKey.term) !== false,
@@ -1131,8 +1341,12 @@ export function LiveWatchProvider({
     dismissAlert,
     enableSound,
     episodes,
+    intentSnapshot,
+    intentStatus,
     muted,
     notices,
+    refreshIntent,
+    submitIntent,
     observations,
     pending,
     refreshTelemetry,

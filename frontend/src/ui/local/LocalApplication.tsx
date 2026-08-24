@@ -18,6 +18,7 @@ import {
   type FilterStateV1,
   type WatchPolicyV1,
 } from '../shared/product';
+import { useLocalWatchIntent } from './product/LocalDesiredWatchContext';
 import { currentSystemLanguages, resolveLocalLocale } from './i18n/localeBootstrap';
 import { useLocalI18n } from './i18n/runtime';
 import { LocalTermPullAction } from './LocalTermPullAction';
@@ -67,6 +68,7 @@ function currentCompatibleFilters(
 
 export function LocalApplication() {
   const personal = useLocalPersonal();
+  const watchIntent = useLocalWatchIntent();
   const personalRef = useRef(personal);
   personalRef.current = personal;
   const i18n = useBcspI18n();
@@ -242,6 +244,7 @@ export function LocalApplication() {
   ], [historyPage, local, savedPage, settingsPage]);
 
   const experience = useMemo<SharedExperienceConfiguration>(() => ({
+    ...(watchIntent === null ? {} : { watchIntent }),
     initialFilters: storedFilterState(personal.state.currentFilters.value),
     initialSelectedSections: personal.state.selectedSections,
     initialVolume: personal.state.settings.value.volumePercent,
@@ -269,6 +272,7 @@ export function LocalApplication() {
     personal.state.selectedSections,
     personal.state.settings.value.soundPolicy,
     personal.state.settings.value.volumePercent,
+    watchIntent,
   ]);
 
   return (

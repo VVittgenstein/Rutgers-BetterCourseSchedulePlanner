@@ -12,6 +12,8 @@ import {
   type WatchMessageIdSource,
   type WatchSocketFactory,
 } from '../../shared/product';
+import type { WatchIntentPort } from '../../shared/watch';
+import { createLocalDesiredWatchApi } from '../desired';
 import {
   createLocalPersonalApi,
   LocalPersonalProvider,
@@ -19,6 +21,7 @@ import {
   type LocalBootstrapData,
   type LocalPersonalApiPort,
 } from '../personal';
+import { LocalDesiredWatchProvider } from './LocalDesiredWatchContext';
 
 const BOOTSTRAP_PATH = '/api/v1/local/bootstrap';
 
@@ -29,6 +32,8 @@ export interface LocalProductBootstrapProps {
   readonly children: ReactNode;
   readonly fetch?: typeof fetch;
   readonly messageId?: WatchMessageIdSource;
+  /** Deterministic mutation ids for tests; production mints UUIDv4s. */
+  readonly mutationId?: () => string;
   readonly runtimeFactory?: LocalProductRuntimeFactory;
   readonly socket?: WatchSocketFactory;
 }
@@ -40,6 +45,7 @@ export function LocalProductBootstrap({
   children,
   fetch: fetchImplementation,
   messageId,
+  mutationId,
   runtimeFactory = createProductRuntimePort,
   socket,
 }: LocalProductBootstrapProps) {
@@ -47,6 +53,7 @@ export function LocalProductBootstrap({
   const [personal, setPersonal] = useState<{
     readonly api: LocalPersonalApiPort;
     readonly bootstrap: LocalBootstrapData;
+    readonly watchIntent: WatchIntentPort;
   } | null>(null);
 
   useEffect(() => {
@@ -93,7 +100,13 @@ export function LocalProductBootstrap({
           fetch: request,
           session: () => sessionBootstrap.sessionNonce,
         });
-        setPersonal({ api, bootstrap: localBootstrap });
+        const watchIntent = createLocalDesiredWatchApi({
+          ...(baseUrl === undefined ? {} : { baseUrl }),
+          fetch: request,
+          ...(mutationId === undefined ? {} : { mutationId }),
+          session: () => sessionBootstrap.sessionNonce,
+        });
+        setPersonal({ api, bootstrap: localBootstrap, watchIntent });
         setState({ status: 'READY', runtime });
       } catch (error) {
         if (!active) return;
@@ -109,16 +122,18 @@ export function LocalProductBootstrap({
       abort.abort();
       runtime?.dispose();
     };
-  }, [baseUrl, fetchImplementation, messageId, runtimeFactory, socket]);
+  }, [baseUrl, fetchImplementation, messageId, mutationId, runtimeFactory, socket]);
 
   return (
     <ProductRuntimeProvider state={state}>
       {personal === null
         ? children
         : (
-          <LocalPersonalProvider api={personal.api} initialBootstrap={personal.bootstrap}>
-            {children}
-          </LocalPersonalProvider>
+          <LocalDesiredWatchProvider watchIntent={personal.watchIntent}>
+            <LocalPersonalProvider api={personal.api} initialBootstrap={personal.bootstrap}>
+              {children}
+            </LocalPersonalProvider>
+          </LocalDesiredWatchProvider>
         )}
     </ProductRuntimeProvider>
   );

@@ -19,6 +19,7 @@ import type {
   SectionKey,
   WatchPolicyV1,
 } from '../product';
+import { findIntentEntry, type WatchIntentState } from './intent';
 import {
   DEFAULT_WATCH_POLICY,
   MAX_SELECTED_SECTIONS,
@@ -26,6 +27,14 @@ import {
   type ActiveWatchView,
   type WatchTelemetryResourceState,
 } from './LiveWatchProvider';
+
+const intentStateMessageKeys = {
+  NOT_WATCHING: 'watch.intent.not_watching',
+  PREPARING: 'watch.intent.preparing',
+  WATCHING: 'watch.intent.watching',
+  STOPPING: 'watch.intent.stopping',
+  ATTENTION: 'watch.intent.attention',
+} as const satisfies Record<WatchIntentState, string>;
 
 function sectionLabel(sectionKey: SectionKey): string {
   return `${sectionKey.index} / ${sectionKey.term} / ${sectionKey.campus}`;
@@ -300,8 +309,23 @@ function SelectedSectionManager({
 }) {
   const i18n = useBcspI18n();
   const watch = useLiveWatch();
-  const inactiveCount = watch.selected.filter((sectionKey) =>
-    !watch.isActive(sectionKey) && watch.isWatchable(sectionKey)).length;
+  // With durable intent, "not started yet" is a fact about the SERVER's
+  // stored rows, not about this page's connection. A section already wanted
+  // is not offered again; a section whose intent could not be read is not
+  // offered either, because offering it would mean guessing.
+  const intentReady = watch.intentStatus === 'READY' && watch.intent !== null;
+  const intentUnavailable = watch.intentStatus === 'FAILED';
+  const wantedCount = watch.intentStatus === 'DISABLED'
+    ? 0
+    : watch.selected.filter((sectionKey) =>
+      findIntentEntry(watch.intent, sectionKey)?.policy != null).length;
+  const inactiveCount = watch.intentStatus === 'DISABLED'
+    ? watch.selected.filter((sectionKey) =>
+      !watch.isActive(sectionKey) && watch.isWatchable(sectionKey)).length
+    : intentReady
+      ? watch.selected.filter((sectionKey) =>
+        findIntentEntry(watch.intent, sectionKey)?.policy == null).length
+      : 0;
   return (
     <section aria-labelledby="watch-selected-title">
       <header className="watch-workspace__section-head">
@@ -316,6 +340,11 @@ function SelectedSectionManager({
           {i18n.formatNumber(watch.selected.length)}/{i18n.formatNumber(MAX_SELECTED_SECTIONS)}
         </span>
       </header>
+      {intentUnavailable ? (
+        <p className="watch-workspace__empty" data-state="ATTENTION" role="alert">
+          {i18n.t('watch.intent.unavailable_detail')}
+        </p>
+      ) : null}
       {watch.selected.length === 0 ? (
         <p className="watch-workspace__empty">{i18n.t('watch.selected_empty')}</p>
       ) : (
@@ -325,19 +354,42 @@ function SelectedSectionManager({
             const pending = watch.pending.some((value) => sectionLabel(value) === sectionLabel(sectionKey));
             const observation = watch.observations.find((value) => sectionLabel(value.sectionKey) === sectionLabel(sectionKey));
             const watchable = watch.isWatchable(sectionKey);
+            const entry = findIntentEntry(watch.intent, sectionKey);
+            // Green comes from ONE place. With durable intent it is the
+            // server's stamp matching what the user asked for, and if that
+            // could not be read there is no green at all -- the previous
+            // read's answer would look identical and mean nothing.
+            const intentState = watch.intentStatus === 'DISABLED'
+              ? null
+              : watch.intentStateFor(sectionKey);
+            const badgeState = intentState === null
+              ? (active === undefined ? (watchable ? 'SELECTED' : 'OUT_OF_RANGE') : 'READY')
+              : intentState === 'WATCHING'
+                ? 'READY'
+                : intentState;
+            const badgeLabel = watch.intentStatus === 'FAILED'
+              ? i18n.t('watch.intent.unavailable')
+              : watch.intentStatus === 'LOADING'
+                ? i18n.t('watch.intent.loading')
+                : intentState !== null
+                  ? i18n.t(intentStateMessageKeys[intentState])
+                  : pending
+                    ? i18n.t('watch.state.starting')
+                    : active === undefined
+                      ? i18n.t(watchable ? 'watch.state.selected' : 'watch.term_out_of_range')
+                      : i18n.t('watch.state.watching');
+            const wanted = entry?.policy != null;
+            const shownPolicy = entry?.policy ?? active?.policy;
             return (
               <li className="watch-workspace__item" key={sectionLabel(sectionKey)}>
                 <div>
                   <div className="watch-workspace__identity">
                     <strong className="watch-workspace__index">{sectionKey.index}</strong>
-                    <span className="watch-workspace__badge" data-state={active === undefined
-                      ? watchable ? 'SELECTED' : 'OUT_OF_RANGE'
-                      : 'READY'}>
-                      {pending
-                        ? i18n.t('watch.state.starting')
-                        : active === undefined
-                          ? i18n.t(watchable ? 'watch.state.selected' : 'watch.term_out_of_range')
-                          : i18n.t('watch.state.watching')}
+                    <span
+                      className="watch-workspace__badge"
+                      data-state={watch.intentStatus === 'FAILED' ? 'ATTENTION' : badgeState}
+                    >
+                      {badgeLabel}
                     </span>
                     {observation === undefined ? null : (
                       <span className="watch-workspace__badge" data-state={observation.state}>
@@ -346,24 +398,50 @@ function SelectedSectionManager({
                     )}
                   </div>
                   <p className="watch-workspace__meta">{sectionKey.term} / {sectionKey.campus}</p>
-                  {active === undefined && !watchable ? (
+                  {active === undefined && intentState === null && !watchable ? (
                     <p className="watch-workspace__meta">{i18n.t('watch.term_out_of_range_detail')}</p>
                   ) : null}
-                  {active === undefined ? null : (
+                  {entry?.problem == null ? null : (
+                    <p className="watch-workspace__meta" data-state="ATTENTION">
+                      {i18n.t(entry.problem.permanent
+                        ? 'watch.intent.problem_permanent'
+                        : 'watch.intent.problem_transient', { reason: entry.problem.reason })}
+                    </p>
+                  )}
+                  {shownPolicy === undefined ? null : (
                     <p className="watch-workspace__meta">
                       {i18n.t('watch.policy_summary', {
-                        duration: active.policy.continuousDuration.kind === 'UNLIMITED'
+                        duration: shownPolicy.continuousDuration.kind === 'UNLIMITED'
                           ? i18n.t('watch.unlimited')
-                          : `${active.policy.continuousDuration.seconds}s`,
-                        max: i18n.formatNumber(active.policy.maxAudible),
-                        mode: i18n.t(watchNotificationMessageKeys[active.policy.notificationMode]),
+                          : `${shownPolicy.continuousDuration.seconds}s`,
+                        max: i18n.formatNumber(shownPolicy.maxAudible),
+                        mode: i18n.t(watchNotificationMessageKeys[shownPolicy.notificationMode]),
                       })}
                     </p>
                   )}
                 </div>
-                {active === undefined ? (
-                  <ActionButton disabled={pending} onClick={() => watch.remove(sectionKey)} tone="quiet">{i18n.t('watch.remove')}</ActionButton>
-                ) : <ActiveActions watchItem={active} />}
+                {intentState !== null
+                  ? wanted
+                    ? (
+                      <ActionButton
+                        onClick={() => void watch.setSectionIntent(sectionKey, null)}
+                        tone="accent"
+                      >
+                        {i18n.t('watch.stop_short')}
+                      </ActionButton>
+                    )
+                    : (
+                      <ActionButton onClick={() => watch.remove(sectionKey)} tone="quiet">
+                        {i18n.t('watch.remove')}
+                      </ActionButton>
+                    )
+                  : active === undefined
+                    ? (
+                      <ActionButton disabled={pending} onClick={() => watch.remove(sectionKey)} tone="quiet">
+                        {i18n.t('watch.remove')}
+                      </ActionButton>
+                    )
+                    : <ActiveActions watchItem={active} />}
               </li>
             );
           })}
@@ -381,8 +459,24 @@ function SelectedSectionManager({
             {i18n.t('watch.start_selected', { count: i18n.formatNumber(inactiveCount) })}
           </ActionButton>
           <ActionButton
-            disabled={!policyReady || watch.active.length === 0}
-            onClick={() => watch.active.forEach((item) => watch.updatePolicy(item, policy))}
+            disabled={!policyReady || (watch.intentStatus === 'DISABLED'
+              ? watch.active.length === 0
+              : wantedCount === 0)}
+            onClick={() => {
+              if (watch.intentStatus === 'DISABLED') {
+                watch.active.forEach((item) => watch.updatePolicy(item, policy));
+                return;
+              }
+              void (async () => {
+                // Sequential, because each submission is compared against the
+                // revision the previous one produced.
+                for (const sectionKey of watch.selected) {
+                  const entry = findIntentEntry(watch.intent, sectionKey);
+                  if (entry?.policy == null) continue;
+                  if (!await watch.setSectionIntent(sectionKey, policy)) break;
+                }
+              })();
+            }}
             tone="quiet"
           >
             {i18n.t('watch.apply_policy')}
