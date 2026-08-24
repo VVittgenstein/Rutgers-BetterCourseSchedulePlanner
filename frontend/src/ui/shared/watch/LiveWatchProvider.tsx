@@ -583,7 +583,6 @@ export function LiveWatchProvider({
    * outcome would restore exactly the state the mutation may have replaced.
    */
   const uncertainAt = useRef(new Map<string, { readonly at: number; readonly section: SectionKey }>());
-  const uncertainKeysRef = useRef<ReadonlySet<string>>(new Set());
   /**
    * The operation counter at the moment the socket last reached OPEN, while a
    * cutoff stands.
@@ -598,7 +597,6 @@ export function LiveWatchProvider({
 
   useEffect(() => { intentSnapshotRef.current = intentSnapshot; }, [intentSnapshot]);
   useEffect(() => { intentStatusRef.current = intentStatus; }, [intentStatus]);
-  useEffect(() => { uncertainKeysRef.current = uncertainKeys; }, [uncertainKeys]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { activeRef.current = effectiveActive; }, [effectiveActive]);
   useEffect(() => { pendingRef.current = pending; }, [pending]);
@@ -753,12 +751,31 @@ export function LiveWatchProvider({
   }, []);
 
   /**
+   * Whether this Section has a submission whose outcome is not known.
+   *
+   * The ONE authority every gate asks, and it is the map `markUncertain`
+   * writes rather than anything derived from it by a render. `uncertain` --
+   * the state, and everything memoised from it -- is how the answer is
+   * DISPLAYED, and it necessarily lags by a render; a gate that read the
+   * displayed copy would be answering about the page as it was drawn before
+   * the request went out, which is exactly the moment a second gesture is
+   * made. Two sources here means two answers, and the one the gates got was
+   * the stale one.
+   */
+  const isUncertain = useCallback(
+    (section: SectionKey): boolean => uncertainAt.current.has(sectionIdentity(section)),
+    [],
+  );
+
+  /**
    * Records that a submission for this Section is in flight and its outcome
    * is not known.
    *
    * Called as the operation reaches the front of the queue and immediately
    * before the request goes out, so the page stops asserting the pre-gesture
-   * state from the moment the gesture is actually asked.
+   * state from the moment the gesture is actually asked. The map is written
+   * SYNCHRONOUSLY here, and that is what the gates read: from this line on,
+   * within the same turn, the Section cannot be submitted again or removed.
    */
   const markUncertain = useCallback((section: SectionKey, sequence: number) => {
     uncertainAt.current.set(sectionIdentity(section), { at: sequence, section });
@@ -829,7 +846,15 @@ export function LiveWatchProvider({
     // first one, so the second would be a decision made about a state nobody
     // can vouch for -- and re-sending the first is exactly the automatic
     // replay this surface must never do.
-    if (uncertainKeysRef.current.has(sectionIdentity(section))) {
+    //
+    // Asked of `uncertainAt`, which `markUncertain` writes as the request
+    // goes out, and not of anything a render produces from it. The whole
+    // window this gate exists for is the one BEFORE React has re-rendered:
+    // two gestures inside one turn -- a second press, a Remove -- reach a
+    // mirror updated by an effect while it still says the section is free,
+    // and the second PUT goes out against a state the first may already have
+    // replaced.
+    if (isUncertain(section)) {
       addNotice('COMMAND_FAILED', 'ALERT', section);
       return false;
     }
@@ -862,7 +887,7 @@ export function LiveWatchProvider({
     // held before the gesture.
     if (settled === 'REREAD') await refreshIntent();
     return settled === 'COMMITTED';
-  }, [addNotice, applyAuthority, intent, markUncertain, refreshIntent, runAuthority]);
+  }, [addNotice, applyAuthority, intent, isUncertain, markUncertain, refreshIntent, runAuthority]);
 
   /**
    * The snapshot a gesture made right now compares against, or `null` when
@@ -1317,14 +1342,15 @@ export function LiveWatchProvider({
     // A submission whose outcome is unknown is the same uncertainty in a
     // different place: the server may already have armed a watch this page's
     // snapshot knows nothing about, and removing the row would take away the
-    // only thing that could ever stop it.
-    if (uncertainKeysRef.current.has(sectionIdentity(sectionKey))) return false;
+    // only thing that could ever stop it. Same authority, same reason: the
+    // Remove pressed in the turn the submission went out must see it.
+    if (isUncertain(sectionKey)) return false;
     const entry = findIntentEntry(intentSnapshotRef.current, sectionKey);
     if (entry === null) return true;
     // A tombstone whose teardown is still running, or that still names a live
     // watch, is not finished stopping.
     return entry.policy === null && !entry.stopping && entry.running === null;
-  }, [intent]);
+  }, [intent, isUncertain]);
 
   const select = useCallback((sectionKey: SectionKey) => {
     if (watchableTermsRef.current?.has(sectionKey.term) === false) {

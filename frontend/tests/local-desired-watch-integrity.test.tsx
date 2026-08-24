@@ -1008,6 +1008,64 @@ describe('a mutation whose outcome is unknown withdraws what it was about', () =
     await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('NOT_WATCHING'));
   });
 
+  it('refuses a second gesture made in the same turn as the first, before any render', async () => {
+    const server = authority();
+    const held = deferred<void>();
+    server.queue(
+      // A tombstone: nothing is running, and nothing is tearing down, so the
+      // row IS removable right up until the START goes out.
+      async () => ok(snapshot([entry(SECTION, { policy: null })])),
+      async (call) => {
+        if (call.method === 'GET') return ok(snapshot([entry(SECTION, { policy: null })]));
+        await held.promise;
+        return ok(committed(snapshot([
+          entry(SECTION, { revision: 2, epoch: 2, running: true }),
+        ]), 2));
+      },
+    );
+    const view = desk(server.fetchImplementation);
+    await waitFor(() => expect(view.value().intentStatus).toBe('READY'));
+    expect(view.value().isRemovable(SECTION)).toBe(true);
+
+    // Everything below happens inside ONE act, so React has not re-rendered
+    // since the request went out. A gate reading anything an effect
+    // maintains still says this Section is free -- which is the window the
+    // user is actually in when they press twice, or press and then Remove.
+    let second: boolean | 'PENDING' = 'PENDING';
+    await act(async () => {
+      void view.value().setSectionIntent(SECTION, POLICY);
+      // Let the queued operation reach the front and actually send.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(server.writes()).toHaveLength(1);
+
+      // A second gesture and a Remove, in the same turn, with the first
+      // answer still outstanding.
+      void view.value().setSectionIntent(SECTION, POLICY).then((value) => { second = value; });
+      await Promise.resolve();
+      await Promise.resolve();
+      view.value().remove(SECTION);
+    });
+
+    // The row the START may already have armed a watch for is still on the
+    // desk, and still selected: removing it would have taken away the only
+    // control that could ever stop it.
+    expect(view.value().isSelected(SECTION)).toBe(true);
+    expect(deskRow(SECTION)).toBeTruthy();
+    expect(view.value().isRemovable(SECTION)).toBe(false);
+    expect(second).toBe(false);
+    expect(server.writes()).toHaveLength(1);
+
+    // The first answer lands, and only then is the Section usable again.
+    await act(async () => {
+      held.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+    expect(server.writes()).toHaveLength(1);
+  });
+
   it('keeps a row whose teardown is still running across a failed read', async () => {
     const server = authority();
     server.queue(
