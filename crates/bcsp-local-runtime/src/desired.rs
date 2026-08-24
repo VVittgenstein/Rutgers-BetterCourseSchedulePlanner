@@ -552,7 +552,14 @@ impl DesiredWatchCoordinator {
             for (section, active_watch_id) in armed {
                 self.disarm(materialization, &section, active_watch_id);
             }
-            materialization.sections.clear();
+            // Only what actually came down is forgotten. A record whose
+            // teardown FAILED still names a physical watch that may be alive
+            // and may still ring; dropping it would leave the process holding
+            // a watch it can no longer address -- every later arm for that
+            // section would come back `AlreadyActive`, forever.
+            materialization
+                .sections
+                .retain(|_, state| state.armed.is_some() || state.pending_disarm);
             return;
         }
 
@@ -579,9 +586,9 @@ impl DesiredWatchCoordinator {
         for (section, active_watch_id) in retired {
             self.disarm(materialization, &section, active_watch_id);
         }
-        materialization
-            .sections
-            .retain(|section, _| desired.contains_key(section));
+        materialization.sections.retain(|section, state| {
+            desired.contains_key(section) || state.armed.is_some() || state.pending_disarm
+        });
 
         let now = Instant::now();
         let mut to_arm = Vec::new();
