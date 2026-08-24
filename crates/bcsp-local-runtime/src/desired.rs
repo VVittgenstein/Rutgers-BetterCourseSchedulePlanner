@@ -899,12 +899,12 @@ impl DesiredWatchCoordinator {
     /// same episode, no second announcement.
     ///
     /// Neither are unfinished teardowns forgotten by it. A tombstone whose
-    /// section still has a physical watch this process could not stop is the
-    /// only row the read has to report `pendingDisarm` on; purging it would
-    /// take a watch that is still alive and can still ring off every page and
-    /// out of every control at once. Which sections those are is known HERE
-    /// and nowhere else, so the set is computed under the same lock that
-    /// authorises the rotation and handed to the writer.
+    /// section still has a physical watch is the only row the read has to
+    /// report `pendingDisarm` on; purging it would take a watch that is still
+    /// alive and can still ring off every page and out of every control at
+    /// once. Which sections those are is known HERE and nowhere else, so the
+    /// set is computed under the same lock that authorises the rotation and
+    /// handed to the writer.
     pub fn rotate_if_due(&self) -> Result<bool, DesiredWatchCoordinatorError> {
         let mut materialization = self.lock_materialization()?;
         if !self.lock_store()?.desired_watch_budget()?.rotation_due() {
@@ -915,15 +915,42 @@ impl DesiredWatchCoordinator {
         // the window.
         #[cfg(test)]
         self.arrive(DesiredWatchCheckpoint::RotationDue);
-        let stopping = materialization
-            .sections
-            .iter()
-            .filter(|(_, state)| state.stopping.is_some())
-            .map(|(section, _)| section.clone())
+        // Which tombstones survive is decided by what the process is REALLY
+        // holding, not by which label the materialization has had time to
+        // move a section to.
+        //
+        // `stopping` alone is a record of teardowns this coordinator has
+        // already tried and failed, and it is not the same question. A STOP
+        // commits its tombstone with the store lock and then takes the
+        // materialization lock to reconcile; a rotation that runs in between
+        // sees the section still recorded as `armed`, finds nothing in
+        // `stopping`, and purges the tombstone of a watch that is very much
+        // alive. If the teardown that follows then fails, the watch goes on
+        // polling Rutgers with no row, no `pendingDisarm` and no id any page
+        // can reach.
+        //
+        // The live set answers both cases at once, and is read HERE, under
+        // the lock that authorises the rotation, so nothing can arm between
+        // the question and the act. The `stopping` records are unioned in
+        // rather than replaced: they name watches this process could not
+        // stop, and an owner that under-reports one for a moment must not be
+        // the reason its row goes. The asymmetry is deliberate -- a watch
+        // that ends just after this read costs one tombstone the next
+        // rotation collects, while a live watch missed here costs the user a
+        // watch nothing can ever stop.
+        let preserve = live_watches(self.owner.as_ref())
+            .into_keys()
+            .chain(
+                materialization
+                    .sections
+                    .iter()
+                    .filter(|(_, state)| state.stopping.is_some())
+                    .map(|(section, _)| section.clone()),
+            )
             .collect::<BTreeSet<_>>();
         let authority = {
             let mut store = self.lock_store()?;
-            store.rotate_desired_watch_authority(&stopping)?;
+            store.rotate_desired_watch_authority(&preserve)?;
             store.desired_watch_authority()?
         };
         tracing::info!(
@@ -1769,11 +1796,45 @@ mod tests {
         audience: AtomicUsize,
         live: Mutex<BTreeMap<SectionKey, ActiveWatchId>>,
         next: AtomicU64,
+        /// Every teardown is refused, and the watch stays exactly where it
+        /// was. This is the failure the coordinator cannot see coming and
+        /// cannot undo: the id it captured is from then on the only thing in
+        /// the process that can address a watch that is still polling.
+        refuse_stops: AtomicBool,
+        stops: Mutex<Vec<ActiveWatchTargetV1>>,
     }
 
     impl Owner {
         fn attach(&self) {
             self.audience.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn refuse_stops(&self, refuse: bool) {
+            self.refuse_stops.store(refuse, Ordering::SeqCst);
+        }
+
+        /// A watch that ended without anyone telling the coordinator.
+        ///
+        /// A term rollover, a manager-side stop, a heartbeat sweep: the
+        /// process is no longer holding it, and no teardown was ever asked
+        /// for. Nothing is tearing down afterwards, which is what makes the
+        /// section's tombstone ordinary removal history.
+        fn lose(&self, section: &SectionKey) {
+            self.live.lock().unwrap().remove(section);
+        }
+
+        fn teardowns_asked(&self) -> usize {
+            self.stops.lock().unwrap().len()
+        }
+
+        fn stops_of(&self, section: &SectionKey) -> Vec<ActiveWatchId> {
+            self.stops
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|target| &target.section_key == section)
+                .map(|target| target.active_watch_id)
+                .collect()
         }
     }
 
@@ -1827,6 +1888,12 @@ mod tests {
         }
 
         fn stop(&self, target: ActiveWatchTargetV1) -> Result<(), WatchManagerError> {
+            self.stops.lock().unwrap().push(target.clone());
+            if self.refuse_stops.load(Ordering::SeqCst) {
+                // Refused, and the watch is still live. Not `UnknownWatch`,
+                // which the coordinator is right to read as "already gone".
+                return Err(WatchManagerError::TargetMismatch);
+            }
             let mut live = self.live.lock().unwrap();
             match live.get(&target.section_key) {
                 Some(id) if *id == target.active_watch_id => {
@@ -1854,15 +1921,23 @@ mod tests {
 
     impl Fixture {
         fn new(checkpoints: Arc<dyn DesiredWatchCheckpoints>) -> Self {
+            Self::owned(Arc::new(Owner::default()), checkpoints)
+        }
+
+        /// The same fixture over an owner the TEST already holds, for the
+        /// cases whose question is about what the process was physically
+        /// holding at a particular instant.
+        fn owned(owner: Arc<Owner>, checkpoints: Arc<dyn DesiredWatchCheckpoints>) -> Self {
             let directory = TempDir::new().unwrap();
             let path = directory.path().join("rbcsp.sqlite");
-            let owner = Arc::new(Owner::default());
             owner.attach();
-            let coordinator =
-                DesiredWatchCoordinator::with_owner(PersonalStateStore::open(&path).unwrap(), owner)
-                    .with_retry_backoff(vec![Duration::ZERO])
-                    .with_revalidation_interval(Duration::ZERO)
-                    .with_checkpoints(checkpoints);
+            let coordinator = DesiredWatchCoordinator::with_owner(
+                PersonalStateStore::open(&path).unwrap(),
+                owner.clone(),
+            )
+            .with_retry_backoff(vec![Duration::ZERO])
+            .with_revalidation_interval(Duration::ZERO)
+            .with_checkpoints(checkpoints);
             Self {
                 _directory: directory,
                 path,
@@ -1872,6 +1947,14 @@ mod tests {
 
         fn read(&self) -> DesiredWatchStateV1 {
             self.coordinator.read().unwrap()
+        }
+
+        /// The id the section's physical watch is running under.
+        fn armed_id(&self, section: &SectionKey) -> ActiveWatchId {
+            entry_for(&self.read(), section)
+                .and_then(|entry| entry.materialized.as_ref())
+                .map(|materialized| materialized.active_watch_id)
+                .expect("the section is armed")
         }
 
         fn submit(
@@ -2122,9 +2205,10 @@ mod tests {
 
     /// A COMMIT whose row is legitimately gone by the time it is stamped.
     ///
-    /// The user stops a Section; the tombstone that STOP writes is real, and
-    /// the teardown finished, so nothing keeps it. Another caller crosses the
-    /// rotation threshold between the decision and the stamp and purges it.
+    /// The user stops a Section nothing is physically watching any more -- the
+    /// watch ended underneath the process, so the tombstone that STOP writes
+    /// is removal history the moment it is written. Another caller crosses the
+    /// rotation threshold between the decision and the stamp and collects it.
     /// The commit still happened, so the answer is still `COMMITTED` -- but
     /// the numbers it reports must describe the authority it ships, and no row
     /// in that authority holds the pre-rotation pair. Reporting them anyway is
@@ -2132,8 +2216,9 @@ mod tests {
     /// it. So absence has one frozen shape, and this is where it is produced.
     #[test]
     fn a_commit_purged_by_another_caller_before_it_is_stamped_reports_the_absent_shape() {
-        let rendezvous = Arc::new(Handoff::new());
-        let fixture = Fixture::new(rendezvous.clone());
+        let owner = Arc::new(Owner::default());
+        let rendezvous = Arc::new(Handoff::watching(owner.clone()));
+        let fixture = Fixture::owned(owner.clone(), rendezvous.clone());
         assert_eq!(
             fixture
                 .submit(&section(1), Some(WatchPolicyV1::default()), 0, 1, 1)
@@ -2143,12 +2228,24 @@ mod tests {
         let generation = fixture.read().authority_generation;
         let revision = revision_of(&fixture.read(), &section(1));
         fixture.make_rotation_due();
+        // The watch is already gone, without a teardown and without anyone
+        // telling the coordinator. This is the premise the absent shape
+        // belongs to: there is nothing left for the tombstone to address.
+        owner.lose(&section(1));
 
         let other = rendezvous.spawn_rotation(&fixture);
         rendezvous.arm();
         let result = fixture.submit(&section(1), None, revision, generation, 910);
         other.join().unwrap();
 
+        assert_eq!(
+            rendezvous.at_rotation(),
+            AtRotation {
+                live: BTreeMap::new(),
+                teardowns_asked: 0,
+            },
+            "nothing physical was left for the rotation to protect",
+        );
         assert_eq!(result.outcome, DesiredWatchOutcomeV1::Committed);
         let state = result.state.as_ref().expect("a commit carries its state");
         assert!(
@@ -2172,6 +2269,132 @@ mod tests {
         );
     }
 
+    /// A STOP whose tombstone is committed but not yet reconciled, and a
+    /// rotation that runs in the gap.
+    ///
+    /// This is the interleaving a preserve set built from `stopping` cannot
+    /// see. A STOP writes its tombstone under the store lock and releases it;
+    /// only then does it take the materialization lock to reconcile. A
+    /// rotation that gets there first finds the section still recorded as
+    /// `armed` -- no teardown has been attempted, so nothing is in `stopping`
+    /// -- and purges a tombstone whose physical watch is very much alive. The
+    /// teardown that follows then fails, and the process is left holding a
+    /// watch that polls Rutgers with no authority row, no `pendingDisarm`, no
+    /// id any page can reach and no STOP anyone can press.
+    ///
+    /// The order is made, not waited for. The mutation parks at
+    /// `MutationDecided` -- after its commit, before its reconcile -- and the
+    /// second thread's rotation runs to completion from there, so the
+    /// mutation cannot possibly have reconciled first. `AtRotation` records
+    /// what was true inside that window rather than after it: a live watch,
+    /// and not one teardown asked for.
+    #[test]
+    fn a_rotation_keeps_the_tombstone_of_a_stop_that_has_not_reconciled_yet() {
+        let owner = Arc::new(Owner::default());
+        let rendezvous = Arc::new(Handoff::watching(owner.clone()));
+        let fixture = Fixture::owned(owner.clone(), rendezvous.clone());
+        assert_eq!(
+            fixture
+                .submit(&section(1), Some(WatchPolicyV1::default()), 0, 1, 1)
+                .outcome,
+            DesiredWatchOutcomeV1::Committed,
+        );
+        let original = fixture.armed_id(&section(1));
+        let generation = fixture.read().authority_generation;
+        let revision = revision_of(&fixture.read(), &section(1));
+        fixture.make_rotation_due();
+        // The teardown will not succeed. Without it the bug is invisible: a
+        // purged tombstone and a watch that really stopped agree.
+        owner.refuse_stops(true);
+
+        let other = rendezvous.spawn_rotation(&fixture);
+        rendezvous.arm();
+        let result = fixture.submit(&section(1), None, revision, generation, 910);
+        other.join().unwrap();
+
+        assert_eq!(
+            rendezvous.at_rotation(),
+            AtRotation {
+                live: BTreeMap::from([(section(1), original)]),
+                teardowns_asked: 0,
+            },
+            "the rotation was authorised while the watch was still live and              before anything had tried to stop it -- so `stopping` was empty              and only the live set could have saved the row",
+        );
+
+        assert_eq!(result.outcome, DesiredWatchOutcomeV1::Committed);
+        let state = result.state.as_ref().expect("a commit carries its state");
+        assert_eq!(
+            state.authority_generation,
+            generation + 1,
+            "the other caller really did rotate in the middle of this call",
+        );
+        let row = entry_for(state, &section(1)).expect("a live watch keeps its row");
+        assert!(row.policy.is_none(), "the user did ask for it to stop");
+        assert!(
+            row.pending_disarm,
+            "and a STOP is not finished while the watch it names can still ring",
+        );
+        assert!(row.materialized.is_none(), "a teardown is never green");
+        let committed = result.committed.expect("a commit says what it wrote");
+        assert_eq!(
+            (committed.revision, committed.materialization_epoch),
+            (row.revision, row.materialization_epoch),
+            "the surviving row is renumbered into the new generation, and the              answer describes it rather than the absent shape",
+        );
+        assert_ne!(
+            committed.revision,
+            DESIRED_WATCH_ABSENT_COMMITTED_NUMBER,
+            "a row that is still there was not legitimately collected",
+        );
+        assert_eq!(
+            live_watches(owner.as_ref()),
+            BTreeMap::from([(section(1), original)]),
+            "and the watch really is still running under the id it was armed              with",
+        );
+
+        // Every page reads the same row, not just the caller that stopped it.
+        let read = fixture.read();
+        assert_eq!(read.authority_generation, state.authority_generation);
+        let visible = entry_for(&read, &section(1)).expect("the desk can still see it");
+        assert!(visible.pending_disarm);
+        assert!(visible.materialized.is_none());
+
+        // Clearing the fault finishes the teardown by the ORIGINAL id, and
+        // only then is the row ordinary removal history.
+        owner.refuse_stops(false);
+        fixture.coordinator.tick();
+        assert!(
+            live_watches(owner.as_ref()).is_empty(),
+            "the captured id is the only thing that could still stop it",
+        );
+        assert!(
+            !owner.stops_of(&section(1)).is_empty()
+                && owner.stops_of(&section(1)).iter().all(|id| *id == original),
+            "and every teardown named the watch it was meant to",
+        );
+        let settled = fixture.read();
+        assert!(
+            !entry_for(&settled, &section(1))
+                .expect("still removal history")
+                .pending_disarm,
+        );
+    }
+
+    /// What the process could say about itself at the instant a rotation was
+    /// authorised.
+    ///
+    /// `teardowns_asked` is what separates the two interleavings that look
+    /// alike from outside. A section can only be in `stopping` because a
+    /// teardown was already attempted and refused; zero attempts means the
+    /// materialization still called this section `armed`, and the tombstone
+    /// the rotation is about to see was committed by a STOP that has not
+    /// reached its reconcile.
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct AtRotation {
+        live: BTreeMap<SectionKey, ActiveWatchId>,
+        teardowns_asked: usize,
+    }
+
     /// A blocking hand-off from inside `MutationDecided` to a second thread.
     ///
     /// Both directions block, so the other caller's rotation is COMPLETE
@@ -2180,6 +2403,15 @@ mod tests {
     /// them is the interleaving under test.
     struct Handoff {
         armed: AtomicBool,
+        /// What the process was physically holding at the instant the
+        /// rotation was authorised, when a test asked to be told.
+        ///
+        /// Recorded rather than asserted from outside, because the whole
+        /// question is what was true INSIDE that window: by the time either
+        /// thread has finished, the mutation has reconciled and the answer
+        /// would be about a different moment.
+        observer: Option<Arc<Owner>>,
+        at_rotation: Mutex<Option<AtRotation>>,
         rotate: SyncSender<()>,
         rotate_rx: Mutex<Option<Receiver<()>>>,
         rotated_tx: SyncSender<u64>,
@@ -2188,10 +2420,22 @@ mod tests {
 
     impl Handoff {
         fn new() -> Self {
+            Self::observing(None)
+        }
+
+        /// A hand-off that also reports the owner's live set from inside
+        /// `RotationDue`.
+        fn watching(owner: Arc<Owner>) -> Self {
+            Self::observing(Some(owner))
+        }
+
+        fn observing(observer: Option<Arc<Owner>>) -> Self {
             let (rotate, rotate_rx) = sync_channel(0);
             let (rotated_tx, rotated) = sync_channel(0);
             Self {
                 armed: AtomicBool::new(false),
+                observer,
+                at_rotation: Mutex::new(None),
                 rotate,
                 rotate_rx: Mutex::new(Some(rotate_rx)),
                 rotated_tx,
@@ -2201,6 +2445,14 @@ mod tests {
 
         fn arm(&self) {
             self.armed.store(true, Ordering::SeqCst);
+        }
+
+        fn at_rotation(&self) -> AtRotation {
+            self.at_rotation
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("the rotation reached its checkpoint")
         }
 
         fn spawn_rotation(&self, fixture: &Fixture) -> std::thread::JoinHandle<()> {
@@ -2221,6 +2473,20 @@ mod tests {
 
     impl DesiredWatchCheckpoints for Handoff {
         fn arrive(&self, checkpoint: DesiredWatchCheckpoint, exclusive: bool) {
+            if checkpoint == DesiredWatchCheckpoint::RotationDue {
+                let Some(owner) = self.observer.as_ref() else {
+                    return;
+                };
+                assert!(
+                    exclusive,
+                    "the set a rotation preserves must be decided inside the domain",
+                );
+                *self.at_rotation.lock().unwrap() = Some(AtRotation {
+                    live: live_watches(owner.as_ref()),
+                    teardowns_asked: owner.teardowns_asked(),
+                });
+                return;
+            }
             if checkpoint != DesiredWatchCheckpoint::MutationDecided
                 || !self.armed.swap(false, Ordering::SeqCst)
             {
