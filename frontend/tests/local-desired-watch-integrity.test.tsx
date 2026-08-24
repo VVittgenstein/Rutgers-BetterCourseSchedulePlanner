@@ -967,6 +967,47 @@ describe('a mutation whose outcome is unknown withdraws what it was about', () =
     expect(server.writes()).toHaveLength(1);
   });
 
+  it('refuses a second gesture made after the first one was already sent', async () => {
+    const server = authority();
+    const held = deferred<void>();
+    server.queue(
+      async () => ok(snapshot([entry(SECTION, { running: true })])),
+      async (call) => {
+        if (call.method === 'GET') return ok(snapshot([entry(SECTION, { running: true })]));
+        await held.promise;
+        return ok(committed(snapshot([
+          entry(SECTION, { policy: null, revision: 2, epoch: 2 }),
+        ]), 2));
+      },
+    );
+    const view = desk(server.fetchImplementation);
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+
+    let stopping: Promise<boolean> | null = null;
+    await act(async () => {
+      stopping = view.value().setSectionIntent(SECTION, null);
+      // Let the queued operation reach the front and actually send.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(server.writes()).toHaveLength(1);
+
+    // The STOP is in flight and nobody knows what it did. A gesture made now
+    // is a decision about a state that may no longer exist -- unlike two
+    // gestures queued before either was sent, which the authority itself
+    // settles by refusing the second.
+    let second = true;
+    await act(async () => { second = await view.value().setSectionIntent(SECTION, POLICY); });
+    expect(second).toBe(false);
+    expect(server.writes()).toHaveLength(1);
+
+    await act(async () => {
+      held.resolve();
+      await stopping;
+    });
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('NOT_WATCHING'));
+  });
+
   it('keeps a row whose teardown is still running across a failed read', async () => {
     const server = authority();
     server.queue(

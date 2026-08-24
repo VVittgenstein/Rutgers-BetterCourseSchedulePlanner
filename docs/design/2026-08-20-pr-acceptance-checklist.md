@@ -908,6 +908,7 @@ Codex 对 `c50499f..2cd54e2` 的独立结论仍是 `CHANGES_REQUIRED`。R2 的�
 | A5 | WatchWorkspace 的 Apply policy 同样逐项重新捕获，第一项触发 rotation 后静默采用新 generation | `::applies a policy against the generation the click was made on`（点击真实 `Apply policy to active` 按钮；两条请求的 `authorityGeneration` 都必须是点击时的 1） | 判别器 |
 | A6 | mutation 结果未知时旧 snapshot 继续可绿、可移除、可再提交 | `::withdraws the green light on a lost STOP before the re-read comes back` | 判别器 |
 | A6 | START 已提交但 response 丢失时，旧 snapshot 没有该 section，管理行整个消失 | `::keeps a lost START addressable, ungreen and unsubmittable until a read lands`（行仍在 desk、非绿、`active` 为 0、remove 与再次提交都被拒；held GET 落地后恢复真实 state，且全程只有一次写） | 判别器 |
+| A6 | 已经发出的 mutation 未定时，同一 section 的下一次手势仍会再发一条 | `::refuses a second gesture made after the first one was already sent`（与 R2 的 `never lets a queued gesture start the watch the one before it stopped` 互补：两条在任何一条发出前排队的手势仍然都提交、由 authority 用 CAS 拒绝第二条；已经发出之后才做的手势才被本地拒绝） | 判别器 |
 | A6 | `intentSaved` 只保留 `policy != null`，STOP fault + 读取失败会隐藏仍在 teardown 的 watch | `::keeps a row whose teardown is still running across a failed read` | 判别器 |
 | A7 | `disprove(null)` 只枚举当时已知 running rows；snapshot 为 null 或全部 PREPARING 时，关闭前 issued 的 GET 在关闭后返回 RUNNING 就能复绿 | `::a read in flight when the socket went CLOSED cannot light up …`（四例矩阵：`CLOSED`/`ERROR` × snapshot 未落地/唯一行仍 PREPARING；随后 OPEN + 新 GET 才允许恢复绿色） | 判别器 |
 | A8 | `Test-SamePolicy` 无精确键集、把一切数字转 `[long]`：extra key、`600.4`、`"600"`、fractional maxAudible 全部判为相同 | `packaging/windows/verify.ps1::Assert-PolicyComparison`（新增 top-level extra、duration extra、`600.4`、`"600"`、fractional/quoted maxAudible、缺 seconds、缺 duration、未知 mode/kind，以及"畸形 body 与自身比较也必须为 false"） | 判别器 |
@@ -947,7 +948,7 @@ R3 引入的两处新机制单独记：
 | `permanent` 判定去掉 `describes` stamp 检查 | `cargo test -p bcsp-local-runtime --test desired_watch` | `an_old_permanent_failure_does_not_survive_the_intent_that_earned_it`、`a_policy_edit_across_a_stuck_teardown_is_not_refused_by_the_old_failure` |
 | projection 去掉 stale failure 过滤 | 同上 | 同上两项 |
 | `submitAgainst` 改回读 `intentSnapshotRef.current` | `npx vitest run tests/local-desired-watch-integrity.test.tsx` | `starts every selected section against the revisions the click was made on`、`applies a policy against the generation the click was made on`、以及 R2 的 `never lets a queued gesture start the watch the one before it stopped` |
-| `markUncertain` 改为空操作 | 同上 | `keeps a lost START addressable, ungreen and unsubmittable until a read lands`、`withdraws the green light on a lost STOP before the re-read comes back` |
+| `markUncertain` 改为空操作 | 同上 | `keeps a lost START addressable, ungreen and unsubmittable until a read lands`、`withdraws the green light on a lost STOP before the re-read comes back`、`refuses a second gesture made after the first one was already sent` |
 | `trustedIdentities` 改回只保留 `policy != null` | 同上 | `keeps a row whose teardown is still running across a failed read` |
 | 全局 cutoff 改回按 section `disprove` | 同上 | 四例 socket cutoff 矩阵全部失败 |
 | codec 改回"缺行即拒绝" | 同上 | `accepts a commit whose row was legitimately collected by a rotation` |
