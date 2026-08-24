@@ -108,6 +108,110 @@ function Read-Bootstrap {
     return Invoke-RestMethod -UseBasicParsing -Method Get -Uri ($Origin + 'api/v1/local/bootstrap') -TimeoutSec 10
 }
 
+<#
+.SYNOPSIS
+Whether two watch policies are the same policy, in every field.
+
+.DESCRIPTION
+"The running watch is running the policy the user asked for" is one of the
+four parts of the green light, and a comparison that stops at the duration's
+KIND says nothing about how long the alarm actually sounds for: FINITE 600 and
+FINITE 601 -- or FINITE 600 and a FINITE with no seconds at all -- would pass
+as identical, and the release gate would sign off on a watch behaving
+differently from the intent it is supposed to be materializing.
+
+UNLIMITED carrying `seconds` is rejected rather than ignored. It is not a
+policy this product produces, so a candidate that emits one is not a candidate
+whose other fields are worth trusting.
+#>
+function Test-SamePolicy {
+    param(
+        [Parameter(Mandatory = $true)]$Left,
+        [Parameter(Mandatory = $true)]$Right
+    )
+
+    if ($null -eq $Left -or $null -eq $Right) { return $false }
+    # Normalized so a literal written in this script and a body parsed off the
+    # wire are compared the same way: under Set-StrictMode an absent property
+    # has to be asked for through PSObject, and a Hashtable has none.
+    $Left = $Left | ConvertTo-Json -Depth 8 -Compress | ConvertFrom-Json
+    $Right = $Right | ConvertTo-Json -Depth 8 -Compress | ConvertFrom-Json
+    if ([string]$Left.notificationMode -cne [string]$Right.notificationMode) { return $false }
+    if ([long]$Left.maxAudible -ne [long]$Right.maxAudible) { return $false }
+    $leftDuration = $Left.continuousDuration
+    $rightDuration = $Right.continuousDuration
+    if ($null -eq $leftDuration -or $null -eq $rightDuration) { return $false }
+    $kind = [string]$leftDuration.kind
+    if ($kind -cne [string]$rightDuration.kind) { return $false }
+    $leftSeconds = $leftDuration.PSObject.Properties['seconds']
+    $rightSeconds = $rightDuration.PSObject.Properties['seconds']
+    if ($kind -ceq 'FINITE') {
+        if ($null -eq $leftSeconds -or $null -eq $rightSeconds) { return $false }
+        if ($null -eq $leftSeconds.Value -or $null -eq $rightSeconds.Value) { return $false }
+        return ([long]$leftSeconds.Value -eq [long]$rightSeconds.Value)
+    }
+    if ($kind -ceq 'UNLIMITED') {
+        # Presence alone is the failure: an unlimited duration has no seconds
+        # to carry, so a body that supplies some is not this contract.
+        if ($null -ne $leftSeconds -or $null -ne $rightSeconds) { return $false }
+        return $true
+    }
+    return $false
+}
+
+<#
+.SYNOPSIS
+Proves Test-SamePolicy can still tell policies apart, before it is trusted.
+
+.DESCRIPTION
+A comparison used once, deep inside a long release rehearsal, is exactly the
+kind of check that can quietly stop discriminating -- and a gate that always
+answers "same" reads identically to a gate that passed. These counter-examples
+run every time and fail the script here, so deleting the seconds comparison
+breaks the rehearsal at this line rather than silently widening what it
+accepts.
+#>
+function Assert-PolicyComparison {
+    $finite600 = [ordered]@{
+        notificationMode = 'ONE_SHOT'
+        maxAudible = 3
+        continuousDuration = [ordered]@{ kind = 'FINITE'; seconds = 600 }
+    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    $finite601 = [ordered]@{
+        notificationMode = 'ONE_SHOT'
+        maxAudible = 3
+        continuousDuration = [ordered]@{ kind = 'FINITE'; seconds = 601 }
+    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    $unlimited = [ordered]@{
+        notificationMode = 'ONE_SHOT'
+        maxAudible = 3
+        continuousDuration = [ordered]@{ kind = 'UNLIMITED' }
+    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    $unlimitedWithSeconds = [ordered]@{
+        notificationMode = 'ONE_SHOT'
+        maxAudible = 3
+        continuousDuration = [ordered]@{ kind = 'UNLIMITED'; seconds = 600 }
+    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    $louder = [ordered]@{
+        notificationMode = 'ONE_SHOT'
+        maxAudible = 4
+        continuousDuration = [ordered]@{ kind = 'FINITE'; seconds = 600 }
+    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    $continuous = [ordered]@{
+        notificationMode = 'CONTINUOUS'
+        maxAudible = 3
+        continuousDuration = [ordered]@{ kind = 'FINITE'; seconds = 600 }
+    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+
+    Assert-Condition (Test-SamePolicy $finite600 $finite600) 'Policy comparison rejected a policy identical to itself.'
+    Assert-Condition (Test-SamePolicy $unlimited $unlimited) 'Policy comparison rejected an UNLIMITED policy identical to itself.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $finite601)) 'Policy comparison cannot tell FINITE 600 from FINITE 601.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $unlimited)) 'Policy comparison cannot tell FINITE from UNLIMITED.'
+    Assert-Condition (-not (Test-SamePolicy $unlimited $unlimitedWithSeconds)) 'Policy comparison accepted an UNLIMITED duration carrying seconds.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $louder)) 'Policy comparison cannot tell one maxAudible from another.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $continuous)) 'Policy comparison cannot tell one notification mode from another.'
+}
+
 function Read-DesiredWatch {
     param([Parameter(Mandatory = $true)][string]$Origin)
 
@@ -469,6 +573,8 @@ $verificationSucceeded = $false
 New-Item -ItemType Directory -Path $candidateRoot, $upgradeRoot, $outsideOne, $outsideTwo, $outsideThree, $logRoot -Force | Out-Null
 
 try {
+    # Before anything is measured with it.
+    Assert-PolicyComparison
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
@@ -743,10 +849,11 @@ try {
         [long]$armed.materialized.materializationEpoch -eq [long]$armed.materializationEpoch
     ) 'The materialized stamp does not match the authority it was armed under.'
     Assert-Condition (
-        [string]$armed.materialized.policy.notificationMode -ceq [string]$armed.policy.notificationMode -and
-        [long]$armed.materialized.policy.maxAudible -eq [long]$armed.policy.maxAudible -and
-        [string]$armed.materialized.policy.continuousDuration.kind -ceq [string]$armed.policy.continuousDuration.kind
+        Test-SamePolicy $armed.materialized.policy $armed.policy
     ) 'The running watch is not running the policy the authority holds.'
+    Assert-Condition (
+        Test-SamePolicy $armed.policy $markerPolicy
+    ) 'The stored intent is not the policy this run wrote.'
     Assert-Condition (
         [string]$armed.materialized.activeWatchId -match '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
     ) 'The running watch is not addressable.'

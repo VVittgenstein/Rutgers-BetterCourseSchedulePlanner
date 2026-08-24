@@ -796,7 +796,16 @@ Readiness、音频自愈、页面级通知）与 P1/P2 一条未做，不得因�
 
 Codex 对 `a4f8d22..107f3e5` 的独立验收结论是 `CHANGES_REQUIRED`。方向被
 接受，五组阻断都是"页面可能在事实之外显示绿色，或用户失去关掉它的办法"。
-下表记录每一项由哪个判别测试关闭；每条测试都对修复前的实现失败。
+下表记录每一项由哪个判别测试关闭。
+
+判别力的说明必须精确，不能一句"每条测试都能打挂旧实现"带过：
+
+- 表中大多数测试是**对 `107f3e5` 的判别器**——移除对应修复即失败；
+- `local_runtime.rs::a_reset_that_cannot_commit_lowers_its_barrier_and_materializes_again`
+  **不是**打挂 `107f3e5` 的测试。`107f3e5` 没有 reset 屏障，因此没有"屏障不落下"
+  这个失效模式。它是 R1 新增屏障的**回归门**：钉住 `begin`/`finish` 必须成对出现，
+  一次失败的 reset 不得让本次运行的余下时间永远不再物化；
+- 同理，凡是只保护 R1/R2 新机制的测试，都按回归门记录，不按判别器记录。
 
 | R1 项 | 缺口 | 关闭它的判别测试 |
 |---|---|---|
@@ -809,7 +818,7 @@ Codex 对 `a4f8d22..107f3e5` 的独立验收结论是 `CHANGES_REQUIRED`。方�
 | A4 | 重放的终局拒绝必须仍是拒绝 | `::a_replayed_terminal_refusal_is_still_the_refusal_it_was` |
 | A5 | reset 在 SQLite 上等待时 attach/reconcile 可留下 orphan watch | `local_runtime.rs::a_full_reset_blocked_in_sqlite_leaves_no_orphan_watch`、`desired_watch.rs::the_reset_barrier_stops_every_physical_watch_including_one_it_never_armed` |
 | A5 | `seal_and_stop` 之后 synthetic owner 可被重建；普通 reset 必须仍可用 | `watch_socket.rs::a_sealed_socket_refuses_to_rebuild_the_owner_but_an_ordinary_stop_does_not` |
-| A5 | reset 事务失败时屏障不落下，剩下的运行时间里再也不物化 | `local_runtime.rs::a_reset_that_cannot_commit_lowers_its_barrier_and_materializes_again` |
+| A5 | reset 事务失败时屏障不落下，剩下的运行时间里再也不物化 | `local_runtime.rs::a_reset_that_cannot_commit_lowers_its_barrier_and_materializes_again`（**回归门**，非 `107f3e5` 判别器） |
 | A6 | 旧 GET / 旧 PUT 覆盖新 tombstone | `local-desired-watch-integrity.test.tsx::never lets an older read put back intent a newer write removed`、`::never lets an older write put back a section a newer write removed` |
 | A6 | 后台 retry 武装成功或 watch 意外停止后投影不刷新 | `::re-reads through the same domain when a retry finally arms the watch`、`::stops showing a watch as running after an unexpected stop` |
 | A7 | 晚加入页面把仍 desired/运行的 section 移出唯一管理列表 | `::counts, describes and can act on a watch it never saw start`、`::fails closed while the authority is unreadable` |
@@ -824,3 +833,52 @@ R1 引入的两处新机制值得单独记：`DESIRED_WATCH_REVALIDATE_INTERVAL`
 `DesiredWatchOwner` 是一个 seam，唯一目的是让两条**只有失败时才有意义**
 的物理路径可被测试——健康的 socket 无法诱发它们，而它们正是会留下
 "仍在响但已无法寻址"的那两条。
+
+## M0-M1-001-R2：reduced S2/L1 最终完整性收口
+
+Codex 对 `107f3e5..c50499f` 的独立验收结论仍是 `CHANGES_REQUIRED`。R1 的方向和
+大部分实现被接受，剩下的是 R1 新代码里**可确定触发、但当时没有构造到的组合**。
+R2 只关闭这些组合，不扩展范围。
+
+下表按 R2 任务包的编号记录每一项的判别测试。判别力分两类，逐项写明：
+
+- **判别器**：把对应修复反转或删除后，该测试失败（已逐条实测，见下节）；
+- **回归门**：保护 R2 新增的机制本身，`c50499f` 里没有这个失效模式可打挂。
+
+| R2 项 | 缺口 | 关闭它的测试 | 判别力 |
+|---|---|---|---|
+| A3 | 失效复验后无条件 `state.armed = None`，teardown 失败即丢掉唯一 activeWatchId | `desired_watch.rs::a_revoked_watch_whose_teardown_fails_stays_addressable_and_is_stopped_by_id`（permanent 与 transient 两个变体） | 判别器 |
+| A3 | 用户随后提交的 STOP 找不到要停的 watch | `desired_watch.rs::a_stop_pressed_while_a_teardown_is_stuck_still_stops_the_original_watch` | 判别器 |
+| A4 | 最终 teardown 失败被记日志吞掉，仍清记录、降屏障并返回成功 | `desired_watch.rs::a_full_reset_that_cannot_finish_its_teardown_is_not_a_reset` | 判别器 |
+| A4 | personal reset surface 吞掉 finish 失败并向页面报成功 | `local_runtime.rs::a_full_reset_that_cannot_stop_a_watch_reports_a_retryable_failure` | 判别器 |
+| A5 | 终局拒绝自己跨阈值时的完整 response，而不只是 outcome | `desired_watch.rs::a_terminal_refusal_that_crosses_the_threshold_answers_from_one_authority` | 回归门（`c50499f` 的 `restamp` 已覆盖此路径） |
+| A5 | 另一 caller 在 outcome 与 response 之间 rotation，拼出跨代的 generation/revision | `desired_watch.rs::a_terminal_refusal_rotated_by_another_caller_answers_from_one_authority` | 判别器 |
+| A6 | 队列在执行时读最新 snapshot，静默把手势 rebase 到用户没看过的 revision | `local-desired-watch-integrity.test.tsx::never lets a queued gesture start the watch the one before it stopped` | 判别器 |
+| A6 | 不同 section 在同一 generation 下仍须能依次提交 | `::still submits two different sections against the state the user saw` | 回归门 |
+| A7 | `WATCH_STOPPED` 后等待可能挂起的 GET，期间继续显示绿色 | `::stops showing a watch as running before the re-read comes back` | 判别器 |
+| A7 | socket CLOSED/ERROR 后继续用旧 materialized snapshot 显示绿色与非零 active | `::stops showing a watch as running once the socket is CLOSED` / `::… is ERROR` | 判别器 |
+| A7 | GET 失败把不在 selection 中的 saved desired row 整体擦掉 | `::keeps a saved row reachable across a failed read and restores it after` | 判别器 |
+| A8 | 搜索入口把任何非空 policy 写成"监控中" | `::the search entry says exactly what the desk says`（10 例矩阵：四元组匹配、未物化、revision 失配、policy 失配、永久失败、STOPPING、pending disarm 且意图仍在、无意图、FAILED、LOADING） | 判别器 |
+| A9.1 | 顶层 envelope 未做精确键检查 | `::refuses an envelope carrying a field nobody agreed to`、`::refuses an envelope with no data at all` | 判别器 |
+| A9.1 | outcome-specific nullability | `::refuses a stale revision that does not say which revision`、`::refuses a stale generation carrying a revision it cannot have meant`、`::refuses a capacity refusal that does not say what the cap is`、`::refuses a mutation id conflict carrying a cap it has nothing to do with`、`::refuses a commit carrying a currentRevision only a refusal has`、`::refuses a commit carrying a maximum only a refusal has` | 判别器 |
+| A9.1 | generation/revision/epoch 与返回 state 的交叉一致性 | `::refuses a commit whose generation is not the generation of the state it returned`、`::refuses a commit whose revision no row in its own state holds`、`::refuses a commit whose epoch no row in its own state holds`、`::refuses a commit whose state says nothing about the Section it wrote` | 判别器 |
+| A9.2 | rotation 并发测试靠固定 sleep 猜测线程到达状态 | `desired_watch.rs::concurrent_callers_crossing_one_threshold_rotate_once`（改用 `DesiredWatchCheckpoint::RotationDue` rendezvous，断言 `exclusive`；旧 check-before-lock 形态在此点不持有排他域，且 rendezvous 会让两个 caller 都完成域外判断） | 判别器 |
+| A9.3 | archive verifier 只比较 `continuousDuration.kind`，不比较 FINITE seconds | `packaging/windows/verify.ps1::Test-SamePolicy` + `Assert-PolicyComparison`（脚本启动即自校验：`FINITE 600 != FINITE 601`、`UNLIMITED` 不得携带 seconds、maxAudible 与 notificationMode 各一例） | 判别器（删除 seconds 比较后同一脚本在 `Assert-PolicyComparison` 处失败） |
+| A9.4 | "15 秒短于最短 watch poll"是错的：合法最短本地 watch poll 是 3 秒 | `desired_watch.rs::the_revalidation_cadence_is_bounded_but_not_per_poll`（同时钉住 `DESIRED_WATCH_REVALIDATE_INTERVAL` 与 `LOCAL_MINIMUM_WATCH_OPEN_INTERVAL_SECONDS`） | 回归门 |
+
+R2 引入两处新机制，同样单独记：
+
+- `SectionMaterialization::stopping` 把"这一份物理 watch 还没拆掉"从 `armed` 里
+  分出来。`armed` 是绿灯的依据，`stopping` 是地址的依据；一个失败的 teardown
+  两者都需要，而 R1 的单一字段只能满足其中一个。
+- `DesiredWatchCheckpoints` 是一个 seam，唯一目的是让两条**关于时序**的保证可被
+  确定性地测量：rotation 的 budget 读取与 rotate 动作是否在同一排他域内，以及
+  一次 mutation 的 outcome 与它的 response 之间能否插进别人的 rotation。这两者
+  的窗口只有几条指令宽，靠 sleep 复现等于断言"猜的延迟够长"——那种断言对它本该
+  拒绝的实现同样通过。
+
+### 判别力实测
+
+前端七项修复逐条反转后重跑 `tests/local-desired-watch-integrity.test.tsx`，
+每一项都有对应测试失败；反转项与失败测试一一对应，无"反转后仍全绿"的条目。
+Rust 侧同样逐条反转复验，记录见 Claude 的 R2 回报 Negative proof 一节。

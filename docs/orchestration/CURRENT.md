@@ -318,15 +318,15 @@ PUT /api/v1/local/desired-watch
 记录日期：2026-08-24。
 
 ```text
-当前检出：feat/s2-alert-delivery@107f3e5
+当前检出：feat/s2-alert-delivery@c50499f
 origin/main：ae65958
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
-Claude 报告 head：107f3e5
-Codex 审查范围：a4f8d22..107f3e5
+Claude R1 报告 head：c50499f
+Codex R1 审查范围：107f3e5..c50499f（全里程碑 a4f8d22..c50499f）
 S2 分支：尚未合并、尚未发布
 当前产品源码工作树：无未提交源码；两个 conversation 归档目录未跟踪
-Codex orchestration 文档：正在记录 CHANGES_REQUIRED 与 R1 修复任务
+Codex orchestration 文档：已记录 R1 CHANGES_REQUIRED，并生成 R2 集中修复任务
 现有 release/0.1.0：sourceCommit=7d5debef（2026-07-15，早于本轮工作）
 ```
 
@@ -337,12 +337,12 @@ Codex orchestration 文档：正在记录 CHANGES_REQUIRED 与 R1 修复任务
 | 工作 | 状态 | 当前事实 |
 |---|---|---|
 | S1 | 代码完成并已合入 main；M0 窄修已写入 feature | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter；尚无新 release |
-| S2 | desired 纵向闭环已实现但验收驳回，仅 feature | HTTP/coordinator/UI 已落地；仍存在假绿、rotation、reset 和前端时序阻断；自动重连、完整 Readiness、音频、通知仍未做 |
+| S2 | desired 纵向闭环与 R1 已实现但验收仍未通过，仅 feature | 真实 archive 已证明重启物化/reset；仍有 teardown fault、terminal response 和前端状态完整性阻断；自动重连、完整 Readiness、音频、通知仍未做 |
 | S3 | 未开始正式实现 | 没有 GridAnchor/RebuildProfile；仅有不足以冻结参数的单校区数据 |
 | S4 | 未开始 | 代码中没有 `prepare_cached` |
 | P1 | 服务端半边完成，仅 feature | validate、reserve lease、session 保护完成；浏览器不会调用或自动重连 |
 | P2 | 大部分未开始 | H5 基本完成、H4 只有 per-session cap；其余重新上线门未完成 |
-| L1 | 纵向代码已落地但未通过验收 | desired 可持久化、GET/PUT、materializer 和 UI 已存在；`M0-M1-001-R1` 关闭前不得称可发布或完成 |
+| L1 | 纵向代码已落地但未通过验收 | desired 可持久化、GET/PUT、materializer、UI 与真实包装 E2E 已存在；`M0-M1-001-R2` 接受前不得称可发布或完成 |
 | L2 | 只有通用 route seam | 无 presence、60 秒状态机或自动退出 |
 | L3 | 未开始 | 无可见业务日志与控制台倒计时 |
 
@@ -356,26 +356,25 @@ Codex orchestration 文档：正在记录 CHANGES_REQUIRED 与 R1 修复任务
 
 ### S2/L1
 
-- `c113a2f..b30e024` 已删除 writer admission/自动 retirement，落地 local GET/PUT、
-  coordinator、synthetic owner、前端五态、边界 marker 和文档；这些方向与最终合同一致；
-- `107f3e5` 尚不能验收，Codex 已冻结 `M0-M1-001-R1` 集中修复；
-- synthetic owner 不参与完整的持续 admission/live-set 校验：已 armed section 后来从 Catalog
-  消失或离开 term/campus 范围时，物理 watch 与 GET 可能永久假绿；
-- terminal stale/limit refusal 会增长 receipt，但 production rotation 只在 `COMMITTED` 后运行；
-  账本可被填到 2048，随后正确 STOP 也永久 503，重启不恢复；
-- rotation 的 check/act 不原子，两个并发 caller 可旋转两次；触发 rotation 的成功响应还可能同时携带
-  旧顶层 generation/revision 与新 `state` generation/revision；
-- Full Reset 的 `stop → SQLite clear → 只清 materialization record` 与在途 reconcile/connect 有竞态，
-  可留下 authority 已空但仍运行的 orphan owner watch；
-- 前端 GET 与 PUT 不在同一响应顺序域，旧响应可覆盖新 tombstone 并重新显示“监控中”；
-- retry 成功或物理 stop 的 owner WS 事件不会刷新 authority GET，页面可能永久“准备中”或保留旧绿态；
-- selection removal 仍依赖旧 `active[]`，晚加入页面或 authority 读取失败时可把仍 desired/运行的 section
-  从唯一管理列表移除；
-- Windows verifier 已由 Codex 在新构建的 `107f3e5` 候选上真实执行并通过，但脚本使用未发布 marker，
-  重启后明确断言 `materialized = null`；它只证明 persistence/reset，没有完成任务 A9.19 的
-  “恢复并装配”；
-- `frontend/src/ui/shared/watch/intent.ts` 含两个原始 NUL 字节，Git 将源码视为 binary；
-- 上述问题关闭前，S2-D3、M1 和迁移发布门保持开放。
+- `c113a2f..b30e024` 落地最终 writer/HTTP/coordinator/synthetic owner/UI/边界；
+  `312ba08..c50499f` 的 R1 又实质修复持续 admission/live drift、receipt-only rotation、
+  reset/reconcile 屏障、sealed owner、raw NUL、late-page active 投影，并恢复真实包装物化门；
+- Codex 已独立验证 `c50499f`：workspace、frontend、architecture、两个 diff-check 全绿；真实 12 文件
+  Windows archive 在普通重启后首个页面 attach 并成功物化，Full Reset 删除 1+1，再重启为空；
+- 失效复验调用 `disarm()` 后无条件清 `armed`：owner stop fault 时会丢唯一 activeWatchId，
+  `pendingDisarm` 虽存在却再也无法重试或响应用户 STOP；
+- Full Reset 的最终 live-set teardown 错误只记日志，仍清 materialization、降低屏障并成功返回；
+  fault 路径可留下 authority 已空、owner 仍活且 GET 无法列出的 watch；
+- terminal refusal outcome 与 `describe/restamp` 不在同一 authority snapshot；另一 caller 在其间 rotation
+  时可返回新 generation + 旧 currentRevision；
+- 前端统一队列会在操作真正运行时读取最新 snapshot，静默把同 section 后续手势 rebase 到用户没看过的
+  revision；STOP 等待期间的 policy 手势可把刚停止的 watch 重新 START；
+- `WATCH_STOPPED`/CLOSED/ERROR 不立即失效旧 authority green；GET 延迟时仍可无限显示监控中。
+  反过来，GET 失败又会把未在 selection 中的 saved desired row 整体从管理 UI 擦掉；
+- `SectionSelectionAction` 把任何非空 desired policy 都标成“监控中”，没有使用已经算出的五态；
+- mutation codec 仍缺顶层精确键与 outcome-specific/cross-field 一致性；rotation 并发负控依赖固定 sleep；
+  Windows verifier 未比较 FINITE duration seconds；
+- `M0-M1-001-R2` 关闭前，S2-D3、M1 和迁移发布门保持开放。
 
 ### P1/S2
 
@@ -404,8 +403,8 @@ Codex orchestration 文档：正在记录 CHANGES_REQUIRED 与 R1 修复任务
 
 ## 16. 当前拟定的下一里程碑
 
-状态：**`M0-M1-001` 已交付但 Codex 判定 `CHANGES_REQUIRED`；集中修复任务
-`M0-M1-001-R1` 已生成，等待用户转发给 Claude。**
+状态：**`M0-M1-001-R1` 已交付但 Codex 判定 `CHANGES_REQUIRED`；最终完整性收口任务
+`M0-M1-001-R2` 已生成，等待用户转发给 Claude。**
 
 当前里程碑不扩展范围：**先把 reduced S2/L1 纵向闭环修到可信、可打包验收。**
 
@@ -418,15 +417,15 @@ Codex orchestration 文档：正在记录 CHANGES_REQUIRED 与 R1 修复任务
 - 多页面共享状态但不实时推送；
 - Full Reset 后再次重启仍为空。
 
-R1 必须包含：
+R2 必须包含：
 
-1. 修复 owner 持续 admission、live-set drift 与假绿；
-2. 修复 refusal receipt rotation、并发双 rotation 与响应自相矛盾；
-3. 修复 Full Reset/reconcile orphan watch 竞态及 sealed owner 复活；
-4. 统一前端 GET/PUT 响应顺序，owner 状态改变后刷新，所有 selection removal fail closed；
-5. 修复 raw NUL、严格 mutation codec 和 late-page active/action 投影；
-6. 用 deterministic published + Gate-pass fixture 让真实 Windows 候选在重启后附页并完成物化；
-7. 让全量 diff-check、workspace/frontend/architecture 和真实 packaging E2E 全绿；
+1. teardown fault 时保留 activeWatchId，并让失效复验与用户 STOP 都能完成精确重试；
+2. Full Reset 最终 owner 未空时不得成功、清记录或吞错；
+3. terminal refusal 与并发 rotation 的 response 由一个 authority snapshot 盖章；
+4. 前端队列捕获手势时 snapshot，不静默 rebase；物理反证立即撤绿；
+5. FAILED/LOADING 保留 saved desired 管理 identity，但不信任旧 green/revision；搜索入口使用真实五态；
+6. 补齐 strict codec、确定性并发 rendezvous 和完整 archive policy 比较；
+7. 从 final head 重新构建一次候选并集中跑全量门；
 8. 保持公网 desired 零表面，不发布中间构建。
 
 建议不包含：
@@ -458,7 +457,7 @@ M7：S3-PR0 数据分析 → 参数冻结 → 调度器实现
 M8：最终 Windows/Linux 候选、打包、soak、发布
 ```
 
-是否把 M0 与 M1 放进同一个 Claude 任务包，由用户在正式开始前确认。
+M0 与 M1 已按用户批准合并执行；当前只做 M1 的 R2 收口，不进入 M2。
 
 ## 18. 不得复活的旧工作模式
 
@@ -474,6 +473,17 @@ M8：最终 Windows/Linux 候选、打包、soak、发布
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-08-24 — M0-M1-001-R1 独立验收
+
+- Claude 在 `107f3e5..c50499f` 完成 R1；
+- Codex 独立复跑 workspace/frontend/architecture/diff-check，并复验真实 Windows archive：
+  12 文件、两次重启、desired 成功 attach/materialize、reset 后为空；
+- 完成 16/16 authoritative changed files 的安全差异扫描
+  `14918661-76ef-4f40-847b-2f8addc08ec7`，传统可报告 finding 为 0；
+- 通过未覆盖组合反例发现 teardown identity、reset fault、terminal restamp、前端 gesture snapshot、
+  immediate fail-closed、saved-row identity、五态标签与验收门判别力残余；
+- R1 结论为 `CHANGES_REQUIRED`，生成一次性 `M0-M1-001-R2`，不扩展到 M2。
 
 ### 2026-08-24 — M0-M1-001 独立验收
 
@@ -499,18 +509,19 @@ M8：最终 Windows/Linux 候选、打包、soak、发布
 作出验收结论或批准进入下一里程碑时都必须更新。
 
 ```text
-Active task id: M0-M1-001
+Active task id: M0-M1-001-R2
 Milestone: M0 S1 窄修与合同同步 + M1 reduced S2/L1 本地 desired 纵向闭环
 Claude prompt issued: YES — 由用户复制转发
-Prompt/version: M0-M1-001/v1
-Expected base: feat/s2-alert-delivery@a4f8d22
-Claude reported head: 107f3e5
-Codex review range: a4f8d22..107f3e5
+Prompt/version: M0-M1-001-R2/v1
+Expected base: feat/s2-alert-delivery@c50499f
+Claude reported head: pending
+Codex review range: pending (expected c50499f..<head>; full a4f8d22..<head>)
 Codex verdict: CHANGES_REQUIRED
-Blocking findings: owner 失效假绿；receipt rotation 永久锁死；reset orphan；前端旧响应/状态刷新/selection orphan；packaging 未证明重启物化
-Repair task: M0-M1-001-R1/v1
-Repair expected base: feat/s2-alert-delivery@107f3e5
-Next authorized action: 用户将 docs/orchestration/tasks/M0-M1-001-R1.md 中的 Claude Prompt 原样转发给 Claude
+Blocking findings: teardown fault 丢 id；reset fault 吞错；terminal response 跨代；gesture rebase；物理反证后假绿；FAILED saved-row 消失；五态/codec/验收门残余
+Prior repair: M0-M1-001-R1/v1 at c50499f — CHANGES_REQUIRED
+Repair task: M0-M1-001-R2/v1
+Repair expected base: feat/s2-alert-delivery@c50499f
+Next authorized action: 用户将 docs/orchestration/tasks/M0-M1-001-R2.md 中的 Claude Prompt 原样转发给 Claude
 ```
 
 验收结论只允许使用：
