@@ -803,12 +803,13 @@ Codex 对 `a4f8d22..107f3e5` 的独立验收结论是 `CHANGES_REQUIRED`。方�
 | A3 | arm 成功后 Catalog 撤下/term 滚出/campus 离开产品，物理 watch 与 GET 仍绿 | `desired_watch.rs::a_section_that_leaves_the_catalog_after_arming_is_taken_down_and_reported`、`::a_target_that_stops_being_watchable_after_arming_is_taken_down_and_reported`、`watch_socket.rs::the_maintenance_sweep_stops_an_owner_held_watch_that_leaves_the_term_window` |
 | A3 | watch 在 coordinator 背后结束（或同 section 换了新 id）仍报 materialized | `desired_watch.rs::a_watch_that_ended_underneath_the_coordinator_is_never_reported_as_running`、`watch_socket.rs::owner_watch_targets_report_the_identity_of_each_running_watch` |
 | A3 | 暂态撤销后不能自愈；健康 watch 被复核重启 | `::a_transient_revocation_clears_the_green_light_and_recovers_by_itself`、`::repeated_maintenance_never_restarts_a_healthy_watch` |
-| A4 | 只增长 receipt 的终局拒绝不触发 rotation，账本可填满后永久 503 | `::terminal_refusal_receipts_alone_rotate_the_authority_exactly_once`、`::a_restart_at_the_receipt_hard_cap_recovers_and_the_stop_finally_commits` |
+| A4 | 只增长 receipt 的终局拒绝不触发 rotation，账本可填满后永久 503 | `::terminal_refusal_receipts_alone_rotate_the_authority_exactly_once`、`::a_restart_at_the_receipt_hard_cap_recovers_on_maintenance_alone`、`::a_full_ledger_refuses_the_stop_and_the_next_attempt_commits` |
 | A4 | check/act 不在同一排他域，一次跨阈两次 rotation | `::concurrent_callers_crossing_one_threshold_rotate_once` |
 | A4 | 触发 rotation 的响应同时携带新旧两套 generation/revision | `::a_response_that_triggered_a_rotation_reports_one_authority_state` |
 | A4 | 重放的终局拒绝必须仍是拒绝 | `::a_replayed_terminal_refusal_is_still_the_refusal_it_was` |
 | A5 | reset 在 SQLite 上等待时 attach/reconcile 可留下 orphan watch | `local_runtime.rs::a_full_reset_blocked_in_sqlite_leaves_no_orphan_watch`、`desired_watch.rs::the_reset_barrier_stops_every_physical_watch_including_one_it_never_armed` |
 | A5 | `seal_and_stop` 之后 synthetic owner 可被重建；普通 reset 必须仍可用 | `watch_socket.rs::a_sealed_socket_refuses_to_rebuild_the_owner_but_an_ordinary_stop_does_not` |
+| A5 | reset 事务失败时屏障不落下，剩下的运行时间里再也不物化 | `local_runtime.rs::a_reset_that_cannot_commit_lowers_its_barrier_and_materializes_again` |
 | A6 | 旧 GET / 旧 PUT 覆盖新 tombstone | `local-desired-watch-integrity.test.tsx::never lets an older read put back intent a newer write removed`、`::never lets an older write put back a section a newer write removed` |
 | A6 | 后台 retry 武装成功或 watch 意外停止后投影不刷新 | `::re-reads through the same domain when a retry finally arms the watch`、`::stops showing a watch as running after an unexpected stop` |
 | A7 | 晚加入页面把仍 desired/运行的 section 移出唯一管理列表 | `::counts, describes and can act on a watch it never saw start`、`::fails closed while the authority is unreadable` |
