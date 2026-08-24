@@ -883,12 +883,41 @@ function closureFrom(entry, adjacency) {
   return visited;
 }
 
+const NUL_CODE_POINT = String.fromCharCode(0);
+
+/**
+ * Refuses a NUL byte anywhere in an active source file.
+ *
+ * The runtime does not care -- `'\u0000'` and a literal NUL are the same
+ * string -- but every TOOL does. Git classifies a file containing one as
+ * binary, which removes it from diffs, from `grep`, and from every security
+ * inventory that walks text sources; the file keeps compiling and shipping
+ * while nobody can read what changed in it. It has happened once here, to the
+ * module that decides what counts as the same Section, so it is a build
+ * failure rather than a convention.
+ */
+export function validateSourceTextEncoding(files) {
+  const errors = [];
+  for (const [filePath, sourceText] of [...files.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    if (typeof sourceText !== 'string') continue;
+    const index = sourceText.indexOf(NUL_CODE_POINT);
+    if (index >= 0) {
+      errors.push(
+        `${toPosixPath(filePath)}: active sources must not contain a raw NUL byte ` +
+          `(offset ${index}); write it as an escape`,
+      );
+    }
+  }
+  return errors;
+}
+
 export function analyzeImportGraph({ files, publicSourceDeny, allowedExternalPackages }) {
   const normalizedFiles = new Map(
     [...files.entries()].map(([filePath, sourceText]) => [toPosixPath(filePath), sourceText]),
   );
   const allowedExternals = new Set(allowedExternalPackages ?? []);
   const errors = validateDenyInput(publicSourceDeny);
+  errors.push(...validateSourceTextEncoding(normalizedFiles));
   const factsByFile = new Map();
   const adjacency = new Map();
   const edges = [];

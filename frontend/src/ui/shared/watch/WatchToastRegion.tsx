@@ -19,10 +19,13 @@ function noticeText(
     ? i18n.t('watch.term_out_of_range_detail')
     : notice.detail === 'UNSUPPORTED_TARGET'
       ? i18n.t('watch.unsupported_target_detail')
-      : notice.detail;
+      : notice.code === 'SELECTION_BLOCKED'
+        ? i18n.t('watch.intent.remove_blocked')
+        : notice.detail;
   const suffix = [section, detail].filter((value) => value !== null && value !== undefined).join(' · ');
   const title = {
     SELECTION_LIMIT: i18n.t('watch.toast.selection_limit'),
+    SELECTION_BLOCKED: i18n.t('watch.toast.selection_blocked'),
     TERM_OUT_OF_RANGE: i18n.t('watch.toast.term_out_of_range'),
     START_REJECTED: i18n.t('watch.toast.start_rejected'),
     COMMAND_FAILED: i18n.t('watch.toast.command_failed'),

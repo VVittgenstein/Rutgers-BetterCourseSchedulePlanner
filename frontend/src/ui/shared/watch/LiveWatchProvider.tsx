@@ -53,7 +53,16 @@ export const DEFAULT_WATCH_POLICY: WatchPolicyV1 = {
 export interface ActiveWatchView {
   readonly activeWatchId: ActiveWatchId;
   readonly sectionKey: SectionKey;
-  readonly startedAt: string;
+  /**
+   * `null` when this view was derived from the server's standing intent
+   * rather than from the START frame that created the watch.
+   *
+   * A page that joins after a watch has started never receives that frame,
+   * and the authority read does not carry a start time -- so the honest
+   * answer is "this is running and here is how to address it", not a
+   * timestamp invented to fill the field.
+   */
+  readonly startedAt: string | null;
   readonly policy: WatchPolicyV1;
 }
 
@@ -89,7 +98,9 @@ export type WatchNoticeCode =
   | 'AUDIO_FAILED'
   | 'AUDIO_CAP_REACHED'
   | 'AUDIO_CUE_QUEUED'
-  | 'WATCH_ALERT_OPEN';
+  | 'WATCH_ALERT_OPEN'
+  /** A selection could not be removed, because doing so would hide a watch. */
+  | 'SELECTION_BLOCKED';
 
 export interface WatchNotice {
   readonly id: number;
@@ -144,6 +155,16 @@ export interface LiveWatchValue {
   refreshIntent(): Promise<void>;
   isSelected(sectionKey: SectionKey): boolean;
   isActive(sectionKey: SectionKey): boolean;
+  /**
+   * Whether this section may be taken off the managed list right now.
+   *
+   * `false` while the server still wants it, while its teardown is still
+   * running, and -- fail closed -- whenever the standing intent could not be
+   * read at all. This list is the only place a watch can be stopped from, so
+   * removing a row from it while something is still watching leaves a watch
+   * that keeps polling and keeps ringing with nothing left to press.
+   */
+  isRemovable(sectionKey: SectionKey): boolean;
   isWatchable(sectionKey: SectionKey): boolean;
   updateWatchableTerms(terms: readonly string[]): void;
   select(sectionKey: SectionKey): void;
@@ -347,6 +368,27 @@ export function LiveWatchProvider({
   );
   const [watchableTerms, setWatchableTerms] = useState<ReadonlySet<string> | null>(() =>
     initialWatchableTerms === undefined ? null : new Set(initialWatchableTerms));
+  /**
+   * What is running, as the SERVER reports it.
+   *
+   * With durable intent this replaces the list built from START frames,
+   * because that list is only ever as complete as this page's own history: a
+   * page that joins after the watches were armed receives no START frame and
+   * would show zero active watches -- an active count of 0, a connection line
+   * that says nothing is being watched, no audio warning when sound is
+   * blocked, and no way to reach the controls for an episode it can see. The
+   * authority read is the same answer for every page, whenever it arrived.
+   */
+  const intentActive = useMemo<readonly ActiveWatchView[]>(() => {
+    if (intent === undefined || intentSnapshot === null) return [];
+    return intentSnapshot.entries.flatMap((entry) => entry.running === null ? [] : [{
+      activeWatchId: entry.running.activeWatchId,
+      sectionKey: entry.section,
+      startedAt: null,
+      policy: entry.running.policy,
+    }]);
+  }, [intent, intentSnapshot]);
+  const effectiveActive = intent === undefined ? active : intentActive;
   const selectedRef = useRef(selected);
   const activeRef = useRef(active);
   const pendingRef = useRef(pending);
@@ -370,12 +412,26 @@ export function LiveWatchProvider({
   const startingRef = useRef(false);
   const watchableTermsRef = useRef(watchableTerms);
   const intentSnapshotRef = useRef(intentSnapshot);
-  const intentAttempt = useRef(0);
+  const intentStatusRef = useRef(intentStatus);
   const intentConnection = useRef<WatchConnectionState | null>(null);
+  // ONE ordered domain for every authority answer.
+  //
+  // A GET issued before a STOP can return after it. Applied as it arrived,
+  // its full snapshot puts the section back to WATCHING -- the page shows a
+  // green light for intent the user has already cancelled, and the tombstone
+  // that proves they cancelled it is the thing that got overwritten. Two
+  // writes to different sections have the same problem in the other
+  // direction. So authority operations run one at a time, in the order they
+  // were asked for, and an answer from an earlier operation can never be
+  // applied over a later one's.
+  const authorityQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const authorityIssued = useRef(0);
+  const authorityApplied = useRef(0);
 
   useEffect(() => { intentSnapshotRef.current = intentSnapshot; }, [intentSnapshot]);
+  useEffect(() => { intentStatusRef.current = intentStatus; }, [intentStatus]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
-  useEffect(() => { activeRef.current = active; }, [active]);
+  useEffect(() => { activeRef.current = effectiveActive; }, [effectiveActive]);
   useEffect(() => { pendingRef.current = pending; }, [pending]);
   useEffect(() => { audioStateRef.current = audioState; }, [audioState]);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
@@ -449,6 +505,41 @@ export function LiveWatchProvider({
   }, [updateTelemetryResource]);
 
   /**
+   * Runs one authority operation in the single ordered domain.
+   *
+   * Serial rather than merely stamped: the revision a submission compares
+   * against is read when the operation RUNS, so a gesture queued behind
+   * another one is compared against the state that one produced instead of
+   * against the state the page happened to be showing when it was clicked.
+   */
+  const runAuthority = useCallback(<T,>(
+    operation: (sequence: number) => Promise<T>,
+  ): Promise<T> => {
+    authorityIssued.current += 1;
+    const sequence = authorityIssued.current;
+    const run = authorityQueue.current.then(
+      () => operation(sequence),
+      () => operation(sequence),
+    );
+    authorityQueue.current = run.then(() => undefined, () => undefined);
+    return run;
+  }, []);
+
+  /** Applies one authority answer, unless a later one has already landed. */
+  const applyAuthority = useCallback((
+    sequence: number,
+    snapshot: WatchIntentSnapshot | null,
+    status: WatchIntentStatus,
+  ) => {
+    if (sequence < authorityApplied.current) return;
+    authorityApplied.current = sequence;
+    intentSnapshotRef.current = snapshot;
+    intentStatusRef.current = status;
+    setIntentSnapshot(snapshot);
+    setIntentStatus(status);
+  }, []);
+
+  /**
    * Re-reads the server's intent.
    *
    * A failure clears the snapshot rather than keeping the last good one. The
@@ -458,23 +549,16 @@ export function LiveWatchProvider({
    */
   const refreshIntent = useCallback(async () => {
     if (intent === undefined) return;
-    const attempt = intentAttempt.current + 1;
-    intentAttempt.current = attempt;
     setIntentStatus((current) => (current === 'READY' ? current : 'LOADING'));
-    try {
-      const snapshot = await intent.read();
-      if (intentAttempt.current !== attempt) return;
-      intentSnapshotRef.current = snapshot;
-      setIntentSnapshot(snapshot);
-      setIntentStatus('READY');
-    } catch {
-      if (intentAttempt.current !== attempt) return;
-      intentSnapshotRef.current = null;
-      setIntentSnapshot(null);
-      setIntentStatus('FAILED');
-      addNotice('COMMAND_FAILED', 'ALERT');
-    }
-  }, [addNotice, intent]);
+    await runAuthority(async (sequence) => {
+      try {
+        applyAuthority(sequence, await intent.read(), 'READY');
+      } catch {
+        applyAuthority(sequence, null, 'FAILED');
+        addNotice('COMMAND_FAILED', 'ALERT');
+      }
+    });
+  }, [addNotice, applyAuthority, intent, runAuthority]);
 
   /**
    * Submits one intent change against the snapshot the page is showing.
@@ -489,36 +573,35 @@ export function LiveWatchProvider({
     policy: WatchPolicyV1 | null,
   ): Promise<boolean> => {
     if (intent === undefined) return false;
-    const snapshot = intentSnapshotRef.current;
-    if (snapshot === null) {
-      await refreshIntent();
-      return false;
-    }
-    try {
-      const result = await intent.submit({ section, policy }, snapshot);
-      if (result.snapshot !== null) {
-        intentSnapshotRef.current = result.snapshot;
-        setIntentSnapshot(result.snapshot);
-        setIntentStatus('READY');
+    const settled = await runAuthority(async (sequence) => {
+      const snapshot = intentSnapshotRef.current;
+      if (snapshot === null) return 'REREAD' as const;
+      try {
+        const result = await intent.submit({ section, policy }, snapshot);
+        if (result.snapshot !== null) applyAuthority(sequence, result.snapshot, 'READY');
+        if (result.outcome === 'COMMITTED') return 'COMMITTED' as const;
+        addNotice(
+          result.outcome === 'AT_CAPACITY'
+            ? 'SELECTION_LIMIT'
+            : result.outcome === 'CONFLICT'
+              ? 'START_REJECTED'
+              : 'COMMAND_FAILED',
+          'ALERT',
+          section,
+        );
+        return result.snapshot === null ? 'REREAD' as const : 'REFUSED' as const;
+      } catch {
+        addNotice('COMMAND_FAILED', 'ALERT', section);
+        return 'REREAD' as const;
       }
-      if (result.outcome === 'COMMITTED') return true;
-      addNotice(
-        result.outcome === 'AT_CAPACITY'
-          ? 'SELECTION_LIMIT'
-          : result.outcome === 'CONFLICT'
-            ? 'START_REJECTED'
-            : 'COMMAND_FAILED',
-        'ALERT',
-        section,
-      );
-      if (result.snapshot === null) await refreshIntent();
-      return false;
-    } catch {
-      addNotice('COMMAND_FAILED', 'ALERT', section);
-      await refreshIntent();
-      return false;
-    }
-  }, [addNotice, intent, refreshIntent]);
+    });
+    // The re-read is its own operation in the same domain, so it can never
+    // land before the answer that asked for it -- and it is never the user's
+    // gesture sent again. The revision they held is stale precisely because
+    // the state changed.
+    if (settled === 'REREAD') await refreshIntent();
+    return settled === 'COMMITTED';
+  }, [addNotice, applyAuthority, intent, refreshIntent, runAuthority]);
 
   const send = useCallback((command: WatchClientCommandV1): boolean => {
     try {
@@ -660,6 +743,12 @@ export function LiveWatchProvider({
         }
         pendingPolicies.current.delete(identity);
       }
+      // The server just changed what is RUNNING. With durable intent that is
+      // a fact about the authority projection, not about this frame: a
+      // section that was preparing is now watching, and only the ordered read
+      // can say so. Without it a restored section stays "preparing" forever
+      // while a watch runs behind it.
+      if (intent !== undefined) void refreshIntent();
       return;
     }
     if (event.type === 'WATCH_STOPPED') {
@@ -670,6 +759,10 @@ export function LiveWatchProvider({
       setEpisodes((current) => current.filter((episode) => episode.activeWatchId !== event.stopped.activeWatchId));
       setAlerts((current) => current.filter((alert) => alert.episode.activeWatchId !== event.stopped.activeWatchId));
       addNotice('WATCH_STOPPED', 'STATUS', event.stopped.sectionKey, event.stopped.reason);
+      // A watch ending unexpectedly -- a term rollover, a forced stop -- is
+      // exactly the case where a page left holding the old projection would
+      // keep showing a green light for it.
+      if (intent !== undefined) void refreshIntent();
       return;
     }
     if (event.type === 'OPEN_OBSERVATION') {
@@ -772,7 +865,7 @@ export function LiveWatchProvider({
         audioController.stopContinuous();
       }
     }
-  }, [addNotice, audioController, loadBatchStatus, send, startContinuousAudio]);
+  }, [addNotice, audioController, intent, loadBatchStatus, refreshIntent, send, startContinuousAudio]);
 
   useEffect(() => {
     const unsubscribeEvents = runtime.watch.subscribe(handleServerEvent);
@@ -863,6 +956,27 @@ export function LiveWatchProvider({
     };
   }, [audioController]);
 
+  /**
+   * Whether a section may be taken off the managed list.
+   *
+   * Fail closed on every uncertainty. With durable intent the server's rows
+   * are the answer -- not this page's `active` list, which is empty on a page
+   * that joined after the watches were armed -- and if those rows could not
+   * be read at all, the honest answer is "not now" rather than a guess that
+   * hides a running watch behind an empty list.
+   */
+  const isRemovable = useCallback((sectionKey: SectionKey): boolean => {
+    if (intent === undefined) {
+      return !activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey));
+    }
+    if (intentStatusRef.current !== 'READY') return false;
+    const entry = findIntentEntry(intentSnapshotRef.current, sectionKey);
+    if (entry === null) return true;
+    // A tombstone whose teardown is still running, or that still names a live
+    // watch, is not finished stopping.
+    return entry.policy === null && !entry.stopping && entry.running === null;
+  }, [intent]);
+
   const select = useCallback((sectionKey: SectionKey) => {
     if (watchableTermsRef.current?.has(sectionKey.term) === false) {
       addNotice('TERM_OUT_OF_RANGE', 'ALERT', sectionKey);
@@ -886,7 +1000,17 @@ export function LiveWatchProvider({
   }, []);
 
   const remove = useCallback((sectionKey: SectionKey) => {
-    if (activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey))) return;
+    // With durable intent this list is the ONLY place a watch can be stopped
+    // from, and the server's rows -- not this page's view of what is running
+    // -- decide whether removing a row would hide one. A page that joined
+    // late has never seen a START frame, so its `active` list is empty while
+    // the process is watching nine sections.
+    if (intent !== undefined && !isRemovable(sectionKey)) {
+      addNotice('SELECTION_BLOCKED', 'ALERT', sectionKey);
+      return;
+    }
+    if (intent === undefined
+      && activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey))) return;
     const next = selectedRef.current.filter((value) => !sameSection(value, sectionKey));
     selectedRef.current = next;
     telemetryEpoch.current += 1;
@@ -895,7 +1019,7 @@ export function LiveWatchProvider({
     telemetryAbort.current?.abort();
     setSelected(next);
     onSelectedChange?.(next);
-  }, [onSelectedChange]);
+  }, [addNotice, intent, isRemovable, onSelectedChange]);
 
   const enableSound = useCallback(async () => {
     audioStateRef.current = 'UNLOCKING';
@@ -1282,7 +1406,7 @@ export function LiveWatchProvider({
   const value = useMemo<LiveWatchValue>(() => ({
     selected,
     pending,
-    active,
+    active: effectiveActive,
     observations,
     episodes,
     alerts,
@@ -1307,7 +1431,9 @@ export function LiveWatchProvider({
     setSectionIntent: submitIntent,
     refreshIntent,
     isSelected: (sectionKey) => selected.some((value) => sameSection(value, sectionKey)),
-    isActive: (sectionKey) => active.some((watch) => sameSection(watch.sectionKey, sectionKey)),
+    isActive: (sectionKey) =>
+      effectiveActive.some((watch) => sameSection(watch.sectionKey, sectionKey)),
+    isRemovable,
     isWatchable: (sectionKey) => watchableTerms?.has(sectionKey.term) !== false,
     updateWatchableTerms,
     select,
@@ -1331,7 +1457,8 @@ export function LiveWatchProvider({
   }), [
     acknowledge,
     acknowledgeAll,
-    active,
+    effectiveActive,
+    isRemovable,
     alerts,
     audioState,
     batchStatuses,

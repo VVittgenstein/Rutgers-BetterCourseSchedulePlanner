@@ -119,15 +119,7 @@ export class LocalDesiredWatchApi implements WatchIntentPort {
     // deferred -- carries this body, whatever status it earned. A body
     // without it is a protocol or transport failure (a malformed request, a
     // missing session), and those are not answers about the user's intent.
-    if (!isOutcomeBody(body)) throw new LocalDesiredWatchError(response.status);
-    const data = body.data;
-    return {
-      outcome: mapOutcome(String(data.outcome)),
-      snapshot: data.state === undefined || data.state === null
-        ? null
-        : parseSnapshotData(data.state),
-      maximum: typeof data.maximum === 'number' ? data.maximum : null,
-    };
+    return parseMutationResult(body, response.status);
   }
 }
 
@@ -137,19 +129,99 @@ export function createLocalDesiredWatchApi(
   return new LocalDesiredWatchApi(options);
 }
 
-function mapOutcome(outcome: string): WatchIntentResult['outcome'] {
-  switch (outcome) {
-    case 'COMMITTED':
-      return 'COMMITTED';
-    case 'LIMIT_EXCEEDED':
-      return 'AT_CAPACITY';
-    case 'AUTHORITY_FULL':
-      return 'UNAVAILABLE';
-    // STALE_GENERATION, STALE_REVISION and MUTATION_ID_CONFLICT all mean the
-    // same thing to a page: what you read is not what is there.
-    default:
-      return 'CONFLICT';
+/**
+ * The complete set of answers the authority can give, and the status each one
+ * is allowed to arrive with.
+ *
+ * Both halves are load-bearing. An unknown outcome string must not fall
+ * through to some default -- a future refusal read as `CONFLICT` would tell
+ * the page to re-read when the truth might be that nothing happened -- and a
+ * known outcome carrying the wrong status is not this authority answering.
+ * Reading `COMMITTED` off a 500 from a proxy, or `AUTHORITY_FULL` off a 200,
+ * would let the page report a state the server never reached.
+ */
+const OUTCOMES: Readonly<Record<string, {
+  readonly outcome: WatchIntentResult['outcome'];
+  readonly status: number;
+}>> = {
+  COMMITTED: { outcome: 'COMMITTED', status: 200 },
+  STALE_GENERATION: { outcome: 'CONFLICT', status: 409 },
+  STALE_REVISION: { outcome: 'CONFLICT', status: 409 },
+  MUTATION_ID_CONFLICT: { outcome: 'CONFLICT', status: 409 },
+  LIMIT_EXCEEDED: { outcome: 'AT_CAPACITY', status: 409 },
+  AUTHORITY_FULL: { outcome: 'UNAVAILABLE', status: 503 },
+};
+
+const MUTATION_RESULT_KEYS = [
+  'contractVersion',
+  'outcome',
+  'replayed',
+  'authorityGeneration',
+  'currentRevision',
+  'maximum',
+  'committed',
+  'state',
+] as const;
+
+const COMMITTED_KEYS = ['revision', 'materializationEpoch', 'epochChanged'] as const;
+
+/**
+ * Strict, exhaustive parsing of one mutation answer.
+ *
+ * The write path decodes as strictly as the read path, for the same reason:
+ * this body is the only evidence the page has that its own gesture took
+ * effect. A loose decode that accepted a missing `state` on a `COMMITTED`
+ * answer, or a negative `maximum`, would let the page render a state nothing
+ * on the server ever held.
+ */
+function parseMutationResult(value: unknown, status: number): WatchIntentResult {
+  if (
+    !isRecord(value)
+    || value.protocolVersion !== 1
+    || !isRecord(value.data)
+    || !hasExactKeys(value.data, MUTATION_RESULT_KEYS)
+  ) {
+    throw new LocalDesiredWatchError(status);
   }
+  const data = value.data;
+  const known = typeof data.outcome === 'string' ? OUTCOMES[data.outcome] : undefined;
+  if (
+    known === undefined
+    || known.status !== status
+    || data.contractVersion !== LOCAL_DESIRED_WATCH_CONTRACT_VERSION
+    || typeof data.replayed !== 'boolean'
+    || !isSafeCount(data.authorityGeneration)
+    || !(data.currentRevision === null || isSafeCount(data.currentRevision))
+    || !(data.maximum === null || isSafeCount(data.maximum))
+  ) {
+    throw new LocalDesiredWatchError(status);
+  }
+  if (known.outcome === 'COMMITTED') {
+    // A commit that does not say what it wrote, or does not carry the state
+    // it produced, is not a commit this page can act on.
+    if (
+      !isRecord(data.committed)
+      || !hasExactKeys(data.committed, COMMITTED_KEYS)
+      || !isSafeCount(data.committed.revision)
+      || !isSafeCount(data.committed.materializationEpoch)
+      || typeof data.committed.epochChanged !== 'boolean'
+      || data.state === null
+      || data.state === undefined
+    ) {
+      throw new LocalDesiredWatchError(status);
+    }
+    return {
+      outcome: 'COMMITTED',
+      snapshot: parseSnapshotData(data.state),
+      maximum: data.maximum,
+    };
+  }
+  // A refusal carries no state: the page has to re-read, because what it held
+  // is not what is there.
+  if (data.committed !== null || data.state !== null) {
+    throw new LocalDesiredWatchError(status);
+  }
+  return { outcome: known.outcome, snapshot: null, maximum: data.maximum };
 }
 
 async function decodeJson(response: Response): Promise<unknown> {
@@ -162,14 +234,6 @@ async function decodeJson(response: Response): Promise<unknown> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isOutcomeBody(value: unknown): value is { readonly data: Record<string, unknown> } {
-  return isRecord(value)
-    && value.protocolVersion === 1
-    && isRecord(value.data)
-    && value.data.contractVersion === LOCAL_DESIRED_WATCH_CONTRACT_VERSION
-    && typeof value.data.outcome === 'string';
 }
 
 function sameSection(left: SectionKey, right: SectionKey): boolean {
@@ -261,6 +325,11 @@ function parseRunning(value: unknown): WatchIntentRunning {
     revision: value.revision,
     epoch: value.materializationEpoch,
     policy: parsePolicy(value.policy),
+    // Kept, not discarded. Every episode control the page can offer -- stop,
+    // acknowledge, reset the audible count -- is addressed by this id, and a
+    // page that joined after the watch started never receives the frame that
+    // would otherwise have carried it.
+    activeWatchId: value.activeWatchId,
   };
 }
 

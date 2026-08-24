@@ -313,13 +313,29 @@ function SelectedSectionManager({
   // stored rows, not about this page's connection. A section already wanted
   // is not offered again; a section whose intent could not be read is not
   // offered either, because offering it would mean guessing.
+  const intentEnabled = watch.intentStatus !== 'DISABLED';
   const intentReady = watch.intentStatus === 'READY' && watch.intent !== null;
   const intentUnavailable = watch.intentStatus === 'FAILED';
-  const wantedCount = watch.intentStatus === 'DISABLED'
-    ? 0
-    : watch.selected.filter((sectionKey) =>
-      findIntentEntry(watch.intent, sectionKey)?.policy != null).length;
-  const inactiveCount = watch.intentStatus === 'DISABLED'
+  // Every section the user can act on, which is NOT the same as the sections
+  // they have selected. Standing intent outlives a selection -- a Full Reset
+  // of the browsing state, an older build, a row edited from another tab --
+  // and a watch that exists but appears in no list is a watch that keeps
+  // ringing with nothing to press. So the desk shows the union.
+  const managed = useMemo(() => {
+    const rows = watch.selected.map((sectionKey) => ({ sectionKey, saved: false }));
+    if (!intentReady) return rows;
+    const known = new Set(watch.selected.map(sectionLabel));
+    for (const entry of watch.intent?.entries ?? []) {
+      if (known.has(sectionLabel(entry.section))) continue;
+      const live = entry.policy !== null || entry.stopping || entry.running !== null;
+      if (live) rows.push({ sectionKey: entry.section, saved: true });
+    }
+    return rows;
+  }, [intentReady, watch.intent, watch.selected]);
+  const wantedCount = intentEnabled
+    ? managed.filter((row) => findIntentEntry(watch.intent, row.sectionKey)?.policy != null).length
+    : 0;
+  const inactiveCount = !intentEnabled
     ? watch.selected.filter((sectionKey) =>
       !watch.isActive(sectionKey) && watch.isWatchable(sectionKey)).length
     : intentReady
@@ -345,11 +361,11 @@ function SelectedSectionManager({
           {i18n.t('watch.intent.unavailable_detail')}
         </p>
       ) : null}
-      {watch.selected.length === 0 ? (
+      {managed.length === 0 ? (
         <p className="watch-workspace__empty">{i18n.t('watch.selected_empty')}</p>
       ) : (
         <ul className="watch-workspace__list">
-          {watch.selected.map((sectionKey) => {
+          {managed.map(({ sectionKey, saved }) => {
             const active = watch.active.find((value) => sectionLabel(value.sectionKey) === sectionLabel(sectionKey));
             const pending = watch.pending.some((value) => sectionLabel(value) === sectionLabel(sectionKey));
             const observation = watch.observations.find((value) => sectionLabel(value.sectionKey) === sectionLabel(sectionKey));
@@ -359,9 +375,7 @@ function SelectedSectionManager({
             // server's stamp matching what the user asked for, and if that
             // could not be read there is no green at all -- the previous
             // read's answer would look identical and mean nothing.
-            const intentState = watch.intentStatus === 'DISABLED'
-              ? null
-              : watch.intentStateFor(sectionKey);
+            const intentState = !intentEnabled ? null : watch.intentStateFor(sectionKey);
             const badgeState = intentState === null
               ? (active === undefined ? (watchable ? 'SELECTED' : 'OUT_OF_RANGE') : 'READY')
               : intentState === 'WATCHING'
@@ -380,6 +394,11 @@ function SelectedSectionManager({
                       : i18n.t('watch.state.watching');
             const wanted = entry?.policy != null;
             const shownPolicy = entry?.policy ?? active?.policy;
+            // Fail closed. Removing a row while the server still wants the
+            // section -- or while we could not read whether it does -- takes
+            // the only STOP control the user has off the screen and leaves the
+            // watch running behind it.
+            const removable = watch.isRemovable(sectionKey);
             return (
               <li className="watch-workspace__item" key={sectionLabel(sectionKey)}>
                 <div>
@@ -391,6 +410,11 @@ function SelectedSectionManager({
                     >
                       {badgeLabel}
                     </span>
+                    {saved ? (
+                      <span className="watch-workspace__badge" data-state="SAVED">
+                        {i18n.t('watch.intent.unmanaged')}
+                      </span>
+                    ) : null}
                     {observation === undefined ? null : (
                       <span className="watch-workspace__badge" data-state={observation.state}>
                         {i18n.t(openStateMessageKeys[observation.state])}
@@ -398,6 +422,9 @@ function SelectedSectionManager({
                     )}
                   </div>
                   <p className="watch-workspace__meta">{sectionKey.term} / {sectionKey.campus}</p>
+                  {saved ? (
+                    <p className="watch-workspace__meta">{i18n.t('watch.intent.unmanaged_detail')}</p>
+                  ) : null}
                   {active === undefined && intentState === null && !watchable ? (
                     <p className="watch-workspace__meta">{i18n.t('watch.term_out_of_range_detail')}</p>
                   ) : null}
@@ -408,6 +435,11 @@ function SelectedSectionManager({
                         : 'watch.intent.problem_transient', { reason: entry.problem.reason })}
                     </p>
                   )}
+                  {intentEnabled && !removable && !wanted ? (
+                    <p className="watch-workspace__meta" data-state="ATTENTION">
+                      {i18n.t('watch.intent.remove_blocked')}
+                    </p>
+                  ) : null}
                   {shownPolicy === undefined ? null : (
                     <p className="watch-workspace__meta">
                       {i18n.t('watch.policy_summary', {
@@ -420,18 +452,38 @@ function SelectedSectionManager({
                     </p>
                   )}
                 </div>
-                {intentState !== null
+                {intentEnabled
                   ? wanted
                     ? (
-                      <ActionButton
-                        onClick={() => void watch.setSectionIntent(sectionKey, null)}
-                        tone="accent"
-                      >
-                        {i18n.t('watch.stop_short')}
-                      </ActionButton>
+                      // The episode controls belong to the watch, not to the
+                      // frame that started it. A page that joined after the
+                      // watch was armed can still see its alerts, so it must
+                      // still be able to act on them -- and it can, because
+                      // the authority read carries the id they are addressed
+                      // by.
+                      <div className="watch-workspace__actions">
+                        {active === undefined ? null : (
+                          <ActionButton
+                            onClick={() => watch.resetAudibleCount(active)}
+                            tone="quiet"
+                          >
+                            {i18n.t('watch.clear_audible_count')}
+                          </ActionButton>
+                        )}
+                        <ActionButton
+                          onClick={() => void watch.setSectionIntent(sectionKey, null)}
+                          tone="accent"
+                        >
+                          {i18n.t('watch.stop_short')}
+                        </ActionButton>
+                      </div>
                     )
                     : (
-                      <ActionButton onClick={() => watch.remove(sectionKey)} tone="quiet">
+                      <ActionButton
+                        disabled={!removable}
+                        onClick={() => watch.remove(sectionKey)}
+                        tone="quiet"
+                      >
                         {i18n.t('watch.remove')}
                       </ActionButton>
                     )
@@ -447,7 +499,7 @@ function SelectedSectionManager({
           })}
         </ul>
       )}
-      {watch.selected.length === 0 ? null : (
+      {managed.length === 0 ? null : (
         <div className="watch-workspace__actions">
           <ActionButton
             busy={watch.starting}
@@ -459,18 +511,18 @@ function SelectedSectionManager({
             {i18n.t('watch.start_selected', { count: i18n.formatNumber(inactiveCount) })}
           </ActionButton>
           <ActionButton
-            disabled={!policyReady || (watch.intentStatus === 'DISABLED'
+            disabled={!policyReady || (!intentEnabled
               ? watch.active.length === 0
               : wantedCount === 0)}
             onClick={() => {
-              if (watch.intentStatus === 'DISABLED') {
+              if (!intentEnabled) {
                 watch.active.forEach((item) => watch.updatePolicy(item, policy));
                 return;
               }
               void (async () => {
                 // Sequential, because each submission is compared against the
                 // revision the previous one produced.
-                for (const sectionKey of watch.selected) {
+                for (const { sectionKey } of managed) {
                   const entry = findIntentEntry(watch.intent, sectionKey);
                   if (entry?.policy == null) continue;
                   if (!await watch.setSectionIntent(sectionKey, policy)) break;

@@ -14,6 +14,7 @@ import {
   validatePackageScripts,
   validateRepositoryStaticContracts,
   validateRepositoryStaticFileUniverse,
+  validateSourceTextEncoding,
 } from './verify-import-graph.mjs';
 
 const toolsDirectory = dirname(fileURLToPath(import.meta.url));
@@ -555,6 +556,45 @@ test('HTML stays single-entry while Vite and package checks allow unrelated evol
     'build:local': 'vite build --config vite.local.config.ts && npm run guard:imports && node ./tools/verify-target-build.mjs local',
   };
   assert.match(validatePackageScripts(lateSourceGuard).join('\n'), /npm run guard:imports then vite build/u);
+});
+
+test('rejects a raw NUL byte in an active source file', () => {
+  // A NUL makes Git call the file binary, which takes it out of diffs,
+  // out of grep, and out of every security inventory that walks text
+  // sources -- while it keeps compiling and shipping. That happened once
+  // here, so the guard is a build failure rather than a convention.
+  const nul = String.fromCharCode(0);
+  const files = baselineFiles();
+  files.set(
+    'src/ui/shared/watch/intent.ts',
+    `export const key = 'term${nul}campus';\n`,
+  );
+  const report = analyzeImportGraph({
+    files,
+    publicSourceDeny: denyInput(),
+    allowedExternalPackages: ['react'],
+  });
+  assert.equal(report.state, 'FAIL');
+  assert.match(report.errors.join('\n'), /must not contain a raw NUL byte/u);
+
+  // The escape is the same string at runtime and stays readable to every
+  // tool, so it must pass.
+  const escaped = baselineFiles();
+  escaped.set(
+    'src/ui/shared/watch/intent.ts',
+    "export const key = `term\\u0000campus`;\n",
+  );
+  assert.deepEqual(validateSourceTextEncoding(escaped), []);
+});
+
+test('the shipped active sources contain no raw NUL bytes', () => {
+  const guardPath = resolve(toolsDirectory, 'verify-import-graph.mjs');
+  const result = spawnSync(process.execPath, [guardPath, '--json'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stdout);
+  assert.doesNotMatch(result.stdout, /raw NUL byte/u);
 });
 
 test('--json emits JSON on stdout only', () => {

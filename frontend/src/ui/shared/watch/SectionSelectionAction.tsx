@@ -1,6 +1,7 @@
 import type { SectionKey } from '../product';
 import { useBcspI18n } from '../i18n/runtime';
 import { RouterLink } from '../routing';
+import { findIntentEntry } from './intent';
 import { useLiveWatchOptional } from './LiveWatchProvider';
 
 export function SectionSelectionAction({ sectionKey }: { readonly sectionKey: SectionKey }) {
@@ -14,6 +15,32 @@ export function SectionSelectionAction({ sectionKey }: { readonly sectionKey: Se
     value.term === sectionKey.term
     && value.campus === sectionKey.campus
     && value.index === sectionKey.index);
+  // With durable intent, whether this button may take the Section off the
+  // list is the SERVER's answer, not this page's. `active` is built from the
+  // START frames this page happened to receive, so on a page opened after the
+  // watches were armed it is empty while the process is watching -- and a
+  // button that trusted it would quietly remove the row that carries the only
+  // STOP control. When the intent could not be read at all the answer is "not
+  // now": guessing here is the one thing that hides a running watch.
+  const intentEnabled = watch.intentStatus !== 'DISABLED';
+  const wanted = intentEnabled
+    && findIntentEntry(watch.intent, sectionKey)?.policy != null;
+  const removable = watch.isRemovable(sectionKey);
+  const blocked = selected && !removable;
+  const intentState = intentEnabled ? watch.intentStateFor(sectionKey) : null;
+  const label = wanted
+    ? i18n.t('watch.intent.watching')
+    : intentEnabled && watch.intentStatus === 'FAILED'
+      ? i18n.t('watch.intent.unavailable')
+      : active
+        ? i18n.t('watch.state.watching')
+        : pending
+          ? i18n.t('watch.state.starting')
+          : !watchable && !selected
+            ? i18n.t('watch.term_out_of_range')
+            : selected
+              ? i18n.t('watch.state.selected')
+              : i18n.t('watch.selection.action');
   return (
     <div className="watch-selection-control">
       <button
@@ -22,21 +49,17 @@ export function SectionSelectionAction({ sectionKey }: { readonly sectionKey: Se
         })}
         aria-pressed={selected}
         className="watch-selection-action"
-        disabled={active || pending || (!selected && !watchable)}
+        disabled={active || pending || blocked || (!selected && !watchable)}
         onClick={() => selected ? watch.remove(sectionKey) : watch.select(sectionKey)}
         type="button"
       >
-        {active
-          ? i18n.t('watch.state.watching')
-          : pending
-            ? i18n.t('watch.state.starting')
-            : !watchable
-              ? i18n.t('watch.term_out_of_range')
-            : selected
-              ? i18n.t('watch.state.selected')
-              : i18n.t('watch.selection.action')}
+        {label}
       </button>
-      {selected && !active && !pending ? (
+      {blocked || (intentState !== null && intentState !== 'NOT_WATCHING') ? (
+        <RouterLink className="watch-selection-control__link" to="/watch">
+          {i18n.t('watch.selection.go_to_desk')}
+        </RouterLink>
+      ) : selected && !active && !pending ? (
         <RouterLink className="watch-selection-control__link" to="/watch">
           {i18n.t('watch.selection.go_to_desk')}
         </RouterLink>
