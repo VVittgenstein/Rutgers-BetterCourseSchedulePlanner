@@ -322,11 +322,11 @@ PUT /api/v1/local/desired-watch
 origin/main：ae65958
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
-Claude R2 报告 head：2cd54e2
-Codex R2 审查范围：c50499f..2cd54e2（全里程碑 a4f8d22..2cd54e2）
+Claude R3 报告 head：b450ed0
+Codex R3 审查范围：2cd54e2..b450ed0（全里程碑 a4f8d22..b450ed0）
 S2 分支：尚未合并、尚未发布
 当前产品源码工作树：无未提交源码；两个 conversation 归档目录未跟踪
-Codex orchestration 文档：已记录 R2 CHANGES_REQUIRED，并生成 R3 组合反例收口任务
+Codex orchestration 文档：已记录 R3 CHANGES_REQUIRED，并生成 R4 最终窄收口任务
 现有 release/0.1.0：sourceCommit=7d5debef（2026-07-15，早于本轮工作）
 ```
 
@@ -337,12 +337,12 @@ Codex orchestration 文档：已记录 R2 CHANGES_REQUIRED，并生成 R3 组合
 | 工作 | 状态 | 当前事实 |
 |---|---|---|
 | S1 | 代码完成并已合入 main；M0 窄修已写入 feature | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter；尚无新 release |
-| S2 | desired 纵向闭环与 R2 已实现但验收仍未通过，仅 feature | 真实 archive 已证明重启物化/reset；仍有 STOP×rotation、failure stamp、真实批量/不确定 mutation 与 close-read 竞态；自动重连、完整 Readiness、音频、通知仍未做 |
+| S2 | desired 纵向闭环与 R3 已实现但验收仍未通过，仅 feature | 真实 archive 已证明重启物化/reset；仍有 committed-before-reconcile × rotation、effect-lagged uncertainty 门与 cutoff 解除证据残余；自动重连、完整 Readiness、音频、通知仍未做 |
 | S3 | 未开始正式实现 | 没有 GridAnchor/RebuildProfile；仅有不足以冻结参数的单校区数据 |
 | S4 | 未开始 | 代码中没有 `prepare_cached` |
 | P1 | 服务端半边完成，仅 feature | validate、reserve lease、session 保护完成；浏览器不会调用或自动重连 |
 | P2 | 大部分未开始 | H5 基本完成、H4 只有 per-session cap；其余重新上线门未完成 |
-| L1 | 纵向代码已落地但未通过验收 | desired 可持久化、GET/PUT、materializer、UI 与真实包装 E2E 已存在；`M0-M1-001-R3` 接受前不得称可发布或完成 |
+| L1 | 纵向代码已落地但未通过验收 | desired 可持久化、GET/PUT、materializer、UI 与真实包装 E2E 已存在；`M0-M1-001-R4` 接受前不得称可发布或完成 |
 | L2 | 只有通用 route seam | 无 presence、60 秒状态机或自动退出 |
 | L3 | 未开始 | 无可见业务日志与控制台倒计时 |
 
@@ -356,24 +356,20 @@ Codex orchestration 文档：已记录 R2 CHANGES_REQUIRED，并生成 R3 组合
 
 ### S2/L1
 
-- R1/R2 已实质关闭持续 admission/live drift、receipt-only rotation、reset 屏障与 incomplete 503、
-  teardown id、普通/cross-caller terminal stamp、单条 gesture、raw NUL、五态、late-page active 和真实包装物化；
-- Codex 已独立验证 `2cd54e2`：workspace 739/1 ignored、frontend 239、architecture、三个 diff-check 全绿；
-  真实 12 文件 Windows archive 再次完成普通重启 attach/materialize、Full Reset 与第三次空重启；
-- STOP 在 receipt threshold−1 写 tombstone 后立即触发 rotation；rotation 清掉该 row。健康 STOP 的
-  COMMITTED body 因此被本地 strict codec 拒绝；stop fault 时内部虽保存 id，GET/desk 却完全看不见它；
-- `failure` 没有 generation/revision/epoch stamp。旧 PERMANENT failure 会穿过 stuck teardown、STOP 与
-  新 START，永久阻止新的 intent 装配；
-- 单条 `setSectionIntent` 已捕获 gesture snapshot，但真实 Start selected 与 Apply policy 逐项 await 后
-  再捕获，仍会把后续 section 静默 rebase 到跨 tab 新 revision/rotation generation；
-- PUT outcome 不确定时 recovery GET 保持 READY，旧 snapshot 仍可绿/可移除。START 已提交但 response
-  丢失时可删除唯一管理行；STOP response 丢失时旧 green 可无限保留；
-- CLOSED/ERROR 只记录当时 snapshot 已知 running rows；关闭前 issued 的 held GET 可在关闭后返回 RUNNING
-  并复活绿色；
-- `intentSaved` 只保留 policy 非空，未覆盖 pendingDisarm/materialized tombstone；读取失败仍可隐藏 teardown；
-- Windows policy helper 已比较 600/601，但仍接受 extra keys、600.4 与数字字符串；checkpoint seam
-  无条件进入生产公开 API；
-- `M0-M1-001-R3` 关闭前，S2-D3、M1 和迁移发布门保持开放。
+- R1–R3 已实质关闭持续 admission/live drift、receipt-only rotation、reset 屏障、teardown id、terminal
+  restamp、failure stamp、真实 batch 单 basis、lost response 撤绿/identity、全局 cutoff、strict codec、
+  五态、late-page active、严格 packaging policy 与真实重启物化；
+- Codex 已独立验证 `b450ed0`：workspace 745/1 ignored、frontend 252、architecture、三个 diff-check 全绿；
+  真实 12 文件 Windows archive 完成非空物化、两次重启、Full Reset 与再次空重启；
+- R3 的 rotation preservation 仍只看已经成为 `stopping` 的记录。并发 STOP 可先提交 tombstone、尚未
+  reconcile，随后被 rotation 清掉；若 owner stop fault，活 watch 又会无 authority row、无页面控制；
+- `markUncertain` 同步写 `uncertainAt.current`，但提交和 removal 门仍读 effect-lagged mirror；最后一笔
+  `b450ed0` 没有 production 修改，新增测试在 effect flush 后才做第二手势，未判别真正窗口；
+- socket cutoff 的失效半边已成立，但当前任意 READY snapshot（包括 PUT response）都可解除，宽于冻结的
+  “OPEN 后新 issued 成功 GET”合同；
+- recovery GET 挂起时其他 section 仍使用旧 snapshot 暂为已披露非阻断限制：请求排在同一 queue 后，
+  generation/revision CAS 会拒绝 rotation/stale 覆盖，且不会自动重放；
+- `M0-M1-001-R4` 接受前，S2-D3、M1 和迁移发布门保持开放。
 
 ### P1/S2
 
@@ -402,8 +398,8 @@ Codex orchestration 文档：已记录 R2 CHANGES_REQUIRED，并生成 R3 组合
 
 ## 16. 当前拟定的下一里程碑
 
-状态：**`M0-M1-001-R2` 已交付但 Codex 判定 `CHANGES_REQUIRED`；组合反例最终收口任务
-`M0-M1-001-R3` 已生成，等待用户转发给 Claude。**
+状态：**`M0-M1-001-R3` 已交付但 Codex 判定 `CHANGES_REQUIRED`；最后三条窄修任务
+`M0-M1-001-R4` 已生成，等待用户转发给 Claude。**
 
 当前里程碑不扩展范围：**先把 reduced S2/L1 纵向闭环修到可信、可打包验收。**
 
@@ -416,16 +412,14 @@ Codex orchestration 文档：已记录 R2 CHANGES_REQUIRED，并生成 R3 组合
 - 多页面共享状态但不实时推送；
 - Full Reset 后再次重启仍为空。
 
-R3 必须包含：
+R4 必须包含：
 
-1. STOP×rotation 保留 stopping tombstone，并冻结合法缺行的 0/0 committed shape；
-2. failure 绑定 authority stamp，新 intent 不继承旧 PERMANENT 结论；
-3. Start selected/Apply policy 整个点击共用一个 snapshot；
-4. mutation 不确定时立即撤销旧 READY，并保留可能已启动的管理 identity；
-5. CLOSED/ERROR 建立全局 response cutoff，关闭前在途 GET 不可复绿；
-6. policy verifier 严格 keys/types，checkpoint hook 不进入生产公开 API；
-7. 从 final head 重新构建一次候选并集中跑全量门；
-8. 保持公网 desired 零表面，不发布中间构建。
+1. rotation 按 owner 当前 physical live keys 保留 tombstone，覆盖 STOP committed-before-reconcile；
+2. mutation 提交/removal 门直接读取 `markUncertain` 同步写入的唯一权威；
+3. socket cutoff 只由 OPEN 后新 issued 的成功 GET 解除，PUT snapshot 不得解除；
+4. 已通过的 absent/failure/batch/identity/policy/test seam 只回归，不重新设计；
+5. 从 final head 重新构建一次候选并集中跑全量门；
+6. 保持公网 desired 零表面，不发布中间构建。
 
 建议不包含：
 
@@ -456,7 +450,7 @@ M7：S3-PR0 数据分析 → 参数冻结 → 调度器实现
 M8：最终 Windows/Linux 候选、打包、soak、发布
 ```
 
-M0 与 M1 已按用户批准合并执行；当前只做 M1 的 R3 收口，不进入 M2。
+M0 与 M1 已按用户批准合并执行；当前只做 M1 的 R4 窄收口，不进入 M2。
 
 ## 18. 不得复活的旧工作模式
 
@@ -472,6 +466,17 @@ M0 与 M1 已按用户批准合并执行；当前只做 M1 的 R3 收口，不�
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-08-24 — M0-M1-001-R3 独立验收
+
+- Claude 在 `2cd54e2..b450ed0` 完成 R3；
+- Codex 独立复跑 workspace/frontend/architecture/diff-check 与最终 Windows archive，普通门及非空
+  三生命周期 E2E 全部通过；
+- 安全差异扫描 `27364bc1-56fd-4f0e-9a3b-b14e69c6c7c7` 覆盖 7/7 authoritative production files，
+  传统可报告 finding 为 0；
+- 新组合交错发现 STOP committed-before-reconcile × rotation，且确认 `b450ed0` 声称的同步 uncertainty
+  map 修复没有进入 production；另有 PUT 解除 cutoff 的窄合同差异；
+- R3 仍为 `CHANGES_REQUIRED`，生成一次性 `M0-M1-001-R4`，不扩展到 M2。
 
 ### 2026-08-24 — M0-M1-001-R2 独立验收
 
@@ -517,19 +522,19 @@ M0 与 M1 已按用户批准合并执行；当前只做 M1 的 R3 收口，不�
 作出验收结论或批准进入下一里程碑时都必须更新。
 
 ```text
-Active task id: M0-M1-001-R3
+Active task id: M0-M1-001-R4
 Milestone: M0 S1 窄修与合同同步 + M1 reduced S2/L1 本地 desired 纵向闭环
 Claude prompt issued: YES — 由用户复制转发
-Prompt/version: M0-M1-001-R3/v1
-Expected base: feat/s2-alert-delivery@2cd54e2
-Claude reported head: pending
-Codex review range: pending (expected 2cd54e2..<head>; full a4f8d22..<head>)
+Prompt/version: M0-M1-001-R4/v1
+Expected base: feat/s2-alert-delivery@b450ed0
+Claude reported head: b450ed0 for R3; R4 pending
+Codex review range: R3 completed 2cd54e2..b450ed0; R4 expected b450ed0..<head>
 Codex verdict: CHANGES_REQUIRED
-Blocking findings: STOP×rotation row 消失；failure 未带 stamp；真实 batch gesture rebase；uncertain mutation 仍 READY；close/read 复绿；policy shape/API seam 残余
-Prior repair: M0-M1-001-R2/v1 at 2cd54e2 — CHANGES_REQUIRED
-Repair task: M0-M1-001-R3/v1
-Repair expected base: feat/s2-alert-delivery@2cd54e2
-Next authorized action: 用户将 docs/orchestration/tasks/M0-M1-001-R3.md 中的 Claude Prompt 原样转发给 Claude
+Blocking findings: STOP committed-before-reconcile 可被 rotation 清 tombstone；uncertainty 门读取 effect-lagged ref；PUT 可解除只应由 GET 解除的 cutoff
+Prior repair: M0-M1-001-R3/v1 at b450ed0 — CHANGES_REQUIRED
+Repair task: M0-M1-001-R4/v1
+Repair expected base: feat/s2-alert-delivery@b450ed0
+Next authorized action: 用户将 docs/orchestration/tasks/M0-M1-001-R4.md 中的 Claude Prompt 原样转发给 Claude
 ```
 
 验收结论只允许使用：
