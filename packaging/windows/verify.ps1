@@ -108,6 +108,90 @@ function Read-Bootstrap {
     return Invoke-RestMethod -UseBasicParsing -Method Get -Uri ($Origin + 'api/v1/local/bootstrap') -TimeoutSec 10
 }
 
+# The exact key sets a watch policy and its duration are allowed to have.
+#
+# Named once and used by both the comparison and its self-check, so a policy
+# growing a field is a change to this line rather than something the gate
+# silently tolerates.
+$PolicyKeys = @('notificationMode', 'maxAudible', 'continuousDuration')
+$FiniteDurationKeys = @('kind', 'seconds')
+$UnlimitedDurationKeys = @('kind')
+$NotificationModes = @('ONE_SHOT', 'CONTINUOUS')
+
+<#
+.SYNOPSIS
+Whether a decoded JSON value is an object with EXACTLY these keys.
+
+.DESCRIPTION
+Exactly, in both directions. A missing key is obviously wrong; an extra one is
+what a candidate emitting a field this contract does not have looks like, and
+a comparison that ignored it would sign off on a body nobody agreed to. The
+type check matters too: a string carries PSObject properties of its own, so
+without it `Length` would be read as a key of a policy.
+#>
+function Test-JsonObjectKeys {
+    param(
+        $Value,
+        [Parameter(Mandatory = $true)][string[]]$Keys
+    )
+
+    if ($null -eq $Value) { return $false }
+    if ($Value.GetType().FullName -cne 'System.Management.Automation.PSCustomObject') {
+        return $false
+    }
+    $names = @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($names.Count -ne $Keys.Count) { return $false }
+    foreach ($key in $Keys) {
+        if (-not ($names -ccontains $key)) { return $false }
+    }
+    return $true
+}
+
+<#
+.SYNOPSIS
+Whether a decoded JSON value is an integer NUMBER.
+
+.DESCRIPTION
+`ConvertFrom-Json` keeps the difference the wire made: an integer literal
+arrives as Int32 or Int64, `600.4` as Decimal, and `"600"` as String. Casting
+straight to `[long]` erases all three, which is how a duration of 600.4
+seconds and a `maxAudible` that is a quoted string pass as the numbers this
+product emits. So the type is decided before any value is compared.
+#>
+function Test-JsonInteger {
+    param($Value)
+
+    if ($null -eq $Value) { return $false }
+    $type = $Value.GetType()
+    return ($type -eq [int] -or $type -eq [long])
+}
+
+<#
+.SYNOPSIS
+Whether a decoded value is a watch policy this product could have produced.
+#>
+function Test-ValidPolicy {
+    param($Policy)
+
+    if (-not (Test-JsonObjectKeys $Policy $PolicyKeys)) { return $false }
+    if ($Policy.notificationMode -isnot [string]) { return $false }
+    if (-not ($NotificationModes -ccontains [string]$Policy.notificationMode)) { return $false }
+    if (-not (Test-JsonInteger $Policy.maxAudible)) { return $false }
+    if ([long]$Policy.maxAudible -le 0) { return $false }
+    $duration = $Policy.continuousDuration
+    if ($null -eq $duration) { return $false }
+    if (Test-JsonObjectKeys $duration $UnlimitedDurationKeys) {
+        # An unlimited duration has no seconds to carry, so a body that
+        # supplies some is not this contract -- and the key set is what says
+        # so, rather than the value being ignored.
+        return ([string]$duration.kind -ceq 'UNLIMITED')
+    }
+    if (-not (Test-JsonObjectKeys $duration $FiniteDurationKeys)) { return $false }
+    if ([string]$duration.kind -cne 'FINITE') { return $false }
+    if (-not (Test-JsonInteger $duration.seconds)) { return $false }
+    return ([long]$duration.seconds -gt 0)
+}
+
 <#
 .SYNOPSIS
 Whether two watch policies are the same policy, in every field.
@@ -120,9 +204,11 @@ FINITE 601 -- or FINITE 600 and a FINITE with no seconds at all -- would pass
 as identical, and the release gate would sign off on a watch behaving
 differently from the intent it is supposed to be materializing.
 
-UNLIMITED carrying `seconds` is rejected rather than ignored. It is not a
-policy this product produces, so a candidate that emits one is not a candidate
-whose other fields are worth trusting.
+Both sides must first BE policies. Equality is only meaningful between two
+values of the shape this contract describes: a body carrying an extra field, a
+fractional duration or a quoted number is not a candidate whose other fields
+are worth comparing, so it is rejected rather than coerced into something
+comparable.
 #>
 function Test-SamePolicy {
     param(
@@ -136,27 +222,18 @@ function Test-SamePolicy {
     # has to be asked for through PSObject, and a Hashtable has none.
     $Left = $Left | ConvertTo-Json -Depth 8 -Compress | ConvertFrom-Json
     $Right = $Right | ConvertTo-Json -Depth 8 -Compress | ConvertFrom-Json
+    if (-not (Test-ValidPolicy $Left)) { return $false }
+    if (-not (Test-ValidPolicy $Right)) { return $false }
     if ([string]$Left.notificationMode -cne [string]$Right.notificationMode) { return $false }
     if ([long]$Left.maxAudible -ne [long]$Right.maxAudible) { return $false }
     $leftDuration = $Left.continuousDuration
     $rightDuration = $Right.continuousDuration
-    if ($null -eq $leftDuration -or $null -eq $rightDuration) { return $false }
     $kind = [string]$leftDuration.kind
     if ($kind -cne [string]$rightDuration.kind) { return $false }
-    $leftSeconds = $leftDuration.PSObject.Properties['seconds']
-    $rightSeconds = $rightDuration.PSObject.Properties['seconds']
     if ($kind -ceq 'FINITE') {
-        if ($null -eq $leftSeconds -or $null -eq $rightSeconds) { return $false }
-        if ($null -eq $leftSeconds.Value -or $null -eq $rightSeconds.Value) { return $false }
-        return ([long]$leftSeconds.Value -eq [long]$rightSeconds.Value)
+        return ([long]$leftDuration.seconds -eq [long]$rightDuration.seconds)
     }
-    if ($kind -ceq 'UNLIMITED') {
-        # Presence alone is the failure: an unlimited duration has no seconds
-        # to carry, so a body that supplies some is not this contract.
-        if ($null -ne $leftSeconds -or $null -ne $rightSeconds) { return $false }
-        return $true
-    }
-    return $false
+    return $true
 }
 
 <#
@@ -167,41 +244,32 @@ Proves Test-SamePolicy can still tell policies apart, before it is trusted.
 A comparison used once, deep inside a long release rehearsal, is exactly the
 kind of check that can quietly stop discriminating -- and a gate that always
 answers "same" reads identically to a gate that passed. These counter-examples
-run every time and fail the script here, so deleting the seconds comparison
-breaks the rehearsal at this line rather than silently widening what it
-accepts.
+run every time and fail the script here, so deleting the seconds comparison,
+the key sets or the integer test breaks the rehearsal at this line rather than
+silently widening what it accepts.
+
+The bodies are written as JSON text rather than as PowerShell literals on
+purpose: the values under test are what a candidate could put on the wire, and
+a hashtable cannot express a quoted number or a duplicate-free extra key the
+way the wire does.
 #>
 function Assert-PolicyComparison {
-    $finite600 = [ordered]@{
-        notificationMode = 'ONE_SHOT'
-        maxAudible = 3
-        continuousDuration = [ordered]@{ kind = 'FINITE'; seconds = 600 }
-    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
-    $finite601 = [ordered]@{
-        notificationMode = 'ONE_SHOT'
-        maxAudible = 3
-        continuousDuration = [ordered]@{ kind = 'FINITE'; seconds = 601 }
-    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
-    $unlimited = [ordered]@{
-        notificationMode = 'ONE_SHOT'
-        maxAudible = 3
-        continuousDuration = [ordered]@{ kind = 'UNLIMITED' }
-    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
-    $unlimitedWithSeconds = [ordered]@{
-        notificationMode = 'ONE_SHOT'
-        maxAudible = 3
-        continuousDuration = [ordered]@{ kind = 'UNLIMITED'; seconds = 600 }
-    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
-    $louder = [ordered]@{
-        notificationMode = 'ONE_SHOT'
-        maxAudible = 4
-        continuousDuration = [ordered]@{ kind = 'FINITE'; seconds = 600 }
-    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
-    $continuous = [ordered]@{
-        notificationMode = 'CONTINUOUS'
-        maxAudible = 3
-        continuousDuration = [ordered]@{ kind = 'FINITE'; seconds = 600 }
-    } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    $finite600 = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"FINITE","seconds":600}}'
+    $finite601 = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"FINITE","seconds":601}}'
+    $unlimited = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"UNLIMITED"}}'
+    $unlimitedWithSeconds = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"UNLIMITED","seconds":600}}'
+    $louder = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":4,"continuousDuration":{"kind":"FINITE","seconds":600}}'
+    $continuous = ConvertFrom-Json '{"notificationMode":"CONTINUOUS","maxAudible":3,"continuousDuration":{"kind":"FINITE","seconds":600}}'
+    $extraPolicyKey = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"FINITE","seconds":600},"volume":50}'
+    $extraDurationKey = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"FINITE","seconds":600,"grace":1}}'
+    $fractionalSeconds = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"FINITE","seconds":600.4}}'
+    $quotedSeconds = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"FINITE","seconds":"600"}}'
+    $fractionalMaxAudible = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3.5,"continuousDuration":{"kind":"FINITE","seconds":600}}'
+    $quotedMaxAudible = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":"3","continuousDuration":{"kind":"FINITE","seconds":600}}'
+    $missingSeconds = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"FINITE"}}'
+    $missingDuration = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3}'
+    $unknownMode = ConvertFrom-Json '{"notificationMode":"SILENT","maxAudible":3,"continuousDuration":{"kind":"FINITE","seconds":600}}'
+    $unknownKind = ConvertFrom-Json '{"notificationMode":"ONE_SHOT","maxAudible":3,"continuousDuration":{"kind":"FOREVER"}}'
 
     Assert-Condition (Test-SamePolicy $finite600 $finite600) 'Policy comparison rejected a policy identical to itself.'
     Assert-Condition (Test-SamePolicy $unlimited $unlimited) 'Policy comparison rejected an UNLIMITED policy identical to itself.'
@@ -210,6 +278,32 @@ function Assert-PolicyComparison {
     Assert-Condition (-not (Test-SamePolicy $unlimited $unlimitedWithSeconds)) 'Policy comparison accepted an UNLIMITED duration carrying seconds.'
     Assert-Condition (-not (Test-SamePolicy $finite600 $louder)) 'Policy comparison cannot tell one maxAudible from another.'
     Assert-Condition (-not (Test-SamePolicy $finite600 $continuous)) 'Policy comparison cannot tell one notification mode from another.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $extraPolicyKey)) 'Policy comparison accepted a policy carrying a field nobody agreed to.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $extraDurationKey)) 'Policy comparison accepted a duration carrying a field nobody agreed to.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $fractionalSeconds)) 'Policy comparison read a fractional duration as the whole number beside it.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $quotedSeconds)) 'Policy comparison read a quoted duration as a number.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $fractionalMaxAudible)) 'Policy comparison read a fractional maxAudible as the whole number beside it.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $quotedMaxAudible)) 'Policy comparison read a quoted maxAudible as a number.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $missingSeconds)) 'Policy comparison accepted a FINITE duration with no seconds.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $missingDuration)) 'Policy comparison accepted a policy with no duration at all.'
+    Assert-Condition (-not (Test-SamePolicy $finite600 $unknownMode)) 'Policy comparison accepted a notification mode this product does not have.'
+    Assert-Condition (-not (Test-SamePolicy $unlimited $unknownKind)) 'Policy comparison accepted a duration kind this product does not have.'
+    # Reflexivity is not a free pass. A candidate that emits a malformed body
+    # would otherwise compare that body against itself and be told it agrees,
+    # which is true and useless: the question the gate asks is whether the
+    # running watch is running the policy the authority holds, and neither
+    # side is a policy.
+    $malformed = @(
+        $extraPolicyKey, $extraDurationKey, $fractionalSeconds, $quotedSeconds,
+        $fractionalMaxAudible, $quotedMaxAudible, $missingSeconds, $missingDuration,
+        $unknownMode, $unknownKind, $unlimitedWithSeconds
+    )
+    foreach ($candidate in $malformed) {
+        Assert-Condition (-not (Test-SamePolicy $candidate $candidate)) (
+            'Policy comparison accepted a malformed policy compared against itself: ' +
+            ($candidate | ConvertTo-Json -Depth 6 -Compress)
+        )
+    }
 }
 
 function Read-DesiredWatch {
