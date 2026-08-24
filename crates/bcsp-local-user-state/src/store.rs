@@ -395,8 +395,9 @@ impl PersonalStateStore {
         })
     }
 
-    /// Rotates the authority: a new generation, the desired rows carried over
-    /// and renumbered, and the removal history and ledger cleared.
+    /// Rotates the authority: a new generation, the surviving rows carried
+    /// over and renumbered, and the rest of the removal history and the whole
+    /// ledger cleared.
     ///
     /// This is the only operation that can free either budget, because a
     /// tombstone and a receipt are both only safe to drop once no client can
@@ -405,24 +406,51 @@ impl PersonalStateStore {
     /// generation raised without the rows carried over would drop live intent
     /// on the floor.
     ///
+    /// `preserve_tombstones` is the caller's list of sections whose removal
+    /// has NOT finished in the physical world. Raising the generation makes a
+    /// tombstone safe to drop as a compare-and-swap guard, but it says nothing
+    /// about the watch the removal was meant to stop: for a section whose
+    /// teardown failed, the tombstone is also the only row the read has to
+    /// hang `pendingDisarm` on, and dropping it makes a watch that is still
+    /// alive and can still ring vanish from every page and every control. So
+    /// those rows are carried over and renumbered like any other survivor, and
+    /// become droppable at the next rotation after the teardown finishes.
+    /// Nothing else is preserved, and the set is bounded by the physical watch
+    /// cap rather than by the removal history's budget.
+    ///
     /// `actor_incarnation` is deliberately untouched: rotation is authority
     /// maintenance, not a new actor, and the frame sequence the actor keeps
     /// under that incarnation must not restart.
-    pub fn rotate_desired_watch_authority(&mut self) -> PersonalStateResult<DesiredWatchRotation> {
+    pub fn rotate_desired_watch_authority(
+        &mut self,
+        preserve_tombstones: &BTreeSet<SectionKey>,
+    ) -> PersonalStateResult<DesiredWatchRotation> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let counters = load_desired_watch_counters(&transaction)?;
         let authority_generation = next_counter(counters.authority_generation)?;
-        let survivors = load_desired_watch_entries(&transaction)?
+        let (survivors, dropped): (Vec<_>, Vec<_>) = load_desired_watch_entries(&transaction)?
             .into_iter()
-            .filter(|entry| !entry.is_tombstone())
-            .collect::<Vec<_>>();
-        let deleted_tombstones = u64::try_from(transaction.execute(
-            "DELETE FROM personal_desired_watches_v1 WHERE desired = 0",
-            [],
-        )?)
-        .map_err(|_| PersonalStateError::StoredIntegerOutOfRange)?;
+            .partition(|entry| {
+                !entry.is_tombstone() || preserve_tombstones.contains(&entry.section)
+            });
+        // Row by row rather than one blanket `DELETE ... WHERE desired = 0`,
+        // because the blanket form cannot express the exception and a
+        // preserved row deleted here would be gone before it was rewritten.
+        for entry in &dropped {
+            transaction.execute(
+                "DELETE FROM personal_desired_watches_v1
+                  WHERE term_id = ?1 AND campus_code = ?2 AND section_index = ?3",
+                params![
+                    entry.section.term().as_str(),
+                    entry.section.campus().as_str(),
+                    entry.section.index().as_str(),
+                ],
+            )?;
+        }
+        let deleted_tombstones = u64::try_from(dropped.len())
+            .map_err(|_| PersonalStateError::StoredIntegerOutOfRange)?;
         let deleted_receipts = u64::try_from(
             transaction.execute("DELETE FROM personal_desired_watch_receipts_v1", [])?,
         )

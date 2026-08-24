@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 use std::path::Path;
 use std::str::FromStr;
@@ -2146,7 +2147,7 @@ fn the_tombstone_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
 
     // Rotation is what unblocks it. The stop then goes through -- against the
     // new generation, because the old one is exactly what rotation retired.
-    let rotation = store.rotate_desired_watch_authority().unwrap();
+    let rotation = store.rotate_desired_watch_authority(&BTreeSet::new()).unwrap();
     assert_eq!(rotation.deleted_tombstones, MAX_DESIRED_WATCH_TOMBSTONES);
     let mut retry = stop(section(9000), rotation.retained[0].revision, 3);
     retry.authority_generation = rotation.authority_generation;
@@ -2216,7 +2217,7 @@ fn the_receipt_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
     );
     assert_eq!(store.desired_watches().unwrap(), Vec::new());
 
-    let rotation = store.rotate_desired_watch_authority().unwrap();
+    let rotation = store.rotate_desired_watch_authority(&BTreeSet::new()).unwrap();
     assert_eq!(rotation.deleted_receipts, MAX_DESIRED_WATCH_RECEIPTS);
     let mut retry = start(section(1), 0, 1);
     retry.authority_generation = rotation.authority_generation;
@@ -2250,6 +2251,106 @@ fn a_replay_still_answers_when_the_ledger_is_full() {
             .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
         DesiredWatchMutationOutcome::Replayed(DesiredWatchReceiptOutcome::committed(first)),
+    );
+}
+
+/// Rotation collects the removal history EXCEPT the rows the caller says are
+/// still being torn down.
+///
+/// Raising the generation is what makes a tombstone safe to drop as a
+/// compare-and-swap guard, and that is the only thing it makes safe. A
+/// tombstone whose section still has a physical watch nobody could stop is
+/// also the row the read hangs `pendingDisarm` on -- drop it and a watch that
+/// is still alive and can still ring is not on any page, in any list, or
+/// behind any control. So the caller, which is the only thing that knows,
+/// names them; they are carried over and renumbered like live intent.
+#[test]
+fn rotation_keeps_the_tombstones_the_caller_is_still_tearing_down() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+
+    let stuck = committed(
+        store
+            .commit_desired_watch_mutation(&start(section(1), 0, 1))
+            .unwrap(),
+    );
+    let finished = committed(
+        store
+            .commit_desired_watch_mutation(&start(section(2), 0, 2))
+            .unwrap(),
+    );
+    committed(
+        store
+            .commit_desired_watch_mutation(&start(section(3), 0, 3))
+            .unwrap(),
+    );
+    committed(
+        store
+            .commit_desired_watch_mutation(&stop(section(1), stuck.revision, 4))
+            .unwrap(),
+    );
+    committed(
+        store
+            .commit_desired_watch_mutation(&stop(section(2), finished.revision, 5))
+            .unwrap(),
+    );
+
+    let preserved = BTreeSet::from([section(1)]);
+    let rotation = store.rotate_desired_watch_authority(&preserved).unwrap();
+
+    assert_eq!(
+        rotation.deleted_tombstones, 1,
+        "only the removal nothing is still working on is collected",
+    );
+    assert_eq!(
+        rotation
+            .retained
+            .iter()
+            .map(|entry| entry.section.clone())
+            .collect::<Vec<_>>(),
+        vec![section(1), section(3)],
+        "the stuck removal survives beside the live intent",
+    );
+    let carried = rotation
+        .retained
+        .iter()
+        .find(|entry| entry.section == section(1))
+        .expect("the preserved row");
+    assert!(carried.is_tombstone(), "it is still a removal, not intent");
+    assert_eq!(
+        (carried.revision, carried.materialization_epoch),
+        (1, 1),
+        "and it is renumbered into the new generation like anything else",
+    );
+
+    let after = store.desired_watch_authority().unwrap();
+    assert_eq!(after.entries, rotation.retained, "the read agrees with it");
+    assert_eq!(
+        store.desired_watch_budget().unwrap().tombstones,
+        1,
+        "the preserved row is the only removal history left",
+    );
+
+    // It is still a real compare-and-swap guard in the new generation: a page
+    // that reads nothing for the Section is refused rather than admitted.
+    let mut resurrect = start(section(1), 0, 6);
+    resurrect.authority_generation = rotation.authority_generation;
+    assert_eq!(
+        store.commit_desired_watch_mutation(&resurrect).unwrap(),
+        DesiredWatchMutationOutcome::StaleRevision { current: 1 },
+    );
+
+    // Once the caller stops naming it, the next rotation collects it.
+    let second = store.rotate_desired_watch_authority(&BTreeSet::new()).unwrap();
+    assert_eq!(second.deleted_tombstones, 1);
+    assert_eq!(
+        second
+            .retained
+            .iter()
+            .map(|entry| entry.section.clone())
+            .collect::<Vec<_>>(),
+        vec![section(3)],
     );
 }
 
@@ -2293,7 +2394,7 @@ fn rotation_carries_intent_into_a_new_generation_and_frees_both_budgets() {
     assert_eq!(before.counters.actor_incarnation, 7);
     assert_eq!(before.entries.len(), 2);
 
-    let rotation = store.rotate_desired_watch_authority().unwrap();
+    let rotation = store.rotate_desired_watch_authority(&BTreeSet::new()).unwrap();
     assert_eq!(rotation.authority_generation, 2);
     assert_eq!(rotation.deleted_tombstones, 1);
     assert_eq!(rotation.deleted_receipts, 3);

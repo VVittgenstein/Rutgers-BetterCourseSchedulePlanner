@@ -22,13 +22,12 @@ pub use bootstrap::{
     LocalBootstrapError, LocalPrimaryDatabase, LocalRuntimeState, OperationalGate,
 };
 pub use desired::{
-    DESIRED_WATCH_MATERIALIZE_BACKOFF, DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchCheckpoint,
-    DesiredWatchCheckpoints, DesiredWatchCommittedV1,
-    DesiredWatchCoordinator, DesiredWatchCoordinatorError, DesiredWatchEntryV1,
-    DesiredWatchFailureClassV1, DesiredWatchFailureReasonV1, DesiredWatchFailureV1,
-    DesiredWatchMaterializedV1, DesiredWatchMutationResultV1, DesiredWatchMutationV1,
-    DesiredWatchOutcomeV1, DesiredWatchOwner, DesiredWatchStateV1,
-    LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_PATH,
+    DESIRED_WATCH_ABSENT_COMMITTED_NUMBER, DESIRED_WATCH_MATERIALIZE_BACKOFF,
+    DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchCommittedV1, DesiredWatchCoordinator,
+    DesiredWatchCoordinatorError, DesiredWatchEntryV1, DesiredWatchFailureClassV1,
+    DesiredWatchFailureReasonV1, DesiredWatchFailureV1, DesiredWatchMaterializedV1,
+    DesiredWatchMutationResultV1, DesiredWatchMutationV1, DesiredWatchOutcomeV1, DesiredWatchOwner,
+    DesiredWatchStateV1, LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_PATH,
     LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
 };
 pub use diagnostic::StartupFailureReport;

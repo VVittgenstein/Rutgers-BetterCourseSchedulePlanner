@@ -15,7 +15,7 @@
 //! are open -- while the alerts that watch produces are fanned out to all of
 //! them, because all of them really are watching.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -242,10 +242,23 @@ pub struct DesiredWatchMutationResultV1 {
     pub state: Option<DesiredWatchStateV1>,
 }
 
+/// The `revision` and `materializationEpoch` a commit reports when the row it
+/// wrote is legitimately no longer in the authority it is answered from.
+///
+/// Zero and not the pre-rotation numbers, and frozen rather than merely
+/// conventional: no live row ever carries it, so a decoder can require
+/// exactly this pair for a missing row and refuse a body whose commit claims
+/// numbers the state it shipped does not hold.
+pub const DESIRED_WATCH_ABSENT_COMMITTED_NUMBER: u64 = 0;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesiredWatchCommittedV1 {
+    /// The row's revision after the write, or
+    /// [`DESIRED_WATCH_ABSENT_COMMITTED_NUMBER`] when the row is no longer in
+    /// the authority this answer carries.
     pub revision: u64,
+    /// The row's materialization epoch after the write, under the same rule.
     pub materialization_epoch: u64,
     /// True when the `desired` VALUE changed and a new epoch was allocated.
     /// A policy edit keeps the epoch, which is the difference between
@@ -381,9 +394,16 @@ impl DesiredWatchOwner for SharedWatchSocket {
 }
 
 /// A named point inside the coordinator that a test can stand at.
+///
+/// Compiled only under `cfg(test)`, and therefore only into this crate's own
+/// unit tests. It is not exported, not reachable from an integration test,
+/// and not present at all in a shipping build: the two guarantees it exists
+/// for are about instruction-level ordering inside this module, so the tests
+/// that need it live in this module too rather than the seam being widened
+/// into the crate's public API to reach them.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum DesiredWatchCheckpoint {
+enum DesiredWatchCheckpoint {
     /// The store has decided one mutation's outcome. The response it will be
     /// reported with has not been assembled yet, and no coordinator lock is
     /// held.
@@ -409,8 +429,12 @@ pub enum DesiredWatchCheckpoint {
 /// outside the domain and then takes it arrives here holding nothing, and
 /// says so.
 ///
-/// Production installs nothing; the coordinator is built without one.
-pub trait DesiredWatchCheckpoints: Send + Sync + 'static {
+/// A shipping build has no such thing. The trait, the field that holds one
+/// and the calls that reach it are all `cfg(test)`, so there is no public
+/// hook a caller could install an arbitrary blocking callback into and no way
+/// to run one while the materialization mutex is held.
+#[cfg(test)]
+trait DesiredWatchCheckpoints: Send + Sync + 'static {
     fn arrive(&self, checkpoint: DesiredWatchCheckpoint, exclusive: bool);
 }
 
@@ -438,8 +462,40 @@ struct SectionMaterialization {
     /// STOP the user presses next, addresses the watch from here.
     stopping: Option<StoppingWatch>,
     blocked_on_slot: bool,
-    failure: Option<DesiredWatchFailureV1>,
+    failure: Option<StampedFailure>,
     retry: Option<RetrySchedule>,
+}
+
+/// A materialization failure, and the authority tuple it was decided under.
+///
+/// The stamp is what stops a verdict from outliving the question. A
+/// `PERMANENT` failure is the strongest thing this module records -- it says
+/// "do not try again" -- and without a stamp that instruction attaches to the
+/// SECTION rather than to the intent that produced it: the user stops the
+/// section, starts it again, edits its policy, or the authority rotates, and
+/// a conclusion drawn about a revision nobody is asking about any more goes
+/// on suppressing every arm for the rest of the process's life.
+///
+/// Stamped, it is a statement about one `(generation, revision, epoch)`. A
+/// new intent is a new question, asked again from scratch; if the answer is
+/// still no, it is recorded again under the stamp that earned it, which is
+/// also what the page is shown. It is deliberately the same tuple
+/// [`RetrySchedule`] carries, and for the same reason.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StampedFailure {
+    authority_generation: u64,
+    revision: u64,
+    materialization_epoch: u64,
+    failure: DesiredWatchFailureV1,
+}
+
+impl StampedFailure {
+    /// Whether this verdict was reached about the intent described here.
+    const fn describes(&self, generation: u64, revision: u64, epoch: u64) -> bool {
+        self.authority_generation == generation
+            && self.revision == revision
+            && self.materialization_epoch == epoch
+    }
 }
 
 /// A scheduled retry, stamped with the authority tuple it was scheduled for.
@@ -533,6 +589,7 @@ pub struct DesiredWatchCoordinator {
     materialization: Mutex<Materialization>,
     backoff: Vec<Duration>,
     revalidate_interval: Duration,
+    #[cfg(test)]
     checkpoints: Option<Arc<dyn DesiredWatchCheckpoints>>,
 }
 
@@ -548,15 +605,17 @@ impl DesiredWatchCoordinator {
             materialization: Mutex::new(Materialization::default()),
             backoff: DESIRED_WATCH_MATERIALIZE_BACKOFF.to_vec(),
             revalidate_interval: DESIRED_WATCH_REVALIDATE_INTERVAL,
+            #[cfg(test)]
             checkpoints: None,
         }
     }
 
     /// Installs somewhere for the coordinator to stand at its checkpoints.
     ///
-    /// Production never calls this. See [`DesiredWatchCheckpoints`] for why
-    /// the seam exists at all rather than being replaced by a longer sleep.
-    pub fn with_checkpoints(mut self, checkpoints: Arc<dyn DesiredWatchCheckpoints>) -> Self {
+    /// See [`DesiredWatchCheckpoints`] for why the seam exists at all rather
+    /// than being replaced by a longer sleep, and why it exists only here.
+    #[cfg(test)]
+    fn with_checkpoints(mut self, checkpoints: Arc<dyn DesiredWatchCheckpoints>) -> Self {
         self.checkpoints = Some(checkpoints);
         self
     }
@@ -622,6 +681,7 @@ impl DesiredWatchCoordinator {
         // module.
         let outcome = self.lock_store()?.commit_desired_watch_mutation(&command)?;
         let mut result = describe(outcome);
+        #[cfg(test)]
         self.arrive(DesiredWatchCheckpoint::MutationDecided);
         if result.outcome == DesiredWatchOutcomeV1::Committed {
             self.reconcile()?;
@@ -837,6 +897,14 @@ impl DesiredWatchCoordinator {
     /// an intent is stamped with, not the intent, so the reconcile that
     /// follows adopts each running watch under its new stamp: same watch id,
     /// same episode, no second announcement.
+    ///
+    /// Neither are unfinished teardowns forgotten by it. A tombstone whose
+    /// section still has a physical watch this process could not stop is the
+    /// only row the read has to report `pendingDisarm` on; purging it would
+    /// take a watch that is still alive and can still ring off every page and
+    /// out of every control at once. Which sections those are is known HERE
+    /// and nowhere else, so the set is computed under the same lock that
+    /// authorises the rotation and handed to the writer.
     pub fn rotate_if_due(&self) -> Result<bool, DesiredWatchCoordinatorError> {
         let mut materialization = self.lock_materialization()?;
         if !self.lock_store()?.desired_watch_budget()?.rotation_due() {
@@ -845,10 +913,17 @@ impl DesiredWatchCoordinator {
         // Between the answer above and the act below, nothing may enter the
         // domain -- and a test stands here to prove it, rather than to widen
         // the window.
+        #[cfg(test)]
         self.arrive(DesiredWatchCheckpoint::RotationDue);
+        let stopping = materialization
+            .sections
+            .iter()
+            .filter(|(_, state)| state.stopping.is_some())
+            .map(|(section, _)| section.clone())
+            .collect::<BTreeSet<_>>();
         let authority = {
             let mut store = self.lock_store()?;
-            store.rotate_desired_watch_authority()?;
+            store.rotate_desired_watch_authority(&stopping)?;
             store.desired_watch_authority()?
         };
         tracing::info!(
@@ -891,20 +966,41 @@ impl DesiredWatchCoordinator {
             }
             return Ok(());
         }
-        if let (Some(committed), Some(entry)) = (result.committed.as_mut(), entry) {
+        if let Some(committed) = result.committed.as_mut() {
             // `epochChanged` is a fact about the COMMIT -- did the desired
             // value change -- and rotation does not change it. The two
             // numbers are the ones rotation renumbers.
-            committed.revision = entry.revision;
-            committed.materialization_epoch = entry.materialization_epoch;
+            //
+            // An ABSENT row is a legal outcome of a commit, not a missing
+            // one: a STOP that crosses the rotation threshold writes a
+            // tombstone and then, in the same call, rotates it away, and a
+            // concurrent caller can rotate between the decision and this
+            // read. What must never happen is reporting the numbers the row
+            // held before it went, because that pair describes an authority
+            // that no longer exists -- a page comparing them against the
+            // state in the same body would find no row holding them and
+            // could only guess which half to believe. So absence has ONE
+            // frozen shape, [`DESIRED_WATCH_ABSENT_COMMITTED_NUMBER`] in both
+            // fields, and the decoder accepts nothing else for a missing row.
+            match entry {
+                Some(entry) => {
+                    committed.revision = entry.revision;
+                    committed.materialization_epoch = entry.materialization_epoch;
+                }
+                None => {
+                    committed.revision = DESIRED_WATCH_ABSENT_COMMITTED_NUMBER;
+                    committed.materialization_epoch = DESIRED_WATCH_ABSENT_COMMITTED_NUMBER;
+                }
+            }
         }
         result.state = Some(state);
         Ok(())
     }
 
     /// Stands at a named point inside the coordinator, for a test that has
-    /// installed somewhere to stand. Production installs nothing and this
-    /// compiles down to one `Option` check.
+    /// installed somewhere to stand. A shipping build does not compile this
+    /// at all.
+    #[cfg(test)]
     fn arrive(&self, checkpoint: DesiredWatchCheckpoint) {
         let Some(checkpoints) = self.checkpoints.as_ref() else {
             return;
@@ -1047,8 +1143,13 @@ impl DesiredWatchCoordinator {
                     ?reason,
                     "a running desired watch is no longer admissible; taking it down",
                 );
+                // Only ever reached for a section the authority still wants:
+                // `running` was filtered against `desired` above, and this is
+                // the stamp the verdict below belongs to.
+                let Some(entry) = desired.get(&section).copied() else {
+                    continue;
+                };
                 self.disarm(materialization, &section, active_watch_id, now);
-                let entry = desired.get(&section).copied();
                 let Some(state) = materialization.sections.get_mut(&section) else {
                     continue;
                 };
@@ -1062,16 +1163,20 @@ impl DesiredWatchCoordinator {
                 // reached by the STOP the user presses.
                 let classification = reason.classification();
                 let retry_scheduled = classification == DesiredWatchFailureClassV1::Transient;
-                state.failure = Some(DesiredWatchFailureV1 {
-                    classification,
-                    reason,
-                    retry_scheduled,
-                });
-                match (retry_scheduled, entry) {
-                    (true, Some(entry)) => {
-                        schedule_retry(state, entry, generation, now, &self.backoff);
-                    }
-                    _ => state.retry = None,
+                record_failure(
+                    state,
+                    entry,
+                    generation,
+                    DesiredWatchFailureV1 {
+                        classification,
+                        reason,
+                        retry_scheduled,
+                    },
+                );
+                if retry_scheduled {
+                    schedule_retry(state, entry, generation, now, &self.backoff);
+                } else {
+                    state.retry = None;
                 }
             }
         }
@@ -1150,18 +1255,34 @@ impl DesiredWatchCoordinator {
                             // would come back `AlreadyActive` and the STOP
                             // the user pressed would have nothing to name.
                             state.armed = Some(armed);
-                            state.failure = Some(DesiredWatchFailureV1 {
-                                classification: DesiredWatchFailureClassV1::Transient,
-                                reason: DesiredWatchFailureReasonV1::TargetUnavailable,
-                                retry_scheduled: true,
-                            });
+                            record_failure(
+                                state,
+                                entry,
+                                generation,
+                                DesiredWatchFailureV1 {
+                                    classification: DesiredWatchFailureClassV1::Transient,
+                                    reason: DesiredWatchFailureReasonV1::TargetUnavailable,
+                                    retry_scheduled: true,
+                                },
+                            );
                             schedule_retry(state, entry, generation, now, &self.backoff);
                         }
                     }
                 }
                 None => {
+                    // A `PERMANENT` verdict is only a reason not to try when
+                    // it was reached about THIS intent. Read without its
+                    // stamp it would attach to the section instead: a STOP, a
+                    // fresh START, a policy edit or a rotation all leave the
+                    // old conclusion in place, and the section could never be
+                    // armed again for the life of the process.
                     let permanent = state.failure.is_some_and(|failure| {
-                        failure.classification == DesiredWatchFailureClassV1::Permanent
+                        failure.failure.classification == DesiredWatchFailureClassV1::Permanent
+                            && failure.describes(
+                                generation,
+                                entry.revision,
+                                entry.materialization_epoch,
+                            )
                     });
                     let waiting = state.retry.is_some_and(|retry| {
                         retry.due_at > now
@@ -1174,7 +1295,9 @@ impl DesiredWatchCoordinator {
                     // changed, so ask it again now. An unfinished teardown IS
                     // a reason to wait: the section still has a physical
                     // watch, and arming a second one would answer
-                    // `AlreadyActive` and leave two ids for one section.
+                    // `AlreadyActive` and leave two ids for one section. It is
+                    // also not permanent: the moment that teardown finishes,
+                    // the next pass arms the new intent.
                     if !permanent && !waiting && state.stopping.is_none() {
                         to_arm.push((section.clone(), entry, policy));
                     }
@@ -1203,11 +1326,16 @@ impl DesiredWatchCoordinator {
                     let Some(state) = materialization.sections.get_mut(section) else {
                         continue;
                     };
-                    state.failure = Some(DesiredWatchFailureV1 {
-                        classification: DesiredWatchFailureClassV1::Transient,
-                        reason: DesiredWatchFailureReasonV1::TargetUnavailable,
-                        retry_scheduled: true,
-                    });
+                    record_failure(
+                        state,
+                        entry,
+                        generation,
+                        DesiredWatchFailureV1 {
+                            classification: DesiredWatchFailureClassV1::Transient,
+                            reason: DesiredWatchFailureReasonV1::TargetUnavailable,
+                            retry_scheduled: true,
+                        },
+                    );
                     schedule_retry(state, entry, generation, now, &self.backoff);
                 }
                 return;
@@ -1244,11 +1372,16 @@ impl DesiredWatchCoordinator {
                         reason == DesiredWatchFailureReasonV1::MaxActiveWatches;
                     let retry_scheduled =
                         classification == DesiredWatchFailureClassV1::Transient;
-                    state.failure = Some(DesiredWatchFailureV1 {
-                        classification,
-                        reason,
-                        retry_scheduled,
-                    });
+                    record_failure(
+                        state,
+                        entry,
+                        generation,
+                        DesiredWatchFailureV1 {
+                            classification,
+                            reason,
+                            retry_scheduled,
+                        },
+                    );
                     if retry_scheduled {
                         schedule_retry(state, entry, generation, now, &self.backoff);
                     } else {
@@ -1260,11 +1393,16 @@ impl DesiredWatchCoordinator {
                 }
                 None => {
                     state.armed = None;
-                    state.failure = Some(DesiredWatchFailureV1 {
-                        classification: DesiredWatchFailureClassV1::Transient,
-                        reason: DesiredWatchFailureReasonV1::TargetUnavailable,
-                        retry_scheduled: true,
-                    });
+                    record_failure(
+                        state,
+                        entry,
+                        generation,
+                        DesiredWatchFailureV1 {
+                            classification: DesiredWatchFailureClassV1::Transient,
+                            reason: DesiredWatchFailureReasonV1::TargetUnavailable,
+                            retry_scheduled: true,
+                        },
+                    );
                     schedule_retry(state, entry, generation, now, &self.backoff);
                 }
             }
@@ -1483,6 +1621,26 @@ fn revoked_reason(admission: WatchStartAdmission) -> Option<DesiredWatchFailureR
     }
 }
 
+/// Records why one intent could not be materialized, against the intent it
+/// was decided about.
+///
+/// Always through here rather than by assigning the field, so a verdict
+/// cannot be written without the stamp that bounds it -- which is the whole
+/// difference between "this intent failed" and "this section is broken".
+fn record_failure(
+    state: &mut SectionMaterialization,
+    entry: &DesiredWatchEntry,
+    generation: u64,
+    failure: DesiredWatchFailureV1,
+) {
+    state.failure = Some(StampedFailure {
+        authority_generation: generation,
+        revision: entry.revision,
+        materialization_epoch: entry.materialization_epoch,
+        failure,
+    });
+}
+
 fn schedule_retry(
     state: &mut SectionMaterialization,
     entry: &DesiredWatchEntry,
@@ -1513,9 +1671,10 @@ fn project(
     materialization: &Materialization,
     live: &BTreeMap<SectionKey, ActiveWatchId>,
 ) -> DesiredWatchStateV1 {
+    let generation = authority.counters.authority_generation;
     DesiredWatchStateV1 {
         contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
-        authority_generation: authority.counters.authority_generation,
+        authority_generation: generation,
         entries: authority
             .entries
             .iter()
@@ -1543,9 +1702,540 @@ fn project(
                     }),
                     pending_disarm: state.is_some_and(|state| state.stopping.is_some()),
                     blocked_on_slot: state.is_some_and(|state| state.blocked_on_slot),
-                    failure: state.and_then(|state| state.failure),
+                    // A verdict about an intent the row has moved past is not
+                    // this row's problem, and reporting it would put an
+                    // explanation on the page for a question nobody asked --
+                    // "cannot watch, needs your decision" on a section the
+                    // user has just restarted, or on a tombstone. The
+                    // reconcile asks again from scratch, and records the
+                    // answer under the stamp that earned it.
+                    failure: state
+                        .and_then(|state| state.failure)
+                        .filter(|failure| {
+                            failure.describes(
+                                generation,
+                                entry.revision,
+                                entry.materialization_epoch,
+                            )
+                        })
+                        .map(|failure| failure.failure),
                 }
             })
             .collect(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Interleavings that only this module can stand inside
+// ---------------------------------------------------------------------------
+
+/// The coordinator's own unit tests.
+///
+/// Everything about the desired-watch surface that can be reached through the
+/// crate's public API is tested from `tests/desired_watch.rs`, against a real
+/// SQLite file and a real shared socket, and belongs there. What lives here is
+/// the small set of guarantees about WHEN one thing happens relative to
+/// another inside a single call -- the rotation budget against the rotation it
+/// authorises, a mutation's outcome against the snapshot its answer is stamped
+/// from -- because reaching those points needs a seam a shipping build must
+/// not have. Rather than widening the crate's API to let any caller install a
+/// callback that runs while the materialization mutex is held, the tests that
+/// need the seam sit next to it, and both are `cfg(test)`.
+///
+/// Nothing here sleeps. Each rendezvous asks a question the correct and the
+/// broken shape answer differently, and blocks until the other caller has
+/// actually reached the state that makes the interleaving real.
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+    use std::sync::{Barrier, Mutex};
+
+    use bcsp_contracts::WatchStartRejectionReason;
+    use bcsp_local_user_state::DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD;
+    use rusqlite::{Connection, params};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    /// A physical-watch owner with no socket behind it.
+    ///
+    /// These tests are about the authority's own ordering, so the owner only
+    /// has to be truthful about identity: what it holds, under which id, and
+    /// that a stop really removes it. Admission always says yes, because a
+    /// revoked target is a different file's subject.
+    #[derive(Default)]
+    struct Owner {
+        audience: AtomicUsize,
+        live: Mutex<BTreeMap<SectionKey, ActiveWatchId>>,
+        next: AtomicU64,
+    }
+
+    impl Owner {
+        fn attach(&self) {
+            self.audience.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl DesiredWatchOwner for Owner {
+        fn audience_connection_count(&self) -> usize {
+            self.audience.load(Ordering::SeqCst)
+        }
+
+        fn watch_targets(&self) -> Vec<ActiveWatchTargetV1> {
+            self.live
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(section_key, active_watch_id)| ActiveWatchTargetV1 {
+                    active_watch_id: *active_watch_id,
+                    section_key: section_key.clone(),
+                })
+                .collect()
+        }
+
+        fn admission_for(&self, _section: &SectionKey) -> WatchStartAdmission {
+            WatchStartAdmission::admitted(None)
+        }
+
+        fn start(
+            &self,
+            items: WatchStartItemsV1,
+        ) -> Result<Vec<WatchStartItemResultV1>, WatchManagerError> {
+            let mut live = self.live.lock().unwrap();
+            Ok(items
+                .as_slice()
+                .iter()
+                .map(|item| {
+                    let section_key = item.section_key.clone();
+                    if live.contains_key(&section_key) {
+                        return WatchStartItemResultV1::Rejected {
+                            section_key,
+                            reason: WatchStartRejectionReason::AlreadyActive,
+                        };
+                    }
+                    let active_watch_id =
+                        ActiveWatchId::new(watch_trace(self.next.fetch_add(1, Ordering::SeqCst)));
+                    live.insert(section_key.clone(), active_watch_id);
+                    WatchStartItemResultV1::Active {
+                        section_key,
+                        active_watch_id,
+                        started_at: time::OffsetDateTime::UNIX_EPOCH,
+                    }
+                })
+                .collect())
+        }
+
+        fn stop(&self, target: ActiveWatchTargetV1) -> Result<(), WatchManagerError> {
+            let mut live = self.live.lock().unwrap();
+            match live.get(&target.section_key) {
+                Some(id) if *id == target.active_watch_id => {
+                    live.remove(&target.section_key);
+                    Ok(())
+                }
+                _ => Err(WatchManagerError::UnknownWatch),
+            }
+        }
+
+        fn update_policy(
+            &self,
+            _target: ActiveWatchTargetV1,
+            _policy: WatchPolicyV1,
+        ) -> Result<(), WatchManagerError> {
+            Ok(())
+        }
+    }
+
+    struct Fixture {
+        _directory: TempDir,
+        path: std::path::PathBuf,
+        coordinator: Arc<DesiredWatchCoordinator>,
+    }
+
+    impl Fixture {
+        fn new(checkpoints: Arc<dyn DesiredWatchCheckpoints>) -> Self {
+            let directory = TempDir::new().unwrap();
+            let path = directory.path().join("rbcsp.sqlite");
+            let owner = Arc::new(Owner::default());
+            owner.attach();
+            let coordinator =
+                DesiredWatchCoordinator::with_owner(PersonalStateStore::open(&path).unwrap(), owner)
+                    .with_retry_backoff(vec![Duration::ZERO])
+                    .with_revalidation_interval(Duration::ZERO)
+                    .with_checkpoints(checkpoints);
+            Self {
+                _directory: directory,
+                path,
+                coordinator: Arc::new(coordinator),
+            }
+        }
+
+        fn read(&self) -> DesiredWatchStateV1 {
+            self.coordinator.read().unwrap()
+        }
+
+        fn submit(
+            &self,
+            section: &SectionKey,
+            policy: Option<WatchPolicyV1>,
+            based_on_revision: u64,
+            authority_generation: u64,
+            mutation: u64,
+        ) -> DesiredWatchMutationResultV1 {
+            self.coordinator
+                .submit(&DesiredWatchMutationV1 {
+                    contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+                    section: section.clone(),
+                    policy,
+                    based_on_revision,
+                    authority_generation,
+                    mutation_id: watch_trace(mutation),
+                })
+                .unwrap()
+        }
+
+        /// Fills the receipt ledger to the point where the next look at the
+        /// budget says "rotate".
+        fn make_rotation_due(&self) {
+            let generation = self.read().authority_generation;
+            let connection = Connection::open(&self.path).unwrap();
+            let existing: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM personal_desired_watch_receipts_v1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let wanted =
+                i64::try_from(DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD).unwrap() - existing;
+            connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+            for index in 0..wanted.max(0) {
+                connection
+                    .execute(
+                        "INSERT INTO personal_desired_watch_receipts_v1
+                             (authority_generation, mutation_id, term_id, campus_code,
+                              section_index, fingerprint, outcome_json)
+                         VALUES (?1, ?2, 'T2026F', 'CAMPUS_A', '30001', ?3,
+                                 '{\"outcome\":\"STALE_REVISION\",\"current\":1}')",
+                        params![
+                            i64::try_from(generation).unwrap(),
+                            format!("00000000-0000-4000-8000-{:012x}", 0x10_0000 + index),
+                            "b".repeat(64),
+                        ],
+                    )
+                    .unwrap();
+            }
+            connection.execute_batch("COMMIT").unwrap();
+        }
+    }
+
+    fn watch_trace(value: u64) -> TraceId {
+        format!("00000000-0000-4000-8000-{value:012x}")
+            .parse()
+            .expect("deterministic UUIDv4")
+    }
+
+    fn section(index: u16) -> SectionKey {
+        SectionKey::try_new("T2026F", "CAMPUS_A", &format!("{index:05}")).expect("SectionKey")
+    }
+
+    fn entry_for<'a>(
+        state: &'a DesiredWatchStateV1,
+        section: &SectionKey,
+    ) -> Option<&'a DesiredWatchEntryV1> {
+        state.entries.iter().find(|entry| &entry.section == section)
+    }
+
+    fn revision_of(state: &DesiredWatchStateV1, section: &SectionKey) -> u64 {
+        entry_for(state, section).map_or(0, |entry| entry.revision)
+    }
+
+    fn armed(state: &DesiredWatchStateV1, section: &SectionKey) -> bool {
+        entry_for(state, section).is_some_and(|entry| {
+            entry.materialized.as_ref().is_some_and(|materialized| {
+                materialized.authority_generation == state.authority_generation
+                    && materialized.revision == entry.revision
+                    && materialized.materialization_epoch == entry.materialization_epoch
+                    && Some(&materialized.policy) == entry.policy.as_ref()
+            })
+        })
+    }
+
+    /// Concurrent callers, one threshold, one rotation.
+    ///
+    /// Rotation raises the generation, so a second one for the same crossing
+    /// invalidates the `basedOnRevision` every page has just re-read with. The
+    /// budget must therefore be read and acted on inside ONE exclusive domain:
+    /// a caller that decides "due" outside it and then takes the lock will
+    /// rotate again on an authority that is no longer due.
+    ///
+    /// Nothing here is timed. The rendezvous stands at the point BETWEEN the
+    /// budget read and the rotation and asks a question the two shapes answer
+    /// differently -- is this point inside the exclusive domain? The fixed
+    /// shape arrives holding it, and cannot deadlock waiting for a second
+    /// arrival because there cannot be one: the other caller is blocked on the
+    /// mutex, and when it finally enters, the budget is no longer due and it
+    /// never arrives at all. A check taken outside the domain arrives holding
+    /// nothing, and the rendezvous then holds it until its partner has read
+    /// the same due budget -- so the double rotation the old shape permits
+    /// actually happens instead of depending on the scheduler.
+    #[test]
+    fn concurrent_callers_crossing_one_threshold_rotate_once() {
+        /// Parks an arrival only when it is NOT inside the exclusive domain.
+        struct Domain {
+            arrivals: Mutex<Vec<bool>>,
+            outside: Barrier,
+        }
+
+        impl DesiredWatchCheckpoints for Domain {
+            fn arrive(&self, checkpoint: DesiredWatchCheckpoint, exclusive: bool) {
+                if checkpoint != DesiredWatchCheckpoint::RotationDue {
+                    return;
+                }
+                self.arrivals.lock().unwrap().push(exclusive);
+                if exclusive {
+                    // Inside the domain: nobody else can be here, so waiting
+                    // for a second arrival would hang forever. Recorded and
+                    // released.
+                    return;
+                }
+                // Outside it. Hold until the other caller has read the same
+                // due budget, so both act on it.
+                self.outside.wait();
+            }
+        }
+
+        let domain = Arc::new(Domain {
+            arrivals: Mutex::new(Vec::new()),
+            outside: Barrier::new(2),
+        });
+        let fixture = Fixture::new(domain.clone());
+        assert_eq!(
+            fixture
+                .submit(&section(1), Some(WatchPolicyV1::default()), 0, 1, 1)
+                .outcome,
+            DesiredWatchOutcomeV1::Committed,
+        );
+        let generation = fixture.read().authority_generation;
+        fixture.make_rotation_due();
+
+        let workers = (0..2)
+            .map(|_| {
+                let coordinator = fixture.coordinator.clone();
+                std::thread::spawn(move || coordinator.rotate_if_due().unwrap())
+            })
+            .collect::<Vec<_>>();
+        let rotated = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .filter(|rotated| *rotated)
+            .count();
+
+        let arrivals = domain.arrivals.lock().unwrap().clone();
+        assert_eq!(
+            arrivals,
+            vec![true],
+            "the budget must be read once, inside the exclusive domain that acts on it",
+        );
+        assert_eq!(rotated, 1, "exactly one caller may rotate one crossing");
+        assert_eq!(
+            fixture.read().authority_generation,
+            generation + 1,
+            "and the generation moves exactly once",
+        );
+        assert!(
+            armed(&fixture.read(), &section(1)),
+            "and the running watch survived it",
+        );
+    }
+
+    /// A response rotated by SOMEONE ELSE mid-call.
+    ///
+    /// This is the interleaving that "did I rotate?" cannot see. The outcome
+    /// is decided against generation G; another caller crosses the threshold
+    /// and rotates to G+1, renumbering every row; and only then is the answer
+    /// assembled. A response stamped from what this caller read on the way in
+    /// would pair G's revision with G+1's generation -- a pair no authority
+    /// ever held, which the page would then be refused for as long as it kept
+    /// presenting it.
+    ///
+    /// The interleaving is made to happen rather than waited for: the
+    /// checkpoint fires after the store has decided and before anything is
+    /// stamped, and the other caller is a real second thread doing a real
+    /// rotation.
+    #[test]
+    fn a_terminal_refusal_rotated_by_another_caller_answers_from_one_authority() {
+        let rendezvous = Arc::new(Handoff::new());
+        let fixture = Fixture::new(rendezvous.clone());
+        // Committed out of Section order, so the pre-rotation revision and
+        // the post-rotation renumbering genuinely differ.
+        assert_eq!(
+            fixture
+                .submit(&section(3), Some(WatchPolicyV1::default()), 0, 1, 1)
+                .outcome,
+            DesiredWatchOutcomeV1::Committed,
+        );
+        assert_eq!(
+            fixture
+                .submit(&section(1), Some(WatchPolicyV1::default()), 0, 1, 2)
+                .outcome,
+            DesiredWatchOutcomeV1::Committed,
+        );
+        let generation = fixture.read().authority_generation;
+        let before = revision_of(&fixture.read(), &section(1));
+        fixture.make_rotation_due();
+
+        let other = rendezvous.spawn_rotation(&fixture);
+        rendezvous.arm();
+        // Stale by revision: terminal, and stamped after the other caller has
+        // finished rotating.
+        let result = fixture.submit(
+            &section(1),
+            Some(WatchPolicyV1::default()),
+            99,
+            generation,
+            910,
+        );
+        other.join().unwrap();
+
+        assert_eq!(result.outcome, DesiredWatchOutcomeV1::StaleRevision);
+        assert_eq!(result.outcome.http_status(), 409);
+        assert!(result.state.is_none());
+        let after = fixture.read();
+        assert_eq!(
+            after.authority_generation,
+            generation + 1,
+            "somebody else rotated in the middle of this call",
+        );
+        assert_eq!(
+            result.authority_generation, after.authority_generation,
+            "and the answer is stamped from the authority that exists now",
+        );
+        let current = revision_of(&after, &section(1));
+        assert_ne!(current, before, "the rotation really did renumber the row");
+        assert_eq!(
+            result.current_revision,
+            Some(current),
+            "the revision and the generation must come from the same authority",
+        );
+    }
+
+    /// A COMMIT whose row is legitimately gone by the time it is stamped.
+    ///
+    /// The user stops a Section; the tombstone that STOP writes is real, and
+    /// the teardown finished, so nothing keeps it. Another caller crosses the
+    /// rotation threshold between the decision and the stamp and purges it.
+    /// The commit still happened, so the answer is still `COMMITTED` -- but
+    /// the numbers it reports must describe the authority it ships, and no row
+    /// in that authority holds the pre-rotation pair. Reporting them anyway is
+    /// a body that contradicts itself, and a strict decoder is right to refuse
+    /// it. So absence has one frozen shape, and this is where it is produced.
+    #[test]
+    fn a_commit_purged_by_another_caller_before_it_is_stamped_reports_the_absent_shape() {
+        let rendezvous = Arc::new(Handoff::new());
+        let fixture = Fixture::new(rendezvous.clone());
+        assert_eq!(
+            fixture
+                .submit(&section(1), Some(WatchPolicyV1::default()), 0, 1, 1)
+                .outcome,
+            DesiredWatchOutcomeV1::Committed,
+        );
+        let generation = fixture.read().authority_generation;
+        let revision = revision_of(&fixture.read(), &section(1));
+        fixture.make_rotation_due();
+
+        let other = rendezvous.spawn_rotation(&fixture);
+        rendezvous.arm();
+        let result = fixture.submit(&section(1), None, revision, generation, 910);
+        other.join().unwrap();
+
+        assert_eq!(result.outcome, DesiredWatchOutcomeV1::Committed);
+        let state = result.state.as_ref().expect("a commit carries its state");
+        assert!(
+            entry_for(state, &section(1)).is_none(),
+            "the rotation purged a tombstone nothing was still tearing down",
+        );
+        let committed = result.committed.expect("a commit says what it wrote");
+        assert_eq!(committed.revision, DESIRED_WATCH_ABSENT_COMMITTED_NUMBER);
+        assert_eq!(
+            committed.materialization_epoch,
+            DESIRED_WATCH_ABSENT_COMMITTED_NUMBER,
+        );
+        assert_eq!(
+            result.authority_generation, state.authority_generation,
+            "the generation, the state and the committed numbers are one authority",
+        );
+        assert_eq!(
+            state.authority_generation,
+            generation + 1,
+            "and it is the authority that exists now",
+        );
+    }
+
+    /// A blocking hand-off from inside `MutationDecided` to a second thread.
+    ///
+    /// Both directions block, so the other caller's rotation is COMPLETE
+    /// before the mutation goes on to assemble its answer. `armed` exists
+    /// because the setup commits reach the same checkpoint and only one of
+    /// them is the interleaving under test.
+    struct Handoff {
+        armed: AtomicBool,
+        rotate: SyncSender<()>,
+        rotate_rx: Mutex<Option<Receiver<()>>>,
+        rotated_tx: SyncSender<u64>,
+        rotated: Mutex<Receiver<u64>>,
+    }
+
+    impl Handoff {
+        fn new() -> Self {
+            let (rotate, rotate_rx) = sync_channel(0);
+            let (rotated_tx, rotated) = sync_channel(0);
+            Self {
+                armed: AtomicBool::new(false),
+                rotate,
+                rotate_rx: Mutex::new(Some(rotate_rx)),
+                rotated_tx,
+                rotated: Mutex::new(rotated),
+            }
+        }
+
+        fn arm(&self) {
+            self.armed.store(true, Ordering::SeqCst);
+        }
+
+        fn spawn_rotation(&self, fixture: &Fixture) -> std::thread::JoinHandle<()> {
+            let coordinator = fixture.coordinator.clone();
+            let rotate_rx = self.rotate_rx.lock().unwrap().take().expect("one rotation");
+            let rotated_tx = self.rotated_tx.clone();
+            std::thread::spawn(move || {
+                rotate_rx.recv().expect("a mutation reached its checkpoint");
+                assert!(
+                    coordinator.rotate_if_due().expect("rotate"),
+                    "the budget was due",
+                );
+                let generation = coordinator.read().unwrap().authority_generation;
+                rotated_tx.send(generation).expect("the mutation is waiting");
+            })
+        }
+    }
+
+    impl DesiredWatchCheckpoints for Handoff {
+        fn arrive(&self, checkpoint: DesiredWatchCheckpoint, exclusive: bool) {
+            if checkpoint != DesiredWatchCheckpoint::MutationDecided
+                || !self.armed.swap(false, Ordering::SeqCst)
+            {
+                return;
+            }
+            assert!(
+                !exclusive,
+                "a mutation must not be decided while holding the domain a reconcile needs",
+            );
+            self.rotate.send(()).expect("the other caller is listening");
+            self.rotated
+                .lock()
+                .unwrap()
+                .recv()
+                .expect("the other caller rotated");
+        }
     }
 }

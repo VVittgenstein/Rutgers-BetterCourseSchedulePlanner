@@ -944,8 +944,14 @@ pub struct DesiredWatchRotation {
     pub authority_generation: u64,
     pub deleted_tombstones: u64,
     pub deleted_receipts: u64,
-    /// Every surviving `desired = 1` row, renumbered into the new
-    /// generation, in section order.
+    /// Every surviving row, renumbered into the new generation, in section
+    /// order -- which is every `desired = 1` row plus the tombstones the
+    /// caller asked to preserve because their teardown has not finished.
+    ///
+    /// This is exactly what a read taken straight afterwards returns, and it
+    /// is meant to be: a caller that had to work out which of the two kinds
+    /// it was looking at would be re-deriving the authority from a summary of
+    /// how it changed.
     pub retained: Vec<DesiredWatchEntry>,
 }
 

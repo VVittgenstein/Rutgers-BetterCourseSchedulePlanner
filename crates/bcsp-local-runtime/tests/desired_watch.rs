@@ -21,8 +21,8 @@ use bcsp_contracts::{
     WatchPolicyV1, WatchStartItemResultV1, WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope,
 };
 use bcsp_local_runtime::{
-    DESIRED_WATCH_MATERIALIZE_BACKOFF, DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchCheckpoint,
-    DesiredWatchCheckpoints, DesiredWatchCoordinator, DesiredWatchCoordinatorError,
+    DESIRED_WATCH_ABSENT_COMMITTED_NUMBER, DESIRED_WATCH_MATERIALIZE_BACKOFF,
+    DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchCoordinator, DesiredWatchCoordinatorError,
     DesiredWatchFailureClassV1, DesiredWatchFailureReasonV1, DesiredWatchMutationResultV1,
     DesiredWatchMutationV1, DesiredWatchOutcomeV1, DesiredWatchOwner, DesiredWatchStateV1,
     LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
@@ -127,19 +127,11 @@ impl Fixture {
         Self::with_settings(backoff, Duration::ZERO)
     }
 
-    fn with_checkpoints(checkpoints: Arc<dyn DesiredWatchCheckpoints>) -> Self {
-        Self::build(vec![Duration::ZERO], Duration::ZERO, Some(checkpoints))
-    }
-
     fn with_settings(backoff: Vec<Duration>, revalidation: Duration) -> Self {
-        Self::build(backoff, revalidation, None)
+        Self::build(backoff, revalidation)
     }
 
-    fn build(
-        backoff: Vec<Duration>,
-        revalidation: Duration,
-        checkpoints: Option<Arc<dyn DesiredWatchCheckpoints>>,
-    ) -> Self {
+    fn build(backoff: Vec<Duration>, revalidation: Duration) -> Self {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("rbcsp.sqlite");
         let admission = Admission::default();
@@ -151,13 +143,11 @@ impl Fixture {
             .unwrap(),
         );
         let faults = Arc::new(OwnerFaults::default());
-        let mut coordinator = coordinator_over(&path, watch.clone(), faults.clone())
-            .with_retry_backoff(backoff)
-            .with_revalidation_interval(revalidation);
-        if let Some(checkpoints) = checkpoints {
-            coordinator = coordinator.with_checkpoints(checkpoints);
-        }
-        let coordinator = Arc::new(coordinator);
+        let coordinator = Arc::new(
+            coordinator_over(&path, watch.clone(), faults.clone())
+                .with_retry_backoff(backoff)
+                .with_revalidation_interval(revalidation),
+        );
         let route = LocalWatchRoute::new(watch.clone(), coordinator.clone());
         Self {
             _directory: directory,
@@ -1364,93 +1354,6 @@ fn a_full_ledger_refuses_the_stop_and_the_next_attempt_commits() {
     assert!(fixture.watch.owner_watched_sections().is_empty());
 }
 
-/// Concurrent callers, one threshold, one rotation.
-///
-/// Rotation raises the generation, so a second one for the same crossing
-/// invalidates the `basedOnRevision` every page has just re-read with. The
-/// budget must therefore be read and acted on inside ONE exclusive domain: a
-/// caller that decides "due" outside it and then takes the lock will rotate
-/// again on an authority that is no longer due.
-///
-/// Nothing here is timed. The rendezvous stands at the point BETWEEN the
-/// budget read and the rotation and asks a question the two shapes answer
-/// differently -- is this point inside the exclusive domain? The fixed shape
-/// arrives holding it, and cannot deadlock waiting for a second arrival
-/// because there cannot be one: the other caller is blocked on the mutex, and
-/// when it finally enters, the budget is no longer due and it never arrives
-/// at all. A check taken outside the domain arrives holding nothing, and the
-/// rendezvous then holds it until its partner has read the same due budget --
-/// so the double rotation the old shape permits actually happens instead of
-/// depending on the scheduler.
-#[test]
-fn concurrent_callers_crossing_one_threshold_rotate_once() {
-    /// Parks an arrival only when it is NOT inside the exclusive domain.
-    struct Domain {
-        arrivals: Mutex<Vec<bool>>,
-        outside: std::sync::Barrier,
-    }
-
-    impl DesiredWatchCheckpoints for Domain {
-        fn arrive(&self, checkpoint: DesiredWatchCheckpoint, exclusive: bool) {
-            if checkpoint != DesiredWatchCheckpoint::RotationDue {
-                return;
-            }
-            self.arrivals.lock().unwrap().push(exclusive);
-            if exclusive {
-                // Inside the domain: nobody else can be here, so waiting for
-                // a second arrival would hang forever. Recorded and released.
-                return;
-            }
-            // Outside it. Hold until the other caller has read the same due
-            // budget, so both act on it.
-            self.outside.wait();
-        }
-    }
-
-    let domain = Arc::new(Domain {
-        arrivals: Mutex::new(Vec::new()),
-        outside: std::sync::Barrier::new(2),
-    });
-    let fixture = Fixture::with_checkpoints(domain.clone());
-    let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
-    let generation = fixture.read().authority_generation;
-    seed_receipts(
-        &fixture.path,
-        generation,
-        DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD - receipt_count(&fixture.path),
-    );
-
-    let workers = (0..2)
-        .map(|_| {
-            let coordinator = fixture.coordinator.clone();
-            std::thread::spawn(move || coordinator.rotate_if_due().unwrap())
-        })
-        .collect::<Vec<_>>();
-    let rotated = workers
-        .into_iter()
-        .map(|worker| worker.join().unwrap())
-        .filter(|rotated| *rotated)
-        .count();
-
-    let arrivals = domain.arrivals.lock().unwrap().clone();
-    assert_eq!(
-        arrivals,
-        vec![true],
-        "the budget must be read once, inside the exclusive domain that acts on it",
-    );
-    assert_eq!(rotated, 1, "exactly one caller may rotate one crossing");
-    assert_eq!(
-        fixture.read().authority_generation,
-        generation + 1,
-        "and the generation moves exactly once",
-    );
-    assert!(
-        armed(&fixture.read(), &section(1)),
-        "and the running watch survived it",
-    );
-}
-
 /// A response that triggered a rotation must describe ONE authority.
 ///
 /// The commit is decided against the numbers before the rotation and the
@@ -2015,110 +1918,6 @@ fn a_terminal_refusal_that_crosses_the_threshold_answers_from_one_authority() {
     );
 }
 
-/// The same response, rotated by SOMEONE ELSE.
-///
-/// This is the interleaving that "did I rotate?" cannot see. The outcome is
-/// decided against generation G; another caller crosses the threshold and
-/// rotates to G+1, renumbering every row; and only then is the answer
-/// assembled. A response stamped from what this caller read on the way in
-/// would pair G's revision with G+1's generation -- a pair no authority ever
-/// held, which the page would then be refused for as long as it kept
-/// presenting it.
-///
-/// The interleaving is made to happen rather than waited for: the checkpoint
-/// fires after the store has decided and before anything is stamped, and the
-/// other caller is a real second thread doing a real rotation.
-#[test]
-fn a_terminal_refusal_rotated_by_another_caller_answers_from_one_authority() {
-    struct Rotate {
-        /// The setup commits go through the same code path, and only ONE of
-        /// them is the interleaving under test.
-        armed: AtomicBool,
-        rotate: std::sync::mpsc::SyncSender<()>,
-        rotated: Mutex<std::sync::mpsc::Receiver<u64>>,
-    }
-
-    impl DesiredWatchCheckpoints for Rotate {
-        fn arrive(&self, checkpoint: DesiredWatchCheckpoint, exclusive: bool) {
-            if checkpoint != DesiredWatchCheckpoint::MutationDecided
-                || !self.armed.swap(false, Ordering::SeqCst)
-            {
-                return;
-            }
-            assert!(
-                !exclusive,
-                "a mutation must not be decided while holding the domain a reconcile needs",
-            );
-            // Blocking hand-offs, both ways: the other caller's rotation is
-            // COMPLETE before this one goes on to assemble its answer.
-            self.rotate.send(()).expect("the other caller is listening");
-            self.rotated
-                .lock()
-                .unwrap()
-                .recv()
-                .expect("the other caller rotated");
-        }
-    }
-
-    let (rotate, rotate_rx) = std::sync::mpsc::sync_channel(0);
-    let (rotated_tx, rotated) = std::sync::mpsc::sync_channel(0);
-    let rendezvous = Arc::new(Rotate {
-        armed: AtomicBool::new(false),
-        rotate,
-        rotated: Mutex::new(rotated),
-    });
-    let fixture = Fixture::with_checkpoints(rendezvous.clone());
-    let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(3), 0, 1), DesiredWatchOutcomeV1::Committed);
-    assert_eq!(fixture.start(&section(1), 0, 2), DesiredWatchOutcomeV1::Committed);
-    let generation = fixture.read().authority_generation;
-    let before = revision(&fixture.read(), &section(1));
-    // Already due, so the OTHER caller is the one that rotates.
-    seed_receipts(
-        &fixture.path,
-        generation,
-        DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD - receipt_count(&fixture.path),
-    );
-
-    let other = {
-        let coordinator = fixture.coordinator.clone();
-        std::thread::spawn(move || {
-            rotate_rx.recv().expect("a mutation reached its checkpoint");
-            assert!(
-                coordinator.rotate_if_due().expect("rotate"),
-                "the budget was due",
-            );
-            let generation = coordinator.read().unwrap().authority_generation;
-            rotated_tx.send(generation).expect("the mutation is waiting");
-        })
-    };
-
-    rendezvous.armed.store(true, Ordering::SeqCst);
-    let result = fixture.submit_result(&section(1), Some(loud_policy()), 99, generation, 910);
-    other.join().unwrap();
-
-    assert_eq!(result.outcome, DesiredWatchOutcomeV1::StaleRevision);
-    assert_eq!(result.outcome.http_status(), 409);
-    assert!(result.state.is_none());
-    let after = fixture.read();
-    assert_eq!(
-        after.authority_generation,
-        generation + 1,
-        "somebody else rotated in the middle of this call",
-    );
-    assert_eq!(
-        result.authority_generation, after.authority_generation,
-        "and the answer is stamped from the authority that exists now",
-    );
-    let current = revision(&after, &section(1));
-    assert_ne!(current, before, "the rotation really did renumber the row");
-    assert_eq!(
-        result.current_revision,
-        Some(current),
-        "the revision and the generation must come from the same authority",
-    );
-}
-
 /// The revalidation cadence, pinned against the cadence it is often confused
 /// with.
 ///
@@ -2138,6 +1937,344 @@ fn the_revalidation_cadence_is_bounded_but_not_per_poll() {
          any claim that it is shorter is false",
     );
 }
+
+// ---------------------------------------------------------------------------
+// A STOP that crosses the rotation threshold
+// ---------------------------------------------------------------------------
+
+/// Fills the ledger to one receipt short of the rotation threshold, so the
+/// NEXT write is the crossing.
+///
+/// The interesting STOP is the one whose own receipt is the thing that makes
+/// the authority due: it commits a tombstone and then, inside the same call,
+/// rotates the authority the tombstone belongs to.
+fn seed_receipts_to_one_before_rotation(fixture: &Fixture) {
+    let generation = fixture.read().authority_generation;
+    seed_receipts(
+        &fixture.path,
+        generation,
+        DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD - 1 - receipt_count(&fixture.path),
+    );
+}
+
+/// A healthy STOP that rotates its own tombstone away still answers something
+/// a strict decoder accepts.
+///
+/// The tombstone is real, the teardown finished, and nothing is left that
+/// needs the row -- so rotation is right to purge it. What must not happen is
+/// the answer reporting the revision and epoch the row held BEFORE the
+/// rotation: the state in the same body is the post-rotation authority, no row
+/// in it holds that pair, and a page comparing the two would be reading a body
+/// that contradicts itself. The frozen absent shape is what makes "the row is
+/// legitimately gone" expressible instead.
+#[test]
+fn a_healthy_stop_that_rotates_its_own_tombstone_answers_the_frozen_absent_shape() {
+    let fixture = Fixture::new();
+    let (_page, _frames) = fixture.attach(100);
+    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    let before = fixture.read();
+    seed_receipts_to_one_before_rotation(&fixture);
+
+    let result = fixture.submit_result(
+        &section(1),
+        None,
+        revision(&before, &section(1)),
+        before.authority_generation,
+        2,
+    );
+
+    assert_eq!(result.outcome, DesiredWatchOutcomeV1::Committed);
+    let state = result.state.as_ref().expect("a commit carries its state");
+    assert_eq!(
+        state.authority_generation,
+        before.authority_generation + 1,
+        "the STOP's own receipt crossed the threshold",
+    );
+    assert_eq!(
+        result.authority_generation, state.authority_generation,
+        "and the answer is stamped from that one authority",
+    );
+    assert!(
+        entry(state, &section(1)).is_none(),
+        "a finished removal is exactly what rotation is allowed to purge",
+    );
+    let committed = result.committed.expect("a commit says what it wrote");
+    assert_eq!(committed.revision, DESIRED_WATCH_ABSENT_COMMITTED_NUMBER);
+    assert_eq!(
+        committed.materialization_epoch,
+        DESIRED_WATCH_ABSENT_COMMITTED_NUMBER,
+    );
+    assert!(
+        fixture.watch.owner_watched_sections().is_empty(),
+        "and the physical watch really did stop",
+    );
+
+    // The wire shape the browser's strict decoder is written against, pinned
+    // here so the two cannot drift into disagreeing about what a legal answer
+    // looks like.
+    let body = serde_json::to_value(&result).expect("the answer serializes");
+    assert_eq!(body["outcome"], serde_json::json!("COMMITTED"));
+    assert_eq!(body["currentRevision"], serde_json::Value::Null);
+    assert_eq!(body["maximum"], serde_json::Value::Null);
+    assert_eq!(
+        body["committed"],
+        serde_json::json!({
+            "revision": 0,
+            "materializationEpoch": 0,
+            "epochChanged": true,
+        }),
+    );
+    assert_eq!(body["authorityGeneration"], body["state"]["authorityGeneration"]);
+    assert_eq!(
+        body["state"]["entries"],
+        serde_json::json!([]),
+        "the state a page will render has no row for the Section it just stopped",
+    );
+}
+
+/// A STOP that rotates while its own teardown is stuck keeps the row.
+///
+/// This is the same crossing with one thing different: the physical watch did
+/// not go. Purging the tombstone here would take the last row naming a watch
+/// that is still polling Rutgers and can still ring off every page at once --
+/// the desk would show nothing, the search entry would offer to add it again,
+/// and the id that could stop it would exist only inside the process. So the
+/// row is carried into the new generation, renumbered with it, and keeps
+/// saying `pendingDisarm` until the teardown finishes.
+#[test]
+fn a_stop_whose_teardown_is_stuck_survives_the_rotation_it_triggered() {
+    let fixture = Fixture::new();
+    let (_page, _frames) = fixture.attach(100);
+    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    let original = fixture.armed_id(&section(1));
+    let before = fixture.read();
+    fixture.faults.fail_stops(true);
+    seed_receipts_to_one_before_rotation(&fixture);
+
+    let result = fixture.submit_result(
+        &section(1),
+        None,
+        revision(&before, &section(1)),
+        before.authority_generation,
+        2,
+    );
+
+    assert_eq!(result.outcome, DesiredWatchOutcomeV1::Committed);
+    let state = result.state.as_ref().expect("a commit carries its state");
+    assert_eq!(
+        state.authority_generation,
+        before.authority_generation + 1,
+        "the crossing really did rotate",
+    );
+    let row = entry(state, &section(1)).expect("a watch that is still alive keeps its row");
+    assert!(row.policy.is_none(), "the user did ask for it to stop");
+    assert!(
+        row.pending_disarm,
+        "and a STOP is not finished while the watch it names can still ring",
+    );
+    let committed = result.committed.expect("a commit says what it wrote");
+    assert_eq!(
+        (committed.revision, committed.materialization_epoch),
+        (row.revision, row.materialization_epoch),
+        "the surviving row is renumbered into the new generation, and the \
+         answer describes it",
+    );
+    assert_ne!(
+        committed.revision,
+        DESIRED_WATCH_ABSENT_COMMITTED_NUMBER,
+        "a row that is still there is not absent",
+    );
+    assert_eq!(
+        fixture.watch.owner_watched_sections(),
+        vec![section(1)],
+        "and it really is still alive",
+    );
+
+    // The same row is what any page reads, not just the one that submitted.
+    let read = fixture.read();
+    assert_eq!(read.authority_generation, state.authority_generation);
+    let visible = entry(&read, &section(1)).expect("the desk can still see it");
+    assert!(visible.pending_disarm);
+    assert!(visible.materialized.is_none(), "a teardown is never green");
+
+    // Clearing the fault stops it by the id captured when it was armed, and
+    // only then does the row become ordinary removal history again.
+    fixture.faults.fail_stops(false);
+    fixture.coordinator.tick();
+    assert!(fixture.watch.owner_watched_sections().is_empty());
+    assert!(
+        stops_for(&fixture, &section(1))
+            .iter()
+            .all(|id| *id == original),
+        "the teardown must only ever have named the watch it was meant to",
+    );
+    let settled = fixture.read();
+    assert!(!entry(&settled, &section(1)).expect("still history").pending_disarm);
+
+    // And a later rotation is free to collect it, because nothing needs it now.
+    let generation = settled.authority_generation;
+    seed_receipts(
+        &fixture.path,
+        generation,
+        DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD - receipt_count(&fixture.path),
+    );
+    assert!(fixture.coordinator.rotate_if_due().unwrap());
+    assert!(
+        entry(&fixture.read(), &section(1)).is_none(),
+        "a finished removal is collected by the next rotation",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A failure belongs to the intent that earned it
+// ---------------------------------------------------------------------------
+
+/// A permanent failure must not outlive the intent it was decided about.
+///
+/// `SECTION_NOT_FOUND` is the strongest answer this coordinator records: do
+/// not try again. Held against the SECTION rather than against the intent, it
+/// becomes permanent in a second sense nobody chose -- the user stops the
+/// section, starts it again, and the process refuses to arm it for the rest of
+/// its life, showing "needs your decision" for a decision the user already
+/// made. Stamped, the new START is a new question.
+#[test]
+fn an_old_permanent_failure_does_not_survive_the_intent_that_earned_it() {
+    let fixture = Fixture::new();
+    let (_page, _frames) = fixture.attach(100);
+    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    let original = fixture.armed_id(&section(1));
+
+    // The catalog stops publishing it AND the teardown will not run, so the
+    // watch is still alive while the permanent verdict is recorded.
+    fixture.faults.fail_stops(true);
+    fixture
+        .admission
+        .set("00001", WatchStartAdmission::SectionNotFound);
+    fixture.coordinator.tick();
+    let revoked = fixture.read();
+    let failure = entry(&revoked, &section(1))
+        .expect("the row survives")
+        .failure
+        .expect("and it says why");
+    assert_eq!(failure.classification, DesiredWatchFailureClassV1::Permanent);
+    assert_eq!(failure.reason, DesiredWatchFailureReasonV1::SectionNotFound);
+    assert!(entry(&revoked, &section(1)).unwrap().pending_disarm);
+
+    // The user stops it. The verdict was about the intent that is now gone.
+    assert_eq!(
+        fixture.stop(&section(1), revision(&revoked, &section(1)), 2),
+        DesiredWatchOutcomeV1::Committed,
+    );
+    let stopped = fixture.read();
+    let tombstone = entry(&stopped, &section(1)).expect("a stop leaves a tombstone");
+    assert!(
+        tombstone.failure.is_none(),
+        "a removal does not inherit an explanation for a START nobody made",
+    );
+    assert!(tombstone.pending_disarm);
+
+    // The section is published again, and the user asks for it again -- while
+    // the old teardown is STILL stuck.
+    fixture
+        .admission
+        .set("00001", WatchStartAdmission::admitted(None));
+    assert_eq!(
+        fixture.start(&section(1), revision(&stopped, &section(1)), 3),
+        DesiredWatchOutcomeV1::Committed,
+    );
+    let restored = fixture.read();
+    let waiting = entry(&restored, &section(1)).expect("the new intent is stored");
+    assert!(waiting.policy.is_some());
+    assert!(
+        waiting.failure.is_none(),
+        "the new intent starts with no verdict against it",
+    );
+    assert!(
+        waiting.pending_disarm,
+        "and it waits for the old watch rather than arming a second one",
+    );
+    assert!(!armed(&restored, &section(1)));
+
+    // The teardown finally runs. The new intent is admitted immediately.
+    fixture.faults.fail_stops(false);
+    fixture.coordinator.tick();
+
+    let after = fixture.read();
+    assert!(
+        armed(&after, &section(1)),
+        "an intent the runtime can act on today must not be held back by a \
+         verdict about one the user replaced",
+    );
+    assert!(entry(&after, &section(1)).unwrap().failure.is_none());
+    assert!(!entry(&after, &section(1)).unwrap().pending_disarm);
+    let replacement = fixture.armed_id(&section(1));
+    assert_ne!(replacement, original, "the new intent got its own watch");
+    assert!(
+        stops_for(&fixture, &section(1))
+            .iter()
+            .all(|id| *id == original),
+        "and nothing ever tried to stop anything but the original",
+    );
+}
+
+/// The same rule under a POLICY EDIT rather than a stop and a start.
+///
+/// A policy edit keeps the materialization epoch and moves only the revision,
+/// which is the narrowest way the intent can change -- and it is still a
+/// different question from the one the permanent verdict answered.
+#[test]
+fn a_policy_edit_across_a_stuck_teardown_is_not_refused_by_the_old_failure() {
+    let fixture = Fixture::new();
+    let (_page, _frames) = fixture.attach(100);
+    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+
+    fixture.faults.fail_stops(true);
+    fixture
+        .admission
+        .set("00001", WatchStartAdmission::SectionNotFound);
+    fixture.coordinator.tick();
+    let revoked = fixture.read();
+    assert_eq!(
+        entry(&revoked, &section(1)).unwrap().failure.unwrap().classification,
+        DesiredWatchFailureClassV1::Permanent,
+    );
+    let epoch = entry(&revoked, &section(1)).unwrap().materialization_epoch;
+
+    fixture
+        .admission
+        .set("00001", WatchStartAdmission::admitted(None));
+    assert_eq!(
+        fixture.submit(
+            &section(1),
+            Some(loud_policy()),
+            revision(&revoked, &section(1)),
+            2,
+        ),
+        DesiredWatchOutcomeV1::Committed,
+    );
+    let edited = fixture.read();
+    let row = entry(&edited, &section(1)).expect("the row survives an edit");
+    assert_eq!(
+        row.materialization_epoch, epoch,
+        "an edit adjusts a watch; it does not restart one",
+    );
+    assert!(
+        row.failure.is_none(),
+        "and the verdict about the previous policy is not carried over",
+    );
+
+    fixture.faults.fail_stops(false);
+    fixture.coordinator.tick();
+
+    let after = fixture.read();
+    assert!(armed(&after, &section(1)));
+    assert_eq!(
+        entry(&after, &section(1)).unwrap().materialized.as_ref().unwrap().policy,
+        loud_policy(),
+        "and what is running is the policy the user last asked for",
+    );
+}
+
 
 // Bulk-seeds receipts, because reaching the ledger budget through the writer
 /// would make the setup the slowest part of the test. The rows are exactly
