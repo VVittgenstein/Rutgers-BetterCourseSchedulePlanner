@@ -745,6 +745,303 @@ describe('physical proof withdraws the green light immediately', () => {
   });
 });
 
+describe('one press of a batch button is one basis', () => {
+  it('starts every selected section against the revisions the click was made on', async () => {
+    const server = authority();
+    // The state another tab leaves behind while the first item is in flight:
+    // SECTION started, and OTHER moved on to revision 5 by somebody else.
+    const moved = () => snapshot([
+      entry(SECTION, { revision: 2, epoch: 2 }),
+      entry(OTHER, { policy: null, revision: 5, epoch: 5 }),
+    ]);
+    server.queue(
+      async () => ok(snapshot([
+        entry(SECTION, { policy: null }),
+        entry(OTHER, { policy: null }),
+      ])),
+      async (call) => {
+        if (call.method === 'GET') return ok(moved());
+        const payload = (call.body as {
+          readonly payload: { readonly section: SectionKey; readonly basedOnRevision: number };
+        }).payload;
+        if (payload.section.index === SECTION.index) return ok(committed(moved(), 2));
+        // A real authority: the compare-and-swap decides here rather than
+        // being asserted here, so a re-based second item is not merely
+        // detected -- it is applied, overwriting a change the user never saw.
+        if (payload.basedOnRevision !== 1) return ok(committed(snapshot([
+          entry(SECTION, { revision: 2, epoch: 2 }),
+          entry(OTHER, { revision: 6, epoch: 6 }),
+        ]), 6));
+        return ok({
+          contractVersion: 1,
+          outcome: 'STALE_REVISION',
+          replayed: false,
+          authorityGeneration: 1,
+          currentRevision: 5,
+          maximum: null,
+          committed: null,
+          state: null,
+        }, 409);
+      },
+    );
+    const view = desk(server.fetchImplementation, { selected: [SECTION, OTHER] });
+    await waitFor(() => expect(view.value().intentStatus).toBe('READY'));
+
+    const start = screen.getByRole('button', { name: 'Start selected · 2' });
+    await act(async () => { start.click(); });
+    await waitFor(() => expect(server.writes()).toHaveLength(2));
+
+    const second = (server.writes()[1]?.body as {
+      readonly payload: { readonly basedOnRevision: number; readonly authorityGeneration: number };
+    }).payload;
+    expect(second.basedOnRevision).toBe(1);
+    expect(second.authorityGeneration).toBe(1);
+    // Refused, re-read, and never resubmitted: two writes for two Sections.
+    await waitFor(() => expect(server.reads().length).toBeGreaterThan(1));
+    expect(server.writes()).toHaveLength(2);
+    await waitFor(() => expect(view.value().intentStateFor(OTHER)).toBe('NOT_WATCHING'));
+  });
+
+  it('applies a policy against the generation the click was made on', async () => {
+    const server = authority();
+    // The first item's own commit crosses the rotation threshold: generation
+    // 2, every row renumbered.
+    const rotated = {
+      contractVersion: 1,
+      authorityGeneration: 2,
+      entries: [
+        { ...entry(SECTION, { running: true }), revision: 1, materializationEpoch: 1 },
+        { ...entry(OTHER, { running: true }), revision: 2, materializationEpoch: 2 },
+      ],
+    };
+    server.queue(
+      async () => ok(snapshot([
+        entry(SECTION, { running: true }),
+        entry(OTHER, { running: true, revision: 2, epoch: 2 }),
+      ])),
+      async (call) => {
+        if (call.method === 'GET') return ok(rotated);
+        const payload = (call.body as {
+          readonly payload: { readonly section: SectionKey; readonly authorityGeneration: number };
+        }).payload;
+        if (payload.section.index === SECTION.index) {
+          return ok({
+            contractVersion: 1,
+            outcome: 'COMMITTED',
+            replayed: false,
+            authorityGeneration: 2,
+            currentRevision: null,
+            maximum: null,
+            committed: { revision: 1, materializationEpoch: 1, epochChanged: false },
+            state: rotated,
+          });
+        }
+        // Whatever generation this item presents is what the authority
+        // answers: presenting the one the rotation produced is admitted.
+        if (payload.authorityGeneration !== 1) {
+          return ok({
+            contractVersion: 1,
+            outcome: 'COMMITTED',
+            replayed: false,
+            authorityGeneration: 2,
+            currentRevision: null,
+            maximum: null,
+            committed: { revision: 2, materializationEpoch: 2, epochChanged: false },
+            state: rotated,
+          });
+        }
+        return ok({
+          contractVersion: 1,
+          outcome: 'STALE_GENERATION',
+          replayed: false,
+          authorityGeneration: 2,
+          currentRevision: null,
+          maximum: null,
+          committed: null,
+          state: null,
+        }, 409);
+      },
+    );
+    const view = desk(server.fetchImplementation, { selected: [SECTION, OTHER] });
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+
+    const apply = screen.getByRole('button', { name: 'Apply policy to active' });
+    await act(async () => { apply.click(); });
+    await waitFor(() => expect(server.writes()).toHaveLength(2));
+
+    const generations = server.writes().map((write) => (write.body as {
+      readonly payload: { readonly authorityGeneration: number };
+    }).payload.authorityGeneration);
+    expect(generations).toEqual([1, 1]);
+    // The second item was refused and re-read. It was not rebased onto the
+    // authority the first item's answer happened to carry.
+    await waitFor(() => expect(server.reads().length).toBeGreaterThan(1));
+    expect(server.writes()).toHaveLength(2);
+  });
+});
+
+describe('a mutation whose outcome is unknown withdraws what it was about', () => {
+  it('keeps a lost START addressable, ungreen and unsubmittable until a read lands', async () => {
+    const server = authority();
+    const held = deferred<void>();
+    const running = () => snapshot([entry(SECTION, { revision: 2, epoch: 2, running: true })]);
+    server.queue(
+      async () => ok(snapshot([entry(SECTION, { policy: null })])),
+      async (call) => {
+        // The write reaches the server and is applied; only the answer is
+        // lost. Everything after it is a read that never comes back.
+        if (call.method === 'PUT') throw new TypeError('the response was lost');
+        await held.promise;
+        return ok(running());
+      },
+    );
+    // Not in the user's selection: the desk row exists only because the page
+    // has something outstanding about this Section.
+    const view = desk(server.fetchImplementation, { selected: [] });
+    await waitFor(() => expect(view.value().intentStatus).toBe('READY'));
+    expect(document.querySelector('.watch-workspace__list')).toBeNull();
+
+    await act(async () => {
+      void view.value().setSectionIntent(SECTION, POLICY);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(server.reads()).toHaveLength(2));
+
+    // The row is on the desk, because the watch may already be running.
+    const row = deskRow(SECTION);
+    expect(within(row).queryByText('Watching')).toBeNull();
+    expect(view.value().active).toHaveLength(0);
+    expect(view.value().isActive(SECTION)).toBe(false);
+    // And nothing on it may be acted on while the answer is unknown.
+    expect(view.value().isRemovable(SECTION)).toBe(false);
+    act(() => { view.value().remove(SECTION); });
+    let resubmitted = true;
+    await act(async () => { resubmitted = await view.value().setSectionIntent(SECTION, POLICY); });
+    expect(resubmitted).toBe(false);
+    expect(server.writes()).toHaveLength(1);
+    expect(server.reads()).toHaveLength(2);
+
+    // The read finally lands, and the page adopts what the server really has.
+    await act(async () => {
+      held.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+    expect(server.writes()).toHaveLength(1);
+  });
+
+  it('withdraws the green light on a lost STOP before the re-read comes back', async () => {
+    const server = authority();
+    const held = deferred<void>();
+    server.queue(
+      async () => ok(snapshot([entry(SECTION, { running: true })])),
+      async (call) => {
+        if (call.method === 'PUT') throw new TypeError('the response was lost');
+        await held.promise;
+        return ok(snapshot([entry(SECTION, { policy: null, revision: 2, epoch: 2 })]));
+      },
+    );
+    const view = desk(server.fetchImplementation);
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+
+    await act(async () => {
+      void view.value().setSectionIntent(SECTION, null);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(server.reads()).toHaveLength(2));
+
+    expect(view.value().intentStateFor(SECTION)).not.toBe('WATCHING');
+    expect(view.value().active).toHaveLength(0);
+    expect(within(deskRow(SECTION)).queryByText('Watching')).toBeNull();
+    expect(view.value().isRemovable(SECTION)).toBe(false);
+    // The gesture is never sent again on the page's own initiative.
+    expect(server.writes()).toHaveLength(1);
+
+    await act(async () => {
+      held.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('NOT_WATCHING'));
+    expect(server.writes()).toHaveLength(1);
+  });
+
+  it('keeps a row whose teardown is still running across a failed read', async () => {
+    const server = authority();
+    server.queue(
+      async () => ok(snapshot([
+        entry(OTHER, { policy: null, revision: 2, epoch: 2, pendingDisarm: true }),
+      ])),
+      async () => new Response('nope', { status: 500 }),
+    );
+    // The user never selected it, and the server no longer wants it -- but
+    // its physical watch has not gone, so it is still the only thing that
+    // can be pressed to stop it.
+    const view = desk(server.fetchImplementation, { selected: [] });
+    await waitFor(() => expect(view.value().intentStateFor(OTHER)).toBe('STOPPING'));
+    expect(view.value().intentSaved.map((section) => section.index)).toEqual([OTHER.index]);
+
+    await act(async () => { await view.value().refreshIntent(); });
+
+    expect(view.value().intentStatus).toBe('FAILED');
+    const row = deskRow(OTHER);
+    expect(within(row).getByText('Watch state unreadable')).toBeTruthy();
+    expect(view.value().isRemovable(OTHER)).toBe(false);
+  });
+});
+
+describe('a closed socket is a cutoff over every answer, not a list of sections', () => {
+  it.each([
+    ['a snapshot that had not landed yet', 'NONE', 'CLOSED'],
+    ['a snapshot that had not landed yet', 'NONE', 'ERROR'],
+    ['a snapshot whose row was still preparing', 'PREPARING', 'CLOSED'],
+    ['a snapshot whose row was still preparing', 'PREPARING', 'ERROR'],
+  ] as const)(
+    'does not let a read issued before %s went %s light the page back up',
+    async (_label, before, state) => {
+      const server = authority();
+      const held = deferred<void>();
+      const running = () => ok(snapshot([entry(SECTION, { running: true })]));
+      const inFlight = async () => {
+        await held.promise;
+        return running();
+      };
+      if (before === 'PREPARING') {
+        server.queue(async () => ok(snapshot([entry(SECTION)])), inFlight, running);
+      } else {
+        server.queue(inFlight, running);
+      }
+      const view = desk(server.fetchImplementation);
+      if (before === 'PREPARING') {
+        await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('PREPARING'));
+        act(() => { void view.value().refreshIntent(); });
+      }
+      await waitFor(() => expect(server.reads()).toHaveLength(before === 'PREPARING' ? 2 : 1));
+
+      await act(async () => { view.watch.setState(state); });
+      // The answer to the read that was already in flight arrives AFTER the
+      // close, and says the server had it running.
+      await act(async () => {
+        held.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(view.value().intentStateFor(SECTION)).not.toBe('WATCHING');
+      expect(view.value().active).toHaveLength(0);
+      expect(view.value().isActive(SECTION)).toBe(false);
+      expect(within(deskRow(SECTION)).queryByText('Watching')).toBeNull();
+
+      // Only a read this page asked for after the socket came back may lift
+      // it -- and then the page says what is really running again.
+      await act(async () => { view.watch.setState('OPEN'); });
+      await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
+      expect(view.value().active).toHaveLength(1);
+    },
+  );
+});
+
 describe('the search entry says exactly what the desk says', () => {
   function fixtureButton(): HTMLElement {
     return within(screen.getByLabelText('Section selection fixtures')).getByRole('button');
@@ -991,6 +1288,17 @@ describe('the mutation answer is decoded as strictly as the read', () => {
       'a commit whose state says nothing about the Section it wrote',
       () => ok(committed(snapshot([entry(OTHER, { revision: 2, epoch: 2 })]))),
     ],
+    [
+      'a commit whose row is gone but which reports the numbers it used to hold',
+      () => ok(committed(snapshot([entry(OTHER, { revision: 1, epoch: 1 })]), 2)),
+    ],
+    [
+      'a commit whose row is gone and which reports half of the absent shape',
+      () => ok({
+        ...committed(snapshot([]), 0),
+        committed: { revision: 0, materializationEpoch: 4, epochChanged: true },
+      }),
+    ],
   ])('refuses %s', async (_label, response) => {
     await expect(port(response).submit(
       { section: SECTION, policy: null },
@@ -1022,5 +1330,32 @@ describe('the mutation answer is decoded as strictly as the read', () => {
     expect(full.outcome).toBe('UNAVAILABLE');
     expect(full.maximum).toBe(2048);
     expect(full.snapshot).toBeNull();
+  });
+
+  /**
+   * A STOP whose own receipt crosses the rotation threshold writes a
+   * tombstone and then rotates it away inside the same call, so the state it
+   * ships genuinely has no row for the Section it just wrote. That is a
+   * legitimate answer, and this is the exact body the local authority
+   * produces for it -- `crates/bcsp-local-runtime/tests/desired_watch.rs`
+   * pins the same shape from the other side.
+   */
+  it('accepts a commit whose row was legitimately collected by a rotation', async () => {
+    const result = await port(() => ok({
+      contractVersion: 1,
+      outcome: 'COMMITTED',
+      replayed: false,
+      authorityGeneration: 2,
+      currentRevision: null,
+      maximum: null,
+      committed: { revision: 0, materializationEpoch: 0, epochChanged: true },
+      state: { contractVersion: 1, authorityGeneration: 2, entries: [] },
+    })).submit(
+      { section: SECTION, policy: null },
+      snapshot([entry(SECTION)]) as never,
+    );
+    expect(result.outcome).toBe('COMMITTED');
+    expect(result.snapshot?.generation).toBe(2);
+    expect(result.snapshot?.entries).toEqual([]);
   });
 });

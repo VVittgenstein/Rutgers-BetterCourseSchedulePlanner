@@ -327,14 +327,14 @@ function SelectedSectionManager({
         const live = entry.policy !== null || entry.stopping || entry.running !== null;
         if (live) add(entry.section);
       }
-      return rows;
     }
-    // The read failed, or has not landed yet. Nothing here may be shown as
-    // running -- the badge says unavailable and every control is closed --
-    // but the IDENTITIES from the last trusted read still belong on screen.
-    // Dropping them is not caution: for a Section the user never selected,
-    // this row is the only STOP control in the product, and the watch behind
-    // it may still be running and still ringing.
+    // The identities the provider says must keep a control, added whether or
+    // not the read landed. Dropping them is not caution: for a Section the
+    // user never selected, this row is the only STOP control in the product,
+    // and the watch behind it may still be running and still ringing. That is
+    // true of a read that failed, and just as true of a START whose answer
+    // was lost -- the server may already have armed a watch the snapshot on
+    // screen says nothing at all about.
     for (const sectionKey of watch.intentSaved) add(sectionKey);
     return rows;
   }, [intentReady, watch.intent, watch.intentSaved, watch.selected]);
@@ -525,15 +525,14 @@ function SelectedSectionManager({
                 watch.active.forEach((item) => watch.updatePolicy(item, policy));
                 return;
               }
-              void (async () => {
-                // Sequential, because each submission is compared against the
-                // revision the previous one produced.
-                for (const { sectionKey } of managed) {
-                  const entry = findIntentEntry(watch.intent, sectionKey);
-                  if (entry?.policy == null) continue;
-                  if (!await watch.setSectionIntent(sectionKey, policy)) break;
-                }
-              })();
+              // One press, one basis. Every Section the batch touches, and the
+              // revision each is compared against, come from the snapshot as
+              // it was when the button was clicked -- so a row another tab
+              // changed in the meantime is refused rather than overwritten,
+              // and a rotation the first item triggers stops the rest instead
+              // of being rebased onto.
+              void watch.setSectionIntentBatch((basis) => basis.entries.flatMap((entry) =>
+                entry.policy === null ? [] : [{ sectionKey: entry.section, policy }]));
             }}
             tone="quiet"
           >

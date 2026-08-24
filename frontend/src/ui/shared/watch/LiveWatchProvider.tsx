@@ -43,6 +43,12 @@ import {
 
 export type WatchAudioState = WatchAudioUnlockResult | 'MUTED' | 'UNLOCKING';
 
+/** One submission inside a batch gesture. `policy === null` asks it to stop. */
+export interface WatchIntentBatchItem {
+  readonly sectionKey: SectionKey;
+  readonly policy: WatchPolicyV1 | null;
+}
+
 export const MAX_SELECTED_SECTIONS = 9;
 export const DEFAULT_WATCH_POLICY: WatchPolicyV1 = {
   notificationMode: 'ONE_SHOT',
@@ -163,6 +169,22 @@ export interface LiveWatchValue {
    * A no-op returning `false` on a target without durable intent.
    */
   setSectionIntent(sectionKey: SectionKey, policy: WatchPolicyV1 | null): Promise<boolean>;
+  /**
+   * Runs one BATCH gesture -- one press of Start selected, one press of Apply
+   * policy -- against a single immutable basis.
+   *
+   * `plan` is handed the snapshot captured when the user pressed, and every
+   * submission the batch makes is compared against that one: the generation
+   * it was showing, and each Section's own revision from it. Capturing per
+   * item instead is what turns a batch into a silent overwrite -- the second
+   * item picks up whatever the first item's answer returned, so a change
+   * another tab made to it, or a rotation the first item triggered, is
+   * applied over rather than refused. A refusal ends the batch; nothing is
+   * ever resubmitted.
+   */
+  setSectionIntentBatch(
+    plan: (basis: WatchIntentSnapshot) => readonly WatchIntentBatchItem[],
+  ): Promise<void>;
   refreshIntent(): Promise<void>;
   isSelected(sectionKey: SectionKey): boolean;
   isActive(sectionKey: SectionKey): boolean;
@@ -387,7 +409,7 @@ export function LiveWatchProvider({
    */
   const [disproved, setDisproved] = useState<ReadonlySet<string>>(() => new Set());
   /**
-   * The Sections the last TRUSTED read said the server holds intent for.
+   * The Sections the last TRUSTED read said the server was managing.
    *
    * Kept across a failed read on purpose. A failed read means "this page can
    * no longer say what is running", not "the user never asked for anything":
@@ -395,8 +417,42 @@ export function LiveWatchProvider({
    * off the screen for exactly the sections the user did not put in their
    * selection. The row comes back as unavailable rather than green, and
    * nothing on it may be submitted until a read succeeds again.
+   *
+   * "Managing" is deliberately wider than "wants watched". A tombstone whose
+   * teardown is still running, and a row the server still reports something
+   * materialized for, both name a physical watch that may still be alive --
+   * so a STOP fault followed by a failed read must not be able to hide one.
    */
-  const [intentSaved, setIntentSaved] = useState<readonly SectionKey[]>([]);
+  const [trustedIdentities, setTrustedIdentities] = useState<readonly SectionKey[]>([]);
+  /**
+   * Sections with a mutation whose outcome this page does not know.
+   *
+   * A submission is sent and then anything can happen to the answer: the
+   * response is lost, the body does not decode, the authority refuses and the
+   * re-read hangs. In every one of those the server may or may not have acted
+   * -- and the one thing the page must not do is go on offering the state it
+   * held before as if nothing had been asked. So the Section loses its green
+   * light, its Remove button and its right to submit again until an authority
+   * answer issued no earlier than the mutation itself comes back.
+   *
+   * It is also an IDENTITY. A START whose response was lost may have armed a
+   * watch the previous snapshot knows nothing about, and a row that is not on
+   * the desk is a watch with no control at all.
+   */
+  const [uncertain, setUncertain] = useState<readonly SectionKey[]>([]);
+  /**
+   * True while this page cannot assert that ANY watch is running.
+   *
+   * The socket it was watching through closed. Section-by-section evidence
+   * cannot express that: a read issued before the close can land after it,
+   * carrying rows the server believed were running at the time, and if the
+   * page had nothing running when the socket went -- a snapshot that was
+   * still null, or every row still preparing -- there is no per-Section
+   * evidence for that answer to lose against. It would simply light up. So
+   * the close is recorded as a cutoff over ALL authority answers, and only a
+   * successful read issued after the socket is open again can lift it.
+   */
+  const [socketCutoff, setSocketCutoff] = useState(false);
   const [watchableTerms, setWatchableTerms] = useState<ReadonlySet<string> | null>(() =>
     initialWatchableTerms === undefined ? null : new Set(initialWatchableTerms));
   /**
@@ -423,16 +479,45 @@ export function LiveWatchProvider({
    * is not something a stopped watch says anything about, and the rows are
    * what carry the STOP control.
    */
+  const uncertainKeys = useMemo(
+    () => new Set(uncertain.map(sectionIdentity)),
+    [uncertain],
+  );
   const disprovedSnapshot = useMemo<WatchIntentSnapshot | null>(() => {
-    if (intentSnapshot === null || disproved.size === 0) return intentSnapshot;
+    if (intentSnapshot === null) return null;
+    if (!socketCutoff && disproved.size === 0 && uncertainKeys.size === 0) return intentSnapshot;
     return {
       ...intentSnapshot,
-      entries: intentSnapshot.entries.map((entry) =>
-        entry.running === null || !disproved.has(sectionIdentity(entry.section))
-          ? entry
-          : { ...entry, running: null }),
+      entries: intentSnapshot.entries.map((entry) => {
+        if (entry.running === null) return entry;
+        if (socketCutoff) return { ...entry, running: null };
+        const identity = sectionIdentity(entry.section);
+        return disproved.has(identity) || uncertainKeys.has(identity)
+          ? { ...entry, running: null }
+          : entry;
+      }),
     };
-  }, [disproved, intentSnapshot]);
+  }, [disproved, intentSnapshot, socketCutoff, uncertainKeys]);
+  /**
+   * Every Section this page must keep a control for, whatever it can read.
+   *
+   * The union of what the last trusted read was managing and what this page
+   * has an unsettled mutation for. The second half is not caution: a START
+   * whose response was lost may already be watching, and the snapshot that
+   * predates it says nothing about the Section at all.
+   */
+  const intentSaved = useMemo<readonly SectionKey[]>(() => {
+    if (uncertain.length === 0) return trustedIdentities;
+    const rows = [...trustedIdentities];
+    const known = new Set(rows.map(sectionIdentity));
+    for (const sectionKey of uncertain) {
+      const identity = sectionIdentity(sectionKey);
+      if (known.has(identity)) continue;
+      known.add(identity);
+      rows.push(sectionKey);
+    }
+    return rows;
+  }, [trustedIdentities, uncertain]);
   const intentActive = useMemo<readonly ActiveWatchView[]>(() => {
     if (intent === undefined || disprovedSnapshot === null) return [];
     return disprovedSnapshot.entries.flatMap((entry) => entry.running === null ? [] : [{
@@ -489,9 +574,31 @@ export function LiveWatchProvider({
    * operation issued AFTER the evidence may clear it.
    */
   const disprovedAt = useRef(new Map<string, number>());
+  /**
+   * Each unsettled mutation, against the operation counter it was sent under.
+   *
+   * Cleared by an authority answer from that operation or a later one, and by
+   * nothing else: an answer to a read that was already in flight when the
+   * mutation went out describes the world before it, so treating it as the
+   * outcome would restore exactly the state the mutation may have replaced.
+   */
+  const uncertainAt = useRef(new Map<string, { readonly at: number; readonly section: SectionKey }>());
+  const uncertainKeysRef = useRef<ReadonlySet<string>>(new Set());
+  /**
+   * The operation counter at the moment the socket last reached OPEN, while a
+   * cutoff stands.
+   *
+   * `null` means the cutoff cannot be lifted yet -- the socket is not open, so
+   * no read that could lift it has been issued. Once it is a number, only an
+   * answer to an operation issued AFTER it counts: a read that was in flight
+   * across the close is not evidence about the connection that replaced it.
+   */
+  const cutoffReleaseAt = useRef<number | null>(null);
+  const socketCutoffRef = useRef(false);
 
   useEffect(() => { intentSnapshotRef.current = intentSnapshot; }, [intentSnapshot]);
   useEffect(() => { intentStatusRef.current = intentStatus; }, [intentStatus]);
+  useEffect(() => { uncertainKeysRef.current = uncertainKeys; }, [uncertainKeys]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { activeRef.current = effectiveActive; }, [effectiveActive]);
   useEffect(() => { pendingRef.current = pending; }, [pending]);
@@ -612,23 +719,62 @@ export function LiveWatchProvider({
       cleared = true;
     }
     if (cleared) setDisproved(new Set(disprovedAt.current.keys()));
-    setIntentSaved(snapshot.entries.flatMap((entry) =>
-      entry.policy === null ? [] : [entry.section]));
+    // A mutation's own answer settles it, and so does any later answer.
+    // Anything issued EARLIER describes the world before the submission and
+    // says nothing about whether it took effect.
+    let settled = false;
+    for (const [identity, pending] of [...uncertainAt.current]) {
+      if (sequence < pending.at) continue;
+      uncertainAt.current.delete(identity);
+      settled = true;
+    }
+    if (settled) {
+      setUncertain([...uncertainAt.current.values()].map((pending) => pending.section));
+    }
+    // The socket-wide cutoff is lifted only by a read this page asked for
+    // after the socket was open again. A read that crossed the close, however
+    // late it lands, is an answer about a connection that no longer exists.
+    if (
+      socketCutoffRef.current
+      && cutoffReleaseAt.current !== null
+      && sequence > cutoffReleaseAt.current
+    ) {
+      socketCutoffRef.current = false;
+      cutoffReleaseAt.current = null;
+      setSocketCutoff(false);
+    }
+    // Every row that could still name a physical watch, not only the ones the
+    // user currently wants: a teardown in progress and a materialization the
+    // server still reports both outlive `policy`.
+    setTrustedIdentities(snapshot.entries.flatMap((entry) =>
+      entry.policy === null && !entry.stopping && entry.running === null
+        ? []
+        : [entry.section]));
   }, []);
 
   /**
-   * Records first-hand evidence that a Section is no longer being watched.
+   * Records that a submission for this Section is in flight and its outcome
+   * is not known.
    *
-   * `sections === null` means the whole physical picture is gone -- the
-   * socket this page was watching through closed -- so nothing the last
-   * snapshot said is running can still be asserted by this page.
+   * Called as the operation reaches the front of the queue and immediately
+   * before the request goes out, so the page stops asserting the pre-gesture
+   * state from the moment the gesture is actually asked.
    */
-  const disprove = useCallback((sections: readonly SectionKey[] | null) => {
-    const identities = sections === null
-      ? (intentSnapshotRef.current?.entries ?? [])
-        .filter((entry) => entry.running !== null)
-        .map((entry) => sectionIdentity(entry.section))
-      : sections.map(sectionIdentity);
+  const markUncertain = useCallback((section: SectionKey, sequence: number) => {
+    uncertainAt.current.set(sectionIdentity(section), { at: sequence, section });
+    setUncertain([...uncertainAt.current.values()].map((pending) => pending.section));
+  }, []);
+
+  /**
+   * Records first-hand evidence that a named Section is no longer being
+   * watched.
+   *
+   * Per-Section, and only per-Section. Losing the socket entirely is not a
+   * longer list of Sections -- there may be none to list -- so that is
+   * recorded as a cutoff over every answer instead. See `socketCutoff`.
+   */
+  const disprove = useCallback((sections: readonly SectionKey[]) => {
+    const identities = sections.map(sectionIdentity);
     if (identities.length === 0) return;
     for (const identity of identities) disprovedAt.current.set(identity, authorityIssued.current);
     setDisproved(new Set(disprovedAt.current.keys()));
@@ -672,21 +818,25 @@ export function LiveWatchProvider({
    * replaying the user's gesture against the new state would apply a decision
    * they made about a state that no longer exists.
    */
-  const submitIntent = useCallback(async (
+  const submitAgainst = useCallback(async (
     section: SectionKey,
     policy: WatchPolicyV1 | null,
+    basis: WatchIntentSnapshot,
   ): Promise<boolean> => {
     if (intent === undefined) return false;
-    const snapshot = intentSnapshotRef.current;
-    // Nothing trustworthy to compare against, so there is nothing to submit:
-    // re-read and let the user decide again against a state they can see.
-    if (snapshot === null || intentStatusRef.current !== 'READY') {
-      await refreshIntent();
+    // A Section whose last submission has not been answered may not be
+    // submitted again. The page does not know what the server did with the
+    // first one, so the second would be a decision made about a state nobody
+    // can vouch for -- and re-sending the first is exactly the automatic
+    // replay this surface must never do.
+    if (uncertainKeysRef.current.has(sectionIdentity(section))) {
+      addNotice('COMMAND_FAILED', 'ALERT', section);
       return false;
     }
     const settled = await runAuthority(async (sequence) => {
+      markUncertain(section, sequence);
       try {
-        const result = await intent.submit({ section, policy }, snapshot);
+        const result = await intent.submit({ section, policy }, basis);
         if (result.snapshot !== null) applyAuthority(sequence, result.snapshot, 'READY');
         if (result.outcome === 'COMMITTED') return 'COMMITTED' as const;
         addNotice(
@@ -707,10 +857,69 @@ export function LiveWatchProvider({
     // The re-read is its own operation in the same domain, so it can never
     // land before the answer that asked for it -- and it is never the user's
     // gesture sent again. The revision they held is stale precisely because
-    // the state changed.
+    // the state changed. It is also what settles the Section: until it comes
+    // back, the row stays unusable rather than falling back to what the page
+    // held before the gesture.
     if (settled === 'REREAD') await refreshIntent();
     return settled === 'COMMITTED';
-  }, [addNotice, applyAuthority, intent, refreshIntent, runAuthority]);
+  }, [addNotice, applyAuthority, intent, markUncertain, refreshIntent, runAuthority]);
+
+  /**
+   * The snapshot a gesture made right now compares against, or `null` when
+   * there is nothing trustworthy to compare against at all.
+   */
+  const gestureBasis = useCallback((): WatchIntentSnapshot | null => {
+    if (intentStatusRef.current !== 'READY') return null;
+    return intentSnapshotRef.current;
+  }, []);
+
+  const submitIntent = useCallback(async (
+    section: SectionKey,
+    policy: WatchPolicyV1 | null,
+  ): Promise<boolean> => {
+    if (intent === undefined) return false;
+    const basis = gestureBasis();
+    // Nothing trustworthy to compare against, so there is nothing to submit:
+    // re-read and let the user decide again against a state they can see.
+    if (basis === null) {
+      await refreshIntent();
+      return false;
+    }
+    return await submitAgainst(section, policy, basis);
+  }, [gestureBasis, intent, refreshIntent, submitAgainst]);
+
+  /**
+   * Runs several submissions against ONE basis, in order, stopping at the
+   * first that is not committed.
+   *
+   * Sequential because the alternative races the batch against itself -- two
+   * writes to the same authority in flight at once, one of which must lose.
+   * One basis because the whole point of a batch is that the user pressed
+   * once, about one screen: an item that compared against what the item
+   * before it produced would be applying the user's decision to a state they
+   * never saw, and would overwrite a change another tab made to it instead of
+   * being refused.
+   */
+  const runIntentBatch = useCallback(async (
+    basis: WatchIntentSnapshot,
+    items: readonly WatchIntentBatchItem[],
+  ) => {
+    for (const item of items) {
+      if (!await submitAgainst(item.sectionKey, item.policy, basis)) break;
+    }
+  }, [submitAgainst]);
+
+  const submitIntentBatch = useCallback(async (
+    plan: (basis: WatchIntentSnapshot) => readonly WatchIntentBatchItem[],
+  ) => {
+    if (intent === undefined) return;
+    const basis = gestureBasis();
+    if (basis === null) {
+      await refreshIntent();
+      return;
+    }
+    await runIntentBatch(basis, plan(basis));
+  }, [gestureBasis, intent, refreshIntent, runIntentBatch]);
 
   const send = useCallback((command: WatchClientCommandV1): boolean => {
     try {
@@ -987,6 +1196,11 @@ export function LiveWatchProvider({
       setConnection(next);
       if (next === 'OPEN') {
         hadConnection.current = true;
+        // The cutoff is not lifted here. A socket being open again says the
+        // page COULD learn what is running; it does not say what is. Only a
+        // read issued from this point on can, so this is the line the release
+        // is measured from.
+        if (socketCutoffRef.current) cutoffReleaseAt.current = authorityIssued.current;
         sendQueuedStart();
       } else if (next === 'CLOSED' || next === 'ERROR') {
         const connectionOwnedState = hadConnection.current
@@ -1011,7 +1225,16 @@ export function LiveWatchProvider({
         // longer something this page can assert. Without this the badge, the
         // active count and the connection line all keep saying "watching"
         // over a closed socket until some future GET happens to disagree.
-        disprove(null);
+        //
+        // Recorded as a cutoff over every answer rather than as a list of
+        // Sections, because the list can be empty and the statement still
+        // true: a page whose first read had not landed, or whose rows were
+        // all still preparing, has nothing to name -- and a read issued
+        // before the close, returning RUNNING after it, would light the whole
+        // desk up over a socket that is gone.
+        socketCutoffRef.current = true;
+        cutoffReleaseAt.current = null;
+        setSocketCutoff(true);
         continuousEpisodeIdsRef.current = [];
         setContinuousEpisodeIds([]);
         audioController.stopContinuous();
@@ -1091,6 +1314,11 @@ export function LiveWatchProvider({
       return !activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey));
     }
     if (intentStatusRef.current !== 'READY') return false;
+    // A submission whose outcome is unknown is the same uncertainty in a
+    // different place: the server may already have armed a watch this page's
+    // snapshot knows nothing about, and removing the row would take away the
+    // only thing that could ever stop it.
+    if (uncertainKeysRef.current.has(sectionIdentity(sectionKey))) return false;
     const entry = findIntentEntry(intentSnapshotRef.current, sectionKey);
     if (entry === null) return true;
     // A tombstone whose teardown is still running, or that still names a live
@@ -1191,9 +1419,17 @@ export function LiveWatchProvider({
     // running from the stored rows, so a page that also sent a START would
     // be asserting a second answer to the same question.
     if (intent !== undefined) {
-      const snapshot = intentSnapshotRef.current;
+      // ONE basis for the whole press, captured before anything is awaited.
+      // Which Sections still need starting and what each of them is compared
+      // against both come from it, so the batch acts on the screen the user
+      // was looking at rather than on whatever the previous item produced.
+      const basis = gestureBasis();
+      if (basis === null) {
+        await refreshIntent();
+        return;
+      }
       const wanted = selectedRef.current.filter((sectionKey) => {
-        const entry = snapshot === null ? null : findIntentEntry(snapshot, sectionKey);
+        const entry = findIntentEntry(basis, sectionKey);
         return entry === null || entry.policy === null;
       });
       if (wanted.length === 0) return;
@@ -1201,12 +1437,10 @@ export function LiveWatchProvider({
       setStarting(true);
       try {
         if (audioStateRef.current !== 'READY') await enableSound();
-        // Sequential on purpose: each submission compares against the
-        // revision the previous one produced, so a batch that raced itself
-        // would have every entry after the first refused as stale.
-        for (const sectionKey of wanted) {
-          if (!await submitIntent(sectionKey, policy)) break;
-        }
+        await runIntentBatch(
+          basis,
+          wanted.map((sectionKey) => ({ sectionKey, policy })),
+        );
         if (runtime.watch.state !== 'OPEN') runtime.watch.connect();
       } finally {
         startingRef.current = false;
@@ -1246,7 +1480,16 @@ export function LiveWatchProvider({
         setStarting(false);
       }
     }
-  }, [addNotice, enableSound, intent, runtime, sendQueuedStart, submitIntent]);
+  }, [
+    addNotice,
+    enableSound,
+    gestureBasis,
+    intent,
+    refreshIntent,
+    runIntentBatch,
+    runtime,
+    sendQueuedStart,
+  ]);
 
   /** Stops watching one section the page is currently showing as watched. */
   const stopSection = useCallback((sectionKey: SectionKey) => {
@@ -1553,6 +1796,7 @@ export function LiveWatchProvider({
       return entry === null ? 'NOT_WATCHING' : watchIntentState(disprovedSnapshot, entry);
     },
     setSectionIntent: submitIntent,
+    setSectionIntentBatch: submitIntentBatch,
     refreshIntent,
     isSelected: (sectionKey) => selected.some((value) => sameSection(value, sectionKey)),
     isActive: (sectionKey) =>
@@ -1600,6 +1844,7 @@ export function LiveWatchProvider({
     notices,
     refreshIntent,
     submitIntent,
+    submitIntentBatch,
     observations,
     pending,
     refreshTelemetry,

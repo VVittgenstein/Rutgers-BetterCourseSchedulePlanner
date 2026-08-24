@@ -172,6 +172,17 @@ const MUTATION_RESULT_KEYS = [
 const COMMITTED_KEYS = ['revision', 'materializationEpoch', 'epochChanged'] as const;
 
 /**
+ * The `revision` and `materializationEpoch` a commit reports when the row it
+ * wrote is legitimately no longer in the authority the answer carries.
+ *
+ * Frozen on both sides. The server produces exactly this pair for an absent
+ * row and never for a present one, so requiring it here is what separates
+ * "the row was collected, which is allowed" from "these numbers came from a
+ * different read of a different authority", which is not.
+ */
+const ABSENT_COMMITTED_NUMBER = 0;
+
+/**
  * Which of the two optional numbers each answer is required to carry, and
  * which it is forbidden to.
  *
@@ -258,11 +269,24 @@ function parseMutationResult(
     // this Section all describe the same write -- so a body assembled from
     // reads taken either side of a rotation contradicts itself here rather
     // than becoming the page's next `basedOnRevision`.
+    //
+    // A MISSING row is a legal outcome, and exactly one shape of it is. A
+    // STOP whose own receipt crosses the rotation threshold writes a
+    // tombstone and then rotates it away inside the same call, and so does a
+    // concurrent rotation landing between the decision and the answer; the
+    // commit really happened, and there is genuinely no row left. What that
+    // answer may not do is report the numbers the row held BEFORE it went,
+    // because no row in the state it shipped holds them. So absence is
+    // `0 / 0` and nothing else -- a pair no live row ever carries.
+    if (data.authorityGeneration !== snapshot.generation) {
+      throw new LocalDesiredWatchError(status);
+    }
+    const expected = entry === undefined
+      ? { revision: ABSENT_COMMITTED_NUMBER, epoch: ABSENT_COMMITTED_NUMBER }
+      : { revision: entry.revision, epoch: entry.epoch };
     if (
-      data.authorityGeneration !== snapshot.generation
-      || entry === undefined
-      || entry.revision !== data.committed.revision
-      || entry.epoch !== data.committed.materializationEpoch
+      expected.revision !== data.committed.revision
+      || expected.epoch !== data.committed.materializationEpoch
     ) {
       throw new LocalDesiredWatchError(status);
     }
