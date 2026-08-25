@@ -156,8 +156,8 @@ export class WatchAudioController {
     if (this.#disposed) return 'FAILED';
     const context = this.#context;
     if (context === null) return null;
+    if (this.#audioFailure || context.state === 'closed') return 'FAILED';
     if (context.state === 'running') return 'READY';
-    if (context.state === 'closed' || this.#audioFailure) return 'FAILED';
     return 'BLOCKED';
   }
 
@@ -184,8 +184,14 @@ export class WatchAudioController {
     const context = this.#context;
     if (this.#disposed || context === null) return this.state;
     if (context.state === 'running') {
-      this.#audioFailure = false;
       this.#gestureRequired = false;
+      // A running context is not proof the OUTPUT works. `#audioFailure` is
+      // only ever set while the context was running and a voice still failed
+      // to start -- a device that went away, a node budget that ran out --
+      // and nothing about coming back from hidden says that was fixed. Only
+      // the user asking again clears it, because only then has anything been
+      // retried.
+      if (this.#audioFailure) return this.#report('FAILED');
       return this.#report('READY');
     }
     if (context.state === 'closed') {
@@ -209,8 +215,7 @@ export class WatchAudioController {
     }
     this.#healing = false;
     if (readContextState(context) === 'running') {
-      this.#audioFailure = false;
-      return this.#report('READY');
+      return this.#report(this.#audioFailure ? 'FAILED' : 'READY');
     }
     return this.#report('BLOCKED');
   }

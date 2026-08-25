@@ -417,10 +417,10 @@ function defaultPageVisibility(): boolean {
  * not two. A cue with no matching alert falls back to its own identity, which
  * still deduplicates it against itself.
  */
-function cueSubject(cue: WatchAudioCueV1, alerts: readonly WatchAlertV1[]): string {
+function cueSubject(cue: WatchAudioCueV1, episodeByWatch: ReadonlyMap<string, string>): string {
   if (cue.trigger.kind === 'CONTINUOUS_EPISODE') return `episode:${cue.trigger.episodeId}`;
-  const alert = alerts.find((candidate) => candidate.episode.activeWatchId === cue.activeWatchId);
-  return alert === undefined ? `cue:${cue.cueId}` : `episode:${alert.episode.episodeId}`;
+  const episodeId = episodeByWatch.get(cue.activeWatchId);
+  return episodeId === undefined ? `cue:${cue.cueId}` : `episode:${episodeId}`;
 }
 
 export interface LiveWatchProviderProps {
@@ -733,6 +733,16 @@ export function LiveWatchProvider({
    */
   const connectionIntents = useRef(new Map<string, WatchStartItemV1>());
   /**
+   * The episode a running watch last raised an alert for.
+   *
+   * Written synchronously as the alert is handled, because the cue that may
+   * fail for it can arrive in the SAME burst -- the server writes both frames
+   * into one dispatch. A copy refreshed by a passive effect is still empty
+   * when the second frame is handled, and the page would tell the user about
+   * one Section twice.
+   */
+  const alertEpisodeByWatch = useRef(new Map<string, string>());
+  /**
    * Bumped whenever the plan is edited, so what the page RENDERS about it can
    * follow. The map itself stays a ref because the reconnect handler reads it
    * synchronously, in the same turn the socket opens.
@@ -791,12 +801,14 @@ export function LiveWatchProvider({
    * that a page which cannot post one never queues it -- a request nobody
    * will render is a promise the page cannot keep.
    */
+  const canNotify = useCallback(
+    () => notificationsEnabledRef.current && notificationPermissionRef.current === 'granted',
+    [],
+  );
   const queueNotification = useCallback((
     request: WatchNotificationRequest | null,
   ) => {
     if (request === null) return;
-    if (!notificationsEnabledRef.current) return;
-    if (notificationPermissionRef.current !== 'granted') return;
     setNotificationQueue((current) => [...current.slice(-7), request]);
   }, []);
 
@@ -1362,6 +1374,10 @@ export function LiveWatchProvider({
       } else {
         setAlerts((current) => replaceByIdentity(current, event.alert, (value) => value.alertId));
       }
+      alertEpisodeByWatch.current.set(
+        event.alert.episode.activeWatchId,
+        event.alert.episode.episodeId,
+      );
       if (!announcedAlerts.current.has(event.alert.alertId) && event.alert.visible) {
         announcedAlerts.current.add(event.alert.alertId);
         const announcer: WatchNotice = {
@@ -1377,7 +1393,7 @@ export function LiveWatchProvider({
         // to notice -- which is the whole case a page-level notification
         // exists for. A page that is visible with working audio gets nothing
         // here; if its cue then fails, the branch below covers it.
-        if (!pageVisibleRef.current || audioStateRef.current !== 'READY') {
+        if (canNotify() && (!pageVisibleRef.current || audioStateRef.current !== 'READY')) {
           queueNotification(notificationLedger.current.request(
             'SECTION_OPEN',
             `episode:${event.alert.episode.episodeId}`,
@@ -1406,10 +1422,10 @@ export function LiveWatchProvider({
         // it, and only now does the page learn that the sound did not play.
         // Keyed by the same subject as the alert, so a section that was
         // already announced is not announced twice.
-        if (outcome === 'AUTOPLAY_BLOCKED' || outcome === 'FAILED') {
+        if (canNotify() && (outcome === 'AUTOPLAY_BLOCKED' || outcome === 'FAILED')) {
           queueNotification(notificationLedger.current.request(
             'CUE_FAILED',
-            cueSubject(disposition.cue, alertsRef.current),
+            cueSubject(disposition.cue, alertEpisodeByWatch.current),
             disposition.cue.sectionKey,
           ));
         }
@@ -1440,7 +1456,7 @@ export function LiveWatchProvider({
         audioController.stopContinuous();
       }
     }
-  }, [addNotice, audioController, bumpConnectionPlan, disprove, intent, loadBatchStatus, queueNotification, refreshIntent, send, startContinuousAudio]);
+  }, [addNotice, audioController, bumpConnectionPlan, canNotify, disprove, intent, loadBatchStatus, queueNotification, refreshIntent, send, startContinuousAudio]);
 
   useEffect(() => {
     const unsubscribeEvents = runtime.watch.subscribe(handleServerEvent);
@@ -1468,7 +1484,13 @@ export function LiveWatchProvider({
     const unsubscribeState = runtime.watch.subscribeState((next) => {
       setConnection(next);
       if (next === 'OPEN') {
-        const reconnected = !hadConnection.current;
+        // Whether this page already has a START on its way for this press.
+        // The first Start opens the socket itself and queues its own frame;
+        // re-arming there would send the same frame twice and arm every
+        // Section the user pressed once, twice. An attempt that FAILED before
+        // opening has no queued frame left -- the close cleared it -- and the
+        // user's decision is still standing, so that one is re-armed.
+        const alreadySending = queuedStart.current !== null;
         hadConnection.current = true;
         setLastContactAt(runtime.watch.lastContactAt);
         setContactEvaluatedAt(now());
@@ -1482,7 +1504,7 @@ export function LiveWatchProvider({
         // durable intent. Where the server holds the intent it also holds the
         // watches, and re-arming from here would be this page asserting a
         // second answer to a question the authority has already answered.
-        if (intent === undefined && reconnected && connectionIntents.current.size > 0) {
+        if (intent === undefined && !alreadySending && connectionIntents.current.size > 0) {
           const items = [...connectionIntents.current.values()];
           for (const item of items) {
             pendingPolicies.current.set(sectionIdentity(item.sectionKey), item.policy);
@@ -1815,7 +1837,13 @@ export function LiveWatchProvider({
           basis,
           wanted.map((sectionKey) => ({ sectionKey, policy })),
         );
-        if (runtime.watch.state !== 'OPEN') runtime.watch.connect();
+        // The submission can take seconds, and the user may have pressed
+        // Disconnect while it was in flight. Connecting here would undo that
+        // decision with work that was already running -- which is precisely
+        // what the barrier exists to prevent.
+        if (runtime.watch.state !== 'OPEN' && runtime.watch.recovery.phase === 'IDLE') {
+          runtime.watch.connect();
+        }
       } finally {
         startingRef.current = false;
         setStarting(false);
@@ -1907,8 +1935,11 @@ export function LiveWatchProvider({
         connectionIntents.current.set(identity, { sectionKey: watch.sectionKey, policy });
         bumpConnectionPlan();
       }
-      setActive((current) => current.map((value) =>
-        value.activeWatchId === watch.activeWatchId ? { ...value, policy } : value));
+      // `active` deliberately keeps the policy the START was accepted under.
+      // This protocol has no answer to an UPDATE_POLICY -- the frame leaving
+      // the socket is the last thing this page learns about it -- so writing
+      // the request in here would make the readiness comparison compare the
+      // page against itself and pass by construction.
     }
   }, [bumpConnectionPlan, intent, send, submitIntent]);
 
@@ -2158,12 +2189,23 @@ export function LiveWatchProvider({
           sameSection(watch.sectionKey, item.sectionKey) && samePolicy(watch.policy, item.policy))).length;
       return { wanted, armed };
     }
-    if (disprovedSnapshot === null) return { wanted: 0, armed: 0 };
-    const wanted = disprovedSnapshot.entries.filter((entry) => entry.policy !== null);
-    const armed = wanted.filter((entry) =>
+    // The page could not read the authority. Whatever the last trusted read
+    // named may still be running, and answering "nothing is being watched"
+    // about it is the same comfortable lie as answering "everything is fine":
+    // the desk keeps those rows precisely because they cannot be dismissed.
+    if (disprovedSnapshot === null) return { wanted: intentSaved.length, armed: 0 };
+    const wantedEntries = disprovedSnapshot.entries.filter((entry) => entry.policy !== null);
+    const armed = wantedEntries.filter((entry) =>
       watchIntentState(disprovedSnapshot, entry) === 'WATCHING').length;
-    return { wanted: wanted.length, armed };
-  }, [connectionPlanRevision, disprovedSnapshot, effectiveActive, intent]);
+    // A submission whose outcome is unknown counts as wanted even when the
+    // snapshot has never heard of the Section. A START whose answer was lost
+    // may have armed a watch this page cannot see -- or may have armed
+    // nothing at all -- and until one of those is settled the page is not in
+    // a position to promise anything.
+    const known = new Set(wantedEntries.map((entry) => sectionIdentity(entry.section)));
+    const unsettled = uncertain.filter((section) => !known.has(sectionIdentity(section))).length;
+    return { wanted: wantedEntries.length + unsettled, armed };
+  }, [connectionPlanRevision, disprovedSnapshot, effectiveActive, intent, intentSaved, uncertain]);
 
   // Computed on EVERY render rather than memoised. The comparison is a
   // subtraction, and doing it here is what makes an expired heartbeat expire:
@@ -2176,7 +2218,13 @@ export function LiveWatchProvider({
     armed: watchCoverage.armed,
     connectionOpen: connection === 'OPEN',
     recovery: recovery.phase,
-    connectionCutoff: socketCutoff,
+    // The cutoff invalidates AUTHORITY answers, and only a target with a
+    // durable authority has any. On a page whose watches live and die with
+    // its own socket, the evidence is the START result on the connection that
+    // is open now -- which a close already cleared. Feeding the cutoff in
+    // there would latch the page yellow for good: nothing on that target ever
+    // lifts it.
+    connectionCutoff: intent !== undefined && socketCutoff,
     hasContact: lastContactAt !== null,
     contactFresh,
     intentUnreadable: intent !== undefined && intentStatus !== 'READY' && intentStatus !== 'DISABLED',
@@ -2236,11 +2284,19 @@ export function LiveWatchProvider({
       return undefined;
     }
     const due = since + WATCH_RECOVERY_NOTIFICATION_GRACE_MILLISECONDS;
-    const announce = () => queueNotification(notificationLedger.current.requestOutage(
-      since,
-      now(),
-      WATCH_RECOVERY_NOTIFICATION_GRACE_MILLISECONDS,
-    ));
+    // Deliverability is decided BEFORE the ledger is asked. The ledger
+    // remembers what it has already said, and a request it hands out is spent
+    // -- so consuming one the page cannot post would mean the user who grants
+    // permission a minute later is never told about the outage they are still
+    // in.
+    const announce = () => {
+      if (!canNotify()) return;
+      queueNotification(notificationLedger.current.requestOutage(
+        since,
+        now(),
+        WATCH_RECOVERY_NOTIFICATION_GRACE_MILLISECONDS,
+      ));
+    };
     if (now() >= due) {
       announce();
       return undefined;
@@ -2250,7 +2306,7 @@ export function LiveWatchProvider({
       Math.max(0, due - now()),
     ));
     return () => globalThis.clearTimeout(timer);
-  }, [now, queueNotification, recovery]);
+  }, [canNotify, now, queueNotification, recovery]);
 
   const nextFreshnessExpiry = useMemo(() => {
     const now = Date.now();

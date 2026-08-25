@@ -764,7 +764,19 @@ export function WatchWorkspace({
               <ActionButton disabled={watch.audioState !== 'READY'} onClick={() => watch.setMuted(!watch.muted)} tone="quiet">
                 {i18n.t(watch.muted ? 'watch.unmute' : 'watch.mute')}
               </ActionButton>
-              <ActionButton disabled={watch.connection === 'IDLE' || watch.connection === 'CLOSED'} onClick={watch.disconnect} tone="quiet">{i18n.t('watch.disconnect')}</ActionButton>
+              {/*
+                Reachable for as long as anything is trying to connect. A page
+                waiting out a thirty-second backoff is CLOSED and still on its
+                way back, so disabling it there would take the only control
+                that stops recovery away at the one moment the user wants it.
+              */}
+              <ActionButton
+                disabled={watch.connection !== 'OPEN'
+                  && watch.connection !== 'CONNECTING'
+                  && watch.recovery.phase === 'IDLE'}
+                onClick={watch.disconnect}
+                tone="quiet"
+              >{i18n.t('watch.disconnect')}</ActionButton>
             </div>
             <p className="watch-workspace__inline-status" role="status">{i18n.t('watch.audio_summary', {
               audio: audioLabel(watch.audioState, i18n),

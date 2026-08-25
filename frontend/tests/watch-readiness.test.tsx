@@ -466,9 +466,13 @@ describe('readiness in the running page', () => {
       if (watch === undefined) throw new Error('expected an active watch');
       context.value().updatePolicy(watch, { ...DEFAULT_WATCH_POLICY, maxAudible: 9 });
     });
-    // The plan now says maxAudible 9 and the running watch says 3. The page
-    // is watching, but not the way the user asked for.
-    expect(context.value().readiness.level).toBe('READY');
+    // The plan now says maxAudible 9 and the running watch says 3. This
+    // protocol has no answer to an UPDATE_POLICY, so the page cannot claim
+    // the watch is running the way the user asked for -- and a page that
+    // compared its own request against its own echo would always agree with
+    // itself.
+    expect(context.value().readiness.level).toBe('DEGRADED');
+    expect(context.value().readiness.reason).toBe('PREPARING');
   });
 });
 
@@ -678,5 +682,231 @@ describe('readiness with a durable authority', () => {
       command.type === 'START_WATCH'
       || command.type === 'STOP_WATCH'
       || command.type === 'UPDATE_POLICY')).toEqual([]);
+  });
+});
+
+describe('what an independent review found, pinned', () => {
+  it('arms a Section once when the Start press is what opened the socket', async () => {
+    const context = harness();
+    context.watch.state = 'IDLE';
+    await act(async () => { await context.value().startSelected(DEFAULT_WATCH_POLICY); });
+    await act(async () => {
+      context.watch.transition('OPEN');
+      context.watch.contact(context.clock.now);
+    });
+
+    // One press, one watch. The press opens the connection AND queues its own
+    // frame; a re-arm that did not notice would arm every Section twice, and
+    // the user would be told about the same opening twice.
+    const starts = context.watch.commands.filter((command) => command.type === 'START_WATCH');
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toEqual({
+      type: 'START_WATCH',
+      items: [{ sectionKey: SECTION_A, policy: DEFAULT_WATCH_POLICY }],
+    });
+  });
+
+  it('recovers from a connection that dropped and comes back, without latching yellow', async () => {
+    const context = harness();
+    await startWatching(context);
+    expect(context.value().readiness.level).toBe('READY');
+
+    await act(async () => {
+      context.watch.transition('CLOSED');
+      context.watch.recover({ phase: 'WAITING', attempt: 1, nextAttemptAt: context.clock.now + 1_000 });
+    });
+    expect(context.value().readiness.level).toBe('DEGRADED');
+
+    await act(async () => {
+      context.watch.transition('OPEN');
+      context.watch.contact(context.clock.now);
+      context.watch.recover({ phase: 'IDLE', attempt: 0, nextAttemptAt: null });
+    });
+    await act(async () => {
+      context.watch.emit({
+        type: 'START_RESULT',
+        result: {
+          contractVersion: 1,
+          items: [{
+            sectionKey: SECTION_A,
+            status: 'ACTIVE',
+            activeWatchId: ACTIVE_A,
+            startedAt: AT,
+            reason: null,
+          }],
+          activeWatchCount: 1,
+        },
+      } as WatchServerEventV1);
+    });
+
+    // Everything is true again: open, armed, audible, visible, unmuted. A
+    // page still reporting "reconnecting" here would be a permanent red over
+    // a connection that is fine, which is its own kind of lie.
+    expect(context.value().readiness.level).toBe('READY');
+  });
+
+  it('does not promise anything while a submission it cannot see the answer to is outstanding', async () => {
+    // A durable-intent page: Section A is watched and green. The user starts
+    // a SECOND Section and the answer never comes back.
+    const other: SectionKey = { term: 'T2030F', campus: 'CAMPUS_A', index: '00002' };
+    const snapshot: WatchIntentSnapshot = {
+      generation: 4,
+      entries: [{
+        section: SECTION_A,
+        policy: DEFAULT_WATCH_POLICY,
+        revision: 7,
+        epoch: 2,
+        running: {
+          generation: 4,
+          revision: 7,
+          epoch: 2,
+          policy: DEFAULT_WATCH_POLICY,
+          activeWatchId: ACTIVE_A,
+        },
+        stopping: false,
+        waitingForSlot: false,
+        problem: null,
+      }],
+    };
+    let releaseSubmit: (() => void) | null = null;
+    const context = harness({
+      intent: {
+        read: async () => snapshot,
+        submit: async () => {
+          await new Promise<void>((resolve) => { releaseSubmit = resolve; });
+          throw new Error('never answered');
+        },
+      },
+    });
+    await act(async () => {
+      context.watch.contact(context.clock.now);
+      await context.value().refreshIntent();
+    });
+    await act(async () => { await context.value().enableSound(); });
+    expect(context.value().readiness.level).toBe('READY');
+
+    await act(async () => {
+      void context.value().setSectionIntent(other, DEFAULT_WATCH_POLICY);
+      await Promise.resolve();
+    });
+
+    // The snapshot has never heard of this Section, so nothing about it can
+    // be read off the projection -- and that is exactly why the page must not
+    // keep saying it will ring. The server may have armed it, or may not.
+    expect(context.value().readiness.level).toBe('DEGRADED');
+    releaseSubmit?.();
+  });
+
+  it('says it cannot read the authority instead of saying nothing is watched', async () => {
+    const snapshot: WatchIntentSnapshot = {
+      generation: 4,
+      entries: [{
+        section: SECTION_A,
+        policy: DEFAULT_WATCH_POLICY,
+        revision: 7,
+        epoch: 2,
+        running: {
+          generation: 4,
+          revision: 7,
+          epoch: 2,
+          policy: DEFAULT_WATCH_POLICY,
+          activeWatchId: ACTIVE_A,
+        },
+        stopping: false,
+        waitingForSlot: false,
+        problem: null,
+      }],
+    };
+    let fail = false;
+    const context = harness({
+      intent: {
+        read: async () => {
+          if (fail) throw new Error('read failed');
+          return snapshot;
+        },
+        submit: async () => ({ outcome: 'COMMITTED', snapshot, maximum: null }),
+      },
+    });
+    await act(async () => {
+      context.watch.contact(context.clock.now);
+      await context.value().refreshIntent();
+    });
+    await act(async () => { await context.value().enableSound(); });
+    expect(context.value().readiness.level).toBe('READY');
+
+    fail = true;
+    await act(async () => { await context.value().refreshIntent(); });
+
+    // "Nothing is being watched" would be false and would take the readiness
+    // line off the screen at the one moment it is most needed. The desk keeps
+    // the row and says it is unreadable; this says the same thing.
+    expect(context.value().readiness.level).toBe('DEGRADED');
+    expect(context.value().readiness.reason).toBe('INTENT_UNREADABLE');
+  });
+
+  it('posts one message for an opening and its failed sound delivered in one burst', async () => {
+    const context = harness({ visible: false });
+    await startWatching(context);
+    context.audio.outcome = 'FAILED';
+
+    // Both frames in ONE turn: the server writes the alert and the cue into a
+    // single dispatch, so the browser hands them to the page back to back
+    // with no render in between.
+    await act(async () => {
+      context.watch.emit(openAlert());
+      context.watch.emit(requestedCue());
+    });
+
+    expect(context.value().notifications).toHaveLength(1);
+  });
+
+  it('keeps a device failure reported after the tab comes back', async () => {
+    const context = harness();
+    await startWatching(context);
+    context.audio.state = 'FAILED';
+    context.audio.outcome = 'FAILED';
+    await act(async () => context.watch.emit(requestedCue()));
+    expect(context.value().readiness.reason).toBe('AUDIO_FAILED');
+
+    // Returning from hidden re-reads the browser's audio state. A context
+    // that never stopped running says nothing about an output that did.
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+    });
+    expect(context.value().readiness.reason).toBe('AUDIO_FAILED');
+  });
+
+  it('still reports an outage to a user who grants permission during it', async () => {
+    const context = harness();
+    // The user was asked at Start and did not answer the browser prompt.
+    context.notifications.answer = 'default';
+    await startWatching(context);
+    expect(context.notifications.permission).toBe('default');
+    await act(async () => {
+      context.watch.transition('CLOSED');
+      context.watch.recover({ phase: 'WAITING', attempt: 1, nextAttemptAt: context.clock.now + 1_000 });
+    });
+
+    // Two minutes pass with no permission: nothing is posted, and nothing is
+    // spent either.
+    await act(async () => {
+      context.clock.now += 150_000;
+      context.watch.recover({ phase: 'WAITING', attempt: 2, nextAttemptAt: context.clock.now + 2_000 });
+    });
+    expect(context.value().notifications).toEqual([]);
+
+    // The user grants it. The outage they are still in is reportable.
+    await act(async () => {
+      context.notifications.permission = 'granted';
+      context.value().requestNotificationPermission();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      context.clock.now += 30_000;
+      context.watch.recover({ phase: 'WAITING', attempt: 3, nextAttemptAt: context.clock.now + 4_000 });
+    });
+    expect(context.value().notifications.filter((request) =>
+      request.kind === 'MONITORING_DEGRADED')).toHaveLength(1);
   });
 });
