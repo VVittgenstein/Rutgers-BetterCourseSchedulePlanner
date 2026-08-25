@@ -1,0 +1,118 @@
+# S3 Offline Rebuild-Cadence Analyzer
+
+Evidence-only tooling for Stage 5 / S3: it re-analyzes previously captured
+openSections observation data to characterize the origin's rebuild cadence
+(30 s vs 60 s grid hypotheses) and evaluates the A4 GO gate. It implements **no
+production feature** (no GridAnchor, no RebuildProfile); its only outputs are
+the two committed evidence documents under `docs/evidence/`.
+
+- **Zero dependencies**: `node:` builtins only (`node:fs`, `node:sqlite`,
+  `node:crypto`, …). Node ≥ 24 (uses `node:sqlite` `DatabaseSync`).
+- **Strictly offline**: the tool performs no network access of any kind. Raw
+  sample data lives in the gitignored `data/` root and is never copied into the
+  repository; outputs carry only basenames, hashes, and counts.
+
+## Usage
+
+```
+node tools/s3/rebuild-profile-analyzer.mjs \
+  --ndjson <DATA_ROOT>/<runDir>          # repeatable; run dir or samples.ndjson path \
+  --sqlite <path/to/db.sqlite>           # repeatable; open_batch_observations source \
+  --sqlite-target <target_id>            # optional filter for SQLite targets \
+  --out-json docs/evidence/S3-REBUILD-PROFILE.json \
+  --out-md   docs/evidence/S3-REBUILD-PROFILE.md
+```
+
+`<DATA_ROOT>` is `data/open-sections-repro` (gitignored). Exit codes: `0`
+analysis completed (any verdict), `1` usage error, `2` fail-closed structural
+error (`E_INPUT_MISSING`, `E_NDJSON_PARSE`, `E_SCHEMA_VERSION`,
+`E_MISSING_FIELD`, `E_SEQUENCE_ORDER`, `E_TIME_PARSE`, `E_TIME_REGRESSION`,
+`E_SQLITE_SCHEMA`, `E_INPUT_MUTATED`, `E_INTERNAL`). On exit 2 **no output
+files are written**.
+
+## Input formats
+
+- **NDJSON**: `samples.ndjson` (schemaVersion 1 rows) plus `run.json` in the
+  same directory. `run.json`'s `uri` query (`year`/`term`/`campus`) names the
+  target (`soc:<year>:<term>:<campus>`); a missing `run.json` degrades the
+  target to `unknown:<input>` and can never satisfy the multi-target gate.
+  Rows with non-zero `curlExitCode`, non-2xx `httpStatus`, or non-empty
+  `validationErrors` are excluded and counted, never silently dropped.
+- **SQLite**: table `open_batch_observations` (see
+  `crates/bcsp-operational-storage/migrations/0002_operational_open.sql`),
+  opened read-only via an `immutable=1` `file:` URI (verified working on
+  node 24). If the URI open fails the tool falls back to a plain
+  `readOnly: true` open and records `"openMode": "readonly"` in
+  `inputs[]` (the Markdown report explains the caveat). Input files are
+  sha256-fingerprinted before analysis and re-verified after; a mismatch is
+  fail-closed (`E_INPUT_MUTATED`).
+
+## Bracket semantics
+
+Change detection compares adjacent `decodedBodySha256` values over included
+rows (NDJSON) or uses `body_changed` flags with the per-target initial LKG row
+excluded (SQLite). **etag is never consulted** — the webfarm serves the same
+body under multiple etags.
+
+Each change yields a half-open bracket `(lower, upper]`:
+
+- **Client clock**: `(stable.requestStartedUtc, changed.requestEndedUtc]` —
+  the conservative outer envelope (SQLite has a single `observed_at` used for
+  both ends).
+- **Server clock**: the `Date` header has 1 s precision (truncated). The
+  server generated the stable body at some instant ≥ its `Date` second start;
+  the change happened strictly after that and at/before the changed body's
+  generation instant, which is < its `Date` + 1 s. The upper bound therefore
+  gets a **+1 s widening** so the true change instant is always contained.
+
+Non-positive server widths (webfarm clock skew) drop the server bounds and are
+counted; the client bounds remain usable.
+
+## Phase model: arc coverage, not histograms
+
+Every bracket maps to an arc on the period circle `[0, P)`; because bounds are
+integer ms, `(l, u]` equals the closed integer interval `[l+1, u]` (mod `P`,
+wrapping). The best phase is the maximal arc-coverage region, found by an exact
+event sweep over arc endpoints. A bracket whose width ≥ `P` covers the whole
+circle: it is **non-informative** and is excluded from coverage counting
+instead of silently inflating it.
+
+A `timestamp % period` histogram of detection times is **invalid** for this
+problem: detection timestamps confound the sampling cadence with the change
+phase (the test suite contains a fixture where the histogram argmax lands 17 s
+away from the true phase that the arc model recovers exactly).
+
+## The 30 vs 60 identity and the tie rule
+
+Every 60 s grid's ticks are a subset of the 30 s grid's ticks at the same phase
+mod 30, so `maxCoverage(30) ≥ maxCoverage(60)` holds identically (asserted at
+runtime). Consequences:
+
+- Equal coverage can **never** select a winner: it only shows the 30 s grid
+  adds no explanatory power — consistent with a true 60 s period but proof of
+  neither model.
+- Only a strict `c30 > c60` win, confirmed in **every** fold of a
+  non-degenerate per-(target, window) holdout, makes the comparison
+  distinguishable; a single-group half-split holdout is labeled degenerate and
+  never promoted to a winner.
+
+## Determinism
+
+Identical input sets produce **byte-identical** outputs regardless of CLI
+argument order: inputs, targets, windows, and brackets are all sorted by stable
+keys, the normalized command is rebuilt from sorted input basenames, and the
+outputs contain no timestamps, absolute paths, hostnames, or `sampleDirectory`
+values. The JSON serializer rejects non-finite numbers; the only non-integer
+values are 4-decimal coverage ratios.
+
+## Tests
+
+```
+node --test "tools/s3/test/*.test.mjs"
+```
+
+The suite is offline and self-contained (fixtures under the OS temp dir). The
+committed-data test runs end-to-end against the real capture directories when
+they exist at `../../../data/open-sections-repro` relative to this worktree (or
+at `BCSP_OPEN_SECTIONS_REPRO_DIR`), independently recounting D1's brackets and
+brute-forcing the arc coverage; it skips cleanly when the data is absent.
