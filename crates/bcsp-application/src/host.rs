@@ -848,8 +848,11 @@ fn account_frame(
 /// or otherwise -- is allowed to grow in its place. The extension still
 /// holds a plain [`mpsc::UnboundedSender`], so [`WebSocketExtension`] and
 /// the local presence/watch routes are untouched; frames the extension
-/// enqueues while a write is in flight are accounted the moment that write
-/// resolves, which the deadline bounds to one timeout at most.
+/// enqueues while the pump is mid-await are accounted at the next drain.
+/// That unaccounted residency is transient, not a growth loop: the write
+/// half of the window is bounded by the write deadline, and the
+/// spawn_blocking extension-call half by extension-call latency -- after
+/// either, the drain runs before anything else is awaited.
 pub async fn serve_websocket_with_bounded_outbound(
     mut socket: WebSocket,
     extension: Arc<dyn WebSocketExtension>,
@@ -2434,6 +2437,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(delivered.as_deref(), Some("alerts and pings still deliver"));
+    }
+
+    #[tokio::test]
+    async fn a_pong_writer_held_past_the_deadline_is_disconnected() {
+        // The write deadline covers CONTROL writes too: a peer that floods
+        // Pings and never reads wedges the Pong reply once the kernel
+        // buffers fill, and without the deadline that connection -- with its
+        // permit and lease upstream -- would be pinned forever, unreachable
+        // even by the heartbeat check (the pump is inside an arm body, not
+        // the select). Removing only the Pong-arm timeout must fail this.
+        let extension = Arc::new(HoldingSocket::default());
+        let global_budget = OutboundByteBudget::new(64 * 1024 * 1024);
+        let stats = Arc::new(BoundedOutboundStats::default());
+        let config = BoundedOutboundConfig {
+            per_socket_budget_bytes: 64 * 1024 * 1024,
+            write_timeout: Duration::from_millis(500),
+            global_budget: global_budget.clone(),
+            stats: stats.clone(),
+        };
+        let (address, _shutdown) = spawn_bounded_pump_host(extension.clone(), config).await;
+        let flooder = bounded_client(address).await;
+        await_condition(|| extension.connection_count() == 1, "the connect").await;
+
+        // Never read; keep sending masked Pings until the server's Pong
+        // replies (and then our own sends) block. Errors just end the
+        // flood -- by then the pump has either timed out or torn down.
+        let flood = tokio::task::spawn_blocking(move || {
+            let mut flooder = flooder;
+            let ping = masked_frame(0x89, &[0x70_u8; 100]);
+            for _ in 0..20_000 {
+                if flooder.write_all(&ping).is_err() {
+                    break;
+                }
+            }
+            flooder
+        });
+        await_condition(
+            || stats.write_timeout_disconnects() == 1,
+            "the pong deadline disconnect",
+        )
+        .await;
+        await_condition(|| extension.disconnects().len() == 1, "the cleanup").await;
+        assert_eq!(stats.socket_budget_disconnects(), 0);
+        assert_eq!(stats.global_budget_disconnects(), 0);
+        drop(flood.await.unwrap());
     }
 
     #[tokio::test]

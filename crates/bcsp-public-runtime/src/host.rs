@@ -2567,6 +2567,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn at_the_cap_the_capacity_verdict_outranks_the_session_verdict() {
+        // S2-D1 f: the permit is taken BEFORE the session lease. The
+        // discriminating input is a full cap plus a nonce the registry would
+        // refuse: permit-first answers 503 (capacity) without consulting the
+        // session; lease-first would answer 403. Swapping the two blocks in
+        // handle_watch_socket must fail this test.
+        let resources = PublicWsResources::with_limits(
+            1,
+            10,
+            64 * 1024 * 1024,
+            256 * 1024,
+            Duration::from_secs(5),
+        );
+        let (_temp, runtime, _store) =
+            spawn_runtime_with_resources(Arc::new(NoPublicProductRoutes), resources.clone()).await;
+        let capacity = resources.capacity.clone();
+        let client = client();
+        let nonce = document_nonce(&client, &runtime).await;
+        let (held, _held_stream) = websocket_handshake(
+            runtime.address(),
+            &format!("/api/v1/watch?session={nonce}"),
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(held.starts_with("HTTP/1.1 101"));
+        await_ws_condition(|| capacity.global_active() == 1, "the held permit").await;
+
+        let (refused, _) = websocket_handshake(
+            runtime.address(),
+            "/api/v1/watch?session=00000000-0000-4000-8000-000000000001",
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(
+            refused.starts_with("HTTP/1.1 503"),
+            "at the cap even an unknown nonce reads as a capacity refusal, got: {refused}",
+        );
+        assert_eq!(capacity.global_refusals(), 1);
+    }
+
+    #[tokio::test]
     async fn websocket_capacity_permits_release_on_every_exit_path() {
         let resources = PublicWsResources::with_limits(
             4,

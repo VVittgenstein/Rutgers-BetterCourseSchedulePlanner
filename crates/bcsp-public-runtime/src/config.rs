@@ -40,12 +40,17 @@ impl PublicHostConfig {
             return Err(PublicHostConfigError::NonLoopbackBind);
         }
         let external_origin = external_origin.into();
+        // Literal lowercase `https://`, exactly like the ops scripts'
+        // `bcsp_origin_authority` (`^https://`): the Uri parser normalizes
+        // scheme case away, and a config the scripts refuse must not start
+        // the service. H7's case-insensitivity is for the DNS host only.
+        if !external_origin.starts_with("https://") {
+            return Err(PublicHostConfigError::InvalidExternalOrigin);
+        }
         let uri = external_origin
             .parse::<Uri>()
             .map_err(|_| PublicHostConfigError::InvalidExternalOrigin)?;
-        if !uri
-            .scheme_str()
-            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"))
+        if uri.scheme_str() != Some("https")
             || uri.authority().is_none()
             || !matches!(uri.path(), "" | "/")
             || uri.query().is_some()
@@ -56,9 +61,11 @@ impl PublicHostConfig {
         // its canonical lowercase form and the origin is REBUILT from that
         // canonical authority rather than trimmed from the input. An
         // operator's `https://Planner.Example` and the browser's
-        // `https://planner.example` therefore meet at one stored value;
-        // nothing else about the origin (scheme identity, port, empty
-        // path, no query) is relaxed.
+        // `https://planner.example` therefore meet at one stored value.
+        // The scheme stays exact-lowercase on purpose: the ops scripts
+        // (`bcsp_origin_authority`) accept only literal `https://`, and the
+        // H7 contract is host case only -- a config the scripts refuse must
+        // not start the service.
         let external_authority = uri
             .authority()
             .expect("authority checked above")
@@ -86,10 +93,14 @@ impl PublicHostConfig {
             .map_err(|_| PublicHostConfigError::InvalidBind)?;
         let mut config = Self::try_new(bind, external_origin, env!("CARGO_PKG_VERSION"))?;
         // Absent means the default; present means it must parse and land in
-        // range. A malformed override fails startup rather than silently
-        // running with a limit nobody chose.
-        if let Ok(raw) = std::env::var(PUBLIC_WS_PER_CLIENT_LIMIT_ENVIRONMENT) {
-            config = config.try_with_per_client_ws_limit(&raw)?;
+        // range. A malformed override -- non-UTF-8 bytes included -- fails
+        // startup rather than silently running with a limit nobody chose.
+        match std::env::var(PUBLIC_WS_PER_CLIENT_LIMIT_ENVIRONMENT) {
+            Ok(raw) => config = config.try_with_per_client_ws_limit(&raw)?,
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(PublicHostConfigError::InvalidPerClientWsLimit);
+            }
         }
         Ok(config)
     }
@@ -176,12 +187,23 @@ mod tests {
     fn an_uppercase_origin_is_stored_in_its_canonical_lowercase_form() {
         let shouted = PublicHostConfig::try_new(
             "127.0.0.1:0".parse().expect("loopback address"),
-            "HTTPS://Planner.EXAMPLE.Test",
+            "https://Planner.EXAMPLE.Test",
             "test-release",
         )
-        .expect("uppercase origin must configure");
+        .expect("uppercase host must configure");
         assert_eq!(shouted.external_authority(), "planner.example.test");
         assert_eq!(shouted.external_origin(), "https://planner.example.test");
+        // H7 is host case only: an uppercase SCHEME stays refused, because
+        // the ops scripts accept only literal `https://` and the two halves
+        // of the boundary must agree on what a legal config is.
+        assert!(matches!(
+            PublicHostConfig::try_new(
+                "127.0.0.1:0".parse().expect("loopback address"),
+                "HTTPS://planner.example.test",
+                "test-release",
+            ),
+            Err(PublicHostConfigError::InvalidExternalOrigin)
+        ));
         let with_port = PublicHostConfig::try_new(
             "127.0.0.1:0".parse().expect("loopback address"),
             "https://Planner.Example.Test:8443",
