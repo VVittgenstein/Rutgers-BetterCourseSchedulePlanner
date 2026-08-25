@@ -969,13 +969,15 @@ impl OperationalStorage {
             "DELETE FROM open_section_current WHERE target_id = ?1",
             [&target_id],
         )?;
-        for (index, state) in &intended_states {
-            transaction.execute(
+        {
+            let mut statement = transaction.prepare_cached(
                 "INSERT INTO open_section_current(
                     target_id, section_index, state, catalog_content_version,
                     attempt_id, observation_sequence, observed_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
+            )?;
+            for (index, state) in &intended_states {
+                statement.execute(params![
                     target_id,
                     index,
                     state.as_str(),
@@ -983,8 +985,8 @@ impl OperationalStorage {
                     attempt_id,
                     observation_sequence,
                     command.completed_at,
-                ],
-            )?;
+                ])?;
+            }
         }
         let mut section_events = Vec::with_capacity(watched_indices.len());
         for index in watched_indices {
