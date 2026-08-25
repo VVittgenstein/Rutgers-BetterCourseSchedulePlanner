@@ -41,36 +41,53 @@ function unitSection(name) {
 const unitSettings = unitSection('Unit');
 const serviceSettings = unitSection('Service');
 
+/**
+ * systemd is last-value-wins, so `includes` alone would bless a unit that
+ * sets the frozen value and then overrides it further down. Each pinned
+ * key must therefore appear EXACTLY once in its section, with the frozen
+ * value.
+ */
+function assertOnlySetting(settings, expected, why) {
+  const key = expected.slice(0, expected.indexOf('=') + 1);
+  const occurrences = settings.filter((line) => line.startsWith(key));
+  assert.deepEqual(occurrences, [expected], why);
+}
+
 // H1: the file-descriptor ceiling, in [Service].
-assert.ok(
-  serviceSettings.includes('LimitNOFILE=65536'),
-  'H1: [Service] must set LimitNOFILE=65536',
+assertOnlySetting(
+  serviceSettings,
+  'LimitNOFILE=65536',
+  'H1: [Service] must set LimitNOFILE=65536 exactly once',
 );
 
 // H6: soft memory pressure and an unbroken restart policy.
-assert.ok(
-  serviceSettings.includes('MemoryHigh=700M'),
-  'H6: [Service] must set MemoryHigh=700M',
+assertOnlySetting(
+  serviceSettings,
+  'MemoryHigh=700M',
+  'H6: [Service] must set MemoryHigh=700M exactly once',
 );
 const everySetting = [...unitSettings, ...serviceSettings, ...unitSection('Install')];
 assert.ok(
   !everySetting.some((line) => line.startsWith('MemoryMax')),
   'H6: soft pressure only -- MemoryMax must stay unset',
 );
-assert.ok(
-  unitSettings.includes('StartLimitIntervalSec=0'),
-  'H6: [Unit] must disable start rate limiting with StartLimitIntervalSec=0',
+assertOnlySetting(
+  unitSettings,
+  'StartLimitIntervalSec=0',
+  'H6: [Unit] must disable start rate limiting with StartLimitIntervalSec=0, exactly once',
 );
 assert.ok(
   !everySetting.some((line) => line.startsWith('StartLimitBurst')),
   'H6: a StartLimitBurst line under StartLimitIntervalSec=0 is dead config',
 );
-assert.ok(
-  serviceSettings.includes('Restart=on-failure'),
+assertOnlySetting(
+  serviceSettings,
+  'Restart=on-failure',
   'H6: the restart policy the unbounded start limit exists for',
 );
-assert.ok(
-  serviceSettings.includes('RestartSec=5s'),
+assertOnlySetting(
+  serviceSettings,
+  'RestartSec=5s',
   'H6: the retry cadence the runbook documents',
 );
 
@@ -110,7 +127,9 @@ assert.ok(
 const upgrade = read('deploy/public/ops/upgrade.sh');
 const sameReleaseStart = upgrade.indexOf('if [[ "$previous" == "$release_path" ]]; then');
 assert.notEqual(sameReleaseStart, -1, 'upgrade.sh must keep its same-release branch');
-const sameReleaseEnd = upgrade.indexOf('\n  fi', sameReleaseStart);
+// The exact closing line, not a prefix: '\n  fi' would also match a line
+// like '  file=...' and silently truncate the scanned branch.
+const sameReleaseEnd = upgrade.indexOf('\n  fi\n', sameReleaseStart);
 assert.notEqual(sameReleaseEnd, -1);
 const sameReleaseBranch = upgrade.slice(sameReleaseStart, sameReleaseEnd);
 assert.ok(

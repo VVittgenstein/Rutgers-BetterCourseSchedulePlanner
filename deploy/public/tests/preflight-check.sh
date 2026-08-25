@@ -100,6 +100,12 @@ expect_pass 'healthy host, no caddyfile'
 # The placeholder origin is refused.
 printf 'BCSP_PUBLIC_ORIGIN=https://planner.invalid\n' > "$ENV_DIR/bcsp.env"
 expect_fail 'placeholder origin' 'placeholder'
+
+# A duplicated origin line is a NAMED preflight failure, not a stray lib
+# error that lets the later probes blame a healthy service.
+printf '%s\n%s\n' 'BCSP_PUBLIC_ORIGIN=https://planner.example.test' \
+  'BCSP_PUBLIC_ORIGIN=https://other.example.test' > "$ENV_DIR/bcsp.env"
+expect_fail 'duplicated origin' 'missing, duplicated, or malformed'
 printf 'BCSP_PUBLIC_ORIGIN=https://planner.example.test\n' > "$ENV_DIR/bcsp.env"
 
 # An out-of-range per-client override is refused before it can refuse the
@@ -131,4 +137,4 @@ expect_fail 'missing stream_close_delay' 'stream_close_delay' --caddyfile "$NO_D
 expect_fail 'placeholder caddyfile' 'planner.invalid placeholder' \
   --caddyfile "$DEPLOY_DIR/caddy/Caddyfile.example"
 
-printf 'preflight-check: PASS (one healthy pass, seven hardened refusals)\n'
+printf 'preflight-check: PASS (three healthy passes, nine hardened refusals)\n'

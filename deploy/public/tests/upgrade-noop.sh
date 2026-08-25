@@ -31,7 +31,7 @@ if [[ ! -L "$TEST_TMP/symlink-probe" ]]; then
 fi
 rm -f -- "$TEST_TMP/symlink-probe"
 
-# --- a complete, valid fake candidate (the exact 21-file allowlist) --------
+# --- a complete, valid fake candidate (the exact 22-file allowlist) --------
 
 CANDIDATE="$TEST_TMP/candidate"
 install -d -m 0755 "$CANDIDATE/bin"

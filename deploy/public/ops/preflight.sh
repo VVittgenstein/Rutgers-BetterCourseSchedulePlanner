@@ -42,7 +42,14 @@ pf_warn() {
 check_origin() {
   local authority host limit_line limit_value limit_count=0
 
-  authority="$(bcsp_origin_authority)" || return 0
+  # bcsp_origin_authority dies (in the substitution subshell) on a missing,
+  # duplicated, or malformed BCSP_PUBLIC_ORIGIN. That must surface as a
+  # named preflight failure -- not vanish and let the probe checks blame a
+  # healthy service.
+  if ! authority="$(bcsp_origin_authority 2>/dev/null)"; then
+    pf_fail "BCSP_PUBLIC_ORIGIN is missing, duplicated, or malformed in $(bcsp_environment_file)"
+    return 0
+  fi
   host="${authority%%:*}"
   case "$host" in
     *.invalid|localhost|127.*)
@@ -64,7 +71,9 @@ check_origin() {
   if [[ "$limit_count" -gt 1 ]]; then
     pf_fail "environment sets BCSP_PUBLIC_WS_PER_CLIENT_LIMIT more than once"
   elif [[ "$limit_count" -eq 1 ]]; then
-    if [[ "$limit_value" =~ ^[0-9]+$ ]] && (( limit_value >= 1 && limit_value <= 1024 )); then
+    # 10# forces base ten: a leading zero ("09") is a legal value to the
+    # service's parser and must not crash this arithmetic as octal.
+    if [[ "$limit_value" =~ ^[0-9]+$ ]] && (( 10#$limit_value >= 1 && 10#$limit_value <= 1024 )); then
       pf_pass "per-client WebSocket limit override is in range: $limit_value"
     else
       pf_fail "BCSP_PUBLIC_WS_PER_CLIENT_LIMIT must be an integer in 1..1024, got '$limit_value' (the service refuses to start otherwise)"
@@ -96,7 +105,9 @@ check_firewall() {
     pf_fail "ufw is unavailable; cannot confirm 80/443 are open (the capture snapshot showed only 22 ever open)"
     return 0
   fi
-  status="$("$BCSP_UFW" status 2>/dev/null || true)"
+  # LC_ALL=C: ufw's output is gettext-localized; the patterns below are the
+  # English forms.
+  status="$(LC_ALL=C "$BCSP_UFW" status 2>/dev/null || true)"
   if ! grep -q '^Status: active' <<< "$status"; then
     pf_fail "ufw is not active"
     return 0
@@ -106,7 +117,7 @@ check_firewall() {
     if grep -Eq "^${port}(/tcp)?[[:space:]]+ALLOW" <<< "$status"; then
       pf_pass "firewall allows ${port}/tcp"
     else
-      pf_fail "firewall does not allow ${port}/tcp; open it (separately authorized) before go-live"
+      pf_fail "firewall does not allow ${port}/tcp; open it with an explicit port rule (e.g. 'ufw allow ${port}/tcp' -- app-profile rules are not recognized here)"
     fi
   done
 }

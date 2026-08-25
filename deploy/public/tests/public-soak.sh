@@ -73,8 +73,8 @@ SOAK_NODE="${BCSP_NODE_BIN:-$(command -v node || true)}"
   printf 'public-soak: Node.js is required\n' >&2
   exit 1
 }
-for command_name in awk caddy certutil curl flock getent install jq sed sha256sum \
-  sqlite3 systemctl systemd-analyze update-ca-certificates useradd userdel; do
+for command_name in awk caddy certutil curl flock getent install journalctl jq sed \
+  sha256sum sqlite3 systemctl systemd-analyze update-ca-certificates useradd userdel; do
   command -v "$command_name" >/dev/null 2>&1 || {
     printf 'public-soak: required command is absent: %s\n' "$command_name" >&2
     exit 1
@@ -84,6 +84,13 @@ done
   printf 'public-soak: systemd is not running\n' >&2
   exit 1
 }
+# The harness runs its own Caddy on :80/:443; a distro caddy.service would
+# collide mid-soak instead of failing here. (stream_close_delay also needs
+# Caddy >= 2.7 -- an older binary fails loudly at the validate step.)
+if systemctl is-active --quiet caddy.service 2>/dev/null; then
+  printf 'public-soak: a system caddy.service is active; stop and disable it first\n' >&2
+  exit 1
+fi
 for path in /opt/bcsp /etc/bcsp /var/lib/bcsp /var/backups/bcsp \
   /etc/systemd/system/bcsp.service /etc/systemd/system/bcsp.service.d; do
   [[ ! -e "$path" ]] || {
@@ -246,6 +253,7 @@ MEMORY_SAMPLES="$TEST_TMP/memory.samples"
 CONNECTION_SAMPLES="$TEST_TMP/connections.samples"
 ARMED_MARKER="$TEST_TMP/soak-armed"
 RELOAD_MARKER="$TEST_TMP/reload-done"
+DONE_MARKER="$TEST_TMP/soak-winding-down"
 : > "$MEMORY_SAMPLES"
 : > "$CONNECTION_SAMPLES"
 
@@ -254,11 +262,14 @@ env HOME="$BROWSER_HOME" "$SOAK_NODE" "$SOAK_DRIVER" \
   --playwright-root "$BCSP_PLAYWRIGHT_ROOT" \
   --armed-marker "$ARMED_MARKER" \
   --reload-marker "$RELOAD_MARKER" \
+  --done-marker "$DONE_MARKER" \
   --duration-seconds "$SOAK_DURATION" \
   --expected-pings "$SOAK_EXPECTED_PINGS" &
 DRIVER_PID="$!"
 
-for _ in {1..240}; do
+# A cold runner can spend minutes launching Chromium before the page and
+# socket come up; four minutes covers Playwright's own launch budget.
+for _ in {1..960}; do
   [[ -f "$ARMED_MARKER" ]] && break
   if ! kill -0 "$DRIVER_PID" 2>/dev/null; then
     wait "$DRIVER_PID" || true
@@ -274,18 +285,25 @@ done
 
 # Sample MemoryCurrent and the connection gauge every 30 seconds while the
 # soak socket is held; the driver's analyzer judges the files afterwards.
+# The done marker stops sampling BEFORE the driver closes its browser, so
+# the teardown itself can never contribute a zero connection sample.
 (
-  while :; do
+  while [[ ! -f "$DONE_MARKER" ]]; do
     systemctl show bcsp.service --property=MemoryCurrent --value >> "$MEMORY_SAMPLES" || true
     curl --silent --header 'Host: planner.test' http://127.0.0.1:8080/metrics 2>/dev/null |
       awk '$1 == "bcsp_websocket_connections" { print $2 }' >> "$CONNECTION_SAMPLES" || true
-    sleep 30
+    for _ in {1..120}; do
+      [[ -f "$DONE_MARKER" ]] && break
+      sleep 0.25
+    done
   done
 ) &
 SAMPLER_PID="$!"
 
 sleep "$(( SOAK_DURATION / 2 ))"
-caddy_soak reload --config "$SOAK_CADDYFILE" --adapter caddyfile
+# --force: Caddy skips applying a byte-identical config since 2.4, and a
+# skipped reload proves nothing -- the gate needs the real reload path.
+caddy_soak reload --force --config "$SOAK_CADDYFILE" --adapter caddyfile
 [[ "$(systemctl show --property MainPID --value bcsp.service)" == "$SERVICE_PID" ]] || {
   printf 'public-soak: MainPID changed across the caddy reload\n' >&2
   exit 1
@@ -307,6 +325,14 @@ SAMPLER_PID=""
   printf 'public-soak: MainPID changed across the soak\n' >&2
   exit 1
 }
+# The driver counts an ACK when it SENDS one; the server logs (and only
+# logs) a frame it rejects. Zero rejections is what upgrades "an ACK-shaped
+# frame was sent" into "the server accepted every ACK".
+if journalctl -u bcsp.service --no-pager 2>/dev/null |
+  grep -Eq 'rejected (malformed|invalid) watch WebSocket'; then
+  printf 'public-soak: the service rejected watch frames during the soak; the ACKs did not land\n' >&2
+  exit 1
+fi
 "$SOAK_NODE" "$SOAK_DRIVER" --analyze-memory "$MEMORY_SAMPLES"
 "$SOAK_NODE" "$SOAK_DRIVER" --analyze-connections "$CONNECTION_SAMPLES"
 bash "$OPS_ROOT/verify.sh"

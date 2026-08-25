@@ -189,10 +189,13 @@ run the same destructive way from a repository checkout (it needs
 `BCSP_PUBLIC_SOAK_CONFIRM=YES` and `BCSP_PLAYWRIGHT_ROOT`, installs the
 candidate behind a real Caddy, and holds one browser WebSocket for 600
 seconds: continuous acknowledged application pings, a mid-soak
-`caddy reload` that the same socket and the same service `MainPID` must
-survive, every 30-second `MemoryCurrent` sample under 700 MiB with
-last-three growth within 32 MiB, and the connection gauge never dropping
-below the held socket. `BCSP_SOAK_DURATION_SECONDS` below 600 exists for
+`caddy reload --force` (forced, because Caddy skips applying a
+byte-identical config and a skipped reload proves nothing) that the same
+socket and the same service `MainPID` must survive, every 30-second
+`MemoryCurrent` sample under 700 MiB with last-three growth within
+32 MiB, and the connection gauge never dropping below the held socket.
+The host needs Caddy 2.7 or newer (`stream_close_delay`) with no distro
+`caddy.service` active. `BCSP_SOAK_DURATION_SECONDS` below 600 exists for
 harness debugging only and prints a DEBUG line that is not H9 evidence.
 Setting `BCSP_SOAK_COMPOSITION_SCRIPT` (with `BCSP_SOAK_ALLOW_RUTGERS=YES`)
 additionally runs the assembled-composition browser gate against real

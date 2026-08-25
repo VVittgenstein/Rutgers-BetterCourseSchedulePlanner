@@ -12,8 +12,8 @@
 // Modes:
 //   (soak)                node public-soak-browser.mjs --base-url URL \
 //                           --playwright-root PATH --armed-marker FILE \
-//                           --reload-marker FILE [--duration-seconds 600] \
-//                           [--expected-pings 50]
+//                           --reload-marker FILE [--done-marker FILE] \
+//                           [--duration-seconds 600] [--expected-pings 50]
 //   --analyze-memory F    judge one-MemoryCurrent-bytes-per-line samples
 //   --analyze-connections F  judge one-connection-count-per-line samples
 //   --self-test           prove the pure judgments on fixed fixtures
@@ -26,6 +26,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 export const MEMORY_LIMIT_BYTES = 700 * 1024 * 1024;
 export const MEMORY_GROWTH_BUDGET_BYTES = 32 * 1024 * 1024;
@@ -172,6 +173,7 @@ function parseArguments(argv) {
     playwrightRoot: null,
     armedMarker: null,
     reloadMarker: null,
+    doneMarker: null,
     durationSeconds: DEFAULT_DURATION_SECONDS,
     expectedPings: DEFAULT_EXPECTED_PINGS,
     analyzeMemory: null,
@@ -197,6 +199,9 @@ function parseArguments(argv) {
         break;
       case '--reload-marker':
         options.reloadMarker = next();
+        break;
+      case '--done-marker':
+        options.doneMarker = next();
         break;
       case '--duration-seconds':
         options.durationSeconds = Number.parseInt(next(), 10);
@@ -374,6 +379,14 @@ async function runSoak(options) {
   } catch (error) {
     failure = error;
   } finally {
+    // Tell the harness the soak window is over BEFORE the held socket goes
+    // away, so its 30-second sampler cannot record the teardown as a
+    // zero-connection sample.
+    if (options.doneMarker) {
+      try {
+        writeFileSync(options.doneMarker, `${new Date().toISOString()}\n`);
+      } catch {}
+    }
     await browser.close();
   }
   if (failure) {
@@ -402,8 +415,11 @@ async function main() {
   await runSoak(options);
 }
 
+// fileURLToPath, not URL.pathname: the latter keeps percent-encoding and
+// breaks on paths with spaces, silently turning every mode into an exit-0
+// no-op -- a judgment tool must never "pass" by failing to run.
 const invokedDirectly =
-  process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+  process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 if (invokedDirectly) {
   main().catch((error) => {
     process.stderr.write(`${error?.stack ?? error}\n`);
