@@ -237,7 +237,13 @@ async function runSoak(options) {
 
   const requireFromFrontend = createRequire(resolve(options.playwrightRoot, 'package.json'));
   const { chromium } = requireFromFrontend('playwright');
-  const browser = await chromium.launch({ args: ['--no-proxy-server'], headless: true });
+  const launchArguments = ['--no-proxy-server'];
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    // The harness runs as root on a disposable host; Chromium refuses its
+    // sandbox there (same accommodation as final-candidate-browser.mjs).
+    launchArguments.push('--no-sandbox');
+  }
+  const browser = await chromium.launch({ args: launchArguments, headless: true });
   let failure = null;
   try {
     const context = await browser.newContext({

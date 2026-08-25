@@ -15,6 +15,7 @@ on:
       - 'packaging/**'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
+      - 'tools/public-ops/**'
   pull_request:
     paths:
       - '.github/workflows/public-ops.yml'
@@ -29,12 +30,18 @@ on:
       - 'packaging/**'
       - 'rust-toolchain.toml'
       - 'tools/architecture/**'
+      - 'tools/public-ops/**'
   workflow_dispatch:
     inputs:
       source_commit:
         description: Full source commit to package (40 or 64 lowercase hexadecimal characters)
         required: true
         type: string
+      run_soak:
+        description: Run the 600-second public soak gate (P2/H9) instead of the iteration package
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -70,6 +77,19 @@ jobs:
           node --check packaging/generate-release-metadata.mjs
           node --check packaging/tests/final-candidate-browser.mjs
           node --check packaging/tests/real-world-browser.mjs
+          node --check packaging/tests/public-soak-browser.mjs
+
+      # P2 hardening: the frozen deploy lines, the soak arithmetic, and the
+      # ops-script judgments are all provable without a build. The two shell
+      # suites run the REAL ops scripts against recording stubs under a
+      # temporary root; upgrade-noop needs the symlinks this runner has.
+      - name: Verify the public deploy and soak contracts
+        shell: bash
+        run: |
+          node tools/public-ops/verify-deploy-contracts.mjs
+          node packaging/tests/public-soak-browser.mjs --self-test
+          bash deploy/public/tests/preflight-check.sh
+          bash deploy/public/tests/upgrade-noop.sh
 
       # The capability policy is only a policy if something runs it. Every
       # surface it governs runs here: the Rust suites below, the frontend
@@ -123,7 +143,7 @@ jobs:
           }
 
   linux-iteration-package:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.run_soak
     name: Linux-only iteration package
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -237,3 +257,113 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  # P2 hardening H9: the 600-second real-stack soak gate. Manual, and only
+  # on explicit request: it builds the archive from the requested commit,
+  # installs it as the real systemd service behind a real Caddy, and holds
+  # one browser WebSocket across a mid-soak `caddy reload`. The composition
+  # tier (real Rutgers data) is NOT run here -- it stays a separately
+  # authorized manual invocation of tests/public-soak.sh.
+  linux-public-soak:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_soak
+    name: Linux public 600s soak (P2/H9)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      REQUESTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+      RUSTUP_TOOLCHAIN: 1.97.0
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate the requested source identity
+        run: |
+          [[ "$REQUESTED_SOURCE_COMMIT" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || {
+            printf '%s\n' 'source_commit must be a full lowercase hexadecimal commit id' >&2
+            exit 2
+          }
+
+      - name: Check out the exact requested revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Confirm the detached, clean checkout and prepare the frozen source
+        id: source
+        run: |
+          actual_commit="$(git rev-parse --verify HEAD)"
+          test "$actual_commit" = "$REQUESTED_SOURCE_COMMIT"
+          if git symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+            printf '%s\n' 'the requested source checkout is not detached' >&2
+            exit 1
+          fi
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+          source_root="$RUNNER_TEMP/rbcsp-source"
+          test ! -e "$source_root"
+          git worktree add --detach "$source_root" "$actual_commit"
+          test "$(git -C "$source_root" rev-parse --verify HEAD)" = "$actual_commit"
+          test -z "$(git -C "$source_root" status --porcelain --untracked-files=all)"
+          printf 'source_root=%s\n' "$source_root" >> "$GITHUB_OUTPUT"
+
+      - name: Select the locked Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+          package-manager-cache: false
+
+      - name: Install the locked package build tools
+        run: |
+          npm install --global npm@11.16.0
+          rustup toolchain install 1.97.0 --profile minimal --target x86_64-unknown-linux-gnu
+          cargo install cargo-about --version 0.9.1 --locked --features cli
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          test "$(node --version)" = 'v24.18.0'
+          test "$(npm --version)" = '11.16.0'
+
+      - name: Install the soak host tools and the real browser
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ca-certificates caddy libnss3-tools sqlite3
+          sudo systemctl disable --now caddy.service || true
+          npm ci --prefix frontend --no-audit --no-fund
+          frontend/node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Build and verify the exact Linux package once
+        id: candidate
+        run: |
+          output_root="$RUNNER_TEMP/rbcsp-release"
+          source_root='${{ steps.source.outputs.source_root }}'
+          build_root="$GITHUB_WORKSPACE/.cache/product-build/linux"
+          cargo fetch --locked --manifest-path "$source_root/Cargo.toml"
+          bash packaging/linux/build.sh \
+            --source-root "$source_root" \
+            --source-commit "$REQUESTED_SOURCE_COMMIT" \
+            --output-root "$output_root" \
+            --build-root "$build_root"
+          printf 'archive=%s\n' "$output_root/rbcsp-linux-x86_64-0.1.0.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Run the 600-second soak against the real stack
+        run: |
+          candidate_root="$RUNNER_TEMP/rbcsp-candidate"
+          mkdir -p -- "$candidate_root"
+          tar -xzf '${{ steps.candidate.outputs.archive }}' -C "$candidate_root" \
+            --no-same-owner --no-same-permissions
+          sudo env \
+            BCSP_PUBLIC_SOAK_CONFIRM=YES \
+            BCSP_PLAYWRIGHT_ROOT="$GITHUB_WORKSPACE/frontend" \
+            BCSP_NODE_BIN="$(command -v node)" \
+            PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
+            bash deploy/public/tests/public-soak.sh --candidate-root "$candidate_root" \
+            | tee "$RUNNER_TEMP/soak-output.txt"
+          grep -q '^P2_H9_PUBLIC_SOAK_PASS ' "$RUNNER_TEMP/soak-output.txt"
+          {
+            printf '### Linux public 600s soak (P2/H9)\n\n'
+            printf -- '- Source commit: `%s`\n' "$REQUESTED_SOURCE_COMMIT"
+            printf -- '- Result: `%s`\n' \
+              "$(grep '^P2_H9_PUBLIC_SOAK_PASS ' "$RUNNER_TEMP/soak-output.txt")"
+          } >> "$GITHUB_STEP_SUMMARY"
