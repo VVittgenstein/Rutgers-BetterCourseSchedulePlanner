@@ -104,6 +104,47 @@ test('rejects stale pre-integration readiness after the UI integration gate', ()
   assert.match(report.errors.join('\n'), /UI_INTEGRATION_COMPLETE/u);
 });
 
+/** A public fixture the caller may adjust before it is verified. */
+function verifyPublic(adjust) {
+  const input = fixture('public');
+  adjust(input.files, input.builtManifest);
+  input.files.set('capability-manifest.json', JSON.stringify(input.builtManifest) + '\n');
+  input.sourceManifest = structuredClone(input.builtManifest);
+  return verifyTargetArtifacts(input);
+}
+
+test('permits page-level notification bytes only in a build that declares it', () => {
+  // The same rule as the source scan, applied to what actually ships. The
+  // emitted manifest is the one consulted: bytes are exempt because the
+  // artefact beside them declares the capability, not because the marker
+  // stopped existing.
+  const withNotification = 'const permission = notificationPermission;\n';
+  const declared = verifyPublic((files) => {
+    files.set('assets/public.js', withNotification);
+  });
+  assert.equal(declared.state, 'PASS', declared.errors.join('\n'));
+
+  const undeclared = verifyPublic((files, manifest) => {
+    files.set('assets/public.js', withNotification);
+    manifest.allowedCapabilities = manifest.allowedCapabilities
+      .filter((slug) => slug !== 'current-page-notification');
+  });
+  assert.equal(undeclared.state, 'FAIL');
+  assert.ok(
+    undeclared.errors.some((error) => error.includes('matched notification_permission')),
+    undeclared.errors.join('\n'),
+  );
+});
+
+test('rejects the notification surfaces a page cannot own, declared or not', () => {
+  for (const marker of ['showNotification', 'serviceWorkerNotification', 'pushManager', 'vapidPublicKey']) {
+    const report = verifyPublic((files) => {
+      files.set('assets/public.js', `const value = ${marker};\n`);
+    });
+    assert.equal(report.state, 'FAIL', `${marker} must still be refused`);
+  }
+});
+
 test('rejects false placeholders in public and missing local capabilities', () => {
   const publicFixture = fixture('public');
   publicFixture.sourceManifest.allowedCapabilities = { 'saved-views': false };

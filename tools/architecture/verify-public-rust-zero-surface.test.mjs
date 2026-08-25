@@ -59,6 +59,50 @@ assert.ok(supplementalApi.violations.some((violation) => (
   && violation.marker === 'local_user_data_reset'
 )));
 
+// The page-level notification markers left the SHARED set so a browser page
+// that declares the capability may use the browser API. Rust is not a browser
+// page: a notification the server could raise would fire with no page running
+// and nothing to verify it against, so all three stay denied here -- on every
+// surface, and with no declaration that can exempt them.
+for (const [marker, source] of [
+  ['notification_permission', 'fn notification_permission() -> bool { true }'],
+  ['browser_notification_api', 'const BROWSER_NOTIFICATION_API: &str = "x";'],
+  ['desktop_notification', 'struct DesktopNotification;'],
+]) {
+  for (const surface of ['SOURCE', 'API', 'STORAGE', 'PACKAGE']) {
+    const audit = auditSurface(
+      new Map([['crates/public/src/notify.rs', source]]),
+      DENY_DOCUMENT,
+      surface,
+    );
+    assert.ok(
+      audit.violations.some((violation) => (
+        violation.denyId === `P4-D-SYSTEM_NOTIFICATIONS-${surface}`
+        && violation.marker === marker
+      )),
+      `${marker} must still be refused on ${surface}`,
+    );
+  }
+}
+
+// And the split is narrow: what a page cannot own is still refused from the
+// shared set itself, with no supplement involved.
+for (const [marker, source] of [
+  ['show_notification', 'fn show_notification() {}'],
+  ['service_worker_notification', 'const SERVICE_WORKER_NOTIFICATION: u8 = 1;'],
+  ['web_push', 'mod web_push {}'],
+]) {
+  const audit = auditSurface(
+    new Map([['crates/public/src/notify.rs', source]]),
+    DENY_DOCUMENT,
+    'SOURCE',
+  );
+  assert.ok(
+    audit.violations.some((violation) => violation.marker === marker),
+    `${marker} must remain in the shared deny set`,
+  );
+}
+
 const storage = auditSurface(
   new Map([['crates/public/migrations/0003_bad.sql', 'CREATE TABLE saved_views (id TEXT);']]),
   DENY_DOCUMENT,

@@ -54,20 +54,28 @@ function baselineFiles() {
   ]);
 }
 
-function analyze(files = baselineFiles(), publicSourceDeny = denyInput()) {
+function analyze(files = baselineFiles(), publicSourceDeny = denyInput(), declaredCapabilities) {
   return analyzeImportGraph({
     allowedExternalPackages: new Set(['react', 'react-dom']),
     files,
     publicSourceDeny,
+    declaredCapabilities,
   });
 }
 
-test('accepts the explicit dual-entry shared graph and 18/215 deny policy', () => {
+/** What the public target declares today, read from the real manifest. */
+function declaredPublicCapabilities() {
+  return new Set(JSON.parse(
+    readFileSync(resolve(repositoryRoot, 'frontend/build/capabilities.public.json'), 'utf8'),
+  ).allowedCapabilities);
+}
+
+test('accepts the explicit dual-entry shared graph and 18/212 deny policy', () => {
   const report = analyze();
   assert.equal(report.state, 'PASS', report.errors.join('\n'));
   assert.equal(report.activeUniverse.fileCount, 5);
   assert.equal(report.publicSourceDeny.checkedCount, 18);
-  assert.equal(report.publicSourceDeny.checkedMarkerCount, 215);
+  assert.equal(report.publicSourceDeny.checkedMarkerCount, 212);
   assert.deepEqual(report.closures.local, [
     'src/entry.local.tsx',
     'src/ui/local/LocalCompositionRoot.tsx',
@@ -78,6 +86,67 @@ test('accepts the explicit dual-entry shared graph and 18/215 deny policy', () =
     'src/ui/public/PublicCompositionRoot.tsx',
     'src/ui/shared/SharedApplication.tsx',
   ]);
+});
+
+test('permits a page-level notification only for a build that declares it', () => {
+  // The capability slug is the permission. A build that declares
+  // `current-page-notification` may read the browser's own notification
+  // permission and post one from the running page; a build that does not is
+  // refused exactly as it was before the marker left the shared set.
+  const pageNotification = 'export const notificationPermission = "granted";\n'
+    + 'export function SharedApplication() { return null; }\n';
+  const files = baselineFiles();
+  files.set('src/ui/shared/SharedApplication.tsx', pageNotification);
+
+  const declared = analyze(files, denyInput(), declaredPublicCapabilities());
+  assert.equal(declared.state, 'PASS', declared.errors.join('\n'));
+  assert.equal(
+    declared.publicSourceDeny.capabilityGatedMarkers.SYSTEM_NOTIFICATIONS.declared,
+    true,
+  );
+  assert.deepEqual(
+    declared.publicSourceDeny.capabilityGatedMarkers.SYSTEM_NOTIFICATIONS.enforcedMarkers,
+    [],
+  );
+
+  const undeclared = analyze(files, denyInput(), new Set(['course-search']));
+  assert.equal(undeclared.state, 'FAIL', 'an undeclared build must still be refused');
+  assert.ok(
+    undeclared.errors.some((error) => error.includes('matched notification_permission')),
+    undeclared.errors.join('\n'),
+  );
+});
+
+test('keeps refusing every notification surface a page cannot own', () => {
+  // The split is narrow on purpose. What a running page does with the user's
+  // permission is one thing; a notification that fires when no page is
+  // running is a different capability this product does not have, and none of
+  // these are exempted by any declaration.
+  for (const [source, marker] of [
+    ['export const showNotification = 1;\n', 'show_notification'],
+    ['export const serviceWorkerNotification = 1;\n', 'service_worker_notification'],
+    ['export const systemNotification = 1;\n', 'system_notification'],
+    ['export const nativeAlert = 1;\n', 'native_alert'],
+    ['export const osNotification = 1;\n', 'os_notification'],
+    ['export const trayBalloon = 1;\n', 'tray_balloon'],
+    ['export const pushManager = 1;\n', 'push_manager'],
+    ['export const pushSubscription = 1;\n', 'push_subscription'],
+    ['export const applicationServerKey = 1;\n', 'application_server_key'],
+    ['export const vapidPublicKey = 1;\n', 'vapid_public_key'],
+    ['export const webPush = 1;\n', 'web_push'],
+  ]) {
+    const files = baselineFiles();
+    files.set(
+      'src/ui/shared/SharedApplication.tsx',
+      `export function SharedApplication() { return null; }\n${source}`,
+    );
+    const report = analyze(files, denyInput(), declaredPublicCapabilities());
+    assert.equal(report.state, 'FAIL', `${marker} must still be refused`);
+    assert.ok(
+      report.errors.some((error) => error.includes(`matched ${marker}`)),
+      `${marker}: ${report.errors.join('\n')}`,
+    );
+  }
 });
 
 test('rejects the desired-watch authority from shared and public source', () => {

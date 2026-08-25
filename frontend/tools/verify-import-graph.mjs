@@ -67,9 +67,36 @@ export const EXPECTED_PUBLIC_SOURCE_DENIES = Object.freeze([
   ['P4-D-LOCAL_RESET-SOURCE', 'LOCAL_RESET'],
 ]);
 
-const EXPECTED_PUBLIC_SOURCE_MARKER_COUNT = 215;
+const EXPECTED_PUBLIC_SOURCE_MARKER_COUNT = 212;
 const EXPECTED_PUBLIC_SOURCE_ROWS_SHA256 =
-  'F78B7BB698BBED4F146DFE1AF7248A312A036F457D2D0809B4DD6FBC46219989';
+  'E3BD71F9FE67866A578B96B04DE635E6F94299AC331A30C4CC838D732D6C2DE1';
+
+/**
+ * Markers a target may use only by DECLARING the capability they belong to.
+ *
+ * They are not in the shared deny set any more, because a page-level browser
+ * notification is a capability this product ships. They are not unguarded
+ * either: a build whose manifest does not declare the slug is scanned for
+ * them exactly as before, so the declaration -- not a comment, and not the
+ * absence of a rule -- is what permits the API.
+ */
+export const CAPABILITY_GATED_MARKERS = Object.freeze({
+  SYSTEM_NOTIFICATIONS: Object.freeze({
+    slug: 'current-page-notification',
+    markers: Object.freeze([
+      'browser_notification_api',
+      'desktop_notification',
+      'notification_permission',
+    ]),
+  }),
+});
+
+/** The gated markers still in force for a target with these declarations. */
+export function gatedMarkersFor(capability, declaredCapabilities) {
+  const gate = CAPABILITY_GATED_MARKERS[capability];
+  if (gate === undefined) return [];
+  return declaredCapabilities?.has(gate.slug) === true ? [] : [...gate.markers];
+}
 
 const ALLOWED_EDGE_TARGETS = Object.freeze({
   'local-entry': new Set(['local', 'shared']),
@@ -845,8 +872,8 @@ export function validateDenyDocument(denyDocument) {
     errors.push('deny document fields/order do not match the frozen schema');
   }
   if (denyDocument.schemaVersion !== 2) errors.push('deny document schemaVersion must be 2');
-  if (denyDocument.markerSetVersion !== 2) {
-    errors.push('deny document markerSetVersion must be 2');
+  if (denyDocument.markerSetVersion !== 3) {
+    errors.push('deny document markerSetVersion must be 3');
   }
   if (denyDocument.kind !== 'PUBLIC_SOURCE_DENY_POLICY') {
     errors.push('deny document kind is invalid');
@@ -911,7 +938,12 @@ export function validateSourceTextEncoding(files) {
   return errors;
 }
 
-export function analyzeImportGraph({ files, publicSourceDeny, allowedExternalPackages }) {
+export function analyzeImportGraph({
+  files,
+  publicSourceDeny,
+  allowedExternalPackages,
+  declaredCapabilities,
+}) {
   const normalizedFiles = new Map(
     [...files.entries()].map(([filePath, sourceText]) => [toPosixPath(filePath), sourceText]),
   );
@@ -1027,7 +1059,11 @@ export function analyzeImportGraph({ files, publicSourceDeny, allowedExternalPac
     const facts = factsByFile.get(filePath);
     if (!facts) continue;
     for (const row of publicSourceDeny ?? []) {
-      for (const marker of row.markers ?? []) {
+      const markers = [
+        ...(row.markers ?? []),
+        ...gatedMarkersFor(row.capability, declaredCapabilities),
+      ];
+      for (const marker of markers) {
         const normalizedMarker = normalizeAuditToken(marker);
         const matchedToken = [...facts.auditTokens].find((token) => token.includes(normalizedMarker));
         if (normalizedMarker && matchedToken) {
@@ -1082,6 +1118,16 @@ export function analyzeImportGraph({ files, publicSourceDeny, allowedExternalPac
       rowsSha256: Array.isArray(publicSourceDeny)
         ? canonicalRowsSha256(publicSourceDeny)
         : null,
+      capabilityGatedMarkers: Object.fromEntries(
+        Object.entries(CAPABILITY_GATED_MARKERS).map(([capability, gate]) => [
+          capability,
+          {
+            slug: gate.slug,
+            declared: declaredCapabilities?.has(gate.slug) === true,
+            enforcedMarkers: gatedMarkersFor(capability, declaredCapabilities),
+          },
+        ]),
+      ),
       violationCount: denyViolations.length,
       violations: denyViolations,
     },
@@ -1314,6 +1360,30 @@ export function validateRepositoryStaticContracts(textFiles) {
   return errors;
 }
 
+/**
+ * The shape this scanner needs from a target manifest, and nothing more.
+ *
+ * The manifest's full contract -- exact capability list, routes, catalogs --
+ * belongs to `verify-target-build.mjs`, which compares it against the product
+ * surface. Here it is consulted only to answer one question, so it is checked
+ * only far enough to trust that answer: a malformed manifest must not silently
+ * read as "declares nothing" and turn a gate off by being broken.
+ */
+function validateTargetManifestShape(manifest, target) {
+  const errors = [];
+  const label = `build/capabilities.${target}.json`;
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+    return [`${label}: must be a JSON object`];
+  }
+  if (manifest.kind !== 'TARGET_BUILD_ALLOWLIST') errors.push(`${label}: kind must be TARGET_BUILD_ALLOWLIST`);
+  if (manifest.target !== target) errors.push(`${label}: target must be ${target}`);
+  if (!Array.isArray(manifest.allowedCapabilities)
+    || manifest.allowedCapabilities.some((slug) => typeof slug !== 'string')) {
+    errors.push(`${label}: allowedCapabilities must be an array of strings`);
+  }
+  return errors;
+}
+
 function readRepositoryInputs(root) {
   const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
   const repositoryRoot = resolve(root, '..');
@@ -1331,8 +1401,17 @@ function readRepositoryInputs(root) {
 
   metadataErrors.push(...validatePackageScripts(packageJson.scripts));
 
+  // The PUBLIC target's manifest, because this scan covers the public
+  // closure. A capability the public build does not declare is not exempt in
+  // shared code either -- shared code compiles into the public bundle.
+  const publicManifest = JSON.parse(
+    readFileSync(resolve(root, 'build/capabilities.public.json'), 'utf8'),
+  );
+  metadataErrors.push(...validateTargetManifestShape(publicManifest, 'public'));
+
   return {
     allowedExternalPackages: new Set(Object.keys(packageJson.dependencies ?? {})),
+    declaredCapabilities: new Set(publicManifest.allowedCapabilities ?? []),
     files: readActiveFiles(root),
     metadataErrors,
     publicSourceDeny: denyDocument.capabilities,

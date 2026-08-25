@@ -71,6 +71,16 @@ jobs:
           node --check packaging/tests/final-candidate-browser.mjs
           node --check packaging/tests/real-world-browser.mjs
 
+      # The capability policy is only a policy if something runs it. Both are
+      # pure-function suites over in-memory fixtures plus the real deny
+      # document: no cargo, no network, no build. Until now they existed and
+      # never executed, which is the same as not having them.
+      - name: Verify the public capability policy contracts
+        shell: bash
+        run: |
+          node tools/architecture/verify-rust-graph.test.mjs
+          node tools/architecture/verify-public-rust-zero-surface.test.mjs
+
       - name: Parse PowerShell packaging scripts
         shell: pwsh
         run: |

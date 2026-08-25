@@ -10,6 +10,7 @@ const SHARED_CAPABILITIES = Object.freeze([
   'course-search',
   'course-section-details',
   'current-page-audio',
+  'current-page-notification',
   'current-page-selection',
   'current-page-toast',
   'current-page-watch',
@@ -86,6 +87,31 @@ const SURFACE_EXTENSIONS = Object.freeze({
 // A bare `email` token is part of react-dom's standards table. Product-specific
 // email markers still catch an email UI, client, route, catalog, or integration.
 const AMBIGUOUS_LIBRARY_MARKERS = new Set(['email']);
+/**
+ * Markers a target keeps being denied unless it DECLARES the capability.
+ *
+ * The mirror of the source-scan gate: the built artefacts of a target that
+ * does not declare `current-page-notification` are still scanned for the
+ * page-level notification markers, so the declaration is what permits the
+ * API here too -- not the marker's absence from the shared set.
+ */
+const CAPABILITY_GATED_MARKERS = Object.freeze({
+  SYSTEM_NOTIFICATIONS: Object.freeze({
+    slug: 'current-page-notification',
+    markers: Object.freeze([
+      'browser_notification_api',
+      'desktop_notification',
+      'notification_permission',
+    ]),
+  }),
+});
+
+function gatedMarkersFor(capability, declaredCapabilities) {
+  const gate = CAPABILITY_GATED_MARKERS[capability];
+  if (gate === undefined) return [];
+  return declaredCapabilities?.has(gate.slug) === true ? [] : [...gate.markers];
+}
+
 const ADDITIONAL_PRODUCT_MARKERS = Object.freeze({
   EMAIL: Object.freeze([
     'contact_email',
@@ -194,10 +220,11 @@ function validateManifest(manifest, target, label) {
   return errors;
 }
 
-function markersFor(row) {
+function markersFor(row, declaredCapabilities) {
   return [
     ...(row.markers ?? []).filter((marker) => !AMBIGUOUS_LIBRARY_MARKERS.has(marker)),
     ...(ADDITIONAL_PRODUCT_MARKERS[row.capability] ?? []),
+    ...gatedMarkersFor(row.capability, declaredCapabilities),
   ];
 }
 
@@ -283,6 +310,12 @@ export function verifyTargetArtifacts({
   const activeDenyCapabilities = target === 'public'
     ? [...denyCapabilities, ...PUBLIC_TARGET_DENY_CAPABILITIES]
     : denyCapabilities;
+  // Read from the BUILT manifest, which is the one that actually ships beside
+  // these bytes. A source manifest that declared the capability while the
+  // emitted one did not would exempt an artefact nobody declared anything for.
+  const declaredCapabilities = new Set(
+    Array.isArray(builtManifest?.allowedCapabilities) ? builtManifest.allowedCapabilities : [],
+  );
   const errors = [
     ...validateManifest(sourceManifest, target, 'source'),
     ...validateManifest(builtManifest, target, 'built'),
@@ -328,7 +361,7 @@ export function verifyTargetArtifacts({
   if (target === 'public') {
     for (const surface of SCANNED_SURFACES) {
       for (const row of activeDenyCapabilities) {
-        for (const marker of markersFor(row)) {
+        for (const marker of markersFor(row, declaredCapabilities)) {
           for (const [filePath, contents] of normalizedContents) {
             const scansBytes = surface === 'BUNDLE';
             const scansTextAsset = SURFACE_EXTENSIONS[surface]?.has(

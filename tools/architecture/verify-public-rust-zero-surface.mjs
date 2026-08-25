@@ -32,6 +32,17 @@ const EXPECTED_CAPABILITY_COUNT = 18;
 const LOCAL_ONLY_PACKAGES = Object.freeze(['bcsp-local-user-state', 'bcsp-local-runtime', 'bcsp-local']);
 const SUPPLEMENTAL_MARKERS = Object.freeze({
   LOCAL_RESET: Object.freeze(['local_user_data_reset']),
+  // The page-level notification markers left the shared marker set so that a
+  // BROWSER page which declares `current-page-notification` may use the
+  // browser API the declaration is about. Rust is not a browser page: server
+  // push, native notifications and anything that would fire without a page
+  // running stay denied here, on every surface, and these three are how that
+  // is enforced now that the shared set no longer carries them.
+  SYSTEM_NOTIFICATIONS: Object.freeze([
+    'browser_notification_api',
+    'desktop_notification',
+    'notification_permission',
+  ]),
 });
 const OPTIONAL_PUBLIC_INPUT_ROOTS = Object.freeze([
   'crates/bcsp-public-runtime/assets',

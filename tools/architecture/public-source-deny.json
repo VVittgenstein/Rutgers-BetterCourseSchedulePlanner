@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "markerSetVersion": 2,
+  "markerSetVersion": 3,
   "kind": "PUBLIC_SOURCE_DENY_POLICY",
   "surface": "SOURCE",
   "isCapabilityManifest": false,
@@ -234,10 +234,7 @@
       "capability": "SYSTEM_NOTIFICATIONS",
       "validationId": "P4-Z-SYSTEM_NOTIFICATIONS-SOURCE",
       "markers": [
-        "browser_notification_api",
-        "desktop_notification",
         "native_alert",
-        "notification_permission",
         "os_notification",
         "service_worker_notification",
         "show_notification",

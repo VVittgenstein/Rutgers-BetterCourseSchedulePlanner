@@ -338,6 +338,7 @@ try {
             'course-search',
             'course-section-details',
             'current-page-audio',
+            'current-page-notification',
             'current-page-selection',
             'current-page-toast',
             'current-page-watch',
