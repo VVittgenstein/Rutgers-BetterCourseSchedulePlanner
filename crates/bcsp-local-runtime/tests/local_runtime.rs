@@ -1209,15 +1209,14 @@ async fn desired_intent_survives_a_restart_and_a_full_reset_clears_it() {
     running.shutdown().await.unwrap();
 }
 
-/// S2b. The shared host promises nothing about a path no target injected --
-/// it simply is not in the route table, and what a client sees there is
-/// whatever the local extension fallback does with it. Presence is still
-/// un-injected (it belongs to the page-lifecycle milestone), so pin it in
-/// both shapes a page can reach it with; a future injection then has to be a
-/// visible behaviour change rather than a silent one.
+/// S2b, now from the other side. The presence path IS injected by the local
+/// build, so the pin moves from "this path does not exist" to "this path is a
+/// WebSocket route and nothing else". A plain GET is refused by the upgrade
+/// extractor before any handler runs, and a path nobody injected still 404s --
+/// which is what keeps the seam honest: the route table, not a promise.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_un_injected_presence_path_is_404_not_a_websocket_route() {
-    let temp = TestDirectory::new("no-secondary-socket");
+async fn the_presence_path_is_a_websocket_route_and_only_that() {
+    let temp = TestDirectory::new("presence-route");
     let (_root, executable) = package(&temp);
     let running = PreparedLocalRuntime::from_executable(executable)
         .unwrap()
@@ -1229,9 +1228,10 @@ async fn the_un_injected_presence_path_is_404_not_a_websocket_route() {
     let nonce = running.nonce().as_str();
 
     let upgrade = websocket_handshake(authority, LOCAL_PRESENCE_SOCKET_PATH, &origin, nonce);
-    assert_eq!(status(&upgrade), 404, "presence upgrade: {upgrade}");
-    assert_eq!(body(&upgrade), "not found");
+    assert_eq!(status(&upgrade), 101, "presence upgrade: {upgrade}");
 
+    // A plain read of the same path is not a page; the upgrade extractor
+    // rejects it before the route's own admission is consulted.
     let read = request(
         authority,
         &format!("GET {LOCAL_PRESENCE_SOCKET_PATH}"),
@@ -1239,8 +1239,20 @@ async fn the_un_injected_presence_path_is_404_not_a_websocket_route() {
         nonce,
         "",
     );
-    assert_eq!(status(&read), 404, "presence read: {read}");
-    assert_eq!(body(&read), "not found");
+    assert_eq!(status(&read), 400, "presence read: {read}");
+
+    // The session nonce is still required, exactly as on the watch route.
+    let wrong = websocket_handshake(
+        authority,
+        LOCAL_PRESENCE_SOCKET_PATH,
+        &origin,
+        "00000000-0000-4000-8000-000000000000",
+    );
+    assert_eq!(status(&wrong), 403, "presence with a wrong session: {wrong}");
+
+    // A path nobody injected is still not in the route table.
+    let absent = websocket_handshake(authority, "/api/v1/local/absent", &origin, nonce);
+    assert_eq!(status(&absent), 404, "absent secondary route: {absent}");
 
     // The built-in route is unaffected by any of this.
     let watch = websocket_handshake(authority, "/api/v1/watch", &origin, nonce);
@@ -1248,6 +1260,135 @@ async fn the_un_injected_presence_path_is_404_not_a_websocket_route() {
 
     running.shutdown().await.unwrap();
 }
+
+/// The whole L2 promise, over real sockets: a page says which tab it is, the
+/// runtime counts it, and when the last one goes the runtime asks itself to
+/// exit -- through the same ordered shutdown the UI exit request uses, never
+/// around it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_last_page_leaving_ends_in_an_ordered_shutdown() {
+    let temp = TestDirectory::new("presence-exit");
+    let (_root, executable) = package(&temp);
+    let mut running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .with_presence_countdown(Duration::from_millis(400))
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap().to_owned();
+    let nonce = running.nonce().as_str().to_owned();
+
+    let mut page = open_presence_socket(&authority, &origin, &nonce);
+    send_websocket_text(&mut page, &presence_hello("00000000-0000-4000-8000-0000000ab001"));
+    let registered = read_websocket_text(&mut page);
+    let registered: serde_json::Value = serde_json::from_str(&registered).unwrap();
+    assert_eq!(registered["payload"]["type"], "REGISTERED");
+    assert_eq!(registered["payload"]["pages"], 1);
+
+    // While the page is open, nothing is asked for.
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(700),
+            running.wait_for_local_exit_request(),
+        )
+        .await
+        .is_err(),
+        "a runtime with a page open must not ask to exit",
+    );
+
+    drop(page);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        running.wait_for_local_exit_request(),
+    )
+    .await
+    .expect("the countdown must expire after the last page leaves")
+    .expect("the exit request channel must stay open");
+
+    // And the exit is the ordinary ordered one: the runtime is still serving
+    // when the request arrives, and the shutdown below is what stops it.
+    let alive = request(&authority, "GET /api/v1/local/desired-watch", &origin, &nonce, "");
+    assert_eq!(status(&alive), 200, "{alive}");
+
+    running.shutdown().await.unwrap();
+}
+
+/// A page that comes back inside the window keeps the program alive, and the
+/// countdown it interrupted cannot fire afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_returning_inside_the_window_cancels_the_exit() {
+    let temp = TestDirectory::new("presence-return");
+    let (_root, executable) = package(&temp);
+    let mut running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .with_presence_countdown(Duration::from_millis(500))
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap().to_owned();
+    let nonce = running.nonce().as_str().to_owned();
+    let tab = "00000000-0000-4000-8000-0000000ab002";
+
+    let mut first = open_presence_socket(&authority, &origin, &nonce);
+    send_websocket_text(&mut first, &presence_hello(tab));
+    let _ = read_websocket_text(&mut first);
+    drop(first);
+
+    // The page reloads: same tab, new connection, inside the window.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let mut second = open_presence_socket(&authority, &origin, &nonce);
+    send_websocket_text(&mut second, &presence_hello(tab));
+    let registered = read_websocket_text(&mut second);
+    assert!(registered.contains("REGISTERED"), "{registered}");
+
+    // Well past the original due time. The countdown that was running when
+    // the page left belonged to a state the page has since changed.
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(900),
+            running.wait_for_local_exit_request(),
+        )
+        .await
+        .is_err(),
+        "a page returned inside the window; the runtime must not exit",
+    );
+
+    running.shutdown().await.unwrap();
+}
+
+/// A socket that never says which tab it is does not count, and does not keep
+/// the program alive. Transport ping/pong is not a page.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_presence_socket_that_never_identifies_itself_is_not_a_page() {
+    let temp = TestDirectory::new("presence-silent");
+    let (_root, executable) = package(&temp);
+    let mut running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .with_presence_countdown(Duration::from_millis(300))
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap().to_owned();
+    let nonce = running.nonce().as_str().to_owned();
+
+    // Held open, and silent. If an unidentified socket counted, this would
+    // keep the runtime alive forever.
+    let _silent = open_presence_socket(&authority, &origin, &nonce);
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        running.wait_for_local_exit_request(),
+    )
+    .await
+    .expect("an unidentified socket must not hold the runtime open")
+    .expect("the exit request channel must stay open");
+
+    running.shutdown().await.unwrap();
+}
+
 
 /// The desired-watch path is an ordinary local HTTP resource, and a plain
 /// GET on it succeeds. The earlier design put a second WebSocket route here
@@ -3113,6 +3254,77 @@ fn request_without_session(authority: &str, request_line: &str) -> String {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
+}
+
+/// Opens a presence socket and HOLDS it. Dropping the returned stream is how
+/// a test closes the page.
+fn open_presence_socket(authority: &str, origin: &str, nonce: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(authority).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "GET {LOCAL_PRESENCE_SOCKET_PATH}?session={nonce} HTTP/1.1\r\nHost: {authority}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: bcsp.v1\r\n\r\n"
+    )
+    .unwrap();
+    stream.flush().unwrap();
+    let response = read_http_response(&mut stream);
+    assert_eq!(status(&response), 101, "{response}");
+    stream
+}
+
+fn presence_hello(tab: &str) -> String {
+    format!(
+        "{{\"protocolVersion\":1,\"messageId\":\"00000000-0000-4000-8000-000000000001\",\"payload\":{{\"type\":\"HELLO\",\"tabId\":\"{tab}\"}}}}"
+    )
+}
+
+/// Writes one masked client text frame. Clients MUST mask; a server that
+/// accepted an unmasked frame would not be following the protocol.
+fn send_websocket_text(stream: &mut TcpStream, text: &str) {
+    let payload = text.as_bytes();
+    assert!(payload.len() < 65_536, "test frames stay small");
+    let mut frame = vec![0x81u8];
+    let mask = [0x37u8, 0xfa, 0x21, 0x3d];
+    if payload.len() < 126 {
+        frame.push(0x80 | u8::try_from(payload.len()).unwrap());
+    } else {
+        frame.push(0x80 | 126);
+        frame.extend_from_slice(&u16::try_from(payload.len()).unwrap().to_be_bytes());
+    }
+    frame.extend_from_slice(&mask);
+    for (index, byte) in payload.iter().enumerate() {
+        frame.push(byte ^ mask[index % 4]);
+    }
+    stream.write_all(&frame).unwrap();
+    stream.flush().unwrap();
+}
+
+/// Reads server frames until one carries text, skipping the transport's own
+/// pings. Server frames are never masked.
+fn read_websocket_text(stream: &mut TcpStream) -> String {
+    loop {
+        let mut header = [0u8; 2];
+        stream.read_exact(&mut header).unwrap();
+        let opcode = header[0] & 0x0f;
+        let length = usize::from(header[1] & 0x7f);
+        let length = match length {
+            126 => {
+                let mut extended = [0u8; 2];
+                stream.read_exact(&mut extended).unwrap();
+                usize::from(u16::from_be_bytes(extended))
+            }
+            127 => panic!("test frames never need 64-bit lengths"),
+            value => value,
+        };
+        let mut payload = vec![0u8; length];
+        stream.read_exact(&mut payload).unwrap();
+        if opcode == 0x1 {
+            return String::from_utf8(payload).unwrap();
+        }
+        assert_ne!(opcode, 0x8, "the runtime closed the presence socket");
+    }
 }
 
 fn websocket_handshake(authority: &str, path: &str, origin: &str, nonce: &str) -> String {

@@ -15,6 +15,11 @@ import {
 import type { WatchIntentPort } from '../../shared/watch';
 import { createLocalDesiredWatchApi } from '../desired';
 import {
+  createLocalPresenceClient,
+  type LocalPresenceClient,
+  type LocalPresenceSocketFactory,
+} from '../presence';
+import {
   createLocalPersonalApi,
   LocalPersonalProvider,
   parseLocalBootstrapEnvelope,
@@ -36,6 +41,10 @@ export interface LocalProductBootstrapProps {
   readonly mutationId?: () => string;
   readonly runtimeFactory?: LocalProductRuntimeFactory;
   readonly socket?: WatchSocketFactory;
+  /** The presence transport. Injected by tests; production opens a real one. */
+  readonly presenceSocket?: LocalPresenceSocketFactory;
+  /** Set false where a test mounts the tree without a runtime to talk to. */
+  readonly presence?: boolean;
 }
 
 export type LocalProductBootstrapConfiguration = Omit<LocalProductBootstrapProps, 'children'>;
@@ -46,6 +55,8 @@ export function LocalProductBootstrap({
   fetch: fetchImplementation,
   messageId,
   mutationId,
+  presence = true,
+  presenceSocket,
   runtimeFactory = createProductRuntimePort,
   socket,
 }: LocalProductBootstrapProps) {
@@ -60,6 +71,7 @@ export function LocalProductBootstrap({
     const abort = new AbortController();
     let active = true;
     let runtime: ProductRuntimePort | null = null;
+    let presenceClient: LocalPresenceClient | null = null;
     setState(PRODUCT_RUNTIME_LOADING);
     setPersonal(null);
 
@@ -106,6 +118,18 @@ export function LocalProductBootstrap({
           ...(mutationId === undefined ? {} : { mutationId }),
           session: () => sessionBootstrap.sessionNonce,
         });
+        if (presence) {
+          // Started once the page has a session, and kept alive for as long as
+          // this tab is mounted. It is the ONLY thing that tells the runtime
+          // somebody is here, and it is deliberately not tied to whether the
+          // user has started watching anything.
+          presenceClient = createLocalPresenceClient({
+            baseUrl: baseUrl ?? globalThis.location?.href ?? 'http://127.0.0.1/',
+            session: () => sessionBootstrap.sessionNonce,
+            ...(presenceSocket === undefined ? {} : { socket: presenceSocket }),
+          });
+          presenceClient.start();
+        }
         setPersonal({ api, bootstrap: localBootstrap, watchIntent });
         setState({ status: 'READY', runtime });
       } catch (error) {
@@ -120,9 +144,19 @@ export function LocalProductBootstrap({
     return () => {
       active = false;
       abort.abort();
+      presenceClient?.dispose();
       runtime?.dispose();
     };
-  }, [baseUrl, fetchImplementation, messageId, mutationId, runtimeFactory, socket]);
+  }, [
+    baseUrl,
+    fetchImplementation,
+    messageId,
+    mutationId,
+    presence,
+    presenceSocket,
+    runtimeFactory,
+    socket,
+  ]);
 
   return (
     <ProductRuntimeProvider state={state}>

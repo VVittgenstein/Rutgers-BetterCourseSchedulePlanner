@@ -15,6 +15,7 @@ mod lifecycle;
 mod path;
 mod personal;
 mod policy;
+mod presence;
 mod product;
 mod watch;
 
@@ -47,6 +48,10 @@ pub use path::{
     LOCAL_DATA_DIRECTORY_NAME, LOCAL_DATABASE_FILE_NAME, LocalPathError, LocalRuntimePaths,
 };
 pub use personal::PersonalSurface;
+pub use presence::{
+    LOCAL_IDLE_EXIT_COUNTDOWN, LOCAL_PRESENCE_HELLO_DEADLINE, LocalPresenceCommandV1,
+    LocalPresenceEventV1, LocalPresencePhase, LocalPresenceRoute, LocalPresenceStateV1,
+};
 pub use policy::{LocalRefreshPolicyProvider, LocalRuntimeCore, create_local_runtime_core};
 pub use watch::{LOCAL_PRESENCE_SOCKET_PATH, LocalWatchRoute, create_local_watch_socket};
 

@@ -5,16 +5,18 @@ use std::time::Duration;
 
 use bcsp_application::{
     LoopbackServer, LoopbackServerError, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,
-    OpenRuntimeSnapshotRegistry, RouteExtension, ServiceStatusRegistry, SessionNonce,
-    SharedWatchSocket, TargetRefreshDemand, WebSocketExtension, spawn_loopback_server_with_socket,
+    OpenRuntimeSnapshotRegistry, RouteExtension, SecondaryWebSocketRoute, ServiceStatusRegistry,
+    SessionNonce, SharedWatchSocket, TargetRefreshDemand, WebSocketExtension,
+    spawn_loopback_server_with_sockets,
 };
 use bcsp_local_user_state::PersonalStateStore;
 use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::{
-    DesiredWatchCoordinator, ExistingLocalInstance, LocalBootstrapError, LocalInstanceClaim,
-    LocalInstanceError, LocalPathError, LocalRouteExtension, LocalRuntimeCore, LocalRuntimePaths,
+    DesiredWatchCoordinator, ExistingLocalInstance, LOCAL_PRESENCE_SOCKET_PATH,
+    LocalBootstrapError, LocalInstanceClaim, LocalInstanceError, LocalPathError,
+    LocalPresenceRoute, LocalRouteExtension, LocalRuntimeCore, LocalRuntimePaths,
     LocalRuntimeState, LocalSurfaceFailure, LocalWatchRoute, OperationalGate, PersonalSurface,
     PrimaryInstanceLease, create_local_runtime_core, create_local_watch_socket,
     product::{
@@ -71,6 +73,8 @@ pub struct PreparedLocalRuntime {
     watch: Arc<SharedWatchSocket>,
     watch_route: Arc<LocalWatchRoute>,
     desired_watch: Arc<DesiredWatchCoordinator>,
+    presence: Arc<LocalPresenceRoute>,
+    shutdown_trigger: LocalShutdownTrigger,
     target_refresh_demand: TargetRefreshDemand,
     prepared_serving: Arc<bcsp_application::PreparedServingRegistry>,
     extension: Arc<LocalRouteExtension>,
@@ -119,6 +123,13 @@ impl PreparedLocalRuntime {
             .with_desired_watch(desired_watch.clone());
         let nonce = SessionNonce::generate();
         let (shutdown_trigger, shutdown_requests) = local_shutdown_channel();
+        // Two things can ask this runtime to exit, and they ask the same way:
+        // the authenticated UI's exit request, and the last page closing. The
+        // trigger only signals intent -- the ordered shutdown below is what
+        // actually happens, and neither caller may bypass it.
+        let presence_trigger = shutdown_trigger.clone();
+        let exit_trigger = shutdown_trigger.clone();
+        let presence = Arc::new(LocalPresenceRoute::new(move || presence_trigger.request()));
         let extension = Arc::new(LocalRouteExtension::with_product_routes(
             nonce.clone(),
             Box::new(personal),
@@ -133,6 +144,8 @@ impl PreparedLocalRuntime {
             watch,
             watch_route,
             desired_watch,
+            presence,
+            shutdown_trigger: exit_trigger,
             target_refresh_demand,
             prepared_serving,
             extension,
@@ -184,6 +197,26 @@ impl PreparedLocalRuntime {
         self.desired_watch.clone()
     }
 
+    pub fn presence(&self) -> Arc<LocalPresenceRoute> {
+        self.presence.clone()
+    }
+
+    /// Replaces the idle-exit countdown.
+    ///
+    /// The product number is [`crate::LOCAL_IDLE_EXIT_COUNTDOWN`], pinned by
+    /// its own test. This exists so an integration test can prove the
+    /// BEHAVIOUR -- that the last page leaving ends in an ordered shutdown,
+    /// and that a page returning cancels it -- without spending a minute of
+    /// wall clock proving the clock works.
+    #[must_use]
+    pub fn with_presence_countdown(mut self, countdown: Duration) -> Self {
+        let trigger = self.shutdown_trigger.clone();
+        self.presence = Arc::new(
+            LocalPresenceRoute::new(move || trigger.request()).with_countdown(countdown),
+        );
+        self
+    }
+
     pub const fn core(&self) -> &LocalRuntimeCore {
         &self.core
     }
@@ -210,8 +243,19 @@ impl PreparedLocalRuntime {
         // route, so a page cannot start or stop a watch by sending a frame
         // and the coordinator learns when the audience changes.
         let socket: Arc<dyn WebSocketExtension> = self.watch_route.clone();
-        let server =
-            spawn_loopback_server_with_socket(extension, socket, self.nonce.clone()).await?;
+        // Presence is its own route, and only the local build injects it. It
+        // counts PAGES, which is a different question from what is being
+        // watched: a page that has started nothing still has someone looking
+        // at it, and the watch socket cannot see that page at all.
+        let presence: Arc<dyn WebSocketExtension> = self.presence.clone();
+        let presence_route = SecondaryWebSocketRoute::new(LOCAL_PRESENCE_SOCKET_PATH, presence)?;
+        let server = spawn_loopback_server_with_sockets(
+            extension,
+            socket,
+            vec![presence_route],
+            self.nonce.clone(),
+        )
+        .await?;
         Ok(RunningLocalRuntime {
             prepared: self,
             server,
@@ -277,6 +321,10 @@ impl RunningLocalRuntime {
         } = self;
         let database_path = prepared.paths().database().to_path_buf();
         refresh.shutdown().await;
+        // Sealed first: a countdown that expired while the runtime was
+        // already exiting would ask for a second shutdown of something that
+        // is halfway through the first.
+        prepared.presence.seal();
         prepared.watch.seal_and_stop();
         prepared.watch.flush_dispatch_sink();
         server.shutdown().await?;
