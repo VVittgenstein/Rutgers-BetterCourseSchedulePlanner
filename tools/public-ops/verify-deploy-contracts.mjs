@@ -101,6 +101,38 @@ assert.ok(
   'the drill must use a real SIGKILL',
 );
 
+// --- deploy/public/caddy/Caddyfile.example --------------------------------
+
+const caddyfile = read('deploy/public/caddy/Caddyfile.example');
+const caddySettings = caddyfile
+  .split('\n')
+  .map((line) => line.trim())
+  .filter((line) => line !== '' && !line.startsWith('#'));
+
+// H2: the reverse_proxy directive must open a block whose settings include
+// the four-hour stream drain; a bare `reverse_proxy 127.0.0.1:8080` is the
+// exact pre-hardening shape that cut every monitor on reload.
+const proxyAt = caddySettings.findIndex((line) =>
+  line.startsWith('reverse_proxy 127.0.0.1:8080'),
+);
+assert.notEqual(proxyAt, -1, 'the site must proxy to 127.0.0.1:8080');
+assert.ok(
+  caddySettings[proxyAt].endsWith('{'),
+  'H2: reverse_proxy must open a block (stream_close_delay lives inside it)',
+);
+const proxyBlockEnd = caddySettings.indexOf('}', proxyAt);
+assert.notEqual(proxyBlockEnd, -1, 'the reverse_proxy block must close');
+assert.ok(
+  caddySettings.slice(proxyAt + 1, proxyBlockEnd).includes('stream_close_delay 4h'),
+  'H2: reverse_proxy must set stream_close_delay 4h',
+);
+
+// The metrics refusal must survive edits around the proxy block.
+assert.ok(
+  caddySettings.includes('respond @metrics 404'),
+  'the public edge must keep refusing /metrics',
+);
+
 // --- deploy/public/config environment surface -----------------------------
 
 const schema = JSON.parse(read('deploy/public/config/bcsp.env.schema.json'));

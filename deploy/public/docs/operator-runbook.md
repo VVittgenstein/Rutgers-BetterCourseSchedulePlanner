@@ -47,6 +47,18 @@ application's nonce-bearing Content Security Policy, and supports HTTP and
 WebSocket proxying. It intentionally sets neither CSP nor HSTS. Validate and
 reload Caddy in a separately authorized host operation.
 
+**Caddy reload risk.** Without `stream_close_delay`, every `caddy reload`
+immediately severs every proxied WebSocket — every person's live section
+monitoring, all at once. The example's `reverse_proxy` block therefore sets
+`stream_close_delay 4h`: established streams keep flowing under the old
+configuration for up to four hours after a reload, while new connections use
+the new configuration at once. Do not remove that directive when adapting
+the block. A reload is still not free — streams older than the delay, and
+any stream still open when the delay expires, are closed, and a second
+reload restarts nothing — so schedule reloads in low-traffic windows
+(late night US Eastern during registration periods) and prefer batching
+config changes over reloading repeatedly.
+
 ## Routine operations
 
 Create a transactionally consistent online backup; never copy a live SQLite

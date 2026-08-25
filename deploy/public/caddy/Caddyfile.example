@@ -15,5 +15,11 @@ planner.invalid {
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}
 
-	reverse_proxy 127.0.0.1:8080
+	reverse_proxy 127.0.0.1:8080 {
+		# H2: Caddy >= 2.7 closes every proxied WebSocket the moment its
+		# config reloads. Established streams -- live section monitoring --
+		# get this long to keep flowing under the old config instead;
+		# reload risk and scheduling advice are in docs/operator-runbook.md.
+		stream_close_delay 4h
+	}
 }
