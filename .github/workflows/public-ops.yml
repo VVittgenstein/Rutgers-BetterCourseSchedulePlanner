@@ -71,15 +71,34 @@ jobs:
           node --check packaging/tests/final-candidate-browser.mjs
           node --check packaging/tests/real-world-browser.mjs
 
-      # The capability policy is only a policy if something runs it. Both are
-      # pure-function suites over in-memory fixtures plus the real deny
-      # document: no cargo, no network, no build. Until now they existed and
-      # never executed, which is the same as not having them.
+      # The capability policy is only a policy if something runs it. Every
+      # surface it governs runs here: the Rust suites below, the frontend
+      # source/bundle/manifest suites, and the release-set gate's fixture
+      # self-test. All are pure functions over in-memory fixtures plus the
+      # real deny document -- no cargo, no build, no archive. The frontend
+      # workflow-contract test in verify-target-build.test.mjs pins these
+      # entries, so deleting any of them fails the next run.
       - name: Verify the public capability policy contracts
         shell: bash
         run: |
           node tools/architecture/verify-rust-graph.test.mjs
           node tools/architecture/verify-public-rust-zero-surface.test.mjs
+
+      - name: Install the frontend guard toolchain
+        shell: bash
+        working-directory: frontend
+        run: npm ci
+
+      - name: Verify the frontend capability policy contracts
+        shell: bash
+        working-directory: frontend
+        run: |
+          npm run guard:imports
+          npm run test:guard
+
+      - name: Self-test the release-set capability gate
+        shell: pwsh
+        run: ./packaging/verify-release-set.ps1 -SelfTest
 
       - name: Parse PowerShell packaging scripts
         shell: pwsh

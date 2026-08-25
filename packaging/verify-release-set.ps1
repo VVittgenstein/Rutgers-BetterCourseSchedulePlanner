@@ -1,22 +1,37 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Verify')]
 param(
-    [string]$ReleaseDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release\0.1.0'),
+    # Defaulted in the body: $PSScriptRoot is not available to parameter
+    # default expressions under Windows PowerShell 5.1.
+    [Parameter(ParameterSetName = 'Verify')]
+    [string]$ReleaseDirectory,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(ParameterSetName = 'Verify', Mandatory = $true)]
     [string]$SourceCommit,
 
-    [Parameter(Mandatory = $true)]
-    [long]$SourceDateEpoch
+    [Parameter(ParameterSetName = 'Verify', Mandatory = $true)]
+    [long]$SourceDateEpoch,
+
+    # Runs the frontend-capability release gate against in-memory fixtures
+    # instead of verifying built archives. The gate is only evidence if it
+    # can be executed where no archive exists: this is how CI proves the
+    # required-slug semantics -- not just the file's syntax -- on every push.
+    [Parameter(ParameterSetName = 'SelfTest', Mandatory = $true)]
+    [switch]$SelfTest
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-if ($SourceCommit -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$') {
-    throw 'SourceCommit must be a full lowercase hexadecimal commit id.'
-}
-if ($SourceDateEpoch -lt 0) {
-    throw 'SourceDateEpoch must be a non-negative integer.'
+if ($PSCmdlet.ParameterSetName -ceq 'Verify') {
+    if (-not $ReleaseDirectory) {
+        $ReleaseDirectory = Join-Path (Split-Path -Parent $PSScriptRoot) 'release\0.1.0'
+    }
+    if ($SourceCommit -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$') {
+        throw 'SourceCommit must be a full lowercase hexadecimal commit id.'
+    }
+    if ($SourceDateEpoch -lt 0) {
+        throw 'SourceDateEpoch must be a non-negative integer.'
+    }
 }
 
 $RepositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
@@ -169,6 +184,36 @@ function Assert-FrontendCapabilities {
     $validated
 }
 
+function Assert-RequiredFrontendCapabilitySet {
+    # The release gate on what the shipped frontends must declare. Kept as a
+    # function of two plain capability arrays so the SelfTest parameter set
+    # can execute it against fixtures without any archive; the Verify flow
+    # calls it with the extracted packages' validated arrays. Returns the
+    # shared-capability count for the release summary.
+    param([string[]]$WindowsCapabilities, [string[]]$LinuxCapabilities)
+    $requiredSharedCapabilities = @(
+        'course-search',
+        'course-section-details',
+        'current-page-audio',
+        'current-page-notification',
+        'current-page-selection',
+        'current-page-toast',
+        'current-page-watch',
+        'en-us-zh-cn',
+        'filter-schema',
+        'open-status',
+        'refresh-diagnostics',
+        'section-search'
+    )
+    foreach ($capability in $requiredSharedCapabilities) {
+        Assert-True (@($WindowsCapabilities | Where-Object { $_ -ceq $capability }).Count -eq 1) "Windows frontend is missing shared capability: $capability"
+        Assert-True (@($LinuxCapabilities | Where-Object { $_ -ceq $capability }).Count -eq 1) "Linux frontend is missing shared capability: $capability"
+    }
+    Assert-True (@($WindowsCapabilities | Where-Object { $_ -ceq 'windows-launcher-lifecycle' }).Count -eq 1) 'Windows frontend is missing windows-launcher-lifecycle.'
+    Assert-True (@($LinuxCapabilities | Where-Object { $_ -ceq 'service-operations' }).Count -eq 1) 'Linux frontend is missing service-operations.'
+    $requiredSharedCapabilities.Count
+}
+
 function Assert-CleanPayload {
     param([string]$Root, [string[]]$Files, [string]$PackageId, [string]$Binary)
     $contentPatterns = @(
@@ -277,6 +322,59 @@ function Test-Package {
     }
 }
 
+if ($PSCmdlet.ParameterSetName -ceq 'SelfTest') {
+    try {
+        # The fixture list is DELIBERATELY a second copy of the required set:
+        # if anyone deletes a slug from the gate, the negative fixture below
+        # sails through it and this self-test fails -- which is the point.
+        $sharedFixture = @(
+            'course-search',
+            'course-section-details',
+            'current-page-audio',
+            'current-page-notification',
+            'current-page-selection',
+            'current-page-toast',
+            'current-page-watch',
+            'en-us-zh-cn',
+            'filter-schema',
+            'open-status',
+            'refresh-diagnostics',
+            'section-search'
+        )
+        $windowsFixture = [string[]]@($sharedFixture + 'windows-launcher-lifecycle')
+        $linuxFixture = [string[]]@($sharedFixture + 'service-operations')
+
+        # Positive: a compliant capability set passes the gate.
+        $null = Assert-RequiredFrontendCapabilitySet $windowsFixture $linuxFixture
+
+        # Negative: the same set without the page-notification slug must be
+        # refused, and refused FOR that slug.
+        $withoutNotification = [string[]]@($sharedFixture | Where-Object { $_ -cne 'current-page-notification' })
+        $refused = $null
+        try {
+            $null = Assert-RequiredFrontendCapabilitySet ([string[]]@($withoutNotification + 'windows-launcher-lifecycle')) ([string[]]@($withoutNotification + 'service-operations'))
+        }
+        catch { $refused = $_.Exception.Message }
+        Assert-True ($null -ne $refused) 'A capability set without current-page-notification was accepted.'
+        Assert-True ($refused.Contains('current-page-notification')) "The refusal did not name the missing slug: $refused"
+
+        # Negative: the per-platform slugs are required too.
+        $refusedPlatform = $null
+        try { $null = Assert-RequiredFrontendCapabilitySet $windowsFixture ([string[]]@($sharedFixture)) }
+        catch { $refusedPlatform = $_.Exception.Message }
+        Assert-True ($null -ne $refusedPlatform) 'A Linux capability set without service-operations was accepted.'
+
+        [pscustomobject]@{
+            state = 'PASS'; mode = 'SELF_TEST'; checkedSharedCapabilities = $sharedFixture.Count
+        } | ConvertTo-Json -Compress
+        exit 0
+    }
+    catch {
+        [System.Console]::Error.WriteLine("release-set-selftest: $($_.Exception.Message)")
+        exit 1
+    }
+}
+
 try {
     Assert-True (Test-Path -LiteralPath $InputsPath -PathType Leaf) "Missing $InputsPath"
     $inputs = Read-Json $InputsPath
@@ -334,26 +432,7 @@ try {
         foreach ($reference in $common) { Assert-True ((ConvertTo-Json $windows.Components[$reference] -Depth 20 -Compress) -ceq (ConvertTo-Json $linux.Components[$reference] -Depth 20 -Compress)) "Shared SBOM component differs: $reference" }
         Assert-Sequence $windows.FrontendRefs $linux.FrontendRefs 'Embedded frontend components'
 
-        $requiredSharedCapabilities = @(
-            'course-search',
-            'course-section-details',
-            'current-page-audio',
-            'current-page-notification',
-            'current-page-selection',
-            'current-page-toast',
-            'current-page-watch',
-            'en-us-zh-cn',
-            'filter-schema',
-            'open-status',
-            'refresh-diagnostics',
-            'section-search'
-        )
-        foreach ($capability in $requiredSharedCapabilities) {
-            Assert-True (@($windows.FrontendCapabilities.allowedCapabilities | Where-Object { $_ -ceq $capability }).Count -eq 1) "Windows frontend is missing shared capability: $capability"
-            Assert-True (@($linux.FrontendCapabilities.allowedCapabilities | Where-Object { $_ -ceq $capability }).Count -eq 1) "Linux frontend is missing shared capability: $capability"
-        }
-        Assert-True (@($windows.FrontendCapabilities.allowedCapabilities | Where-Object { $_ -ceq 'windows-launcher-lifecycle' }).Count -eq 1) 'Windows frontend is missing windows-launcher-lifecycle.'
-        Assert-True (@($linux.FrontendCapabilities.allowedCapabilities | Where-Object { $_ -ceq 'service-operations' }).Count -eq 1) 'Linux frontend is missing service-operations.'
+        $sharedFrontendCapabilityCount = Assert-RequiredFrontendCapabilitySet ([string[]]@($windows.FrontendCapabilities.allowedCapabilities)) ([string[]]@($linux.FrontendCapabilities.allowedCapabilities))
 
         [pscustomobject]@{
             state = 'PASS'; version = [string]$inputs.releaseVersion; sourceCommit = [string]$windows.Manifest.sourceCommit
@@ -363,7 +442,7 @@ try {
                 [pscustomobject]@{ id = [string]$linuxPackage.id; archive = [string]$linuxPackage.archiveName; sha256 = $linux.ArchiveHash; files = $linux.FileCount }
             )
             sharedComponents = $common.Count; frontendComponents = $windows.FrontendRefs.Count
-            sharedFrontendCapabilities = $requiredSharedCapabilities.Count
+            sharedFrontendCapabilities = $sharedFrontendCapabilityCount
         } | ConvertTo-Json -Depth 5 -Compress
     }
     finally { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force } }

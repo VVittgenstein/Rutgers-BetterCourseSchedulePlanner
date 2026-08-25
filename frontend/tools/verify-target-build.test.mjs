@@ -252,3 +252,76 @@ test('rejects a cross-target module before tree shaking can remove it', () => {
   assert.equal(report.state, 'FAIL');
   assert.match(report.errors.join('\n'), /src\/ui\/local.*outside the public source graph/u);
 });
+
+/**
+ * The CI entries that make the capability policy executable, in order.
+ *
+ * A policy suite that exists but is not wired into the workflow is the same
+ * as not having it -- which is exactly how the frontend Notification suites
+ * shipped once before. This contract pins the wiring itself: each fragment
+ * below must appear, in this order, inside the packaging-contracts job.
+ */
+const REQUIRED_POLICY_CI_FRAGMENTS = [
+  'node tools/architecture/verify-rust-graph.test.mjs',
+  'node tools/architecture/verify-public-rust-zero-surface.test.mjs',
+  'npm ci',
+  'npm run guard:imports',
+  'npm run test:guard',
+  'verify-release-set.ps1 -SelfTest',
+];
+
+/** Errors for a workflow text that no longer runs the policy, or none. */
+function validatePolicyCiContract(workflowText) {
+  const errors = [];
+  const jobStart = workflowText.indexOf('packaging-contracts:');
+  if (jobStart < 0) {
+    return ['the packaging-contracts job is missing from the workflow'];
+  }
+  const jobEnd = workflowText.indexOf('linux-iteration-package:', jobStart);
+  const jobText = jobEnd < 0
+    ? workflowText.slice(jobStart)
+    : workflowText.slice(jobStart, jobEnd);
+  let cursor = 0;
+  for (const fragment of REQUIRED_POLICY_CI_FRAGMENTS) {
+    const at = jobText.indexOf(fragment, cursor);
+    if (at < 0) {
+      errors.push(`the packaging-contracts job no longer runs "${fragment}" (in order)`);
+      continue;
+    }
+    cursor = at + fragment.length;
+  }
+  return errors;
+}
+
+test('the real workflow wires every capability policy suite into CI', () => {
+  const workflowText = readFileSync(
+    resolve(toolsDirectory, '../../.github/workflows/public-ops.yml'),
+    'utf8',
+  );
+  assert.deepEqual(validatePolicyCiContract(workflowText), []);
+});
+
+test('removing a policy CI entry is detected, not parsed around', () => {
+  const workflowText = readFileSync(
+    resolve(toolsDirectory, '../../.github/workflows/public-ops.yml'),
+    'utf8',
+  );
+  // Each entry is individually load-bearing: strip one line at a time and
+  // the contract must name the missing entry. A check satisfied by a valid
+  // YAML parse alone -- the old evidence -- passes every one of these.
+  for (const fragment of REQUIRED_POLICY_CI_FRAGMENTS) {
+    const mutated = workflowText
+      .split('\n')
+      .filter((line) => !line.includes(fragment))
+      .join('\n');
+    const errors = validatePolicyCiContract(mutated);
+    assert.ok(
+      errors.some((error) => error.includes(fragment)),
+      `deleting "${fragment}" from the workflow must fail the contract`,
+    );
+  }
+  assert.deepEqual(
+    validatePolicyCiContract('jobs: {}'),
+    ['the packaging-contracts job is missing from the workflow'],
+  );
+});
