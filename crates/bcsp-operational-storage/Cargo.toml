@@ -22,4 +22,5 @@ time.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+rusqlite = { workspace = true, features = ["hooks"] }
 tempfile.workspace = true

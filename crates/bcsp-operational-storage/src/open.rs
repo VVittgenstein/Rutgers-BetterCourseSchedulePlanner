@@ -2179,6 +2179,14 @@ impl OperationalStorage {
             })
             .transpose()
     }
+
+    /// Test-only access to the single underlying SQLite connection, so
+    /// integration tests can install an authorizer prepare-count probe and
+    /// flush the prepared-statement cache. Never call this from product code.
+    #[doc(hidden)]
+    pub fn raw_connection_for_tests(&self) -> &Connection {
+        &self.connection
+    }
 }
 
 fn load_started_open_attempt(
