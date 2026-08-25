@@ -151,7 +151,10 @@ impl WsConnectionCapacity {
         self: &Arc<Self>,
         client_key: String,
     ) -> Result<WsCapacityPermit, WsCapacityError> {
-        let mut state = self.state.lock().map_err(|_| WsCapacityError::Unavailable)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| WsCapacityError::Unavailable)?;
         if state.global_active >= self.global_limit {
             drop(state);
             self.global_refusals.fetch_add(1, Ordering::SeqCst);
@@ -192,7 +195,9 @@ impl WsConnectionCapacity {
 
     #[cfg(test)]
     fn tracked_clients(&self) -> usize {
-        self.state.lock().map_or(usize::MAX, |state| state.per_client.len())
+        self.state
+            .lock()
+            .map_or(usize::MAX, |state| state.per_client.len())
     }
 }
 
@@ -243,7 +248,10 @@ mod tests {
         assert_eq!(DEFAULT_PER_CLIENT_WS_CONNECTIONS, 64);
         assert!(PER_CLIENT_WS_LIMIT_RANGE.contains(&DEFAULT_PER_CLIENT_WS_CONNECTIONS));
         assert_eq!(PER_CLIENT_WS_LIMIT_RANGE, 1..=1024);
-        assert_eq!(MAX_WS_CONNECTIONS_PER_SESSION, 4, "per-session cap is untouched");
+        assert_eq!(
+            MAX_WS_CONNECTIONS_PER_SESSION, 4,
+            "per-session cap is untouched"
+        );
         assert_eq!(PER_SOCKET_OUTBOUND_BUDGET_BYTES, 256 * 1024);
         assert_eq!(GLOBAL_OUTBOUND_BUDGET_BYTES, 64 * 1024 * 1024);
         assert_eq!(SOCKET_WRITE_TIMEOUT, Duration::from_secs(5));
@@ -293,10 +301,21 @@ mod tests {
     fn a_refused_key_leaves_no_entry_and_released_keys_are_forgotten() {
         let capacity = WsConnectionCapacity::with_limits(1, 1);
         let held = capacity.admit("holder".to_owned()).expect("the slot");
-        assert_eq!(capacity.admit("newcomer".to_owned()).unwrap_err(), WsCapacityError::GlobalExhausted);
-        assert_eq!(capacity.tracked_clients(), 1, "a refusal must not add a key");
+        assert_eq!(
+            capacity.admit("newcomer".to_owned()).unwrap_err(),
+            WsCapacityError::GlobalExhausted
+        );
+        assert_eq!(
+            capacity.tracked_clients(),
+            1,
+            "a refusal must not add a key"
+        );
         drop(held);
-        assert_eq!(capacity.tracked_clients(), 0, "a released key must be forgotten");
+        assert_eq!(
+            capacity.tracked_clients(),
+            0,
+            "a released key must be forgotten"
+        );
         assert_eq!(capacity.global_active(), 0);
     }
 }

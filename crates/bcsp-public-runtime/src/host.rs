@@ -2592,7 +2592,11 @@ mod tests {
         )
         .await;
         assert!(unknown.starts_with("HTTP/1.1 403"));
-        assert_eq!(capacity.global_active(), 0, "a refused lease returns the permit");
+        assert_eq!(
+            capacity.global_active(),
+            0,
+            "a refused lease returns the permit"
+        );
 
         // Transport refusal (Binary frame) releases.
         let (accepted, stream) = websocket_handshake(
@@ -2605,8 +2609,11 @@ mod tests {
         assert!(accepted.starts_with("HTTP/1.1 101"));
         await_ws_condition(|| capacity.global_active() == 1, "the admitted permit").await;
         let stream = send_raw(stream, masked_client_frame(0x82, b"no binary")).await;
-        await_ws_condition(|| capacity.global_active() == 0, "the binary refusal to release")
-            .await;
+        await_ws_condition(
+            || capacity.global_active() == 0,
+            "the binary refusal to release",
+        )
+        .await;
         drop(stream);
 
         // A client Close frame releases.
@@ -2685,8 +2692,11 @@ mod tests {
         .await
         .expect("the bounded pump must refuse the over-budget ping");
         assert_eq!(stats.socket_budget_disconnects(), 1);
-        await_ws_condition(|| capacity.global_active() == 0, "the slow consumer to release")
-            .await;
+        await_ws_condition(
+            || capacity.global_active() == 0,
+            "the slow consumer to release",
+        )
+        .await;
         assert_eq!(
             resources.global_outbound_budget.queued_bytes(),
             0,
@@ -2828,7 +2838,6 @@ mod tests {
             assert!(metrics.contains(expected), "missing metric: {expected}");
         }
     }
-
 
     #[tokio::test]
     async fn websocket_requires_origin_nonce_and_protocol_and_shutdown_closes_live_transport() {
