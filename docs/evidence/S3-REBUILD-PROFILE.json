@@ -1,0 +1,852 @@
+{
+  "schemaVersion": 1,
+  "toolVersion": "1.0.0",
+  "normalizedCommand": "rebuild-profile-analyzer --ndjson 20260820T033451393Z-a8a40f98/samples.ndjson --ndjson 20260820T033527487Z-d92a8a35/samples.ndjson --ndjson 20260820T033701043Z-5745bc4a/samples.ndjson --out-json S3-REBUILD-PROFILE.json --out-md S3-REBUILD-PROFILE.md",
+  "inputs": [
+    {
+      "kind": "ndjson",
+      "id": "20260820T033451393Z-a8a40f98/samples.ndjson",
+      "sha256": "ee1ca6fde70fa277ab9e3dbdc5eb14b658fc7982e7c9a391865f065025fce171",
+      "rows": 1,
+      "excluded": {
+        "curlExitCode": 0,
+        "httpStatusNon2xx": 0,
+        "validationErrors": 0,
+        "initialLkg": 0
+      }
+    },
+    {
+      "kind": "ndjson",
+      "id": "20260820T033527487Z-d92a8a35/samples.ndjson",
+      "sha256": "bf6fa4cd50444c6c23c69909e8b291c4a6fd4aa9d874cce3c39dd5f6cd444ee3",
+      "rows": 3,
+      "excluded": {
+        "curlExitCode": 0,
+        "httpStatusNon2xx": 0,
+        "validationErrors": 0,
+        "initialLkg": 0
+      }
+    },
+    {
+      "kind": "ndjson",
+      "id": "20260820T033701043Z-5745bc4a/samples.ndjson",
+      "sha256": "80e3f8fc16df15d14f729478ce939e78da7880aa44284fc128c6c3c1f2eb1eb2",
+      "rows": 554,
+      "excluded": {
+        "curlExitCode": 0,
+        "httpStatusNon2xx": 0,
+        "validationErrors": 0,
+        "initialLkg": 0
+      }
+    }
+  ],
+  "targets": [
+    {
+      "targetId": "soc:2026:9:NB",
+      "term": "9",
+      "year": "2026",
+      "campus": "NB",
+      "windows": [
+        {
+          "windowId": "20260820T033451393Z-a8a40f98/samples.ndjson#w00",
+          "utcStart": "2026-08-20T03:34:51.458Z",
+          "utcEnd": "2026-08-20T03:34:51.792Z",
+          "nyLabel": "2026-08-19 23:34–23:34 ET",
+          "peakOverlap": false,
+          "sampleCount": 1,
+          "bracketCount": 0,
+          "brackets": []
+        },
+        {
+          "windowId": "20260820T033527487Z-d92a8a35/samples.ndjson#w00",
+          "utcStart": "2026-08-20T03:35:27.541Z",
+          "utcEnd": "2026-08-20T03:35:48.086Z",
+          "nyLabel": "2026-08-19 23:35–23:35 ET",
+          "peakOverlap": false,
+          "sampleCount": 3,
+          "bracketCount": 0,
+          "brackets": []
+        },
+        {
+          "windowId": "20260820T033701043Z-5745bc4a/samples.ndjson#w00",
+          "utcStart": "2026-08-20T03:37:01.121Z",
+          "utcEnd": "2026-08-20T05:42:20.043Z",
+          "nyLabel": "2026-08-19 23:37–08-20 01:42 ET",
+          "peakOverlap": false,
+          "sampleCount": 554,
+          "bracketCount": 67,
+          "brackets": [
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#6",
+              "lowerUtc": "2026-08-20T03:37:53.632Z",
+              "upperUtc": "2026-08-20T03:38:06.945Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#11",
+              "lowerUtc": "2026-08-20T03:39:00.532Z",
+              "upperUtc": "2026-08-20T03:39:13.943Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#19",
+              "lowerUtc": "2026-08-20T03:40:49.253Z",
+              "upperUtc": "2026-08-20T03:41:01.963Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#23",
+              "lowerUtc": "2026-08-20T03:41:41.844Z",
+              "upperUtc": "2026-08-20T03:42:03.538Z",
+              "widthSeconds": 22,
+              "serverWidthSeconds": 22,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#28",
+              "lowerUtc": "2026-08-20T03:42:58.646Z",
+              "upperUtc": "2026-08-20T03:43:11.363Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#32",
+              "lowerUtc": "2026-08-20T03:43:53.744Z",
+              "upperUtc": "2026-08-20T03:44:06.662Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 13,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#36",
+              "lowerUtc": "2026-08-20T03:44:48.192Z",
+              "upperUtc": "2026-08-20T03:45:02.239Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#46",
+              "lowerUtc": "2026-08-20T03:47:00.394Z",
+              "upperUtc": "2026-08-20T03:47:14.134Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#50",
+              "lowerUtc": "2026-08-20T03:47:54.652Z",
+              "upperUtc": "2026-08-20T03:48:08.987Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 16,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#59",
+              "lowerUtc": "2026-08-20T03:49:56.924Z",
+              "upperUtc": "2026-08-20T03:50:10.812Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#63",
+              "lowerUtc": "2026-08-20T03:50:50.008Z",
+              "upperUtc": "2026-08-20T03:51:04.089Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#68",
+              "lowerUtc": "2026-08-20T03:51:56.925Z",
+              "upperUtc": "2026-08-20T03:52:11.328Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#72",
+              "lowerUtc": "2026-08-20T03:52:51.018Z",
+              "upperUtc": "2026-08-20T03:53:03.603Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 13,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#77",
+              "lowerUtc": "2026-08-20T03:53:59.345Z",
+              "upperUtc": "2026-08-20T03:54:13.703Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#81",
+              "lowerUtc": "2026-08-20T03:54:54.145Z",
+              "upperUtc": "2026-08-20T03:55:07.994Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#90",
+              "lowerUtc": "2026-08-20T03:56:56.943Z",
+              "upperUtc": "2026-08-20T03:57:10.549Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#94",
+              "lowerUtc": "2026-08-20T03:57:49.721Z",
+              "upperUtc": "2026-08-20T03:58:02.366Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 13,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#99",
+              "lowerUtc": "2026-08-20T03:58:54.681Z",
+              "upperUtc": "2026-08-20T03:59:08.459Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#113",
+              "lowerUtc": "2026-08-20T04:02:00.944Z",
+              "upperUtc": "2026-08-20T04:02:15.380Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#122",
+              "lowerUtc": "2026-08-20T04:04:00.825Z",
+              "upperUtc": "2026-08-20T04:04:15.026Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#161",
+              "lowerUtc": "2026-08-20T04:12:57.516Z",
+              "upperUtc": "2026-08-20T04:13:11.530Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#165",
+              "lowerUtc": "2026-08-20T04:13:52.521Z",
+              "upperUtc": "2026-08-20T04:14:06.501Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#170",
+              "lowerUtc": "2026-08-20T04:14:58.358Z",
+              "upperUtc": "2026-08-20T04:15:12.087Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#188",
+              "lowerUtc": "2026-08-20T04:18:57.374Z",
+              "upperUtc": "2026-08-20T04:19:11.611Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#192",
+              "lowerUtc": "2026-08-20T04:19:53.927Z",
+              "upperUtc": "2026-08-20T04:20:08.245Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#201",
+              "lowerUtc": "2026-08-20T04:21:56.538Z",
+              "upperUtc": "2026-08-20T04:22:10.742Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#205",
+              "lowerUtc": "2026-08-20T04:22:50.982Z",
+              "upperUtc": "2026-08-20T04:23:05.206Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#236",
+              "lowerUtc": "2026-08-20T04:29:56.137Z",
+              "upperUtc": "2026-08-20T04:30:09.351Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#240",
+              "lowerUtc": "2026-08-20T04:30:49.853Z",
+              "upperUtc": "2026-08-20T04:31:03.689Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#254",
+              "lowerUtc": "2026-08-20T04:33:59.109Z",
+              "upperUtc": "2026-08-20T04:34:12.764Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#263",
+              "lowerUtc": "2026-08-20T04:36:00.632Z",
+              "upperUtc": "2026-08-20T04:36:14.103Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#271",
+              "lowerUtc": "2026-08-20T04:37:49.054Z",
+              "upperUtc": "2026-08-20T04:38:02.333Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#280",
+              "lowerUtc": "2026-08-20T04:39:52.002Z",
+              "upperUtc": "2026-08-20T04:40:05.372Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#284",
+              "lowerUtc": "2026-08-20T04:40:47.196Z",
+              "upperUtc": "2026-08-20T04:41:02.136Z",
+              "widthSeconds": 15,
+              "serverWidthSeconds": 16,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#297",
+              "lowerUtc": "2026-08-20T04:43:49.331Z",
+              "upperUtc": "2026-08-20T04:44:02.963Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#302",
+              "lowerUtc": "2026-08-20T04:44:59.176Z",
+              "upperUtc": "2026-08-20T04:45:12.888Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#306",
+              "lowerUtc": "2026-08-20T04:45:54.649Z",
+              "upperUtc": "2026-08-20T04:46:09.059Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 16,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#310",
+              "lowerUtc": "2026-08-20T04:46:49.136Z",
+              "upperUtc": "2026-08-20T04:47:03.322Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#319",
+              "lowerUtc": "2026-08-20T04:48:52.354Z",
+              "upperUtc": "2026-08-20T04:49:06.789Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#328",
+              "lowerUtc": "2026-08-20T04:50:55.181Z",
+              "upperUtc": "2026-08-20T04:51:09.475Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#337",
+              "lowerUtc": "2026-08-20T04:52:57.308Z",
+              "upperUtc": "2026-08-20T04:53:10.893Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#341",
+              "lowerUtc": "2026-08-20T04:53:49.136Z",
+              "upperUtc": "2026-08-20T04:54:03.550Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#346",
+              "lowerUtc": "2026-08-20T04:54:57.027Z",
+              "upperUtc": "2026-08-20T04:55:10.378Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#355",
+              "lowerUtc": "2026-08-20T04:56:58.496Z",
+              "upperUtc": "2026-08-20T04:57:19.385Z",
+              "widthSeconds": 21,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#358",
+              "lowerUtc": "2026-08-20T04:57:48.115Z",
+              "upperUtc": "2026-08-20T04:58:02.369Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#372",
+              "lowerUtc": "2026-08-20T05:00:59.394Z",
+              "upperUtc": "2026-08-20T05:01:13.792Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#380",
+              "lowerUtc": "2026-08-20T05:02:47.413Z",
+              "upperUtc": "2026-08-20T05:03:02.008Z",
+              "widthSeconds": 15,
+              "serverWidthSeconds": 16,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#385",
+              "lowerUtc": "2026-08-20T05:03:56.746Z",
+              "upperUtc": "2026-08-20T05:04:10.657Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#389",
+              "lowerUtc": "2026-08-20T05:04:51.402Z",
+              "upperUtc": "2026-08-20T05:05:05.475Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#398",
+              "lowerUtc": "2026-08-20T05:06:52.417Z",
+              "upperUtc": "2026-08-20T05:07:07.041Z",
+              "widthSeconds": 15,
+              "serverWidthSeconds": 16,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#407",
+              "lowerUtc": "2026-08-20T05:08:58.682Z",
+              "upperUtc": "2026-08-20T05:09:12.398Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#411",
+              "lowerUtc": "2026-08-20T05:09:53.464Z",
+              "upperUtc": "2026-08-20T05:10:07.101Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#420",
+              "lowerUtc": "2026-08-20T05:11:54.549Z",
+              "upperUtc": "2026-08-20T05:12:07.843Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#424",
+              "lowerUtc": "2026-08-20T05:12:49.389Z",
+              "upperUtc": "2026-08-20T05:13:03.491Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#442",
+              "lowerUtc": "2026-08-20T05:16:54.031Z",
+              "upperUtc": "2026-08-20T05:17:07.568Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#446",
+              "lowerUtc": "2026-08-20T05:17:48.188Z",
+              "upperUtc": "2026-08-20T05:18:01.493Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#451",
+              "lowerUtc": "2026-08-20T05:18:55.991Z",
+              "upperUtc": "2026-08-20T05:19:08.806Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 13,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#455",
+              "lowerUtc": "2026-08-20T05:19:49.709Z",
+              "upperUtc": "2026-08-20T05:20:11.725Z",
+              "widthSeconds": 22,
+              "serverWidthSeconds": 22,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#459",
+              "lowerUtc": "2026-08-20T05:20:50.829Z",
+              "upperUtc": "2026-08-20T05:21:03.635Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 13,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#464",
+              "lowerUtc": "2026-08-20T05:21:57.608Z",
+              "upperUtc": "2026-08-20T05:22:12.342Z",
+              "widthSeconds": 15,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#468",
+              "lowerUtc": "2026-08-20T05:22:51.232Z",
+              "upperUtc": "2026-08-20T05:23:04.182Z",
+              "widthSeconds": 13,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#486",
+              "lowerUtc": "2026-08-20T05:26:53.748Z",
+              "upperUtc": "2026-08-20T05:27:07.432Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 14,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#495",
+              "lowerUtc": "2026-08-20T05:28:55.586Z",
+              "upperUtc": "2026-08-20T05:29:09.652Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#504",
+              "lowerUtc": "2026-08-20T05:30:56.152Z",
+              "upperUtc": "2026-08-20T05:31:10.097Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#513",
+              "lowerUtc": "2026-08-20T05:32:57.212Z",
+              "upperUtc": "2026-08-20T05:33:11.761Z",
+              "widthSeconds": 15,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#549",
+              "lowerUtc": "2026-08-20T05:40:57.491Z",
+              "upperUtc": "2026-08-20T05:41:11.523Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 13,
+              "informative30": true,
+              "informative60": true
+            },
+            {
+              "bracketId": "soc:2026:9:NB/20260820T033701043Z-5745bc4a/samples.ndjson#w00/#553",
+              "lowerUtc": "2026-08-20T05:41:52.122Z",
+              "upperUtc": "2026-08-20T05:42:06.194Z",
+              "widthSeconds": 14,
+              "serverWidthSeconds": 15,
+              "informative30": true,
+              "informative60": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "bracketTotals": {
+    "total": 67,
+    "informative30": 67,
+    "informative60": 67,
+    "nonInformative30": 0,
+    "nonInformative60": 0,
+    "serverNonPositiveWidth": 0,
+    "noPriorStable": 0,
+    "ageGreaterThanZeroEndpoints": 0
+  },
+  "models": {
+    "m30": {
+      "periodSeconds": 30,
+      "server": {
+        "informativeCount": 67,
+        "nonInformativeCount": 0,
+        "unusableCount": 0,
+        "maxCoverage": 67,
+        "coverageRatio": 1,
+        "bestPhaseIntervals": [
+          {
+            "startMs": 1,
+            "endMs": 1000
+          }
+        ],
+        "residualBracketIds": []
+      },
+      "client": {
+        "informativeCount": 67,
+        "nonInformativeCount": 0,
+        "unusableCount": 0,
+        "maxCoverage": 67,
+        "coverageRatio": 1,
+        "bestPhaseIntervals": [
+          {
+            "startMs": 945,
+            "endMs": 1493
+          }
+        ],
+        "residualBracketIds": []
+      }
+    },
+    "m60": {
+      "periodSeconds": 60,
+      "server": {
+        "informativeCount": 67,
+        "nonInformativeCount": 0,
+        "unusableCount": 0,
+        "maxCoverage": 67,
+        "coverageRatio": 1,
+        "bestPhaseIntervals": [
+          {
+            "startMs": 1,
+            "endMs": 1000
+          }
+        ],
+        "residualBracketIds": []
+      },
+      "client": {
+        "informativeCount": 67,
+        "nonInformativeCount": 0,
+        "unusableCount": 0,
+        "maxCoverage": 67,
+        "coverageRatio": 1,
+        "bestPhaseIntervals": [
+          {
+            "startMs": 945,
+            "endMs": 1493
+          }
+        ],
+        "residualBracketIds": []
+      }
+    }
+  },
+  "comparison": {
+    "clockSource": "server",
+    "clockFallback": false,
+    "commonInformativeCount": 67,
+    "maxCoverage30Common": 67,
+    "maxCoverage60Common": 67,
+    "provisionalWinner": null,
+    "distinguishable": false,
+    "winner": null,
+    "reason": "equal-coverage-30s-adds-no-explanatory-power",
+    "holdout": {
+      "mode": "degenerate",
+      "degenerate": true,
+      "groupCount": 1,
+      "folds": [
+        {
+          "groupId": "degenerate-half-split",
+          "trainCount": 33,
+          "testCount": 34,
+          "test30": 34,
+          "test60": 34
+        }
+      ],
+      "consistentM30Win": false
+    }
+  },
+  "clock": {
+    "status": "server-date-available",
+    "offsetDistribution": {
+      "sampleCount": 558,
+      "minMs": -6176,
+      "p50Ms": -752,
+      "p95Ms": -297,
+      "maxMs": 309
+    },
+    "serverDateRegressions": 0,
+    "serverDateMissingCount": 0
+  },
+  "safeOffset": {
+    "identifiable": false,
+    "reason": "not-distinguishable"
+  },
+  "goGate": [
+    {
+      "id": "A4-1",
+      "requirement": "Multi-target evidence: at least NB, NK, CM independently evaluable",
+      "satisfied": false,
+      "evidence": "targets: soc:2026:9:NB only; NK missing; CM missing"
+    },
+    {
+      "id": "A4-2",
+      "requirement": "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window",
+      "satisfied": false,
+      "evidence": "windows: 3 total, 0 peak-overlapping, 3 off-peak"
+    },
+    {
+      "id": "A4-3",
+      "requirement": "30s vs 60s model distinguishable with consistent winner under per-(target,window) holdout",
+      "satisfied": false,
+      "evidence": "c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate"
+    },
+    {
+      "id": "A4-4",
+      "requirement": "Unified safe offset covers phase and positive jitter across all targets/windows",
+      "satisfied": false,
+      "evidence": "not identifiable (not-distinguishable)"
+    },
+    {
+      "id": "A4-5",
+      "requirement": "Report honestly handles server Date precision, client clock, and request latency",
+      "satisfied": true,
+      "evidence": "serverDate present on 558 samples; +1s quantization widening applied; client-vs-server offset p50=-752 ms"
+    },
+    {
+      "id": "A4-6",
+      "requirement": "Conclusions stable under leave-out of outliers / single target",
+      "satisfied": false,
+      "evidence": "not evaluable: no distinguishable winner"
+    }
+  ],
+  "decision": {
+    "verdict": "NO_PRODUCTION_CHANGE",
+    "qualifier": "DATA_REQUIRED",
+    "reasons": [
+      "A4-1 unsatisfied: targets: soc:2026:9:NB only; NK missing; CM missing",
+      "A4-2 unsatisfied: windows: 3 total, 0 peak-overlapping, 3 off-peak",
+      "A4-3 unsatisfied: c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate",
+      "A4-4 unsatisfied: not identifiable (not-distinguishable)",
+      "A4-6 unsatisfied: not evaluable: no distinguishable winner"
+    ]
+  }
+}
