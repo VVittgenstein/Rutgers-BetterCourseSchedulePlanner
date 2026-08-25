@@ -1,14 +1,15 @@
 [CmdletBinding(DefaultParameterSetName = 'Verify')]
 param(
     # Defaulted in the body: $PSScriptRoot is not available to parameter
-    # default expressions under Windows PowerShell 5.1.
-    [Parameter(ParameterSetName = 'Verify')]
+    # default expressions under Windows PowerShell 5.1. Positions keep the
+    # invocation surface the untagged parameters had.
+    [Parameter(ParameterSetName = 'Verify', Position = 0)]
     [string]$ReleaseDirectory,
 
-    [Parameter(ParameterSetName = 'Verify', Mandatory = $true)]
+    [Parameter(ParameterSetName = 'Verify', Mandatory = $true, Position = 1)]
     [string]$SourceCommit,
 
-    [Parameter(ParameterSetName = 'Verify', Mandatory = $true)]
+    [Parameter(ParameterSetName = 'Verify', Mandatory = $true, Position = 2)]
     [long]$SourceDateEpoch,
 
     # Runs the frontend-capability release gate against in-memory fixtures
@@ -23,7 +24,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if ($PSCmdlet.ParameterSetName -ceq 'Verify') {
-    if (-not $ReleaseDirectory) {
+    if (-not $PSBoundParameters.ContainsKey('ReleaseDirectory')) {
+        # Only when OMITTED. An explicitly passed empty value -- a wrapper's
+        # unset variable -- must keep failing loudly, not verify the default
+        # directory in place of the one the caller meant.
         $ReleaseDirectory = Join-Path (Split-Path -Parent $PSScriptRoot) 'release\0.1.0'
     }
     if ($SourceCommit -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$') {
@@ -347,22 +351,30 @@ if ($PSCmdlet.ParameterSetName -ceq 'SelfTest') {
         # Positive: a compliant capability set passes the gate.
         $null = Assert-RequiredFrontendCapabilitySet $windowsFixture $linuxFixture
 
-        # Negative: the same set without the page-notification slug must be
-        # refused, and refused FOR that slug.
-        $withoutNotification = [string[]]@($sharedFixture | Where-Object { $_ -cne 'current-page-notification' })
-        $refused = $null
-        try {
-            $null = Assert-RequiredFrontendCapabilitySet ([string[]]@($withoutNotification + 'windows-launcher-lifecycle')) ([string[]]@($withoutNotification + 'service-operations'))
+        # Negative, once per shared slug: the fixture minus that one slug must
+        # be refused, and refused FOR that slug. This is what makes the copy
+        # discriminating for the whole set, current-page-notification
+        # included, rather than only for whichever slug a reviewer thought of.
+        foreach ($slug in $sharedFixture) {
+            $without = [string[]]@($sharedFixture | Where-Object { $_ -cne $slug })
+            $refused = $null
+            try {
+                $null = Assert-RequiredFrontendCapabilitySet ([string[]]@($without + 'windows-launcher-lifecycle')) ([string[]]@($without + 'service-operations'))
+            }
+            catch { $refused = $_.Exception.Message }
+            Assert-True ($null -ne $refused) "A capability set without $slug was accepted."
+            Assert-True ($refused.Contains($slug)) "The refusal did not name the missing slug ${slug}: $refused"
         }
-        catch { $refused = $_.Exception.Message }
-        Assert-True ($null -ne $refused) 'A capability set without current-page-notification was accepted.'
-        Assert-True ($refused.Contains('current-page-notification')) "The refusal did not name the missing slug: $refused"
 
         # Negative: the per-platform slugs are required too.
         $refusedPlatform = $null
         try { $null = Assert-RequiredFrontendCapabilitySet $windowsFixture ([string[]]@($sharedFixture)) }
         catch { $refusedPlatform = $_.Exception.Message }
         Assert-True ($null -ne $refusedPlatform) 'A Linux capability set without service-operations was accepted.'
+        $refusedWindows = $null
+        try { $null = Assert-RequiredFrontendCapabilitySet ([string[]]@($sharedFixture)) $linuxFixture }
+        catch { $refusedWindows = $_.Exception.Message }
+        Assert-True ($null -ne $refusedWindows) 'A Windows capability set without windows-launcher-lifecycle was accepted.'
 
         [pscustomobject]@{
             state = 'PASS'; mode = 'SELF_TEST'; checkedSharedCapabilities = $sharedFixture.Count

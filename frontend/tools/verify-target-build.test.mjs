@@ -278,9 +278,15 @@ function validatePolicyCiContract(workflowText) {
     return ['the packaging-contracts job is missing from the workflow'];
   }
   const jobEnd = workflowText.indexOf('linux-iteration-package:', jobStart);
-  const jobText = jobEnd < 0
+  const jobText = (jobEnd < 0
     ? workflowText.slice(jobStart)
-    : workflowText.slice(jobStart, jobEnd);
+    : workflowText.slice(jobStart, jobEnd))
+    // A commented-out step is a removed step. Matching against comment lines
+    // would let '#   npm run test:guard' satisfy the contract while CI runs
+    // nothing.
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
   let cursor = 0;
   for (const fragment of REQUIRED_POLICY_CI_FRAGMENTS) {
     const at = jobText.indexOf(fragment, cursor);
@@ -320,6 +326,16 @@ test('removing a policy CI entry is detected, not parsed around', () => {
       `deleting "${fragment}" from the workflow must fail the contract`,
     );
   }
+  // Commenting a step out is the same removal wearing a disguise.
+  const commented = workflowText
+    .split('\n')
+    .map((line) => (line.includes('npm run test:guard') ? `#${line}` : line))
+    .join('\n');
+  assert.ok(
+    validatePolicyCiContract(commented)
+      .some((error) => error.includes('npm run test:guard')),
+    'a commented-out CI entry must fail the contract',
+  );
   assert.deepEqual(
     validatePolicyCiContract('jobs: {}'),
     ['the packaging-contracts job is missing from the workflow'],
