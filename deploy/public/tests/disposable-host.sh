@@ -300,6 +300,18 @@ bash "$OPS_ROOT/restore.sh" "$MANUAL_BACKUP"
 
 bash "$OPS_ROOT/upgrade.sh" ci-v2 "$CANDIDATE_ROOT"
 [[ "$(basename -- "$(readlink /opt/bcsp/current)")" == "ci-v2" ]]
+
+# H3: a second upgrade to the SAME release is a liveness check, not a
+# restart -- the service must keep its process across it.
+pid_before_noop="$(systemctl show bcsp.service --property=MainPID --value)"
+[[ "$pid_before_noop" =~ ^[0-9]+$ && "$pid_before_noop" -gt 0 ]]
+bash "$OPS_ROOT/upgrade.sh" ci-v2 "$CANDIDATE_ROOT"
+pid_after_noop="$(systemctl show bcsp.service --property=MainPID --value)"
+if [[ "$pid_after_noop" != "$pid_before_noop" ]]; then
+  printf 'disposable-host: a same-release upgrade changed MainPID %s -> %s\n' \
+    "$pid_before_noop" "$pid_after_noop" >&2
+  exit 1
+fi
 sqlite3 "$DATABASE" 'UPDATE ops_disposable_proof SET value = "after-v2";'
 bash "$OPS_ROOT/rollback.sh" ci-v1
 [[ "$(basename -- "$(readlink /opt/bcsp/current)")" == "ci-v1" ]]

@@ -101,6 +101,29 @@ assert.ok(
   'the drill must use a real SIGKILL',
 );
 
+// --- deploy/public/ops/upgrade.sh -----------------------------------------
+
+// H3: the same-release branch is a liveness check and nothing else. The
+// executable proof is deploy/public/tests/upgrade-noop.sh (Linux; recording
+// systemctl stub must stay empty); this pin catches the regression on any
+// platform by reading the branch itself.
+const upgrade = read('deploy/public/ops/upgrade.sh');
+const sameReleaseStart = upgrade.indexOf('if [[ "$previous" == "$release_path" ]]; then');
+assert.notEqual(sameReleaseStart, -1, 'upgrade.sh must keep its same-release branch');
+const sameReleaseEnd = upgrade.indexOf('\n  fi', sameReleaseStart);
+assert.notEqual(sameReleaseEnd, -1);
+const sameReleaseBranch = upgrade.slice(sameReleaseStart, sameReleaseEnd);
+assert.ok(
+  sameReleaseBranch.includes('bcsp_wait_for_liveness'),
+  'H3: the same-release branch must still verify liveness',
+);
+for (const forbidden of ['bcsp_restart_service', 'bcsp_reload_enable_service']) {
+  assert.ok(
+    !sameReleaseBranch.includes(forbidden),
+    `H3: the same-release branch must not call ${forbidden} -- that restart is what cleared every watch`,
+  );
+}
+
 // --- deploy/public/caddy/Caddyfile.example --------------------------------
 
 const caddyfile = read('deploy/public/caddy/Caddyfile.example');

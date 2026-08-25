@@ -23,10 +23,13 @@ main() {
   release_path="$(bcsp_install_release "$release_id" "$package_root")"
 
   if [[ "$previous" == "$release_path" ]]; then
-    bcsp_reload_enable_service
-    bcsp_restart_service
+    # H3: a same-release upgrade is a liveness check, nothing more. The
+    # release content was just proven byte-identical, so there is nothing
+    # to reload and nothing to restart -- and a restart here would clear
+    # every live watch (watches are not persisted) for zero benefit. The
+    # service keeps its MainPID; only the health probe runs.
     bcsp_wait_for_liveness || bcsp_die "active release is not live"
-    bcsp_log "release $release_id is already active and live"
+    bcsp_log "release $release_id is already active and live; nothing to restart"
     return
   fi
 
