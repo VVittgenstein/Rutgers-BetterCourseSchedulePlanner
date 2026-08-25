@@ -569,6 +569,35 @@ mod tests {
     }
 
     #[test]
+    fn one_of_two_tabs_leaving_is_not_the_last_page() {
+        let harness = harness(Duration::from_millis(80));
+        let _first = attach(&harness.route, 1);
+        hello(&harness.route, 1, 100);
+        let _second = attach(&harness.route, 2);
+        hello(&harness.route, 2, 101);
+        assert_eq!(harness.route.state().pages, 2);
+
+        harness.route.disconnect(trace(1));
+        assert_eq!(harness.route.state().pages, 1);
+        assert_eq!(
+            harness.route.state().phase,
+            LocalPresencePhase::Running,
+            "one window closing is not the user leaving",
+        );
+
+        std::thread::sleep(Duration::from_millis(120));
+        harness.route.tick();
+        assert_eq!(*harness.exits.lock().expect("exit counter"), 0);
+
+        // The second one is.
+        harness.route.disconnect(trace(2));
+        assert_eq!(harness.route.state().pages, 0);
+        std::thread::sleep(Duration::from_millis(120));
+        harness.route.tick();
+        assert_eq!(*harness.exits.lock().expect("exit counter"), 1);
+    }
+
+    #[test]
     fn the_last_page_leaving_starts_a_countdown_that_a_returning_page_cancels() {
         let harness = harness(Duration::from_millis(200));
         let _inbound = attach(&harness.route, 1);
