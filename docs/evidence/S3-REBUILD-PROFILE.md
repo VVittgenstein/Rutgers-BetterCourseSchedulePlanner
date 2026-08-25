@@ -27,8 +27,8 @@ This offline analysis of the committed openSections capture evidence reaches the
 ## Bracket statistics
 
 - Total change brackets: 67
-- Informative (width < period): 30 s → 67, 60 s → 67; non-informative: 30 s → 0, 60 s → 0
-- Server brackets dropped for non-positive width (webfarm clock skew): 0; change rows without a prior stable row: 0; bracket endpoints with `age > 0`: 0
+- Informative (0 < width < period, server clock — the comparison clock): 30 s → 67, 60 s → 67; non-informative: 30 s → 0, 60 s → 0
+- Server brackets dropped for non-positive width (webfarm clock skew): 0; brackets rejected entirely for non-positive client/observed_at width (corrupt capture ordering): 0; change rows without a prior stable row: 0; bracket endpoints with `age > 0`: 0
 - Client-clock width (s): min 12.585 / p50 13.945 / max 22.016
 - Server-clock width incl. +1 s Date widening (s): min 13.000 / p50 15.000 / max 22.000
 
@@ -65,7 +65,7 @@ max-coverage(30) ≥ max-coverage(60) holds identically — the ticks of any 60 
 - **Server Date regressions** (adjacent samples, > 1 s backwards): 0; samples missing serverDate: 0. The webfarm rotates multiple backends (`X-Server-Name`), so small skew between backends is expected and is why non-positive-width server brackets are dropped (0 here).
 - **Caching**: `cache-control: max-age=30` means an intermediary cache could quantize observations; bracket endpoints with `age > 0`: 0.
 - **etag is not a change signal**: the same body is served with multiple etags across backends; change detection uses `decodedBodySha256` only, and etag is never consulted.
-- **Timestamp semantics**: NDJSON rows carry client-side `requestStartedUtc`/`requestEndedUtc` (bracket = (stable requestStart, changed requestEnd]); SQLite rows carry a single `observed_at`, used for both bracket endpoints, so SQLite client-clock brackets are narrower than the true envelope by up to one request duration.
+- **Timestamp semantics**: NDJSON rows carry client-side `requestStartedUtc`/`requestEndedUtc` (bracket = (stable requestStart, changed requestEnd]); SQLite rows carry a single `observed_at`, used for both bracket endpoints, so SQLite client-clock brackets are narrower than the true envelope by up to one request duration. Client/observed_at timestamps must be monotone per target within a 2 s tolerance (fail-closed beyond it); a change pair whose client width is still non-positive indicates corrupt capture ordering and is rejected entirely and counted (0 here), never treated as informative.
 - **Method**: brackets are interval-censored arcs on the period circle; the best phase is the maximum arc-coverage region. A `timestamp % period` histogram of detection times is invalid for this purpose (it confounds sampling cadence with change phase) and is not used.
 
 ## Reproduction
