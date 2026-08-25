@@ -124,3 +124,38 @@ Vultr 实例已由产品负责人主动停机。H9 与公网组装集成测试�
 - H2/H3 的用户侧影响由《提醒必达》设计（自动重连）兜底，但兜底≠豁免：
   加固项独立成立；
 - H5 的最优修法依赖《提醒必达》的"WS 活动续期 nonce"（同一处代码改动）。
+
+## 4. 实现记录（2026-08-25，STAGE-3/v1-parallel，待 Codex 审）
+
+仓内实现已落地，数值以 STAGE-3 任务包/S2-D1 冻结为准（本文 v2 中的示例
+数字如"2048/3/256 帧/1 MiB"由冻结值取代）：
+
+- H1/H6：`deploy/public/systemd/bcsp.service` 落 `LimitNOFILE=65536`、
+  `MemoryHigh=700M`、`StartLimitIntervalSec=0`（删除随之失效的
+  `StartLimitBurst`）；`ops/verify.sh` 从 LOADED unit 读回三值；
+  `tests/disposable-host.sh` 新增六连 SIGKILL 恢复演练。
+- H2：`Caddyfile.example` 的 `reverse_proxy` 落 `stream_close_delay 4h`；
+  runbook 落 reload 风险与低峰建议；同 socket 穿真实 reload 由 H9 harness
+  在 Linux 上证明。
+- H3：`ops/upgrade.sh` same-release 分支改为纯 liveness 检查（零 systemctl
+  调用，`MainPID` 不变）；`tests/upgrade-noop.sh`（stub 判别）与
+  disposable-host 的同 id 二跑 PID 断言双向钉死。
+- H4：**二选一裁定为应用层限制**——per-client 并发 WS 上限复用 issuance
+  limiter 的同一 client key 规范化，不引入 `mholt/caddy-ratelimit` 第三方
+  模块。冻结值：global 1024（`< 4096`，3072 headroom 有测试钉死）、
+  per-client 默认 64（唯一可调项 `BCSP_PUBLIC_WS_PER_CLIENT_LIMIT`，
+  1..=1024）、per-session 4/403 不变；出站按字节预算定界（per-socket
+  256 KiB + 全局 64 MiB，RAII 预留）而非帧数，所有 socket write 受 5s
+  deadline；容量拒绝 503 + 独立 metric/log code。
+- H5：不重写 registry/session；新增"global cap 打满时仍可签发/续期"回归。
+- H7：authority 在配置边界规范化为小写并由规范部件重建 origin；比较仅
+  宽恕 ASCII 大小写，scheme/port/name 照旧拒绝。
+- H8：仓内 `ops/preflight.sh`（只读检查：占位域名、DNS、UFW 80/443、
+  root SSH 密码登录、failed units、Caddy 配置、服务活性）随包发布
+  （allowlist 21→22 四处同步）；真实主机操作仍需另行授权。
+- H9：`tests/public-soak.sh` + `packaging/tests/public-soak-browser.mjs`
+  实现 600s 真实 systemd+Caddy+浏览器 harness（PING 序列连续性即连接
+  身份、中途真实 `caddy reload`、30s `MemoryCurrent` 采样与增长预算）；
+  CI 手动入口 `linux-public-soak`。本机（Windows、无 Caddy/systemd）
+  不能运行该门：**H9 与真实主机验证保持 PENDING_LINUX_EVIDENCE**，
+  composition 层（真实上游数据）保持另行授权。

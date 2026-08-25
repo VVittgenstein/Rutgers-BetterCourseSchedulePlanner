@@ -37,6 +37,13 @@
    socket；按**字节预算**（如 1 MiB/socket）+ 全局内存预算定界，并附
    慢消费者压测。**同属 H4（Codex S2-PR4 批准时确认，非该差分引入）**：
    既有 pump 的出站通道无界且无 write timeout。
+   （实现记录 2026-08-25，STAGE-3/v1-parallel，待审：按 STAGE-3 冻结值
+   落地 per-socket 256 KiB + 全局 64 MiB 字节预算（RAII 预留、达限只断
+   本连接、预算即时归还）与全部 socket write 的 5s deadline；判别测试在
+   bcsp-application host 测试（预算/超时/正常关闭四例，去门即红已实测）
+   与 bcsp-public-runtime 的 e2e（8 字节预算下首个 app PING 溢出证明
+   公网路径确实走 bounded pump）。慢消费者"压测"由确定性预算/超时
+   判别测试与 H9 soak harness 共同承担。）
 
 ## 非阻断加固（Codex S1-PR2 复核建议，择机补做）
 
@@ -96,6 +103,16 @@ S2-D1. **H4 全局/per-client WS 上限与背压（P2 加固）落地之前，
           upgrade/pump 并覆盖所有失败退出路径；
        g) 发布前确认无仓外旧版 manifest consumer，或为其同步
           `$literal:true` 支持 / 升级 schemaVersion。
+       （实现记录 2026-08-25，STAGE-3/v1-parallel，待审：a/b/c 按冻结值
+       落地——global 1024、per-client 64（`BCSP_PUBLIC_WS_PER_CLIENT_LIMIT`
+       可调 1..=1024，越界拒绝启动）、client key 复用 `client_rate_key`
+       本尊；1024/4096/3072 数值不变量与"打满仍签发/续期"有测试直接
+       钉死。d) 拒绝计数上 `/metrics`（global/client 各一）且 per-client
+       可调。e) per-socket 256 KiB + 全局 64 MiB 出站字节预算与 5s write
+       deadline 同批落地。f) permit 在 `reserve_ws` 之前取得、RAII 随
+       upgrade closure，pre-upgrade 拒绝/Binary/Close/EOF/shutdown 五条
+       退出路径的释放各有测试。g) 未处理——本 lane 未动 manifest schema，
+       该项属发布期确认。）
 S2-D2. XFF 最后一跳取值规则以"Caddy 为公网第一跳、默认覆写
        X-Forwarded-*"为前提冻结；若将来接入 CDN/`trusted_proxies`/
        其他代理链，必须重新冻结取值规则并跑真 Caddy 链路测试。
