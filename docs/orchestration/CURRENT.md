@@ -161,18 +161,20 @@ Claude 的回报应至少包含：
 
 Claude 的“全部完成”“测试全绿”只是待核验声明。Codex 必须自己读取 Git 和代码。
 
-## 6. Codex 验收方式
+## 6. Codex Stage 级验收方式
 
-Codex 在里程碑边界集中验收，不逐小 commit 打断 Claude。
+Codex 在完整 Stage 边界集中验收，不再把 M2/M3/M4 之类相邻 slice 分别交付、分别审查。
 
 默认循环：
 
 ```text
-任务包 → Claude 完整实现 → Codex 一轮集中审查
-       → Claude 一轮集中修复 → Codex 最终验收
+Stage 任务包 → Claude 内部多 phase 连续实现 → final boundary 集中重门/一次回报
+             → Codex 一轮全 Stage 审查
+             → 仅有 blockers 时一轮集中修复 → 最终验收
 ```
 
-只有发现新的 P0/P1、产品行为冲突或迁移/发布阻断时才增加轮次。
+只有 `BLOCKER`（审查严重度 P0/P1、产品行为冲突、权威/安全/误退出、迁移/发布阻断或核心假阳性
+测试）才增加轮次。这里的严重度 P1/P2 不得与项目工作流 P1/P2 混用。
 
 Codex 必须：
 
@@ -182,23 +184,30 @@ Codex 必须：
 - 先报告阻断，再列非阻断技术债；
 - 对弱测试检查判别力；
 - 不因非阻断问题重开整个架构；
-- 只有用户可见纵向结果闭合后才把里程碑标为完成。
+- 普通审查严重度 P2/P3 进入 deferred debt，不生成 repair prompt；
+- 允许 `ACCEPTED_WITH_DEFERRED_DEBT`，不要求技术债清零；
+- 只有 Stage 用户结果闭合后才标为完成。
 
 ## 7. 加速规则
 
 旧模式的主要速度问题是：反复重写设计、过细 dormant 切片、每小改都跑全套门、
 finding 一条一条往返、用户手工重组消息。新的固定规则：
 
-1. 以**用户可用里程碑**切片，不以单个类型或 helper 切片；
-2. Claude 可在一个任务包内连续完成多个内部 commit；
-3. Codex 在 Claude 编写期间并行准备验收表和反例；
-4. findings 一次性汇总；
-5. 默认只允许一轮集中修复；
-6. 开发中跑定向测试，里程碑边界跑 workspace/frontend/architecture；
-7. 只有激活、合并或发布边界才跑打包 E2E 与重型安全扫描；
-8. 非阻断技术债记录，不抢占当前主线；
+1. 以完整**产品 Stage**切片，不以 helper、PR slice 或单一能力切片；
+2. Claude 在 Stage 内按依赖顺序做多个内部 phase/commit，phase 之间不中途 handoff；
+3. 每 phase 只跑 focused tests；workspace/frontend/architecture 只在 final boundary 集中运行，失败按固定
+   transient/受影响复验协议处理；
+4. archive、安全扫描、真机/soak 只在相关 Stage final 边界运行；
+5. Codex 一轮覆盖整个 Stage diff，findings 一次性分成 blockers 与 deferred；
+6. 默认最多一轮集中修复；普通低严重度 finding 不触发修复轮；
+7. 不要求每个小修做 revert negative proof，只证明最高风险不变量；
+8. final gate 首次出现 unexplained transient 时先保存完整 command/status/output/log；同一 full gate 最多
+   再跑一次、可定位的 failing binary/case 最多再跑两次。不复现即记 deferred observation，禁止 10+ 次
+   压测式追查；任一次复现则升级并诊断；
 9. 没有新的产品决定或真实阻断时，不再发起大设计循环；
-10. 用户只因产品选择被打断。
+10. 用户只因产品选择、外部权限/部署或不可逆动作被打断。
+
+详细 Stage 与分级合同见 `docs/orchestration/STAGE-EXECUTION-PLAN.md`。
 
 ## 8. 原始任务为什么出现
 
@@ -318,15 +327,15 @@ PUT /api/v1/local/desired-watch
 记录日期：2026-08-24。
 
 ```text
-当前检出：feat/s2-alert-delivery@2cd54e2
+当前检出：feat/s2-alert-delivery@75cefb0
 origin/main：ae65958
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
-Claude R3 报告 head：b450ed0
-Codex R3 审查范围：2cd54e2..b450ed0（全里程碑 a4f8d22..b450ed0）
+Claude R4 报告 head：75cefb0
+Codex R4 审查范围：b450ed0..75cefb0（全里程碑 a4f8d22..75cefb0）
 S2 分支：尚未合并、尚未发布
 当前产品源码工作树：无未提交源码；两个 conversation 归档目录未跟踪
-Codex orchestration 文档：已记录 R3 CHANGES_REQUIRED，并生成 R4 最终窄收口任务
+Codex orchestration 文档：已记录 R4 ACCEPTED；旧 M2 未实施即作废；当前任务为 STAGE-2
 现有 release/0.1.0：sourceCommit=7d5debef（2026-07-15，早于本轮工作）
 ```
 
@@ -337,12 +346,12 @@ Codex orchestration 文档：已记录 R3 CHANGES_REQUIRED，并生成 R4 最终
 | 工作 | 状态 | 当前事实 |
 |---|---|---|
 | S1 | 代码完成并已合入 main；M0 窄修已写入 feature | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter；尚无新 release |
-| S2 | desired 纵向闭环与 R3 已实现但验收仍未通过，仅 feature | 真实 archive 已证明重启物化/reset；仍有 committed-before-reconcile × rotation、effect-lagged uncertainty 门与 cutoff 解除证据残余；自动重连、完整 Readiness、音频、通知仍未做 |
+| S2 | reduced desired/L1 纵向闭环已验收，仅 feature；完整 S2 未完成 | M1 已证明持久意图、真实物化、重启/reset 与组合并发；自动重连、完整 Readiness、音频、通知仍未做 |
 | S3 | 未开始正式实现 | 没有 GridAnchor/RebuildProfile；仅有不足以冻结参数的单校区数据 |
 | S4 | 未开始 | 代码中没有 `prepare_cached` |
-| P1 | 服务端半边完成，仅 feature | validate、reserve lease、session 保护完成；浏览器不会调用或自动重连 |
+| P1 | 服务端半边完成，仅 feature；Stage S2 客户端待做 | validate、reserve lease、session 保护完成；公网尚无 mutable nonce holder/validate-before-connect |
 | P2 | 大部分未开始 | H5 基本完成、H4 只有 per-session cap；其余重新上线门未完成 |
-| L1 | 纵向代码已落地但未通过验收 | desired 可持久化、GET/PUT、materializer、UI 与真实包装 E2E 已存在；`M0-M1-001-R4` 接受前不得称可发布或完成 |
+| L1 | `ACCEPTED`，仅 feature | desired 持久化、GET/PUT、materializer、UI、并发反例与真实包装三生命周期 E2E 均通过；尚未合并/发布 |
 | L2 | 只有通用 route seam | 无 presence、60 秒状态机或自动退出 |
 | L3 | 未开始 | 无可见业务日志与控制台倒计时 |
 
@@ -356,26 +365,25 @@ Codex orchestration 文档：已记录 R3 CHANGES_REQUIRED，并生成 R4 最终
 
 ### S2/L1
 
-- R1–R3 已实质关闭持续 admission/live drift、receipt-only rotation、reset 屏障、teardown id、terminal
-  restamp、failure stamp、真实 batch 单 basis、lost response 撤绿/identity、全局 cutoff、strict codec、
-  五态、late-page active、严格 packaging policy 与真实重启物化；
-- Codex 已独立验证 `b450ed0`：workspace 745/1 ignored、frontend 252、architecture、三个 diff-check 全绿；
-  真实 12 文件 Windows archive 完成非空物化、两次重启、Full Reset 与再次空重启；
-- R3 的 rotation preservation 仍只看已经成为 `stopping` 的记录。并发 STOP 可先提交 tombstone、尚未
-  reconcile，随后被 rotation 清掉；若 owner stop fault，活 watch 又会无 authority row、无页面控制；
-- `markUncertain` 同步写 `uncertainAt.current`，但提交和 removal 门仍读 effect-lagged mirror；最后一笔
-  `b450ed0` 没有 production 修改，新增测试在 effect flush 后才做第二手势，未判别真正窗口；
-- socket cutoff 的失效半边已成立，但当前任意 READY snapshot（包括 PUT response）都可解除，宽于冻结的
-  “OPEN 后新 issued 成功 GET”合同；
+- R1–R4 已关闭持续 admission/live drift、rotation/teardown 组合、reset 屏障、terminal/failure stamp、
+  真实 batch 单 basis、lost response 撤绿/identity、全局 cutoff、strict codec、五态、late-page active、
+  严格 packaging policy 与真实重启物化；
+- Codex 已独立验证 `75cefb0`：workspace 746/1 ignored、frontend 254、architecture、三个 diff-check 全绿；
+  final-head 12 文件 Windows archive 完成非空物化、两次重启、Full Reset 与再次空重启；
+- rotation 现在按 owner live truth 保留 tombstone；STOP committed-before-reconcile + stop fault 时 row、
+  pendingDisarm 与原 id 均可达；uncertainty 同步门与 read-only cutoff release 也有真实事件窗口反例；
+- `M0-M1-001`、reduced S2-D3 与 L1 已由 Codex 标为 `ACCEPTED`，本地迁移的纵向行为门关闭；这不等于
+  已合并/发布，也不等于完整 S2；
 - recovery GET 挂起时其他 section 仍使用旧 snapshot 暂为已披露非阻断限制：请求排在同一 queue 后，
   generation/revision CAS 会拒绝 rotation/stale 覆盖，且不会自动重放；
-- `M0-M1-001-R4` 接受前，S2-D3、M1 和迁移发布门保持开放。
+- 下一阶段不再回修 desired；一次完成 `STAGE-2` 中的 transport reconnect、公网 nonce
+  客户端、Readiness、提醒恢复与本地生命周期收口。
 
 ### P1/S2
 
 - 公网前端没有 mutable nonce holder；
 - 没有调用 `/api/v1/session/validate`；
-- 没有自动重连；
+- 没有共享自动重连/userStopped/退避状态机；公网也没有与 selection 分离的页面内 reconnect plan；
 - 心跳未进入 25 秒 Readiness；
 - AudioContext 自愈和页面级 Notification 尚未实现；
 - 公网 H4 全局容量和字节背压仍是部署阻断。
@@ -396,61 +404,58 @@ Codex orchestration 文档：已记录 R3 CHANGES_REQUIRED，并生成 R4 最终
 5. 真正重新上线还必须完成 P2 的配置项、真实组装测试和 10 分钟 Caddy+浏览器 soak；
 6. “已合入 main”不等于“已发布”；发布状态必须由候选 manifest 的 sourceCommit 证明。
 
-## 16. 当前拟定的下一里程碑
+## 16. 当前 Stage
 
-状态：**`M0-M1-001-R3` 已交付但 Codex 判定 `CHANGES_REQUIRED`；最后三条窄修任务
-`M0-M1-001-R4` 已生成，等待用户转发给 Claude。**
+状态：**用户已撤销 M2/M3/M4 分别交付；`M2-001` 未实施即作废并并入
+`STAGE-2`，等待用户一次转发给 Claude。**
 
-当前里程碑不扩展范围：**先把 reduced S2/L1 纵向闭环修到可信、可打包验收。**
+当前 Stage 2：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
 
 用户可见目标：
 
-- 本地页面能读取和提交“我想盯哪些课”；
-- 程序按已提交 desired 装配真实监控；
-- 页面刷新/程序重启后恢复；
-- 页面显示 desired、准备、已装配或失败的真实状态；
-- 多页面共享状态但不实时推送；
-- Full Reset 后再次重启仍为空。
+- 意外断线、服务重启或长时间离线后，仍存活的页面自动退避重连；
+- 显式 Disconnect 绝不被自动连回，用户再次 Start 或明确 Resume 后才恢复；
+- 公网页面每次连接前 single-flight validate 当前 nonce，失效时原子换新并只用新票握手；
+- 公网页面按页面内 connection intent 重建监控，不从 selection 猜测，也不复活已 STOP 的 section；
+- 本地重连继续由服务端 desired coordinator 物化，页面不得发送 legacy START；
+- 五环 Readiness、AudioContext 自愈与当前页面级 Notification 一次完成；
+- 本地 presence 证明任何浏览 tab 存活；最后页面离开 60 秒后复验再退出；
+- 控制台显示关键生命周期事件且不泄漏 nonce/session/请求体。
 
-R4 必须包含：
-
-1. rotation 按 owner 当前 physical live keys 保留 tombstone，覆盖 STOP committed-before-reconcile；
-2. mutation 提交/removal 门直接读取 `markUncertain` 同步写入的唯一权威；
-3. socket cutoff 只由 OPEN 后新 issued 的成功 GET 解除，PUT snapshot 不得解除；
-4. 已通过的 absent/failure/batch/identity/policy/test seam 只回归，不重新设计；
-5. 从 final head 重新构建一次候选并集中跑全量门；
-6. 保持公网 desired 零表面，不发布中间构建。
+Claude 使用一个官方 dynamic workflow 自行规划内部 phase、subagent、文件组织和 focused tests。Codex
+只冻结用户结果、协议/政策边界、验收场景和 final gates；并行 agents 默认只读，当前权威 checkout 的
+产品写入与 Git 提交由单一 integrator 串行完成，不得以“动态”为名扩展 Stage。
 
 建议不包含：
 
-- 共享自动重连；
-- P1 浏览器换票；
-- 完整五环 Readiness；
-- AudioContext 自愈；
-- 页面级 Notification；
-- L2/L3；
-- 完整 P2；
+- H4/完整 P2；
 - S3/S4。
 
-上述后续工作仍在总案内，只是不属于第一个里程碑。
+Stage 通过只代表 S2/P1 client/L2/L3 功能完成；公网 deployment 仍由 H4/P2 阻断。
 
-## 17. 当前推荐的后续顺序
+## 17. 用户冻结的余下四阶段顺序
 
-为避免“顺带”造成歧义，今后使用明确里程碑：
+Stage 1（S1）已完成；M0/M1 也已验收。余下产品工作只允许按以下四个完整 Stage 推进：
 
 ```text
-M0：S1 30 秒窄修 + 最终合同同步
-M1：reduced S2/L1 本地 desired 纵向闭环
-M2：共享自动重连 + P1 浏览器换票
-M3：完整 Readiness + 音频自愈 + 页面级通知
-M4：L2 presence/60 秒退出 + L3 控制台日志
-M5：P2 公网加固（H4 可与 M1–M3 并行准备）
-M6：S4 prepare_cached
-M7：S3-PR0 数据分析 → 参数冻结 → 调度器实现
-M8：最终 Windows/Linux 候选、打包、soak、发布
+Stage 1 — S1（已完成）
+
+Stage 2 — STAGE-2
+  S2 + P1 + L1 回归 + L2/L3 + 通知政策修订；一次实现、一次验收
+
+Stage 3 — STAGE-3
+  只做 H1–H9/完整 P2 公网资源、配置、组装与部署边界；一次实现、一次验收
+
+Stage 4 — STAGE-4
+  只做 prepare_cached 微优化；保持行为不变，不夹带存储重构
+
+Stage 5 — STAGE-5
+  先取得跨 target/时段证据，再决定是否实现调度器；证据不足可零 production change 结束
 ```
 
-M0 与 M1 已按用户批准合并执行；当前只做 M1 的 R4 窄收口，不进入 M2。
+发布不是额外产品 Stage；余下四阶段完成后再由 Codex 准备一次候选/发布门，并另行取得外部动作授权。
+当前只授权 Stage 2。完整阶段合同、分级政策与停止条件见
+`docs/orchestration/STAGE-EXECUTION-PLAN.md`。
 
 ## 18. 不得复活的旧工作模式
 
@@ -466,6 +471,33 @@ M0 与 M1 已按用户批准合并执行；当前只做 M1 的 R4 窄收口，�
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-08-24 — 改为 Stage 级推进并允许非关键问题延期
+
+- 用户明确撤销 M2、M3、M4 分别实现/分别验收的慢速方式；
+- `M2-001` 在尚未实施前标为 `SUPERSEDED BEFORE IMPLEMENTATION`，其内容与原 M3/M4 一并进入
+  `STAGE-2`；
+- 用户最终冻结余下四个产品 Stage：`S2（P1/L1/L2/L3）→ P2 → S4 → S3`；不再把 P2/S4 合并，
+  release 也不冒充第五个产品 Stage；
+- 每个 Stage 由 Codex 在真实起点上写一份完整计划，用户一次转发；Claude 使用官方 dynamic workflow
+  自主编排内部工作并只在 Stage final 回报一次；
+- Prompt 只钉死范围、用户结果、边界、验收场景和 final gates，不预先规定内部类型/文件/agent 数；
+- 拒绝过早优化：当前 Stage 之外、无现实路径/失败证据且不影响主合同的问题默认延期；
+- 只有会造成错误成功状态、用户失控/意图丢失、安全或资源边界破坏、误退出、迁移/发布危险的
+  `BLOCKER` 阻断；普通审查严重度 P2/P3 默认记入 deferred debt，可用
+  `ACCEPTED_WITH_DEFERRED_DEBT` 通过；
+- 当前授权任务改为 `STAGE-2/v1`，产品代码基线仍为 `75cefb0`。
+
+### 2026-08-24 — M0-M1-001-R4 最终验收
+
+- Claude 在 `b450ed0..75cefb0` 完成 R4；
+- Codex 独立复核 committed-before-reconcile 交错、同一 render turn uncertainty 门与 READ-only cutoff
+  release，三个判别测试和 production 机制均成立；
+- workspace 746/1 ignored、frontend 254、architecture、diff-check 与 final-head Windows archive 全绿；
+- 两次构建获显式豁免：第二次是最终 head 的完整重建，没有污染正式 release；一次未保留日志且未复现的
+  workspace HTTP 失败记为 unexplained transient 观察项，不冒充已诊断 flake；
+- `M0-M1-001`、reduced S2-D3 与 L1 结论为 `ACCEPTED`；当时生成的 `M2-001` 后因用户改为
+  Stage 级推进而在未实施前作废。
 
 ### 2026-08-24 — M0-M1-001-R3 独立验收
 
@@ -522,28 +554,30 @@ M0 与 M1 已按用户批准合并执行；当前只做 M1 的 R4 窄收口，�
 作出验收结论或批准进入下一里程碑时都必须更新。
 
 ```text
-Active task id: M0-M1-001-R4
-Milestone: M0 S1 窄修与合同同步 + M1 reduced S2/L1 本地 desired 纵向闭环
-Claude prompt issued: YES — 由用户复制转发
-Prompt/version: M0-M1-001-R4/v1
-Expected base: feat/s2-alert-delivery@b450ed0
-Claude reported head: b450ed0 for R3; R4 pending
-Codex review range: R3 completed 2cd54e2..b450ed0; R4 expected b450ed0..<head>
-Codex verdict: CHANGES_REQUIRED
-Blocking findings: STOP committed-before-reconcile 可被 rotation 清 tombstone；uncertainty 门读取 effect-lagged ref；PUT 可解除只应由 GET 解除的 cutoff
-Prior repair: M0-M1-001-R3/v1 at b450ed0 — CHANGES_REQUIRED
-Repair task: M0-M1-001-R4/v1
-Repair expected base: feat/s2-alert-delivery@b450ed0
-Next authorized action: 用户将 docs/orchestration/tasks/M0-M1-001-R4.md 中的 Claude Prompt 原样转发给 Claude
+Active task id: STAGE-2
+Milestone: Stage 2 complete S2 + P1/L1/L2/L3 closure
+Claude prompt prepared: YES
+Claude prompt forwarded: NO — 等待用户复制转发
+Prompt/version: STAGE-2/v1
+Expected base: feat/s2-alert-delivery@75cefb0
+Claude reported head: pending
+Codex review range: pending (expected 75cefb0..<head>)
+Codex verdict: NOT_STARTED
+Blocking findings: none; Stage work not yet implemented
+Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
+Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
+Active task: STAGE-2/v1
+Next authorized action: 用户将 docs/orchestration/tasks/STAGE-2.md 中的 Claude Prompt 原样转发给 Claude
 ```
 
 验收结论只允许使用：
 
 - `ACCEPTED`
+- `ACCEPTED_WITH_DEFERRED_DEBT`
 - `CHANGES_REQUIRED`
 - `BLOCKED`（仅真实外部/产品决策阻断）
 - `NOT_STARTED`
 - `IN_PROGRESS`
 - `PENDING_REVIEW`
 
-未经 Codex 更新本表为 `ACCEPTED`，Claude 的完成声明不得推进里程碑状态。
+未经 Codex 更新本表为 `ACCEPTED` 或 `ACCEPTED_WITH_DEFERRED_DEBT`，Claude 的完成声明不得推进 Stage 状态。
