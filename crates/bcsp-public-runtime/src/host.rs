@@ -576,9 +576,7 @@ async fn handle_watch_socket(
         );
     }
     let session = strict_session_query(request.uri().query());
-    let admitted = header_text(headers, ORIGIN).as_deref()
-        == Some(state.config.external_origin())
-        && requested_subprotocol(headers);
+    let admitted = valid_origin(headers, &state) && requested_subprotocol(headers);
     let Some(nonce) = session.filter(|_| admitted) else {
         return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
     };
@@ -658,7 +656,7 @@ async fn handle_session_validate(
             ApiErrorCode::MalformedRequest,
         );
     }
-    if header_text(&headers, ORIGIN).as_deref() != Some(state.config.external_origin()) {
+    if !valid_origin(&headers, &state) {
         return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
     }
     // Renewal is anonymous issuance: it draws from the same per-client
@@ -1035,7 +1033,7 @@ fn replace_html_language(template: &str, html_lang: &str) -> Option<String> {
 }
 
 fn authenticated_mutation(headers: &HeaderMap, state: &PublicHostState) -> bool {
-    if header_text(headers, ORIGIN).as_deref() != Some(state.config.external_origin()) {
+    if !valid_origin(headers, state) {
         return false;
     }
     authenticated_session(headers, state)
@@ -1046,8 +1044,27 @@ fn authenticated_session(headers: &HeaderMap, state: &PublicHostState) -> bool {
         .is_some_and(|nonce| matches!(state.sessions.locale(&nonce), Ok(Some(_))))
 }
 
+/// H7: the stored authority is canonical lowercase and DNS hosts compare
+/// case-insensitively, so an uppercase `Host:` from an operator probe (ops
+/// scripts forward the env value byte-exactly) reaches the same service a
+/// browser's lowercase form does. ASCII case is the only thing forgiven:
+/// the authority string -- name, port, everything -- must otherwise match
+/// exactly.
 fn valid_host(headers: &HeaderMap, state: &PublicHostState) -> bool {
-    header_text(headers, HOST).as_deref() == Some(state.config.external_authority())
+    header_text(headers, HOST)
+        .as_deref()
+        .is_some_and(|host| host.eq_ignore_ascii_case(state.config.external_authority()))
+}
+
+/// The Origin counterpart of [`valid_host`]. An Origin header serializes
+/// scheme and host only (plus an optional port), and both letters-bearing
+/// parts are case-insensitive by RFC 3986, so whole-string ASCII
+/// case-insensitive equality forgives exactly the case and nothing else:
+/// a different scheme, port, or name still fails.
+fn valid_origin(headers: &HeaderMap, state: &PublicHostState) -> bool {
+    header_text(headers, ORIGIN)
+        .as_deref()
+        .is_some_and(|origin| origin.eq_ignore_ascii_case(state.config.external_origin()))
 }
 
 fn strict_session_query(query: Option<&str>) -> Option<&str> {
@@ -1414,6 +1431,13 @@ mod tests {
     async fn spawn_runtime(
         routes: Arc<dyn RouteExtension>,
     ) -> (TempDir, PublicRuntime, SharedPublicOperationalStore) {
+        spawn_runtime_with_config(test_config(), routes).await
+    }
+
+    async fn spawn_runtime_with_config(
+        config: PublicHostConfig,
+        routes: Arc<dyn RouteExtension>,
+    ) -> (TempDir, PublicRuntime, SharedPublicOperationalStore) {
         let temp = TempDir::new().expect("temporary directory");
         let store = PublicOperationalStore::open_for_state_root(temp.path().join("state"))
             .expect("public operational state");
@@ -1421,7 +1445,7 @@ mod tests {
             OperationalStorage::open(store.database_path()).expect("public serving storage"),
         ));
         let store = Arc::new(Mutex::new(store));
-        let runtime = PublicRuntime::spawn(test_config(), serving_storage, routes)
+        let runtime = PublicRuntime::spawn(config, serving_storage, routes)
             .await
             .expect("public runtime");
         (temp, runtime, store)
@@ -2668,6 +2692,86 @@ mod tests {
             0,
             "the dead queue must return its bytes",
         );
+    }
+
+    #[tokio::test]
+    async fn a_shouted_origin_configuration_still_serves_lowercase_browsers() {
+        // H7: the operator wrote the origin in uppercase; the browser will
+        // send lowercase Host and Origin headers. Both must land, and the
+        // uppercase probe form (ops scripts forward the env value
+        // byte-exactly) must land too -- while scheme, port, and name
+        // mismatches stay refused exactly as before.
+        let config = PublicHostConfig::try_new(
+            "127.0.0.1:0".parse().expect("loopback address"),
+            "https://Planner.EXAMPLE.test",
+            "test-release",
+        )
+        .expect("uppercase configuration");
+        let (_temp, runtime, _store) =
+            spawn_runtime_with_config(config, Arc::new(NoPublicProductRoutes)).await;
+        let client = client();
+
+        // The browser's lowercase document request issues a session.
+        let nonce = document_nonce(&client, &runtime).await;
+        let path = format!("/api/v1/watch?session={nonce}");
+
+        // The browser's lowercase WebSocket handshake completes.
+        let (accepted, _stream) = websocket_handshake(
+            runtime.address(),
+            &path,
+            "https://planner.example.test",
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(
+            accepted.starts_with("HTTP/1.1 101"),
+            "a lowercase browser handshake must succeed under an uppercase configuration, got: {accepted}",
+        );
+
+        // An uppercase Host from an operator probe reaches liveness.
+        let probe = client
+            .get(request_url(&runtime, PUBLIC_LIVENESS_PATH))
+            .header(HOST.as_str(), "Planner.EXAMPLE.test")
+            .send()
+            .await
+            .expect("liveness probe");
+        assert_eq!(probe.status(), StatusCode::OK);
+
+        // An uppercase Host on the handshake itself is the same authority.
+        let (uppercase_host, _upper_stream) = websocket_handshake_with_host(
+            runtime.address(),
+            &path,
+            "PLANNER.example.TEST",
+            "https://planner.example.test",
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(uppercase_host.starts_with("HTTP/1.1 101"));
+
+        // Nothing else was relaxed: scheme, port, and name mismatches.
+        let (wrong_scheme, _) = websocket_handshake(
+            runtime.address(),
+            &path,
+            "http://planner.example.test",
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(wrong_scheme.starts_with("HTTP/1.1 403"));
+        let (wrong_port, _) = websocket_handshake(
+            runtime.address(),
+            &path,
+            "https://planner.example.test:8443",
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(wrong_port.starts_with("HTTP/1.1 403"));
+        let misdirected = client
+            .get(request_url(&runtime, PUBLIC_LIVENESS_PATH))
+            .header(HOST.as_str(), "planner.example.test.evil")
+            .send()
+            .await
+            .expect("misdirected probe");
+        assert_eq!(misdirected.status(), StatusCode::MISDIRECTED_REQUEST);
     }
 
     #[tokio::test]

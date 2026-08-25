@@ -43,19 +43,28 @@ impl PublicHostConfig {
         let uri = external_origin
             .parse::<Uri>()
             .map_err(|_| PublicHostConfigError::InvalidExternalOrigin)?;
-        if uri.scheme_str() != Some("https")
+        if !uri
+            .scheme_str()
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"))
             || uri.authority().is_none()
             || !matches!(uri.path(), "" | "/")
             || uri.query().is_some()
         {
             return Err(PublicHostConfigError::InvalidExternalOrigin);
         }
+        // H7: DNS hosts are case-insensitive, so the authority is stored in
+        // its canonical lowercase form and the origin is REBUILT from that
+        // canonical authority rather than trimmed from the input. An
+        // operator's `https://Planner.Example` and the browser's
+        // `https://planner.example` therefore meet at one stored value;
+        // nothing else about the origin (scheme identity, port, empty
+        // path, no query) is relaxed.
         let external_authority = uri
             .authority()
             .expect("authority checked above")
             .as_str()
-            .to_owned();
-        let external_origin = external_origin.trim_end_matches('/').to_owned();
+            .to_ascii_lowercase();
+        let external_origin = format!("https://{external_authority}");
         let release = release.into();
         if release.is_empty() || release.chars().any(char::is_control) {
             return Err(PublicHostConfigError::InvalidRelease);
@@ -162,6 +171,30 @@ impl PublicHostConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_uppercase_origin_is_stored_in_its_canonical_lowercase_form() {
+        let shouted = PublicHostConfig::try_new(
+            "127.0.0.1:0".parse().expect("loopback address"),
+            "HTTPS://Planner.EXAMPLE.Test",
+            "test-release",
+        )
+        .expect("uppercase origin must configure");
+        assert_eq!(shouted.external_authority(), "planner.example.test");
+        assert_eq!(shouted.external_origin(), "https://planner.example.test");
+        let with_port = PublicHostConfig::try_new(
+            "127.0.0.1:0".parse().expect("loopback address"),
+            "https://Planner.Example.Test:8443",
+            "test-release",
+        )
+        .expect("origin with a port must configure");
+        assert_eq!(with_port.external_authority(), "planner.example.test:8443");
+        assert_eq!(
+            with_port.external_origin(),
+            "https://planner.example.test:8443",
+            "the port survives canonicalization untouched",
+        );
+    }
 
     #[test]
     fn configuration_keeps_the_public_listener_loopback_only() {
