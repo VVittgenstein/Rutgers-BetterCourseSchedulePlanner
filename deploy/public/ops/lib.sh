@@ -223,7 +223,7 @@ bcsp_validate_candidate_root() {
   actual_top_level="$(find "$package_root" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
   [[ "$actual_top_level" == "$expected_top_level" ]] || \
     bcsp_die "package top level does not match the public allowlist"
-  expected_files=$'BUILD-PROVENANCE.json\nFRONTEND-CAPABILITIES.json\nLICENSE\nMANIFEST.json\nSBOM.cdx.json\nSHA256SUMS\nTHIRD-PARTY-NOTICES.txt\nVERSION\nbin/bcsp-server\ncaddy/Caddyfile.example\nconfig/bcsp.env.example\nconfig/bcsp.env.schema.json\ndocs/operator-runbook.md\nops/backup.sh\nops/install.sh\nops/lib.sh\nops/restore.sh\nops/rollback.sh\nops/upgrade.sh\nops/verify.sh\nsystemd/bcsp.service'
+  expected_files=$'BUILD-PROVENANCE.json\nFRONTEND-CAPABILITIES.json\nLICENSE\nMANIFEST.json\nSBOM.cdx.json\nSHA256SUMS\nTHIRD-PARTY-NOTICES.txt\nVERSION\nbin/bcsp-server\ncaddy/Caddyfile.example\nconfig/bcsp.env.example\nconfig/bcsp.env.schema.json\ndocs/operator-runbook.md\nops/backup.sh\nops/install.sh\nops/lib.sh\nops/preflight.sh\nops/restore.sh\nops/rollback.sh\nops/upgrade.sh\nops/verify.sh\nsystemd/bcsp.service'
   actual_files="$(find "$package_root" -type f -printf '%P\n' | LC_ALL=C sort)"
   [[ "$actual_files" == "$expected_files" ]] || \
     bcsp_die "package files do not match the public allowlist"

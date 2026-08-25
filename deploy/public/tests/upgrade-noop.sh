@@ -49,7 +49,8 @@ install -m 0644 "$DEPLOY_DIR/config/bcsp.env.example" "$CANDIDATE/config/bcsp.en
 install -m 0644 "$DEPLOY_DIR/config/bcsp.env.schema.json" \
   "$CANDIDATE/config/bcsp.env.schema.json"
 install -m 0644 "$DEPLOY_DIR/docs/operator-runbook.md" "$CANDIDATE/docs/operator-runbook.md"
-for script in backup.sh install.sh lib.sh restore.sh rollback.sh upgrade.sh verify.sh; do
+for script in backup.sh install.sh lib.sh preflight.sh restore.sh rollback.sh \
+  upgrade.sh verify.sh; do
   install -m 0755 "$OPS_DIR/$script" "$CANDIDATE/ops/$script"
 done
 

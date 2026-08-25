@@ -71,6 +71,7 @@
         "ops/backup.sh",
         "ops/install.sh",
         "ops/lib.sh",
+        "ops/preflight.sh",
         "ops/restore.sh",
         "ops/rollback.sh",
         "ops/upgrade.sh",

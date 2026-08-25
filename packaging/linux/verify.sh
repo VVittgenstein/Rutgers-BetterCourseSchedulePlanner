@@ -82,9 +82,9 @@ const matches = input.packages?.filter((entry) => entry.id === packageId) ?? [];
 if (input.schemaVersion !== 1 || input.packageCount !== 2 || matches.length !== 1) process.exit(10);
 const packageConfig = matches[0];
 if (input.releaseVersion !== '0.1.0' || packageConfig.target !== target || packageConfig.archiveName !== archiveName) process.exit(11);
-if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 21) process.exit(12);
+if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 22) process.exit(12);
 const files = [...packageConfig.allowlist].sort();
-if (new Set(files).size !== 21) process.exit(13);
+if (new Set(files).size !== 22) process.exit(13);
 process.stdout.write(`${files.join('\n')}\n`);
 NODE
 )" || die 'the frozen Linux package definition is invalid'
@@ -92,7 +92,7 @@ mapfile -t EXPECTED_FILES <<< "$allowlist_text"
 
 archive_listing="$("$TAR_BIN" -tzf "$ARCHIVE_PATH")"
 mapfile -t ARCHIVE_FILES <<< "$archive_listing"
-[[ "${#ARCHIVE_FILES[@]}" -eq 21 ]] || die "archive must contain exactly 21 files; found ${#ARCHIVE_FILES[@]}"
+[[ "${#ARCHIVE_FILES[@]}" -eq 22 ]] || die "archive must contain exactly 22 files; found ${#ARCHIVE_FILES[@]}"
 [[ "$archive_listing" == "$(printf '%s\n' "${EXPECTED_FILES[@]}")" ]] || \
   die 'archive entries do not match the exact Linux allowlist and order'
 for entry in "${ARCHIVE_FILES[@]}"; do
@@ -113,7 +113,7 @@ mkdir -p -- "$CANDIDATE_ROOT"
 
 actual_files="$(find "$CANDIDATE_ROOT" -type f -printf '%P\n' | sort)"
 expected_files="$(printf '%s\n' "${EXPECTED_FILES[@]}")"
-[[ "$actual_files" == "$expected_files" ]] || die 'extracted files do not match the exact 21-file allowlist'
+[[ "$actual_files" == "$expected_files" ]] || die 'extracted files do not match the exact 22-file allowlist'
 [[ -z "$(find "$CANDIDATE_ROOT" -type l -print -quit)" ]] || die 'candidate contains a symbolic link'
 [[ -z "$(find "$CANDIDATE_ROOT" ! -type d ! -type f -print -quit)" ]] || die 'candidate contains a special file'
 for forbidden in data share tests; do
@@ -208,4 +208,4 @@ readonly REPACKED="$TEMP_ROOT/repacked.tar.gz"
 )
 cmp -- "$ARCHIVE_PATH" "$REPACKED" || die 'archive is not byte-for-byte deterministic'
 
-printf 'linux package verification: PASS (21 files)\n'
+printf 'linux package verification: PASS (22 files)\n'

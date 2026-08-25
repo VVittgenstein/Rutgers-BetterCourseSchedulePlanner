@@ -147,14 +147,14 @@ const matches = input.packages?.filter((entry) => entry.id === packageId) ?? [];
 if (input.schemaVersion !== 1 || input.packageCount !== 2 || matches.length !== 1) process.exit(10);
 const packageConfig = matches[0];
 if (input.releaseVersion !== '0.1.0' || packageConfig.target !== target || packageConfig.archiveName !== archiveName) process.exit(11);
-if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 21) process.exit(12);
+if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 22) process.exit(12);
 const files = [...packageConfig.allowlist].sort();
-if (new Set(files).size !== 21 || files.some((fileName) => fileName.startsWith('/') || fileName.includes('..') || fileName.includes('\\'))) process.exit(13);
+if (new Set(files).size !== 22 || files.some((fileName) => fileName.startsWith('/') || fileName.includes('..') || fileName.includes('\\'))) process.exit(13);
 process.stdout.write(`${files.join('\n')}\n`);
 NODE
 )" || die 'the frozen Linux package definition is invalid'
 mapfile -t EXPECTED_FILES <<< "$allowlist_text"
-[[ "${#EXPECTED_FILES[@]}" -eq 21 ]] || die 'the Linux package allowlist must contain exactly 21 files'
+[[ "${#EXPECTED_FILES[@]}" -eq 22 ]] || die 'the Linux package allowlist must contain exactly 22 files'
 
 capture_version "$RUSTC_BIN" '1.97.0' --version
 capture_version "$CARGO_BIN" '1.97.0' --version
@@ -217,8 +217,8 @@ for relative in caddy/Caddyfile.example config/bcsp.env.example \
   config/bcsp.env.schema.json docs/operator-runbook.md systemd/bcsp.service; do
   install -D -m 0644 -- "$SOURCE_ROOT/deploy/public/$relative" "$PACKAGE_ROOT/$relative"
 done
-for relative in ops/backup.sh ops/install.sh ops/lib.sh ops/restore.sh \
-  ops/rollback.sh ops/upgrade.sh ops/verify.sh; do
+for relative in ops/backup.sh ops/install.sh ops/lib.sh ops/preflight.sh \
+  ops/restore.sh ops/rollback.sh ops/upgrade.sh ops/verify.sh; do
   install -D -m 0755 -- "$SOURCE_ROOT/deploy/public/$relative" "$PACKAGE_ROOT/$relative"
 done
 
@@ -295,7 +295,7 @@ install -m 0644 -- "$MIT_TEMPLATE" "$METADATA_SOURCE_ROOT/packaging/licenses/MIT
 
 actual_files="$(find "$PACKAGE_ROOT" -type f -printf '%P\n' | sort)"
 expected_files="$(printf '%s\n' "${EXPECTED_FILES[@]}")"
-[[ "$actual_files" == "$expected_files" ]] || die 'the staged package does not match the exact 21-file allowlist'
+[[ "$actual_files" == "$expected_files" ]] || die 'the staged package does not match the exact 22-file allowlist'
 [[ -z "$(find "$PACKAGE_ROOT" \( -type l -o \( ! -type d ! -type f \) \) -print -quit)" ]] || \
   die 'the staged package contains a symbolic link or special file'
 

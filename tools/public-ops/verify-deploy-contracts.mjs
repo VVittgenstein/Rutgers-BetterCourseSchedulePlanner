@@ -192,4 +192,31 @@ assert.ok(
   'the env example must document the one tunable value',
 );
 
+// --- packaging allowlist consistency (H8) ---------------------------------
+
+// The shipped-file list lives in four hardcoded places; this pins the two
+// machine-readable ones against each other so adding a file (like
+// ops/preflight.sh) cannot drift them apart. build.sh, verify.sh, and
+// verify-release-set.ps1 pin the count again at build time.
+const releaseInputs = JSON.parse(read('packaging/release-inputs.json'));
+const linuxPackage = releaseInputs.packages.find(
+  (entry) => entry.id === 'LINUX_PUBLIC_DEPLOYMENT_PACKAGE',
+);
+assert.ok(linuxPackage, 'release-inputs.json must define the Linux package');
+assert.equal(linuxPackage.allowlist.length, 22, 'the Linux allowlist ships 22 files');
+assert.ok(
+  linuxPackage.allowlist.includes('ops/preflight.sh'),
+  'H8: the preflight ships with the candidate',
+);
+
+const lib = read('deploy/public/ops/lib.sh');
+const expectedFilesMatch = lib.match(/expected_files=\$'([^']+)'/);
+assert.ok(expectedFilesMatch, 'lib.sh must keep its literal expected_files list');
+const libFiles = expectedFilesMatch[1].split('\\n');
+assert.deepEqual(
+  [...linuxPackage.allowlist].sort(),
+  [...libFiles].sort(),
+  'release-inputs.json and bcsp_validate_candidate_root must agree on the shipped files',
+);
+
 console.log('public deploy contracts: PASS');

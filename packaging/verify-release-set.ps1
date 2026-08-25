@@ -393,7 +393,7 @@ try {
     Assert-True ([int]$inputs.schemaVersion -eq 1 -and [int]$inputs.packageCount -eq 2 -and @($inputs.packages).Count -eq 2) 'release-inputs.json must define exactly two packages.'
     $definitions = @{
         WINDOWS_LOCAL_RELEASE_ARCHIVE = @('x86_64-pc-windows-msvc', 'apps/bcsp-local', 'local', 'data/rbcsp.sqlite', 12, 'RBCSP.exe', 'bcsp-local')
-        LINUX_PUBLIC_DEPLOYMENT_PACKAGE = @('x86_64-unknown-linux-gnu', 'apps/bcsp-server', 'public', '/var/lib/bcsp/rbcsp.sqlite', 21, 'bin/bcsp-server', 'bcsp-server')
+        LINUX_PUBLIC_DEPLOYMENT_PACKAGE = @('x86_64-unknown-linux-gnu', 'apps/bcsp-server', 'public', '/var/lib/bcsp/rbcsp.sqlite', 22, 'bin/bcsp-server', 'bcsp-server')
     }
     $packages = @{}
     foreach ($package in @($inputs.packages)) {
