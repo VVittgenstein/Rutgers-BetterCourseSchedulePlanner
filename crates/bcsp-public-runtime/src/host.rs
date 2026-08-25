@@ -19,7 +19,7 @@ use bcsp_application::{
     OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError, OpenRuntimeSnapshotRegistry,
     RefreshPolicyError, RequestMethod, RouteExtension, SHARED_WATCH_SUBPROTOCOL,
     SharedProductStorage, SharedWatchSocket, TargetRefreshDemand, WebSocketExtension,
-    serve_websocket, shared_websocket_upgrade,
+    serve_websocket_with_bounded_outbound, shared_websocket_upgrade,
 };
 use bcsp_contracts::{
     ActiveWatchTargetV1, ApiErrorBody, ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope,
@@ -37,6 +37,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+use crate::capacity::{PublicWsResources, WsCapacityError};
 use crate::config::{
     PUBLIC_CATALOG_INTERVAL_SECONDS, PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS,
     PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS, PublicHostConfig, PublicHostConfigError,
@@ -93,6 +94,8 @@ struct PublicHostState {
     service: Arc<dyn PublicServiceStateSource>,
     product_routes: Arc<dyn RouteExtension>,
     watch: Arc<SharedWatchSocket>,
+    /// H4 resource gate and outbound bounds shared by every public socket.
+    ws_resources: PublicWsResources,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -197,6 +200,7 @@ impl PublicRuntime {
                 scheduler_source,
                 watch.clone(),
             ));
+        let ws_resources = PublicWsResources::production(config.per_client_ws_limit());
         Self::spawn_with_state_and_open_runtime(
             config,
             product_routes,
@@ -204,6 +208,7 @@ impl PublicRuntime {
             watch,
             scheduler,
             open_runtime,
+            ws_resources,
         )
         .await
     }
@@ -216,6 +221,28 @@ impl PublicRuntime {
         watch: Arc<SharedWatchSocket>,
         scheduler: Arc<InMemoryPublicSchedulerStatus>,
     ) -> Result<Self, PublicRuntimeError> {
+        let ws_resources = PublicWsResources::production(config.per_client_ws_limit());
+        Self::spawn_with_state_and_resources(
+            config,
+            product_routes,
+            service,
+            watch,
+            scheduler,
+            ws_resources,
+        )
+        .await
+    }
+
+    /// Test seam: the H4 mechanism with limits small enough to reach.
+    #[cfg(test)]
+    async fn spawn_with_state_and_resources(
+        config: PublicHostConfig,
+        product_routes: Arc<dyn RouteExtension>,
+        service: Arc<dyn PublicServiceStateSource>,
+        watch: Arc<SharedWatchSocket>,
+        scheduler: Arc<InMemoryPublicSchedulerStatus>,
+        ws_resources: PublicWsResources,
+    ) -> Result<Self, PublicRuntimeError> {
         Self::spawn_with_state_and_open_runtime(
             config,
             product_routes,
@@ -223,10 +250,12 @@ impl PublicRuntime {
             watch,
             scheduler,
             Arc::new(OpenRuntimeSnapshotRegistry::default()),
+            ws_resources,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_with_state_and_open_runtime(
         config: PublicHostConfig,
         product_routes: Arc<dyn RouteExtension>,
@@ -234,6 +263,7 @@ impl PublicRuntime {
         watch: Arc<SharedWatchSocket>,
         scheduler: Arc<InMemoryPublicSchedulerStatus>,
         open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
+        ws_resources: PublicWsResources,
     ) -> Result<Self, PublicRuntimeError> {
         let listener = TcpListener::bind(config.bind())
             .await
@@ -249,6 +279,7 @@ impl PublicRuntime {
             service,
             product_routes,
             watch: watch.clone(),
+            ws_resources,
         };
         let router = public_router(state);
         let (shutdown, shutdown_receiver) = oneshot::channel();
@@ -525,7 +556,7 @@ async fn handle_metrics(State(state): State<PublicHostState>, request: Request) 
     text_response(
         StatusCode::OK,
         "text/plain; version=0.0.4; charset=utf-8",
-        render_metrics(&snapshot),
+        render_metrics(&snapshot, &state.ws_resources),
     )
 }
 
@@ -551,11 +582,42 @@ async fn handle_watch_socket(
     let Some(nonce) = session.filter(|_| admitted) else {
         return api_error_response(StatusCode::FORBIDDEN, ApiErrorCode::MalformedRequest);
     };
+    // H4 capacity permit, taken BEFORE the session lease so a connection
+    // counts against the global and per-client caps from this moment on --
+    // including the window before its upgrade completes. The client key is
+    // the issuance limiter's exact normalization (client_rate_key); no
+    // second approximation exists. Capacity refusals are 503 -- never 403
+    // (session admission) and never 429 (issuance rate limiting) -- with a
+    // distinct log code and metric per limit.
+    let permit = match state.ws_resources.capacity.admit(client_rate_key(headers)) {
+        Ok(permit) => permit,
+        Err(WsCapacityError::GlobalExhausted) => {
+            tracing::warn!(code = "PUBLIC_WS_GLOBAL_CONNECTION_LIMIT");
+            return api_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ApiErrorCode::InternalError,
+            );
+        }
+        Err(WsCapacityError::ClientExhausted) => {
+            tracing::warn!(code = "PUBLIC_WS_CLIENT_CONNECTION_LIMIT");
+            return api_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ApiErrorCode::InternalError,
+            );
+        }
+        Err(WsCapacityError::Unavailable) => {
+            return api_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ApiErrorCode::InternalError,
+            );
+        }
+    };
     // Atomic reserve_ws lease (design section 2b): validity + per-session
     // connection cap + count increment + activity touch in one lock. The
     // lease rides the upgrade closure and lives for the whole transport
     // pump, so the session cannot be pruned or evicted mid-handshake, and
-    // any exit path (including task abort) releases the slot.
+    // any exit path (including task abort) releases the slot. A refusal
+    // here drops the permit just taken -- RAII, not bookkeeping.
     let lease = match state.sessions.reserve_ws(nonce) {
         Ok(lease) => lease,
         Err(ReserveWsError::UnknownSession) => {
@@ -577,9 +639,11 @@ async fn handle_watch_socket(
     let mut source = SystemTraceIdSource;
     let connection_id = source.next_trace_id();
     let extension: Arc<dyn WebSocketExtension> = state.watch;
+    let outbound = state.ws_resources.bounded_outbound_config();
     shared_websocket_upgrade(upgrade, PUBLIC_WS_SUBPROTOCOL).on_upgrade(move |socket| async move {
         let _lease = lease;
-        serve_websocket(socket, extension, connection_id).await;
+        let _permit = permit;
+        serve_websocket_with_bounded_outbound(socket, extension, connection_id, outbound).await;
     })
 }
 
@@ -1024,7 +1088,7 @@ fn escape_inline_json(value: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
-fn render_metrics(snapshot: &PublicServiceSnapshot) -> String {
+fn render_metrics(snapshot: &PublicServiceSnapshot, ws_resources: &PublicWsResources) -> String {
     let mut output = String::new();
     let ready = u8::from(snapshot.ready);
     let circuit = u8::from(snapshot.scheduler.origin_circuit_open);
@@ -1099,6 +1163,48 @@ fn render_metrics(snapshot: &PublicServiceSnapshot) -> String {
         output,
         "bcsp_open_watched_requested_interval_seconds {}",
         PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS
+    );
+    // H4 resource observability: admitted connections (upgrade-pending ones
+    // included, unlike bcsp_websocket_connections above), each capacity
+    // refusal reason, the queued outbound bytes, and each bounded-pump
+    // disconnect reason. Aggregate service facts only, like everything else
+    // on this surface.
+    let capacity = &ws_resources.capacity;
+    let stats = &ws_resources.outbound_stats;
+    let _ = writeln!(
+        output,
+        "bcsp_websocket_admitted_connections {}",
+        capacity.global_active()
+    );
+    let _ = writeln!(
+        output,
+        "bcsp_websocket_global_capacity_refusals {}",
+        capacity.global_refusals()
+    );
+    let _ = writeln!(
+        output,
+        "bcsp_websocket_client_capacity_refusals {}",
+        capacity.client_refusals()
+    );
+    let _ = writeln!(
+        output,
+        "bcsp_websocket_outbound_queued_bytes {}",
+        ws_resources.global_outbound_budget.queued_bytes()
+    );
+    let _ = writeln!(
+        output,
+        "bcsp_websocket_slow_consumer_disconnects {}",
+        stats.socket_budget_disconnects()
+    );
+    let _ = writeln!(
+        output,
+        "bcsp_websocket_global_outbound_budget_disconnects {}",
+        stats.global_budget_disconnects()
+    );
+    let _ = writeln!(
+        output,
+        "bcsp_websocket_write_timeout_disconnects {}",
+        stats.write_timeout_disconnects()
     );
     output
 }
@@ -2149,10 +2255,25 @@ mod tests {
         origin: &str,
         protocol: Option<&str>,
     ) -> (String, TcpStream) {
+        websocket_handshake_with_headers(address, path, host, origin, protocol, "").await
+    }
+
+    /// The handshake with caller-chosen extra header lines (each must end
+    /// with `\r\n`), so capacity tests can present a forwarded client
+    /// address the way Caddy would.
+    async fn websocket_handshake_with_headers(
+        address: std::net::SocketAddr,
+        path: &str,
+        host: &str,
+        origin: &str,
+        protocol: Option<&str>,
+        extra_headers: &str,
+    ) -> (String, TcpStream) {
         let path = path.to_owned();
         let origin = origin.to_owned();
         let host = host.to_owned();
         let protocol = protocol.map(str::to_owned);
+        let extra_headers = extra_headers.to_owned();
         tokio::task::spawn_blocking(move || {
             let mut stream = TcpStream::connect(address).expect("WebSocket TCP connection");
             stream
@@ -2162,7 +2283,7 @@ mod tests {
                 .map(|value| format!("Sec-WebSocket-Protocol: {value}\r\n"))
                 .unwrap_or_default();
             let request = format!(
-                "GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{protocol}\r\n"
+                "GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{protocol}{extra_headers}\r\n"
             );
             stream.write_all(request.as_bytes()).expect("write handshake");
             let mut response = Vec::new();
@@ -2183,6 +2304,427 @@ mod tests {
         .await
         .expect("handshake task")
     }
+
+    /// Mirrors the production composition of `PublicRuntime::spawn`, but
+    /// with H4 limits small enough for a test to reach.
+    async fn spawn_runtime_with_resources(
+        routes: Arc<dyn RouteExtension>,
+        resources: PublicWsResources,
+    ) -> (TempDir, PublicRuntime, SharedPublicOperationalStore) {
+        let temp = TempDir::new().expect("temporary directory");
+        let store = PublicOperationalStore::open_for_state_root(temp.path().join("state"))
+            .expect("public operational state");
+        let serving_storage = Arc::new(Mutex::new(
+            OperationalStorage::open(store.database_path()).expect("public serving storage"),
+        ));
+        let store = Arc::new(Mutex::new(store));
+        let watch = create_public_watch_socket(
+            serving_storage.clone(),
+            Arc::new(OpenRuntimeSnapshotRegistry::default()),
+        )
+        .expect("public watch socket");
+        let scheduler = Arc::new(InMemoryPublicSchedulerStatus::default());
+        let scheduler_source: Arc<dyn PublicSchedulerStatusSource> = scheduler.clone();
+        let service: Arc<dyn PublicServiceStateSource> =
+            Arc::new(PublicServiceInspector::with_system_clock(
+                serving_storage,
+                scheduler_source,
+                watch.clone(),
+            ));
+        let runtime = PublicRuntime::spawn_with_state_and_resources(
+            test_config(),
+            routes,
+            service,
+            watch,
+            scheduler,
+            resources,
+        )
+        .await
+        .expect("public runtime");
+        (temp, runtime, store)
+    }
+
+    async fn document_nonce(client: &Client, runtime: &PublicRuntime) -> String {
+        let (_, _, bootstrap) = document(client, runtime, "/", "en-US").await;
+        bootstrap_data(&bootstrap)["sessionNonce"]
+            .as_str()
+            .expect("document nonce")
+            .to_owned()
+    }
+
+    /// A masked client frame, for tests that must end a connection through
+    /// a specific transport path (Binary refusal, Close) rather than EOF.
+    fn masked_client_frame(first_byte: u8, payload: &[u8]) -> Vec<u8> {
+        let mask = [0x37_u8, 0xfa, 0x21, 0x3d];
+        let mut frame = vec![first_byte];
+        frame.push(0x80 | u8::try_from(payload.len()).expect("short payload"));
+        frame.extend_from_slice(&mask);
+        frame.extend(
+            payload
+                .iter()
+                .enumerate()
+                .map(|(index, byte)| byte ^ mask[index % 4]),
+        );
+        frame
+    }
+
+    async fn send_raw(stream: TcpStream, bytes: Vec<u8>) -> TcpStream {
+        tokio::task::spawn_blocking(move || {
+            let mut stream = stream;
+            stream.write_all(&bytes).expect("write frame");
+            stream.flush().expect("flush frame");
+            stream
+        })
+        .await
+        .expect("frame task")
+    }
+
+    async fn await_ws_condition(mut condition: impl FnMut() -> bool, what: &str) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !condition() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting until {what}"));
+    }
+
+    #[tokio::test]
+    async fn websocket_global_cap_refuses_503_recovers_and_the_registry_still_issues() {
+        let resources = PublicWsResources::with_limits(
+            2,
+            10,
+            64 * 1024 * 1024,
+            256 * 1024,
+            Duration::from_secs(5),
+        );
+        let (_temp, runtime, _store) =
+            spawn_runtime_with_resources(Arc::new(NoPublicProductRoutes), resources.clone()).await;
+        let capacity = resources.capacity.clone();
+        let client = client();
+        let nonce = document_nonce(&client, &runtime).await;
+        let path = format!("/api/v1/watch?session={nonce}");
+
+        let (first, _first_stream) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(first.starts_with("HTTP/1.1 101"));
+        let (second, second_stream) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(second.starts_with("HTTP/1.1 101"));
+        let (refused, _) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(
+            refused.starts_with("HTTP/1.1 503"),
+            "the global cap must refuse with 503, got: {refused}",
+        );
+        assert_eq!(capacity.global_refusals(), 1);
+        assert_eq!(capacity.client_refusals(), 0);
+
+        // At the cap, issuance is untouched: the registry still hands out
+        // fresh sessions and validate still renews (1024 < 4096 in
+        // production; the relationship itself is pinned in capacity.rs).
+        let fresh = document_nonce(&client, &runtime).await;
+        assert_ne!(fresh, nonce, "a fresh session must still be issued");
+        let renewed = post_validate(
+            &client,
+            &runtime,
+            TEST_AUTHORITY,
+            Some(TEST_ORIGIN),
+            &format!(r#"{{"nonce":"{nonce}"}}"#),
+        )
+        .await;
+        assert_eq!(renewed.status(), StatusCode::OK);
+
+        // A released slot readmits.
+        drop(second_stream);
+        await_ws_condition(|| capacity.global_active() < 2, "the freed slot").await;
+        let (readmitted, _readmitted_stream) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(readmitted.starts_with("HTTP/1.1 101"));
+
+        tokio::time::timeout(Duration::from_secs(3), runtime.shutdown())
+            .await
+            .expect("graceful shutdown timeout")
+            .expect("graceful shutdown");
+        await_ws_condition(|| capacity.global_active() == 0, "shutdown to release").await;
+    }
+
+    #[tokio::test]
+    async fn websocket_per_client_cap_keys_exactly_like_issuance_and_bounds_only_that_client() {
+        let resources = PublicWsResources::with_limits(
+            100,
+            1,
+            64 * 1024 * 1024,
+            256 * 1024,
+            Duration::from_secs(5),
+        );
+        let (_temp, runtime, _store) =
+            spawn_runtime_with_resources(Arc::new(NoPublicProductRoutes), resources.clone()).await;
+        let capacity = resources.capacity.clone();
+        let client = client();
+        let nonce = document_nonce(&client, &runtime).await;
+        let path = format!("/api/v1/watch?session={nonce}");
+        let handshake_from = |forwarded: &'static str| {
+            let path = path.clone();
+            let address = runtime.address();
+            async move {
+                websocket_handshake_with_headers(
+                    address,
+                    &path,
+                    TEST_AUTHORITY,
+                    TEST_ORIGIN,
+                    Some(PUBLIC_WS_SUBPROTOCOL),
+                    &format!("X-Forwarded-For: {forwarded}\r\n"),
+                )
+                .await
+            }
+        };
+
+        // Same /64, different interface identifiers: one client key.
+        let (first, first_stream) = handshake_from("2001:db8:1:2:aaaa::1").await;
+        assert!(first.starts_with("HTTP/1.1 101"));
+        let (same_network, _) = handshake_from("2001:db8:1:2:bbbb::2").await;
+        assert!(
+            same_network.starts_with("HTTP/1.1 503"),
+            "a rotated interface identifier must not multiply the allowance",
+        );
+        assert_eq!(capacity.client_refusals(), 1);
+
+        // A different /64 is a different client.
+        let (other_network, _other_stream) = handshake_from("2001:db8:9:9::1").await;
+        assert!(other_network.starts_with("HTTP/1.1 101"));
+
+        // A v4-mapped IPv6 address keys as its embedded IPv4 address.
+        let (mapped, _mapped_stream) = handshake_from("::ffff:192.0.2.7").await;
+        assert!(mapped.starts_with("HTTP/1.1 101"));
+        let (plain_v4, _) = handshake_from("192.0.2.7").await;
+        assert!(
+            plain_v4.starts_with("HTTP/1.1 503"),
+            "the v4-mapped and plain forms are one client",
+        );
+        assert_eq!(capacity.client_refusals(), 2);
+        assert_eq!(capacity.global_refusals(), 0);
+
+        // Releasing the /64's connection readmits the same network.
+        drop(first_stream);
+        let address = runtime.address();
+        let readmit_path = path.clone();
+        await_ws_condition(|| capacity.global_active() < 3, "the freed client slot").await;
+        let (readmitted, _readmitted_stream) = websocket_handshake_with_headers(
+            address,
+            &readmit_path,
+            TEST_AUTHORITY,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+            "X-Forwarded-For: 2001:db8:1:2:cccc::3\r\n",
+        )
+        .await;
+        assert!(readmitted.starts_with("HTTP/1.1 101"));
+    }
+
+    #[tokio::test]
+    async fn websocket_capacity_permits_release_on_every_exit_path() {
+        let resources = PublicWsResources::with_limits(
+            4,
+            4,
+            64 * 1024 * 1024,
+            256 * 1024,
+            Duration::from_secs(5),
+        );
+        let (_temp, runtime, _store) =
+            spawn_runtime_with_resources(Arc::new(NoPublicProductRoutes), resources.clone()).await;
+        let capacity = resources.capacity.clone();
+        let client = client();
+        let nonce = document_nonce(&client, &runtime).await;
+        let path = format!("/api/v1/watch?session={nonce}");
+
+        // Pre-upgrade failure: the permit is taken before the session
+        // lease, so a lease refusal must hand it straight back.
+        let (unknown, _) = websocket_handshake(
+            runtime.address(),
+            "/api/v1/watch?session=00000000-0000-4000-8000-000000000001",
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(unknown.starts_with("HTTP/1.1 403"));
+        assert_eq!(capacity.global_active(), 0, "a refused lease returns the permit");
+
+        // Transport refusal (Binary frame) releases.
+        let (accepted, stream) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(accepted.starts_with("HTTP/1.1 101"));
+        await_ws_condition(|| capacity.global_active() == 1, "the admitted permit").await;
+        let stream = send_raw(stream, masked_client_frame(0x82, b"no binary")).await;
+        await_ws_condition(|| capacity.global_active() == 0, "the binary refusal to release")
+            .await;
+        drop(stream);
+
+        // A client Close frame releases.
+        let (accepted, stream) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(accepted.starts_with("HTTP/1.1 101"));
+        await_ws_condition(|| capacity.global_active() == 1, "the second permit").await;
+        let stream = send_raw(stream, masked_client_frame(0x88, &[])).await;
+        await_ws_condition(|| capacity.global_active() == 0, "the close to release").await;
+        drop(stream);
+
+        // A plain EOF releases.
+        let (accepted, stream) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(accepted.starts_with("HTTP/1.1 101"));
+        await_ws_condition(|| capacity.global_active() == 1, "the third permit").await;
+        drop(stream);
+        await_ws_condition(|| capacity.global_active() == 0, "the eof to release").await;
+
+        // Shutdown (cancellation) releases.
+        let (accepted, _held) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(accepted.starts_with("HTTP/1.1 101"));
+        await_ws_condition(|| capacity.global_active() == 1, "the held permit").await;
+        tokio::time::timeout(Duration::from_secs(3), runtime.shutdown())
+            .await
+            .expect("graceful shutdown timeout")
+            .expect("graceful shutdown");
+        await_ws_condition(|| capacity.global_active() == 0, "shutdown to release").await;
+    }
+
+    #[tokio::test]
+    async fn the_public_socket_runs_the_bounded_pump_end_to_end() {
+        // An 8-byte per-socket budget: the first server application PING
+        // cannot fit, so the connection must fall to the slow-consumer path
+        // -- which is only possible if the public handler actually serves
+        // its sockets through the bounded pump.
+        let resources =
+            PublicWsResources::with_limits(8, 8, 64 * 1024 * 1024, 8, Duration::from_secs(5));
+        let (_temp, runtime, _store) =
+            spawn_runtime_with_resources(Arc::new(NoPublicProductRoutes), resources.clone()).await;
+        let capacity = resources.capacity.clone();
+        let stats = resources.outbound_stats.clone();
+        let client = client();
+        let nonce = document_nonce(&client, &runtime).await;
+        let (accepted, _stream) = websocket_handshake(
+            runtime.address(),
+            &format!("/api/v1/watch?session={nonce}"),
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(accepted.starts_with("HTTP/1.1 101"));
+        // The application PING is due after WATCH_APP_PING_INTERVAL (10 s);
+        // the maintenance ticker delivers it into the bounded queue.
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while stats.socket_budget_disconnects() == 0 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("the bounded pump must refuse the over-budget ping");
+        assert_eq!(stats.socket_budget_disconnects(), 1);
+        await_ws_condition(|| capacity.global_active() == 0, "the slow consumer to release")
+            .await;
+        assert_eq!(
+            resources.global_outbound_budget.queued_bytes(),
+            0,
+            "the dead queue must return its bytes",
+        );
+    }
+
+    #[tokio::test]
+    async fn capacity_refusals_and_budget_lines_are_visible_in_metrics() {
+        let resources = PublicWsResources::with_limits(
+            100,
+            1,
+            64 * 1024 * 1024,
+            256 * 1024,
+            Duration::from_secs(5),
+        );
+        let (_temp, runtime, _store) =
+            spawn_runtime_with_resources(Arc::new(NoPublicProductRoutes), resources.clone()).await;
+        let client = client();
+        let nonce = document_nonce(&client, &runtime).await;
+        let path = format!("/api/v1/watch?session={nonce}");
+        // Without a forwarded header both handshakes share the "direct"
+        // key, exactly as issuance does.
+        let (first, _first_stream) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(first.starts_with("HTTP/1.1 101"));
+        let (refused, _) = websocket_handshake(
+            runtime.address(),
+            &path,
+            TEST_ORIGIN,
+            Some(PUBLIC_WS_SUBPROTOCOL),
+        )
+        .await;
+        assert!(refused.starts_with("HTTP/1.1 503"));
+
+        let metrics = client
+            .get(request_url(&runtime, PUBLIC_METRICS_PATH))
+            .header(HOST.as_str(), TEST_AUTHORITY)
+            .send()
+            .await
+            .expect("metrics response")
+            .text()
+            .await
+            .expect("metrics body");
+        for expected in [
+            "bcsp_websocket_admitted_connections 1",
+            "bcsp_websocket_global_capacity_refusals 0",
+            "bcsp_websocket_client_capacity_refusals 1",
+            "bcsp_websocket_outbound_queued_bytes 0",
+            "bcsp_websocket_slow_consumer_disconnects 0",
+            "bcsp_websocket_global_outbound_budget_disconnects 0",
+            "bcsp_websocket_write_timeout_disconnects 0",
+        ] {
+            assert!(metrics.contains(expected), "missing metric: {expected}");
+        }
+    }
+
 
     #[tokio::test]
     async fn websocket_requires_origin_nonce_and_protocol_and_shutdown_closes_live_transport() {

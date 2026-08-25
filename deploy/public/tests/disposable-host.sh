@@ -106,7 +106,7 @@ jq -e '
   .type == "object" and
   .additionalProperties == false and
   .required == ["BCSP_PUBLIC_ORIGIN"] and
-  (.properties | keys) == ["BCSP_PUBLIC_ORIGIN"] and
+  (.properties | keys) == ["BCSP_PUBLIC_ORIGIN", "BCSP_PUBLIC_WS_PER_CLIENT_LIMIT"] and
   .secretVariables == []
 ' "$CANDIDATE_ROOT/config/bcsp.env.schema.json" >/dev/null
 caddy validate --config "$CANDIDATE_ROOT/caddy/Caddyfile.example" --adapter caddyfile >/dev/null

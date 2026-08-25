@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 #![deny(warnings)]
 
+mod capacity;
 mod config;
 mod host;
 mod product;
@@ -13,8 +14,8 @@ mod watch;
 
 pub use config::{
     PUBLIC_BIND_ADDRESS, PUBLIC_CATALOG_INTERVAL_SECONDS, PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS,
-    PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS, PublicHostConfig, PublicHostConfigError,
-    fixed_public_refresh_policy,
+    PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS, PUBLIC_WS_PER_CLIENT_LIMIT_ENVIRONMENT, PublicHostConfig,
+    PublicHostConfigError, fixed_public_refresh_policy,
 };
 pub use host::{
     NoPublicProductRoutes, PUBLIC_LIVENESS_PATH, PUBLIC_METRICS_PATH, PUBLIC_READINESS_PATH,

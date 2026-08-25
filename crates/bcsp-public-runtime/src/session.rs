@@ -7,7 +7,10 @@ use serde::Serialize;
 use thiserror::Error;
 
 const DOCUMENT_SESSION_TTL: Duration = Duration::from_secs(2 * 60 * 60);
-const MAX_DOCUMENT_SESSIONS: usize = 4_096;
+/// Registry capacity. The H4 global WebSocket cap in [`crate::capacity`] is
+/// deliberately far below this so leased (unevictable) sessions can never
+/// crowd out issuance; the relationship is pinned there.
+pub(crate) const MAX_DOCUMENT_SESSIONS: usize = 4_096;
 /// Per-session WebSocket connection cap enforced inside the reserve_ws
 /// lease (alert-delivery design v3.1, section 2b). The public client holds
 /// one watch socket per document; the headroom covers reconnect overlap.

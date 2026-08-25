@@ -15,6 +15,11 @@ pub const PUBLIC_CATALOG_INTERVAL_SECONDS: u64 = 600;
 pub const PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS: u32 = SHARED_PUBLIC_GENERAL_OPEN_INTERVAL_SECONDS;
 pub const PUBLIC_WATCHED_OPEN_INTERVAL_SECONDS: u32 = PUBLIC_WATCH_OPEN_INTERVAL_SECONDS;
 pub const PUBLIC_ORIGIN_ENVIRONMENT: &str = "BCSP_PUBLIC_ORIGIN";
+/// Optional override for the per-client active WebSocket cap (H4). The only
+/// configurable H4 number: campus NAT or a shared IPv6 /64 can legitimately
+/// need more than the launch default of 64, so this one value is tunable in
+/// `1..=1024`. Every other H4 constant stays frozen in `crate::capacity`.
+pub const PUBLIC_WS_PER_CLIENT_LIMIT_ENVIRONMENT: &str = "BCSP_PUBLIC_WS_PER_CLIENT_LIMIT";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicHostConfig {
@@ -22,6 +27,7 @@ pub struct PublicHostConfig {
     external_origin: String,
     external_authority: String,
     release: String,
+    per_client_ws_limit: u32,
 }
 
 impl PublicHostConfig {
@@ -59,6 +65,7 @@ impl PublicHostConfig {
             external_origin,
             external_authority,
             release,
+            per_client_ws_limit: crate::capacity::DEFAULT_PER_CLIENT_WS_CONNECTIONS,
         })
     }
 
@@ -68,7 +75,35 @@ impl PublicHostConfig {
         let bind = PUBLIC_BIND_ADDRESS
             .parse()
             .map_err(|_| PublicHostConfigError::InvalidBind)?;
-        Self::try_new(bind, external_origin, env!("CARGO_PKG_VERSION"))
+        let mut config = Self::try_new(bind, external_origin, env!("CARGO_PKG_VERSION"))?;
+        // Absent means the default; present means it must parse and land in
+        // range. A malformed override fails startup rather than silently
+        // running with a limit nobody chose.
+        if let Ok(raw) = std::env::var(PUBLIC_WS_PER_CLIENT_LIMIT_ENVIRONMENT) {
+            config = config.try_with_per_client_ws_limit(&raw)?;
+        }
+        Ok(config)
+    }
+
+    /// Applies the one tunable H4 value, refusing anything outside the
+    /// frozen `1..=1024` range.
+    pub fn try_with_per_client_ws_limit(
+        mut self,
+        raw: &str,
+    ) -> Result<Self, PublicHostConfigError> {
+        let value = raw
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| PublicHostConfigError::InvalidPerClientWsLimit)?;
+        if !crate::capacity::PER_CLIENT_WS_LIMIT_RANGE.contains(&value) {
+            return Err(PublicHostConfigError::InvalidPerClientWsLimit);
+        }
+        self.per_client_ws_limit = value;
+        Ok(self)
+    }
+
+    pub const fn per_client_ws_limit(&self) -> u32 {
+        self.per_client_ws_limit
     }
 
     pub const fn bind(&self) -> SocketAddr {
@@ -107,6 +142,8 @@ pub enum PublicHostConfigError {
     NonLoopbackBind,
     #[error("public release identifier is invalid")]
     InvalidRelease,
+    #[error("public per-client WebSocket limit is invalid")]
+    InvalidPerClientWsLimit,
 }
 
 impl PublicHostConfigError {
@@ -117,6 +154,7 @@ impl PublicHostConfigError {
             Self::InvalidBind => "PUBLIC_BIND_INVALID",
             Self::NonLoopbackBind => "PUBLIC_BIND_NOT_LOOPBACK",
             Self::InvalidRelease => "PUBLIC_RELEASE_INVALID",
+            Self::InvalidPerClientWsLimit => "PUBLIC_WS_PER_CLIENT_LIMIT_INVALID",
         }
     }
 }
@@ -159,6 +197,40 @@ mod tests {
             ),
             Err(PublicHostConfigError::InvalidExternalOrigin)
         ));
+    }
+
+    #[test]
+    fn the_per_client_ws_limit_is_tunable_only_inside_its_frozen_range() {
+        let base = PublicHostConfig::try_new(
+            "127.0.0.1:0".parse().expect("loopback address"),
+            "https://planner.example.test",
+            "test-release",
+        )
+        .expect("valid public host");
+        assert_eq!(base.per_client_ws_limit(), 64, "the launch default");
+        assert_eq!(
+            base.clone()
+                .try_with_per_client_ws_limit("1")
+                .expect("floor of the range")
+                .per_client_ws_limit(),
+            1
+        );
+        assert_eq!(
+            base.clone()
+                .try_with_per_client_ws_limit(" 1024 ")
+                .expect("ceiling of the range")
+                .per_client_ws_limit(),
+            1024
+        );
+        for invalid in ["0", "1025", "", "sixty-four", "-1", "64.5"] {
+            assert!(
+                matches!(
+                    base.clone().try_with_per_client_ws_limit(invalid),
+                    Err(PublicHostConfigError::InvalidPerClientWsLimit)
+                ),
+                "{invalid:?} must be refused",
+            );
+        }
     }
 
     #[test]
