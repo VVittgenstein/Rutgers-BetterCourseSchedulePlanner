@@ -110,9 +110,12 @@ export class WatchAudioController {
 
   async unlock(): Promise<WatchAudioUnlockResult> {
     if (this.#disposed) return 'FAILED';
-    this.#audioFailure = false;
     // An unlock only ever happens through a user action, so whatever the
-    // browser last refused is worth asking about again.
+    // browser last refused is worth asking about again. A known OUTPUT
+    // failure is different: the browser never refused anything there -- a
+    // voice failed to start on a running context -- and pressing a button
+    // does not make that untrue. `#confirmOutput` below is what clears it,
+    // by actually trying again.
     this.#gestureRequired = false;
     let context = this.#context;
     if (context === null) {
@@ -125,7 +128,7 @@ export class WatchAudioController {
         return this.#report('FAILED');
       }
     }
-    if (context.state === 'running') return this.#report('READY');
+    if (context.state === 'running') return this.#confirmOutput(context);
     if (context.state === 'closed') {
       this.#audioFailure = true;
       return this.#report('FAILED');
@@ -141,8 +144,34 @@ export class WatchAudioController {
       return this.#report('FAILED');
     }
     return readContextState(context) === 'running'
-      ? this.#report('READY')
+      ? this.#confirmOutput(context)
       : this.#report('BLOCKED');
+  }
+
+  /**
+   * READY, but only once a known output failure has been retried for real.
+   *
+   * `#audioFailure` means a voice failed to create, connect, or start while
+   * the context itself was `running` -- a device that went away, a node
+   * budget that ran out. A `running` context says nothing about whether that
+   * is still true, so an unlock that lands here retries the same operations
+   * with an inaudible voice: gain at the minimum floor, nothing the user can
+   * hear, and never a substitute for the mute they chose. Only that retry
+   * succeeding -- or failing -- is allowed to change the answer.
+   *
+   * With no known failure this is exactly the old path: `running` is the
+   * agreed ring-③ evidence, and no probe plays on an ordinary Start.
+   */
+  #confirmOutput(context: WatchAudioContextPort): WatchAudioUnlockResult {
+    if (this.#audioFailure) {
+      try {
+        this.#startVoice(context, 0, false);
+      } catch {
+        return this.#report('FAILED');
+      }
+      this.#audioFailure = false;
+    }
+    return this.#report('READY');
   }
 
   /**
@@ -202,6 +231,11 @@ export class WatchAudioController {
     // without a gesture, and never twice at the same time.
     if (this.#gestureRequired || this.#healing) return this.#report('BLOCKED');
     this.#healing = true;
+    // READY is revoked the moment the repair BEGINS, not when it ends. The
+    // context is suspended right now, and a resume the browser never settles
+    // would otherwise leave a green light over silent audio for as long as
+    // it hangs.
+    this.#report('BLOCKED');
     try {
       await context.resume();
     } catch (error) {

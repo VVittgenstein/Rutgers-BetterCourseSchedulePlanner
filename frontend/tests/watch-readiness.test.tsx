@@ -17,7 +17,14 @@ import type {
   WatchServerEventV1,
   WsServerEnvelope,
 } from '../src/ui/shared/product';
-import type { WatchAudioController, WatchAudioUnlockResult } from '../src/ui/shared/watch/audio';
+import {
+  WatchAudioController,
+  type WatchAudioContextPort,
+  type WatchAudioGainPort,
+  type WatchAudioOscillatorPort,
+  type WatchAudioParamPort,
+  type WatchAudioUnlockResult,
+} from '../src/ui/shared/watch/audio';
 import {
   DEFAULT_WATCH_POLICY,
   LiveWatchProvider,
@@ -239,6 +246,60 @@ class FakeNotifications implements WatchNotificationPort {
   }
 }
 
+const silentParam: WatchAudioParamPort = {
+  setValueAtTime: () => undefined,
+  linearRampToValueAtTime: () => undefined,
+  exponentialRampToValueAtTime: () => undefined,
+};
+
+/**
+ * A browser context for tests that need the REAL controller: the output can
+ * be broken independently of the context state, and a resume can be held
+ * open the way a browser that never answers holds it.
+ */
+class RecoverableAudioContext implements WatchAudioContextPort {
+  currentTime = 0;
+  destination: unknown = { output: true };
+  state: AudioContextState = 'suspended';
+  failOscillator = false;
+  holdResume = false;
+  releaseResume: (() => void) | null = null;
+  readonly #listeners = new Set<() => void>();
+
+  addEventListener(_type: 'statechange', listener: () => void): void {
+    this.#listeners.add(listener);
+  }
+
+  async resume(): Promise<void> {
+    if (this.holdResume) {
+      await new Promise<void>((resolve) => { this.releaseResume = resolve; });
+    }
+    this.state = 'running';
+  }
+
+  createGain(): WatchAudioGainPort {
+    return { gain: silentParam, connect: (destination) => destination, disconnect: () => undefined };
+  }
+
+  createOscillator(): WatchAudioOscillatorPort {
+    if (this.failOscillator) throw new Error('output device is gone');
+    return {
+      type: 'sine',
+      frequency: silentParam,
+      onended: null,
+      connect: (destination) => destination,
+      disconnect: () => undefined,
+      start: () => undefined,
+      stop: () => undefined,
+    };
+  }
+
+  suspendAndAnnounce(): void {
+    this.state = 'suspended';
+    this.#listeners.forEach((listener) => listener());
+  }
+}
+
 function unexpected(): never {
   throw new Error('unexpected product call');
 }
@@ -261,6 +322,8 @@ function harness(options: {
   readonly visible?: boolean;
   readonly intent?: WatchIntentPort;
   readonly notificationsEnabled?: boolean;
+  /** A REAL controller for tests about audio truth; the stub otherwise. */
+  readonly audio?: WatchAudioController;
 } = {}): Harness {
   const watch = new FakeWatch();
   const audio = new FakeAudio();
@@ -316,7 +379,7 @@ function harness(options: {
   let current: LiveWatchValue | null = null;
   const tree = () => (
     <LiveWatchProvider
-      audio={audio as unknown as WatchAudioController}
+      audio={options.audio ?? (audio as unknown as WatchAudioController)}
       clock={() => clock.now}
       initialNotificationsEnabled={options.notificationsEnabled ?? true}
       initialSelected={[SECTION_A]}
@@ -875,6 +938,66 @@ describe('what an independent review found, pinned', () => {
       await Promise.resolve();
     });
     expect(context.value().readiness.reason).toBe('AUDIO_FAILED');
+  });
+
+  it('does not let the sound recovery relight an output that is still failing', async () => {
+    const browserAudio = new RecoverableAudioContext();
+    const controller = new WatchAudioController({ createContext: () => browserAudio });
+    const context = harness({ audio: controller });
+    await startWatching(context);
+    expect(context.value().readiness.level).toBe('READY');
+
+    // A real voice fails on a running context: the device went away.
+    browserAudio.failOscillator = true;
+    await act(async () => context.watch.emit(requestedCue()));
+    expect(context.value().readiness.reason).toBe('AUDIO_FAILED');
+
+    // The user presses the recovery control while the output is still gone.
+    // The context still reports `running`; the page must not go green on the
+    // strength of a button press that proved nothing.
+    await act(async () => { await context.value().enableSound(); });
+    expect(context.value().audioState).toBe('FAILED');
+    expect(context.value().readiness.level).toBe('DEGRADED');
+    expect(context.value().readiness.reason).toBe('AUDIO_FAILED');
+
+    // The device comes back. The same press now retries the output for
+    // real, and only that success is allowed to restore the green light.
+    browserAudio.failOscillator = false;
+    await act(async () => { await context.value().enableSound(); });
+    expect(context.value().audioState).toBe('READY');
+    expect(context.value().readiness.level).toBe('READY');
+  });
+
+  it('degrades the standing readiness while a held resume is still pending', async () => {
+    const browserAudio = new RecoverableAudioContext();
+    const controller = new WatchAudioController({ createContext: () => browserAudio });
+    const context = harness({ audio: controller });
+    await startWatching(context);
+    expect(context.value().readiness.level).toBe('READY');
+
+    // The system suspends the context; the repair's resume never settles.
+    // The standing readiness must drop NOW, not when the browser gets
+    // around to answering -- it may never.
+    browserAudio.holdResume = true;
+    await act(async () => {
+      browserAudio.suspendAndAnnounce();
+      await Promise.resolve();
+    });
+    expect(context.value().audioState).toBe('BLOCKED');
+    expect(context.value().readiness.level).toBe('DEGRADED');
+    expect(context.value().readiness.reason).toBe('AUDIO_BLOCKED');
+
+    // The browser finally answers; the light may come back on. The release
+    // travels through two awaits (the held promise, then the resume call),
+    // so the flush yields once per link in that chain.
+    await act(async () => {
+      browserAudio.releaseResume?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(context.value().audioState).toBe('READY');
+    expect(context.value().readiness.level).toBe('READY');
   });
 
   it('still reports an outage to a user who grants permission during it', async () => {

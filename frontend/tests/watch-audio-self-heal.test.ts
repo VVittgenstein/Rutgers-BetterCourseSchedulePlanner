@@ -104,10 +104,33 @@ describe('WatchAudioController self-heal', () => {
 
     expect(context.resume).toHaveBeenCalledTimes(1);
     expect(controller.state).toBe('READY');
-    // BLOCKED then READY: the page is told the truth on the way down as well
-    // as on the way back, so a cue that lands in between is not reported as
-    // delivered.
-    expect(states).toContain('READY');
+    // BLOCKED then READY, in that order: the page is told the truth on the
+    // way down as well as on the way back, so a cue that lands in between is
+    // not reported as delivered. The exact tail is not pinned because the
+    // resume's own statechange re-enters heal and may publish READY twice.
+    expect(states[0]).toBe('BLOCKED');
+    expect(states.at(-1)).toBe('READY');
+  });
+
+  it('revokes READY the moment a suspend is announced, before the resume settles', async () => {
+    const context = new SuspendableContext();
+    const { controller, states } = await unlocked(context);
+    let release: (() => void) | null = null;
+    context.resume.mockImplementation(async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      context.state = 'running';
+    });
+
+    context.suspendAndAnnounce();
+    // The resume is still pending -- the browser may never settle it. The
+    // page has to have been told already, not when (or if) the promise ends.
+    expect(states).toContain('BLOCKED');
+    expect(states).not.toContain('READY');
+    expect(controller.state).toBe('BLOCKED');
+
+    release?.();
+    await vi.waitFor(() => expect(states.at(-1)).toBe('READY'));
+    expect(controller.state).toBe('READY');
   });
 
   it('reports a blocked context honestly and stops asking until a gesture', async () => {

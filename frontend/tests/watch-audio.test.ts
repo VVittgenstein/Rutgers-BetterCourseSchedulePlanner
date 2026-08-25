@@ -155,6 +155,37 @@ describe('WatchAudioController', () => {
     expect(controller.play(ONE_SHOT_CUE, Number.NaN, false)).toBe('FAILED');
   });
 
+  it('keeps a known output failure through unlock until a new output attempt succeeds', async () => {
+    const context = new FakeContext();
+    const controller = new WatchAudioController({ createContext: () => context });
+    await expect(controller.unlock()).resolves.toBe('READY');
+    // No known failure, no probe: `running` alone is the agreed evidence,
+    // and an ordinary unlock must not ring or start anything.
+    expect(context.oscillators).toHaveLength(0);
+
+    context.failOscillator = true;
+    expect(controller.play(ONE_SHOT_CUE, 50, false)).toBe('FAILED');
+    expect(controller.state).toBe('FAILED');
+
+    // The user presses the recovery control while the output is still
+    // broken. The context still reports `running`; that alone must not
+    // launder a failure a real voice has already proven.
+    await expect(controller.unlock()).resolves.toBe('FAILED');
+    expect(controller.state).toBe('FAILED');
+    expect(context.oscillators).toHaveLength(0);
+
+    // The device comes back. READY is allowed now only because the unlock
+    // actually retried the output: a new voice was created and started, at
+    // the minimum gain floor so nothing was audible.
+    context.failOscillator = false;
+    await expect(controller.unlock()).resolves.toBe('READY');
+    expect(context.oscillators).toHaveLength(1);
+    expect(context.oscillators[0]?.start).toHaveBeenCalledOnce();
+    expect(context.gains[0]?.gain.changes).toContainEqual(['linear', 0.0001, 4.025]);
+    expect(controller.state).toBe('READY');
+    expect(controller.play(ONE_SHOT_CUE, 50, false)).toBe('STARTED');
+  });
+
   it('plays an explicit local preview through the configured output and volume', async () => {
     const context = new FakeContext();
     const controller = new WatchAudioController({ createContext: () => context });
