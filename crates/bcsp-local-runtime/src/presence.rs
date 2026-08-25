@@ -355,6 +355,18 @@ impl WebSocketExtension for LocalPresenceRoute {
         let now = Instant::now();
         let exit = {
             let mut registry = self.lock();
+            if registry.sealed || registry.phase == LocalPresencePhase::Exiting {
+                // The exit decision has already committed under this same
+                // lock. This socket may have been legally admitted while the
+                // countdown was still running, but registering it now would
+                // answer REGISTERED to a page the runtime is about to take
+                // away -- and nothing reverses Exiting. Refused the same way
+                // a socket refused at admission is: closed, not counted, not
+                // reported as a page.
+                drop(registry);
+                self.close(connection_id, "presence HELLO arrived after the exit decision");
+                return;
+            }
             let Some(connection) = registry.connections.get(&connection_id) else {
                 return;
             };
@@ -524,13 +536,17 @@ mod tests {
     }
 
     fn harness(countdown: Duration) -> Harness {
+        harness_with(countdown, Duration::from_millis(60))
+    }
+
+    fn harness_with(countdown: Duration, hello_deadline: Duration) -> Harness {
         let exits = std::sync::Arc::new(Mutex::new(0));
         let counter = exits.clone();
         let route = LocalPresenceRoute::new(move || {
             *counter.lock().expect("exit counter") += 1;
         })
         .with_countdown(countdown)
-        .with_hello_deadline(Duration::from_millis(60));
+        .with_hello_deadline(hello_deadline);
         Harness { route, exits }
     }
 
@@ -804,6 +820,89 @@ mod tests {
             (2..=4).contains(&countdowns),
             "expected one line per remaining second, saw {countdowns}: {lines:?}",
         );
+    }
+
+    #[test]
+    fn a_withheld_hello_landing_after_the_exit_decision_is_not_registered() {
+        // The withheld socket's registration deadline must OUTLIVE the
+        // countdown: with the shared 60ms deadline the sweep would close the
+        // silent socket at the same tick that commits Exiting, and the test
+        // would pass against the very race it exists to catch.
+        let harness = harness_with(Duration::from_millis(40), Duration::from_secs(30));
+        let _first = attach(&harness.route, 1);
+        hello(&harness.route, 1, 100);
+        harness.route.disconnect(trace(1));
+        assert!(matches!(
+            harness.route.state().phase,
+            LocalPresencePhase::CountingDown { .. }
+        ));
+
+        // Admitted while the countdown is still running -- legal -- but the
+        // HELLO is withheld past the expiry decision.
+        let mut withheld = attach(&harness.route, 2);
+        std::thread::sleep(Duration::from_millis(80));
+        harness.route.tick();
+        assert_eq!(*harness.exits.lock().expect("exit counter"), 1);
+        assert_eq!(harness.route.state().phase, LocalPresencePhase::Exiting);
+
+        // The HELLO lands after the decision. Registering it would tell the
+        // page it is counted and then take the runtime away from it.
+        hello(&harness.route, 2, 200);
+        assert_eq!(harness.route.state().pages, 0);
+        assert_eq!(harness.route.state().phase, LocalPresencePhase::Exiting);
+        assert_eq!(
+            *harness.exits.lock().expect("exit counter"),
+            1,
+            "the rejected HELLO neither cancels nor re-requests the exit",
+        );
+        assert!(
+            withheld.try_recv().is_err(),
+            "a HELLO after the exit decision is not answered REGISTERED",
+        );
+    }
+
+    #[test]
+    fn a_withheld_hello_after_the_exit_decision_logs_no_page_opened() {
+        #[derive(Default)]
+        struct Recorder {
+            lines: Mutex<Vec<String>>,
+        }
+        impl crate::LocalConsoleSink for std::sync::Arc<Recorder> {
+            fn line(&self, text: &str) {
+                self.lines.lock().expect("recorder").push(text.to_owned());
+            }
+        }
+
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let console = std::sync::Arc::new(
+            crate::LocalConsole::new(crate::LocalConsoleLocale::EnUs)
+                .with_sink(std::sync::Arc::new(recorder.clone())),
+        );
+        let route = LocalPresenceRoute::new(|| {})
+            .with_countdown(Duration::from_millis(40))
+            .with_hello_deadline(Duration::from_secs(30))
+            .with_console(console);
+
+        let (outbound, _inbound) = mpsc::unbounded_channel();
+        assert!(route.connect(trace(1), outbound));
+        hello(&route, 1, 100);
+        route.disconnect(trace(1));
+
+        let (outbound, _withheld) = mpsc::unbounded_channel();
+        assert!(route.connect(trace(2), outbound));
+        std::thread::sleep(Duration::from_millis(80));
+        route.tick();
+        assert_eq!(route.state().phase, LocalPresencePhase::Exiting);
+
+        hello(&route, 2, 200);
+
+        // The user must never read "a page is open" about a page the runtime
+        // is in the middle of taking away.
+        let lines = recorder.lines.lock().expect("recorder").clone();
+        let opened = lines.iter().filter(|line| line.contains("A page is open")).count();
+        let closed = lines.iter().filter(|line| line.contains("A page closed")).count();
+        assert_eq!(opened, 1, "only the original page ever opened: {lines:?}");
+        assert_eq!(closed, 1, "the rejected socket was never a page: {lines:?}");
     }
 
     #[test]
