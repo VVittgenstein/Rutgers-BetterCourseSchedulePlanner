@@ -13,7 +13,7 @@ import { AnalyzerError, internalAssert } from "./errors.mjs";
 import { fmtRatio } from "./stable.mjs";
 
 // Shared constants (single source of truth; gate.mjs re-exports them).
-export const TOOL_VERSION = "1.0.0";
+export const TOOL_VERSION = "1.1.0";
 export const SCHEMA_VERSION = 1;
 export const PERIODS_MS = [30000, 60000];
 export const SERVER_DATE_WIDEN_MS = 1000;
@@ -44,7 +44,9 @@ export function bracketWidthMs(bracket, clockSource) {
 
 export function isInformative(bracket, periodMs, clockSource) {
   const width = bracketWidthMs(bracket, clockSource);
-  return width !== null && width < periodMs;
+  // width <= 0 is a corrupt bracket, not a narrow one: it must never count as
+  // informative (a negative-width "arc" would cover almost the whole circle).
+  return width !== null && width > 0 && width < periodMs;
 }
 
 function mod(n, m) {
@@ -56,6 +58,7 @@ function mod(n, m) {
 export function bracketArc(bracket, periodMs, clockSource) {
   const { lowerMs, upperMs } = bracketBounds(bracket, clockSource);
   internalAssert(lowerMs !== null && upperMs !== null, "arc requested for unusable bracket");
+  internalAssert(upperMs - lowerMs > 0, "arc requested for non-positive-width bracket");
   internalAssert(upperMs - lowerMs < periodMs, "arc requested for non-informative bracket");
   return { startMs: mod(lowerMs + 1, periodMs), endMs: mod(upperMs, periodMs) };
 }
@@ -147,7 +150,10 @@ export function fitPhase(brackets, periodMs, clockSource) {
   let nonInformativeCount = 0;
   for (const bracket of brackets) {
     const width = bracketWidthMs(bracket, clockSource);
-    if (width === null) {
+    if (width === null || width <= 0) {
+      // null: bounds unavailable on this clock. <= 0: corrupt (fail-closed) —
+      // buildBrackets already rejects these, but any bracket reaching this
+      // point is still excluded rather than credited.
       unusableCount += 1;
     } else if (width >= periodMs) {
       // Wide brackets cover the full circle: non-informative, excluded from

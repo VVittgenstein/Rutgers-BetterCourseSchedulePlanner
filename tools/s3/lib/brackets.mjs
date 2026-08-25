@@ -14,7 +14,19 @@
 
 import { SERVER_DATE_WIDEN_MS, PERIODS_MS, bracketWidthMs } from "./phase.mjs";
 
+// Returns a bracket, or null when the pair is rejected (counted in counters).
 function makeBracket(window, targetId, stable, changed, counters) {
+  if (changed.clientEndMs - stable.clientStartMs <= 0) {
+    // Non-positive client/observed_at width: the capture's own row ordering is
+    // corrupt for this pair (a tolerated client-clock step, a corrupted
+    // requestEndedUtc, or a SQLite observed_at tie/regression within the
+    // ingestion tolerance). The pairing itself is untrustworthy, so the whole
+    // bracket is rejected — the server bounds derive from the same suspect
+    // pair and are not kept either. Counted, never silently credited as
+    // informative coverage (mirrors the serverNonPositiveWidth treatment).
+    counters.clientNonPositiveWidth += 1;
+    return null;
+  }
   let serverLowerMs = stable.serverDateMs;
   let serverUpperMs = changed.serverDateMs !== null ? changed.serverDateMs + SERVER_DATE_WIDEN_MS : null;
   if (serverLowerMs === null || serverUpperMs === null) {
@@ -61,6 +73,7 @@ export function buildBrackets(window, sourceKind) {
   const counters = {
     changeCount: 0,
     serverNonPositiveWidth: 0,
+    clientNonPositiveWidth: 0,
     noPriorStable: 0,
     ageGreaterThanZeroEndpoints: 0,
   };
@@ -71,7 +84,8 @@ export function buildBrackets(window, sourceKind) {
       const a = samples[i - 1];
       const b = samples[i];
       if (b.bodySha !== a.bodySha) {
-        brackets.push(makeBracket(window, b.targetId, a, b, counters));
+        const bracket = makeBracket(window, b.targetId, a, b, counters);
+        if (bracket !== null) brackets.push(bracket);
       }
     }
   } else if (sourceKind === "sqlite") {
@@ -83,7 +97,8 @@ export function buildBrackets(window, sourceKind) {
         counters.noPriorStable += 1;
         continue;
       }
-      brackets.push(makeBracket(window, row.targetId, samples[i - 1], row, counters));
+      const bracket = makeBracket(window, row.targetId, samples[i - 1], row, counters);
+      if (bracket !== null) brackets.push(bracket);
     }
   }
   return { brackets, counters };

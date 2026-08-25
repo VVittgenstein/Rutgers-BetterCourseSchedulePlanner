@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fitPhase, sweepArcs, arcContains } from "../lib/phase.mjs";
-import { compareModels } from "../lib/gate.mjs";
+import { fitPhase, sweepArcs, arcContains, isInformative } from "../lib/phase.mjs";
+import { compareModels, commonInformativeSet } from "../lib/gate.mjs";
 import { fakeBracket } from "./fixtures.mjs";
 
 const MIN = 60000;
@@ -63,6 +63,25 @@ test("residual invariant holds with outliers", () => {
   assert.equal(fit.maxCoverage, 9);
   assert.deepEqual(fit.residualBracketIds, ["outlier"]);
   assert.equal(fit.residualBracketIds.length, fit.informativeCount - fit.maxCoverage);
+});
+
+test("non-positive-width brackets are never informative and never credited", () => {
+  // A negative-width bracket would map to a near-full-circle "arc" and inflate
+  // coverage at almost every phase; it must be excluded as unusable instead.
+  const corrupt = fakeBracket({ id: "neg", lowerMs: 10 * MIN, upperMs: 10 * MIN - 2000 });
+  const zero = fakeBracket({ id: "zero", lowerMs: 20 * MIN, upperMs: 20 * MIN });
+  const good = fakeBracket({ id: "good", lowerMs: 30 * MIN - 500, upperMs: 30 * MIN + 500 });
+  for (const clock of ["server", "client"]) {
+    assert.equal(isInformative(corrupt, 30000, clock), false);
+    assert.equal(isInformative(zero, 30000, clock), false);
+    assert.equal(isInformative(corrupt, 60000, clock), false);
+    const fit = fitPhase([corrupt, zero, good], 30000, clock);
+    assert.equal(fit.informativeCount, 1);
+    assert.equal(fit.unusableCount, 2, "corrupt brackets must land in unusableCount");
+    assert.equal(fit.maxCoverage, 1);
+    const common = commonInformativeSet([corrupt, zero, good], clock);
+    assert.deepEqual(common.map((b) => b.bracketId), ["good"]);
+  }
 });
 
 test("runtime invariant c30 >= c60 (compareModels does not throw)", () => {

@@ -101,6 +101,40 @@ test("serverDate skew producing non-positive width -> client-only bracket + coun
   assert.equal(fit.informativeCount, 0);
 });
 
+test("tolerated client-clock step producing negative width -> bracket rejected and counted", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  makeRunDir(join(dir, "runA"), {
+    samples: [
+      sampleRow({ seq: 1, startMs: BASE, elapsedMs: 100, bodySha: "a", serverDateMs: BASE }),
+      // client clock steps back 1.9 s (inside the 2 s ingestion tolerance);
+      // with 100 ms elapsed the client envelope is (BASE, BASE - 1800]: width -1800.
+      sampleRow({ seq: 2, startMs: BASE - 1900, elapsedMs: 100, bodySha: "b", serverDateMs: BASE + 13000 }),
+    ],
+  });
+  const { brackets, counters } = buildBrackets(windowFromNdjson(join(dir, "runA")), "ndjson");
+  // The whole bracket is rejected — the seemingly valid server bounds derive
+  // from the same corrupt pair and must not survive on their own.
+  assert.equal(brackets.length, 0);
+  assert.equal(counters.clientNonPositiveWidth, 1);
+  assert.equal(counters.changeCount, 0);
+});
+
+test("corrupted requestEndedUtc < requestStartedUtc -> bracket rejected and counted", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  makeRunDir(join(dir, "runA"), {
+    samples: [
+      sampleRow({ seq: 1, startMs: BASE, elapsedMs: 100, bodySha: "a", serverDateMs: BASE }),
+      // requestEndedUtc 50 s BEFORE requestStartedUtc of the stable row
+      sampleRow({ seq: 2, startMs: BASE + 100, elapsedMs: -50100, bodySha: "b", serverDateMs: BASE + 13000 }),
+    ],
+  });
+  const { brackets, counters } = buildBrackets(windowFromNdjson(join(dir, "runA")), "ndjson");
+  assert.equal(brackets.length, 0);
+  assert.equal(counters.clientNonPositiveWidth, 1);
+});
+
 test("sqlite path: change rows bracket against nearest preceding row", () => {
   const mkSample = (seq, tMs, body, changed) => ({
     inputId: "obs.sqlite",

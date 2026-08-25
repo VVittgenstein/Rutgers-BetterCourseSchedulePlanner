@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { AnalyzerError } from "./errors.mjs";
 import { sha256File } from "./stable.mjs";
 import { parseIsoMs, parseHttpDate } from "./timeparse.mjs";
+import { CLIENT_TIME_REGRESSION_TOLERANCE_MS } from "./phase.mjs";
 
 function buildImmutableUri(path) {
   const forward = path.replaceAll("\\", "/");
@@ -56,6 +57,7 @@ export function ingestSqlite(path, sqliteTargets) {
   const excluded = { curlExitCode: 0, httpStatusNon2xx: 0, validationErrors: 0, initialLkg: 0 };
   const samplesByTarget = new Map();
   const prevSeqByTarget = new Map();
+  const prevObservedByTarget = new Map();
   const lkgSkippedByTarget = new Set();
   let keptRows = 0;
 
@@ -80,6 +82,19 @@ export function ingestSqlite(path, sqliteTargets) {
         `input ${id} target ${row.target_id} seq ${row.observation_sequence}: unparseable observed_at`,
       );
     }
+
+    // observed_at monotonicity per target, mirroring the NDJSON client-clock
+    // check: a regression beyond the tolerance is fail-closed. Regressions
+    // within the tolerance can still produce a non-positive client-width
+    // bracket, which buildBrackets rejects and counts.
+    const prevObservedMs = prevObservedByTarget.get(targetId) ?? null;
+    if (prevObservedMs !== null && observedMs < prevObservedMs - CLIENT_TIME_REGRESSION_TOLERANCE_MS) {
+      throw new AnalyzerError(
+        "E_TIME_REGRESSION",
+        `input ${id} target ${row.target_id} seq ${row.observation_sequence}: observed_at regressed by more than ${CLIENT_TIME_REGRESSION_TOLERANCE_MS} ms`,
+      );
+    }
+    prevObservedByTarget.set(targetId, observedMs);
 
     if (row.http_status < 200 || row.http_status > 299) {
       excluded.httpStatusNon2xx += 1;

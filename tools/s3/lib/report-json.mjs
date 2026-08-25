@@ -33,6 +33,7 @@ export function buildJsonReport(ctx) {
     bracketTotals,
     fits,
     comparison,
+    clockSource,
     clockFallback,
     clock,
     safeOffset,
@@ -40,7 +41,10 @@ export function buildJsonReport(ctx) {
     decision,
   } = ctx;
 
-  const bracketClock = clock.status === "server-date-available" ? "server" : "client";
+  // Per-bracket informative flags use the SAME clock the comparison selected
+  // (including a client fallback), so a bracket can never show as
+  // non-informative in the table while being counted by the comparison.
+  const bracketClock = clockSource;
 
   const inputsJson = [...inputs]
     .sort((a, b) => cmpStr(a.kind, b.kind) || cmpStr(a.id, b.id))
@@ -170,6 +174,7 @@ export function buildJsonReport(ctx) {
       nonInformative30: bracketTotals.nonInformative30,
       nonInformative60: bracketTotals.nonInformative60,
       serverNonPositiveWidth: bracketTotals.serverNonPositiveWidth,
+      clientNonPositiveWidth: bracketTotals.clientNonPositiveWidth,
       noPriorStable: bracketTotals.noPriorStable,
       ageGreaterThanZeroEndpoints: bracketTotals.ageGreaterThanZeroEndpoints,
     },
@@ -189,15 +194,18 @@ export function buildJsonReport(ctx) {
   return stableStringify(root) + "\n";
 }
 
-export function computeBracketTotals(brackets, counters, clockStatus) {
-  const clock = clockStatus === "server-date-available" ? "server" : "client";
+// clockSource is the clock the model comparison selected ("server"/"client"),
+// so the headline totals always agree with the comparison's bracket handling.
+export function computeBracketTotals(brackets, counters, clockSource) {
   let informative30 = 0;
   let informative60 = 0;
   let nonInformative30 = 0;
   let nonInformative60 = 0;
   for (const bracket of brackets) {
-    const width = bracketWidthMs(bracket, clock);
-    if (width === null) continue;
+    const width = bracketWidthMs(bracket, clockSource);
+    // null: no bounds on this clock. <= 0: corrupt bracket (fail-closed);
+    // buildBrackets already rejects these, but never count one as informative.
+    if (width === null || width <= 0) continue;
     if (width < 30000) informative30 += 1;
     else nonInformative30 += 1;
     if (width < 60000) informative60 += 1;
@@ -210,6 +218,7 @@ export function computeBracketTotals(brackets, counters, clockStatus) {
     nonInformative30,
     nonInformative60,
     serverNonPositiveWidth: counters.serverNonPositiveWidth,
+    clientNonPositiveWidth: counters.clientNonPositiveWidth,
     noPriorStable: counters.noPriorStable,
     ageGreaterThanZeroEndpoints: counters.ageGreaterThanZeroEndpoints,
   };

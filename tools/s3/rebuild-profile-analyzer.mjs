@@ -72,6 +72,7 @@ function main() {
   const counters = {
     changeCount: 0,
     serverNonPositiveWidth: 0,
+    clientNonPositiveWidth: 0,
     noPriorStable: 0,
     ageGreaterThanZeroEndpoints: 0,
   };
@@ -101,6 +102,7 @@ function main() {
       allBrackets.push(...brackets);
       counters.changeCount += winCounters.changeCount;
       counters.serverNonPositiveWidth += winCounters.serverNonPositiveWidth;
+      counters.clientNonPositiveWidth += winCounters.clientNonPositiveWidth;
       counters.noPriorStable += winCounters.noPriorStable;
       counters.ageGreaterThanZeroEndpoints += winCounters.ageGreaterThanZeroEndpoints;
     }
@@ -162,7 +164,10 @@ function main() {
     outJsonBase: basename(args.outJson),
     outMdBase: basename(args.outMd),
   });
-  const bracketTotals = computeBracketTotals(allBrackets, counters, clock.status);
+  // Totals and per-bracket informative flags are computed on the SAME clock
+  // the model comparison selected, so the report tables can never disagree
+  // with the comparison about which brackets counted.
+  const bracketTotals = computeBracketTotals(allBrackets, counters, clockSource);
   const reportCtx = {
     normalizedCommand,
     inputs: ingests.map((i) => i.input),
@@ -172,6 +177,7 @@ function main() {
     bracketTotals,
     fits,
     comparison,
+    clockSource,
     clockFallback,
     clock,
     safeOffset,

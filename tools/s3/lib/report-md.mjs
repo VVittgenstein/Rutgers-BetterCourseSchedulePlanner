@@ -41,6 +41,7 @@ export function buildMdReport(ctx) {
     bracketTotals,
     fits,
     comparison,
+    clockSource,
     clockFallback,
     clock,
     safeOffset,
@@ -117,10 +118,10 @@ export function buildMdReport(ctx) {
   push();
   push(`- Total change brackets: ${bracketTotals.total}`);
   push(
-    `- Informative (width < period): 30 s → ${bracketTotals.informative30}, 60 s → ${bracketTotals.informative60}; non-informative: 30 s → ${bracketTotals.nonInformative30}, 60 s → ${bracketTotals.nonInformative60}`,
+    `- Informative (0 < width < period, ${clockSource} clock — the comparison clock): 30 s → ${bracketTotals.informative30}, 60 s → ${bracketTotals.informative60}; non-informative: 30 s → ${bracketTotals.nonInformative30}, 60 s → ${bracketTotals.nonInformative60}`,
   );
   push(
-    `- Server brackets dropped for non-positive width (webfarm clock skew): ${bracketTotals.serverNonPositiveWidth}; change rows without a prior stable row: ${bracketTotals.noPriorStable}; bracket endpoints with \`age > 0\`: ${bracketTotals.ageGreaterThanZeroEndpoints}`,
+    `- Server brackets dropped for non-positive width (webfarm clock skew): ${bracketTotals.serverNonPositiveWidth}; brackets rejected entirely for non-positive client/observed_at width (corrupt capture ordering): ${bracketTotals.clientNonPositiveWidth}; change rows without a prior stable row: ${bracketTotals.noPriorStable}; bracket endpoints with \`age > 0\`: ${bracketTotals.ageGreaterThanZeroEndpoints}`,
   );
   const clientWidths = brackets.map((b) => b.clientWidthMs);
   const serverWidths = brackets.filter((b) => b.serverWidthMs !== null).map((b) => b.serverWidthMs);
@@ -209,7 +210,7 @@ export function buildMdReport(ctx) {
     `- **etag is not a change signal**: the same body is served with multiple etags across backends; change detection uses \`decodedBodySha256\` only, and etag is never consulted.`,
   );
   push(
-    `- **Timestamp semantics**: NDJSON rows carry client-side \`requestStartedUtc\`/\`requestEndedUtc\` (bracket = (stable requestStart, changed requestEnd]); SQLite rows carry a single \`observed_at\`, used for both bracket endpoints, so SQLite client-clock brackets are narrower than the true envelope by up to one request duration.`,
+    `- **Timestamp semantics**: NDJSON rows carry client-side \`requestStartedUtc\`/\`requestEndedUtc\` (bracket = (stable requestStart, changed requestEnd]); SQLite rows carry a single \`observed_at\`, used for both bracket endpoints, so SQLite client-clock brackets are narrower than the true envelope by up to one request duration. Client/observed_at timestamps must be monotone per target within a 2 s tolerance (fail-closed beyond it); a change pair whose client width is still non-positive indicates corrupt capture ordering and is rejected entirely and counted (${bracketTotals.clientNonPositiveWidth} here), never treated as informative.`,
   );
   push(
     `- **Method**: brackets are interval-censored arcs on the period circle; the best phase is the maximum arc-coverage region. A \`timestamp % period\` histogram of detection times is invalid for this purpose (it confounds sampling cadence with change phase) and is not used.`,

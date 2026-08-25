@@ -66,7 +66,18 @@ Each change yields a half-open bracket `(lower, upper]`:
   gets a **+1 s widening** so the true change instant is always contained.
 
 Non-positive server widths (webfarm clock skew) drop the server bounds and are
-counted; the client bounds remain usable.
+counted (`serverNonPositiveWidth`); the client bounds remain usable. A
+non-positive **client** width — a tolerated small client-clock step, a
+corrupted `requestEndedUtc`, or a SQLite `observed_at` tie/regression within
+the tolerance — instead rejects the **whole** bracket and is counted
+(`clientNonPositiveWidth`): the pair ordering itself is suspect, so not even
+the server bounds are kept, and such a bracket is never credited as
+informative coverage. Client/`observed_at` timestamps must be monotone per
+target within a 2 s tolerance; larger regressions are fail-closed
+(`E_TIME_REGRESSION`) for NDJSON and SQLite alike. Per-bracket informative
+flags and the `bracketTotals` block are computed on the **same clock the model
+comparison selected** (server unless it fell back to client), so the evidence
+tables can never disagree with the comparison about which brackets counted.
 
 ## Phase model: arc coverage, not histograms
 
