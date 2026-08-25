@@ -246,6 +246,45 @@ if [[ "$discovery_sentinel" -ne 1 ]]; then
   exit 1
 fi
 
+# H6: crash-loop recovery. StartLimitIntervalSec=0 means systemd never
+# stops retrying a failed service; six SIGKILLs in a row would trip the old
+# 5-per-minute start limit on the sixth kill, so surviving all six is the
+# discriminating proof, not a formality.
+for kill_attempt in 1 2 3 4 5 6; do
+  crashed_pid="$(systemctl show bcsp.service --property=MainPID --value)"
+  if ! [[ "$crashed_pid" =~ ^[0-9]+$ && "$crashed_pid" -gt 0 ]]; then
+    printf 'disposable-host: no MainPID before SIGKILL %s of 6\n' "$kill_attempt" >&2
+    exit 1
+  fi
+  kill -9 "$crashed_pid"
+  recovered=0
+  for _ in {1..60}; do
+    sleep 1
+    revived_pid="$(systemctl show bcsp.service --property=MainPID --value)"
+    if [[ "$revived_pid" =~ ^[0-9]+$ && "$revived_pid" -gt 0 && \
+      "$revived_pid" != "$crashed_pid" ]] && systemctl is-active --quiet bcsp.service; then
+      recovered=1
+      break
+    fi
+  done
+  if [[ "$recovered" -ne 1 ]]; then
+    printf 'disposable-host: service did not recover after SIGKILL %s of 6\n' \
+      "$kill_attempt" >&2
+    exit 1
+  fi
+done
+kill_live_status=""
+for _ in {1..30}; do
+  kill_live_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --header 'Host: planner.invalid' http://127.0.0.1:8080/health/live || true)"
+  [[ "$kill_live_status" == "200" ]] && break
+  sleep 1
+done
+if [[ "$kill_live_status" != "200" ]]; then
+  printf 'disposable-host: liveness did not return after the crash-loop drill\n' >&2
+  exit 1
+fi
+
 sqlite3 "$DATABASE" \
   'CREATE TABLE ops_disposable_proof(value TEXT NOT NULL); INSERT INTO ops_disposable_proof VALUES ("baseline");'
 MANUAL_BACKUP="$(bash "$OPS_ROOT/backup.sh")"

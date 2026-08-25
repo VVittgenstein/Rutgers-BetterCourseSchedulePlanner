@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/lib.sh"
 main() {
   local opt_root releases_root current config_root state_root operations_root backup_root environment_file unit_path
   local release_path database support_file passwd_entry passwd_home passwd_shell
+  local limit_nofile memory_high start_limit_interval
 
   [[ "$#" -eq 0 ]] || bcsp_die "usage: verify.sh"
   bcsp_require_privilege
@@ -88,6 +89,18 @@ main() {
 
   bcsp_require_command "$BCSP_SYSTEMCTL"
   bcsp_systemctl is-active --quiet "$BCSP_SERVICE_NAME" || bcsp_die "service is not active"
+  # Read the resource limits back from the LOADED unit (H1/H6): a unit file
+  # that says 65536 proves nothing about the service actually running.
+  limit_nofile="$(bcsp_systemctl show "$BCSP_SERVICE_NAME" --property=LimitNOFILE --value)"
+  [[ "$limit_nofile" == "65536" ]] || \
+    bcsp_die "service LimitNOFILE is '$limit_nofile', expected 65536"
+  memory_high="$(bcsp_systemctl show "$BCSP_SERVICE_NAME" --property=MemoryHigh --value)"
+  [[ "$memory_high" == "734003200" ]] || \
+    bcsp_die "service MemoryHigh is '$memory_high', expected 734003200 (700M)"
+  start_limit_interval="$(bcsp_systemctl show "$BCSP_SERVICE_NAME" \
+    --property=StartLimitIntervalUSec --value)"
+  [[ "$start_limit_interval" == "0" ]] || \
+    bcsp_die "service start limiting is '$start_limit_interval', expected 0 (disabled)"
   bcsp_wait_for_liveness || bcsp_die "service is not live"
 
   if [[ -f "$database" ]]; then

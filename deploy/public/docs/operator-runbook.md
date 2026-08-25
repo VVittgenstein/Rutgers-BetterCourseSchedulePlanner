@@ -85,6 +85,48 @@ Inspect service output with `journalctl -u bcsp.service`. Readiness may return
 503 immediately after first start because no catalog snapshot has been loaded;
 that is not a liveness failure.
 
+## Monitoring and recovery
+
+The unit carries three resource decisions worth knowing when reading alerts:
+
+- `LimitNOFILE=65536`: every WebSocket, HTTP keep-alive, and SQLite handle
+  holds a file descriptor. Without this line the systemd default of 1024
+  turns an ordinary selection-day crowd into `EMFILE` for every new
+  connection, including the health probes. `ops/verify.sh` reads the value
+  back from the loaded unit.
+- `MemoryHigh=700M`: soft memory pressure on a roughly 955 MiB host. Above
+  it the kernel reclaims and throttles the service; nothing is killed
+  (`MemoryMax` is deliberately unset). Watch
+  `systemctl show bcsp -p MemoryCurrent` — sustained readings near the
+  threshold mean the service is being slowed, not that it is about to die.
+- `StartLimitIntervalSec=0` with `Restart=on-failure` and `RestartSec=5s`:
+  a crashing service retries forever at five-second intervals instead of
+  parking itself in `failed` after five crashes. The service therefore
+  recovers from crash loops (an OOM storm included) without a human running
+  `reset-failed`, at the cost that a persistent crash shows up as a restart
+  storm rather than a dead unit.
+
+Because a broken service now keeps restarting rather than staying down,
+monitor for the loop itself, not only for "inactive":
+
+```bash
+journalctl -u bcsp.service --since -15min | grep -c 'Scheduled restart'
+```
+
+A steadily growing count is the crash-loop signal; read the panic or exit
+message immediately above each restart line. `systemctl stop` remains an
+ordinary stop — a deliberate stop is not a failure and is not restarted.
+
+Watch capacity and backpressure on the loopback metrics surface (the public
+edge blocks `/metrics`): `bcsp_websocket_admitted_connections`,
+`bcsp_websocket_global_capacity_refusals` and
+`bcsp_websocket_client_capacity_refusals` (each refusal is a 503 to a
+browser; sustained client-capacity refusals from a campus NAT are the
+signal to raise `BCSP_PUBLIC_WS_PER_CLIENT_LIMIT`), the queued-byte gauge
+`bcsp_websocket_outbound_queued_bytes`, and the three disconnect counters
+(`slow_consumer`, `global_outbound_budget`, `write_timeout`) that say why
+the service cut a connection loose.
+
 ## Disposable-host test hooks
 
 All scripts accept `BCSP_ROOT=/temporary/root` to redirect managed filesystem

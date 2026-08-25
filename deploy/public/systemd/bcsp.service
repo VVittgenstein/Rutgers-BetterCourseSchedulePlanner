@@ -2,8 +2,10 @@
 Description=Rutgers Better Course Schedule Planner public service
 Wants=network-online.target
 After=network-online.target
-StartLimitIntervalSec=60s
-StartLimitBurst=5
+# H6: never give up on a crash loop. Restart=on-failure with RestartSec=5s
+# keeps retrying forever; the alternative is a service that stays down from
+# the sixth crash until a human runs reset-failed.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -16,6 +18,14 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
 UMask=0027
+# H1: every WebSocket, keep-alive request, and SQLite handle holds a file
+# descriptor; the 1024 default turns a normal selection-day crowd into
+# EMFILE for everyone, health probes included.
+LimitNOFILE=65536
+# H6: reclaim pressure well before the ~955 MiB host runs out. Soft
+# pressure only -- no MemoryMax, so the kernel throttles and reclaims
+# instead of killing.
+MemoryHigh=700M
 
 NoNewPrivileges=true
 PrivateTmp=true
