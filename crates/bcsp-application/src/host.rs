@@ -691,6 +691,321 @@ pub async fn serve_websocket(
     let _ = tokio::task::spawn_blocking(move || extension.disconnect(connection_id)).await;
 }
 
+/// Bytes an owner is willing to keep queued for sockets that share it. The
+/// public target creates one budget per connection and one for the whole
+/// process (P2 hardening H4); the local loopback pump deliberately keeps its
+/// unbounded channel and never touches this type.
+///
+/// Accounting covers the UTF-8 payload of queued text frames -- the thing an
+/// extension can grow without bound -- not WebSocket framing overhead.
+pub struct OutboundByteBudget {
+    limit_bytes: usize,
+    queued_bytes: std::sync::atomic::AtomicUsize,
+}
+
+impl OutboundByteBudget {
+    pub fn new(limit_bytes: usize) -> Arc<Self> {
+        Arc::new(Self {
+            limit_bytes,
+            queued_bytes: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    /// Bytes currently reserved. Every reservation is released by RAII, so
+    /// this returns to zero once the queues that held them are gone.
+    pub fn queued_bytes(&self) -> usize {
+        self.queued_bytes.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn try_reserve(self: &Arc<Self>, bytes: usize) -> Option<OutboundByteReservation> {
+        self.queued_bytes
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |queued| {
+                    let next = queued.checked_add(bytes)?;
+                    (next <= self.limit_bytes).then_some(next)
+                },
+            )
+            .ok()
+            .map(|_| OutboundByteReservation {
+                budget: Arc::clone(self),
+                bytes,
+            })
+    }
+}
+
+/// One frame's worth of budget. Dropping it returns the bytes, so a queue
+/// entry, a completed write, a failed write, and a dropped queue all release
+/// through the same path.
+struct OutboundByteReservation {
+    budget: Arc<OutboundByteBudget>,
+    bytes: usize,
+}
+
+impl Drop for OutboundByteReservation {
+    fn drop(&mut self) {
+        self.budget
+            .queued_bytes
+            .fetch_sub(self.bytes, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Why the bounded pump ended a connection early. Each reason has its own
+/// counter so operators can tell an overwhelmed socket from an overwhelmed
+/// process from a peer that stopped reading.
+#[derive(Default)]
+pub struct BoundedOutboundStats {
+    socket_budget_disconnects: std::sync::atomic::AtomicU64,
+    global_budget_disconnects: std::sync::atomic::AtomicU64,
+    write_timeout_disconnects: std::sync::atomic::AtomicU64,
+}
+
+impl BoundedOutboundStats {
+    pub fn socket_budget_disconnects(&self) -> u64 {
+        self.socket_budget_disconnects
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn global_budget_disconnects(&self) -> u64 {
+        self.global_budget_disconnects
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn write_timeout_disconnects(&self) -> u64 {
+        self.write_timeout_disconnects
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn record_overflow(&self, overflow: OutboundOverflow) {
+        let counter = match overflow {
+            OutboundOverflow::Socket => &self.socket_budget_disconnects,
+            OutboundOverflow::Global => &self.global_budget_disconnects,
+        };
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn record_write_timeout(&self) {
+        self.write_timeout_disconnects
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The bounded pump's per-target inputs. The numbers themselves are frozen
+/// in the public runtime; this crate owns only the mechanism, so tests can
+/// prove it with small values.
+#[derive(Clone)]
+pub struct BoundedOutboundConfig {
+    pub per_socket_budget_bytes: usize,
+    pub write_timeout: Duration,
+    pub global_budget: Arc<OutboundByteBudget>,
+    pub stats: Arc<BoundedOutboundStats>,
+}
+
+#[derive(Clone, Copy)]
+enum OutboundOverflow {
+    Socket,
+    Global,
+}
+
+/// A queued text frame carrying the budget it holds. The reservations ride
+/// the entry, so wherever the entry goes -- written, failed, or dropped with
+/// the queue -- the bytes come back.
+struct AccountedFrame {
+    text: String,
+    socket_reservation: OutboundByteReservation,
+    global_reservation: OutboundByteReservation,
+}
+
+fn account_frame(
+    text: String,
+    socket_budget: &Arc<OutboundByteBudget>,
+    global_budget: &Arc<OutboundByteBudget>,
+) -> Result<AccountedFrame, OutboundOverflow> {
+    let bytes = text.len();
+    let socket_reservation = socket_budget
+        .try_reserve(bytes)
+        .ok_or(OutboundOverflow::Socket)?;
+    let global_reservation = global_budget
+        .try_reserve(bytes)
+        .ok_or(OutboundOverflow::Global)?;
+    Ok(AccountedFrame {
+        text,
+        socket_reservation,
+        global_reservation,
+    })
+}
+
+/// Runs the public target's variant of the transport pump: the same frame,
+/// heartbeat, and cleanup semantics as [`serve_websocket`], plus the P2/H4
+/// outbound contract -- every queued byte is reserved against a per-socket
+/// and a process-wide budget before it may wait for the wire, and every
+/// actual socket write (Text, Pong, Ping) runs under one write deadline.
+///
+/// A reservation that cannot be granted, or a write that outlives the
+/// deadline, ends exactly that connection: the queue is dropped, its
+/// reservations return by RAII, and no replacement queue -- control, close,
+/// or otherwise -- is allowed to grow in its place. The extension still
+/// holds a plain [`mpsc::UnboundedSender`], so [`WebSocketExtension`] and
+/// the local presence/watch routes are untouched; frames the extension
+/// enqueues while a write is in flight are accounted the moment that write
+/// resolves, which the deadline bounds to one timeout at most.
+pub async fn serve_websocket_with_bounded_outbound(
+    mut socket: WebSocket,
+    extension: Arc<dyn WebSocketExtension>,
+    connection_id: TraceId,
+    config: BoundedOutboundConfig,
+) {
+    let (outbound, mut outbound_messages) = mpsc::unbounded_channel();
+    let connect_extension = Arc::clone(&extension);
+    let connected =
+        tokio::task::spawn_blocking(move || connect_extension.connect(connection_id, outbound))
+            .await;
+    if !matches!(connected, Ok(true)) {
+        return;
+    }
+    let socket_budget = OutboundByteBudget::new(config.per_socket_budget_bytes);
+    let mut queue: std::collections::VecDeque<AccountedFrame> = std::collections::VecDeque::new();
+    let mut heartbeat = tokio::time::interval(SOCKET_HEARTBEAT_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_seen = tokio::time::Instant::now();
+    'pump: loop {
+        // Account everything the extension queued since the last turn.
+        // try_recv never waits, so the extension-facing channel only holds
+        // frames between turns -- there is no second queue outside the
+        // budget, only this bounded one.
+        loop {
+            match outbound_messages.try_recv() {
+                Ok(text) => match account_frame(text, &socket_budget, &config.global_budget) {
+                    Ok(frame) => queue.push_back(frame),
+                    Err(overflow) => {
+                        config.stats.record_overflow(overflow);
+                        break 'pump;
+                    }
+                },
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => break 'pump,
+            }
+        }
+        // Owe the peer a frame? Write exactly one under the deadline, then
+        // account again before considering anything else.
+        if let Some(frame) = queue.pop_front() {
+            let AccountedFrame {
+                text,
+                socket_reservation,
+                global_reservation,
+            } = frame;
+            let written = tokio::time::timeout(
+                config.write_timeout,
+                socket.send(Message::Text(text.into())),
+            )
+            .await;
+            drop((socket_reservation, global_reservation));
+            match written {
+                Ok(Ok(())) => continue,
+                Ok(Err(_)) => break,
+                Err(_) => {
+                    config.stats.record_write_timeout();
+                    break;
+                }
+            }
+        }
+        tokio::select! {
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(Message::Text(message))) => {
+                        last_seen = tokio::time::Instant::now();
+                        let text_extension = Arc::clone(&extension);
+                        let message = message.to_string();
+                        if tokio::task::spawn_blocking(move || {
+                            text_extension.transport_activity(connection_id);
+                            text_extension.receive_text(connection_id, &message);
+                        })
+                        .await
+                        .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        last_seen = tokio::time::Instant::now();
+                        let activity_extension = Arc::clone(&extension);
+                        if tokio::task::spawn_blocking(move || {
+                            activity_extension.transport_activity(connection_id);
+                        })
+                        .await
+                        .is_err()
+                        {
+                            break;
+                        }
+                        match tokio::time::timeout(
+                            config.write_timeout,
+                            socket.send(Message::Pong(payload)),
+                        )
+                        .await
+                        {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => {
+                                config.stats.record_write_timeout();
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        last_seen = tokio::time::Instant::now();
+                        let activity_extension = Arc::clone(&extension);
+                        if tokio::task::spawn_blocking(move || {
+                            activity_extension.transport_activity(connection_id);
+                        })
+                        .await
+                        .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(Message::Binary(_))) => break,
+                }
+            }
+            outbound = outbound_messages.recv() => {
+                let Some(text) = outbound else {
+                    break;
+                };
+                match account_frame(text, &socket_budget, &config.global_budget) {
+                    Ok(frame) => queue.push_back(frame),
+                    Err(overflow) => {
+                        config.stats.record_overflow(overflow);
+                        break;
+                    }
+                }
+            }
+            _ = heartbeat.tick() => {
+                if last_seen.elapsed() >= SOCKET_HEARTBEAT_TIMEOUT {
+                    break;
+                }
+                match tokio::time::timeout(
+                    config.write_timeout,
+                    socket.send(Message::Ping(Vec::new().into())),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        config.stats.record_write_timeout();
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // The queue's reservations release here, before the extension learns the
+    // connection is gone -- budget can never outlive its socket.
+    drop(queue);
+    let _ = tokio::task::spawn_blocking(move || extension.disconnect(connection_id)).await;
+}
+
 fn session_query(query: Option<&str>) -> Option<&str> {
     let mut session = None;
     for field in query?.split('&') {
@@ -1083,6 +1398,12 @@ mod tests {
     /// Pops one complete server frame and reports its first byte. Server
     /// frames are never masked, so the header is opcode plus length only.
     fn take_server_frame(pending: &mut Vec<u8>) -> Option<u8> {
+        take_server_frame_with_payload(pending).map(|(opcode, _)| opcode)
+    }
+
+    /// Pops one complete server frame, keeping its payload for tests that
+    /// assert what was delivered rather than only that something was.
+    fn take_server_frame_with_payload(pending: &mut Vec<u8>) -> Option<(u8, Vec<u8>)> {
         if pending.len() < 2 {
             return None;
         }
@@ -1101,8 +1422,9 @@ mod tests {
         if pending.len() < header + length {
             return None;
         }
+        let payload = pending[header..header + length].to_vec();
         pending.drain(..header + length);
-        Some(opcode)
+        Some((opcode, payload))
     }
 
     #[test]
@@ -1810,5 +2132,343 @@ mod tests {
         })
         .await
         .unwrap_or_else(|_| panic!("timed out waiting until {what}"));
+    }
+
+    /// Waits for any condition another task owns, with the same discipline.
+    async fn await_condition(mut condition: impl FnMut() -> bool, what: &str) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !condition() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting until {what}"));
+    }
+
+    /// Holds every connection's sender, in connect order, so a test can
+    /// drive the bounded pump's outbound path byte by byte.
+    #[derive(Default)]
+    struct HoldingSocket {
+        connections: Mutex<Vec<(TraceId, mpsc::UnboundedSender<String>)>>,
+        disconnects: Mutex<Vec<TraceId>>,
+    }
+
+    impl HoldingSocket {
+        fn send_to(&self, index: usize, text: &str) {
+            let connections = self.connections.lock().unwrap();
+            let (_, sender) = &connections[index];
+            let _ = sender.send(text.to_owned());
+        }
+
+        fn connection_count(&self) -> usize {
+            self.connections.lock().unwrap().len()
+        }
+
+        fn connection_id(&self, index: usize) -> TraceId {
+            self.connections.lock().unwrap()[index].0
+        }
+
+        fn disconnects(&self) -> Vec<TraceId> {
+            self.disconnects.lock().unwrap().clone()
+        }
+    }
+
+    impl WebSocketExtension for HoldingSocket {
+        fn connect(&self, connection_id: TraceId, outbound: mpsc::UnboundedSender<String>) -> bool {
+            self.connections
+                .lock()
+                .unwrap()
+                .push((connection_id, outbound));
+            true
+        }
+
+        fn receive_text(&self, _connection_id: TraceId, _message: &str) {}
+
+        fn disconnect(&self, connection_id: TraceId) {
+            self.disconnects.lock().unwrap().push(connection_id);
+        }
+    }
+
+    /// A real listener whose only route serves the bounded pump, so every
+    /// bounded-outbound test runs the same transport a public socket gets.
+    async fn spawn_bounded_pump_host(
+        extension: Arc<HoldingSocket>,
+        config: BoundedOutboundConfig,
+    ) -> (SocketAddr, oneshot::Sender<()>) {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = Router::new().route(
+            "/bounded",
+            get(move |upgrade: WebSocketUpgrade| {
+                let extension: Arc<dyn WebSocketExtension> = extension.clone();
+                let config = config.clone();
+                async move {
+                    let mut source = SystemTraceIdSource;
+                    let connection_id = source.next_trace_id();
+                    shared_websocket_upgrade(upgrade, SHARED_WATCH_SUBPROTOCOL).on_upgrade(
+                        move |socket| {
+                            serve_websocket_with_bounded_outbound(
+                                socket,
+                                extension,
+                                connection_id,
+                                config,
+                            )
+                        },
+                    )
+                }
+            }),
+        );
+        let (shutdown, shutdown_receiver) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_receiver.await;
+                })
+                .await;
+        });
+        (address, shutdown)
+    }
+
+    async fn bounded_client(address: SocketAddr) -> TcpStream {
+        tokio::task::spawn_blocking(move || {
+            upgraded_websocket(
+                address,
+                "/bounded",
+                "127.0.0.1",
+                "http://127.0.0.1",
+                "test-nonce",
+                Duration::from_secs(5),
+            )
+        })
+        .await
+        .unwrap()
+        .expect("bounded pump upgrade")
+    }
+
+    /// Walks server frames until a text frame arrives and returns its
+    /// payload; heartbeat pings on the way are expected and skipped.
+    fn read_server_text(stream: &mut TcpStream) -> Option<String> {
+        let mut pending = Vec::new();
+        loop {
+            while let Some((opcode, payload)) = take_server_frame_with_payload(&mut pending) {
+                match opcode & 0x0f {
+                    0x1 => return String::from_utf8(payload).ok(),
+                    0x8 => return None,
+                    _ => {}
+                }
+            }
+            let mut buffer = [0_u8; 4096];
+            match stream.read(&mut buffer) {
+                Ok(0) => return None,
+                Ok(read) => pending.extend_from_slice(&buffer[..read]),
+                Err(_) => return None,
+            }
+        }
+    }
+
+    #[test]
+    fn the_byte_budget_grants_to_its_limit_and_returns_on_drop() {
+        let budget = OutboundByteBudget::new(100);
+        let first = budget.try_reserve(60).expect("60 of 100");
+        let second = budget.try_reserve(40).expect("exactly the limit");
+        assert!(
+            budget.try_reserve(1).is_none(),
+            "one byte past the limit must be refused",
+        );
+        assert_eq!(budget.queued_bytes(), 100);
+        drop(first);
+        assert_eq!(budget.queued_bytes(), 40, "a dropped reservation returns");
+        let third = budget.try_reserve(60).expect("freed bytes are reusable");
+        drop((second, third));
+        assert_eq!(budget.queued_bytes(), 0);
+    }
+
+    // The bounded-outbound tests run on the default current-thread flavor on
+    // purpose: two `send_to` calls with no await between them are then
+    // atomic with respect to the pump task, which makes "both frames arrive
+    // in one accounting turn" a scheduling fact rather than a hope. All
+    // client socket I/O goes through spawn_blocking so the runtime thread
+    // the pump needs is never blocked.
+
+    #[tokio::test]
+    async fn a_burst_past_the_socket_budget_ends_only_that_connection() {
+        let extension = Arc::new(HoldingSocket::default());
+        let global_budget = OutboundByteBudget::new(1024 * 1024);
+        let stats = Arc::new(BoundedOutboundStats::default());
+        let config = BoundedOutboundConfig {
+            per_socket_budget_bytes: 100,
+            write_timeout: Duration::from_secs(5),
+            global_budget: global_budget.clone(),
+            stats: stats.clone(),
+        };
+        let (address, _shutdown) = spawn_bounded_pump_host(extension.clone(), config).await;
+        let mut slow = bounded_client(address).await;
+        await_condition(|| extension.connection_count() == 1, "first connect").await;
+        let mut healthy = bounded_client(address).await;
+        await_condition(|| extension.connection_count() == 2, "second connect").await;
+
+        extension.send_to(0, &"x".repeat(60));
+        extension.send_to(0, &"y".repeat(60));
+        await_condition(
+            || stats.socket_budget_disconnects() == 1,
+            "the socket budget disconnect",
+        )
+        .await;
+        await_condition(
+            || extension.disconnects() == vec![extension.connection_id(0)],
+            "cleanup of exactly the overflowing connection",
+        )
+        .await;
+        assert_eq!(
+            global_budget.queued_bytes(),
+            0,
+            "the dead queue must return its global bytes",
+        );
+        assert_eq!(stats.global_budget_disconnects(), 0);
+        assert_eq!(stats.write_timeout_disconnects(), 0);
+
+        let closed = tokio::task::spawn_blocking(move || closed_by_peer(&mut slow))
+            .await
+            .unwrap();
+        assert!(closed, "the overflowing connection must be gone");
+        extension.send_to(1, "still flowing");
+        let delivered = tokio::task::spawn_blocking(move || read_server_text(&mut healthy))
+            .await
+            .unwrap();
+        assert_eq!(
+            delivered.as_deref(),
+            Some("still flowing"),
+            "the healthy connection must be untouched",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_burst_past_the_global_budget_returns_its_bytes_and_spares_the_rest() {
+        let extension = Arc::new(HoldingSocket::default());
+        let global_budget = OutboundByteBudget::new(100);
+        let stats = Arc::new(BoundedOutboundStats::default());
+        let config = BoundedOutboundConfig {
+            per_socket_budget_bytes: 1024 * 1024,
+            write_timeout: Duration::from_secs(5),
+            global_budget: global_budget.clone(),
+            stats: stats.clone(),
+        };
+        let (address, _shutdown) = spawn_bounded_pump_host(extension.clone(), config).await;
+        let mut overflowing = bounded_client(address).await;
+        await_condition(|| extension.connection_count() == 1, "first connect").await;
+        let mut healthy = bounded_client(address).await;
+        await_condition(|| extension.connection_count() == 2, "second connect").await;
+
+        extension.send_to(0, &"x".repeat(60));
+        extension.send_to(0, &"y".repeat(60));
+        await_condition(
+            || stats.global_budget_disconnects() == 1,
+            "the global budget disconnect",
+        )
+        .await;
+        await_condition(
+            || global_budget.queued_bytes() == 0,
+            "the global budget to recover",
+        )
+        .await;
+        assert_eq!(stats.socket_budget_disconnects(), 0);
+
+        let closed = tokio::task::spawn_blocking(move || closed_by_peer(&mut overflowing))
+            .await
+            .unwrap();
+        assert!(closed, "the overflowing connection must be gone");
+        // With the budget recovered, the same bytes now fit for the healthy
+        // connection -- the overload cost one connection, not the process.
+        extension.send_to(1, &"z".repeat(60));
+        let delivered = tokio::task::spawn_blocking(move || read_server_text(&mut healthy))
+            .await
+            .unwrap();
+        assert_eq!(delivered.as_deref(), Some("z".repeat(60).as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_writer_held_past_the_deadline_is_disconnected_and_others_keep_flowing() {
+        let extension = Arc::new(HoldingSocket::default());
+        let global_budget = OutboundByteBudget::new(64 * 1024 * 1024);
+        let stats = Arc::new(BoundedOutboundStats::default());
+        let config = BoundedOutboundConfig {
+            per_socket_budget_bytes: 64 * 1024 * 1024,
+            write_timeout: Duration::from_millis(500),
+            global_budget: global_budget.clone(),
+            stats: stats.clone(),
+        };
+        let (address, _shutdown) = spawn_bounded_pump_host(extension.clone(), config).await;
+        let mut held = bounded_client(address).await;
+        await_condition(|| extension.connection_count() == 1, "first connect").await;
+        let mut healthy = bounded_client(address).await;
+        await_condition(|| extension.connection_count() == 2, "second connect").await;
+
+        // The held client never reads. Enough queued payload overwhelms any
+        // kernel buffer, so one write must eventually outlive the deadline;
+        // the budgets are sized so accounting itself never refuses.
+        let chunk = "m".repeat(32 * 1024);
+        for _ in 0..1024 {
+            extension.send_to(0, &chunk);
+        }
+        await_condition(
+            || stats.write_timeout_disconnects() == 1,
+            "the write deadline disconnect",
+        )
+        .await;
+        await_condition(
+            || global_budget.queued_bytes() == 0,
+            "the dead queue to return its bytes",
+        )
+        .await;
+        assert_eq!(stats.socket_budget_disconnects(), 0);
+        assert_eq!(stats.global_budget_disconnects(), 0);
+
+        let closed = tokio::task::spawn_blocking(move || closed_by_peer(&mut held))
+            .await
+            .unwrap();
+        assert!(closed, "the held connection must be gone");
+        extension.send_to(1, "alerts and pings still deliver");
+        let delivered = tokio::task::spawn_blocking(move || read_server_text(&mut healthy))
+            .await
+            .unwrap();
+        assert_eq!(delivered.as_deref(), Some("alerts and pings still deliver"));
+    }
+
+    #[tokio::test]
+    async fn a_normal_close_releases_every_reserved_byte_without_blame() {
+        let extension = Arc::new(HoldingSocket::default());
+        let global_budget = OutboundByteBudget::new(1024);
+        let stats = Arc::new(BoundedOutboundStats::default());
+        let config = BoundedOutboundConfig {
+            per_socket_budget_bytes: 512,
+            write_timeout: Duration::from_secs(5),
+            global_budget: global_budget.clone(),
+            stats: stats.clone(),
+        };
+        let (address, _shutdown) = spawn_bounded_pump_host(extension.clone(), config).await;
+        let mut client = bounded_client(address).await;
+        await_condition(|| extension.connection_count() == 1, "the connect").await;
+
+        extension.send_to(0, "delivered before the close");
+        let delivered = tokio::task::spawn_blocking(move || {
+            let text = read_server_text(&mut client);
+            (text, client)
+        })
+        .await
+        .unwrap();
+        assert_eq!(delivered.0.as_deref(), Some("delivered before the close"));
+        drop(delivered.1);
+
+        await_condition(|| extension.disconnects().len() == 1, "the cleanup").await;
+        assert_eq!(global_budget.queued_bytes(), 0);
+        assert_eq!(stats.socket_budget_disconnects(), 0);
+        assert_eq!(stats.global_budget_disconnects(), 0);
+        assert_eq!(
+            stats.write_timeout_disconnects(),
+            0,
+            "an ordinary departure is not a slow consumer",
+        );
     }
 }
