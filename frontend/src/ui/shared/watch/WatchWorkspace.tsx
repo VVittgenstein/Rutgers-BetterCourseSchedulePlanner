@@ -778,6 +778,24 @@ export function WatchWorkspace({
                 tone="quiet"
               >{i18n.t('watch.disconnect')}</ActionButton>
             </div>
+            <label className="watch-workspace__confirm">
+              <input
+                checked={watch.notificationsEnabled}
+                onChange={(event) => {
+                  const enabled = event.currentTarget.checked;
+                  watch.setNotificationsEnabled(enabled);
+                  // The ask has to ride THIS click: an await before it, even
+                  // on a resolved promise, ends the user activation and the
+                  // browser refuses. Same boundary as the readiness region's
+                  // ALLOW_NOTIFICATIONS action; a browser that has already
+                  // answered is never re-prompted.
+                  if (enabled) watch.requestNotificationPermission();
+                }}
+                type="checkbox"
+              />
+              {i18n.t('watch.notification.setting')}
+            </label>
+            <p className="watch-workspace__inline-status">{i18n.t('watch.notification.setting_hint')}</p>
             <p className="watch-workspace__inline-status" role="status">{i18n.t('watch.audio_summary', {
               audio: audioLabel(watch.audioState, i18n),
               audibility: i18n.t(watch.muted ? 'watch.audibility.muted' : 'watch.audibility.audible'),

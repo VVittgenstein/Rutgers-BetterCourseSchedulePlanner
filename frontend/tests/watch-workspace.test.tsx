@@ -42,13 +42,19 @@ import { ProductClientError } from '../src/ui/shared/product';
 import {
   LiveWatchProvider,
   SectionSelectionAction,
+  WatchNotificationRegion,
   WatchToastRegion,
   WatchWorkspace,
 } from '../src/ui/shared/watch';
+import { useLiveWatch, type LiveWatchValue } from '../src/ui/shared/watch/LiveWatchProvider';
 import {
   WatchAudioController,
   type WatchAudioUnlockResult,
 } from '../src/ui/shared/watch/audio';
+import type {
+  WatchNotificationPermission,
+  WatchNotificationPort,
+} from '../src/ui/shared/watch/notification';
 
 const NOW = '2026-07-15T04:00:00.000Z';
 const FRESH_UNTIL = '2026-07-15T04:00:30.000Z';
@@ -351,6 +357,42 @@ function SelectionActions({ sections }: { readonly sections: readonly SectionKey
   );
 }
 
+/** The browser's notification seam, recording what was asked and posted. */
+class FakeNotifications implements WatchNotificationPort {
+  permission: WatchNotificationPermission = 'default';
+  /** What the browser will answer, and whether it was ever asked. */
+  answer: WatchNotificationPermission = 'granted';
+  readonly asked: number[] = [];
+  readonly posted: Array<{ title: string; body: string; tag: string }> = [];
+  #sequence = 0;
+
+  async requestPermission(): Promise<WatchNotificationPermission> {
+    this.#sequence += 1;
+    this.asked.push(this.#sequence);
+    if (this.permission !== 'default') return this.permission;
+    this.permission = this.answer;
+    return this.permission;
+  }
+
+  show(title: string, body: string, tag: string): void {
+    this.posted.push({ title, body, tag });
+  }
+}
+
+function LiveWatchProbe({ publish }: { readonly publish: (value: LiveWatchValue) => void }) {
+  publish(useLiveWatch());
+  return null;
+}
+
+interface RenderWatchOptions {
+  readonly notifications?: WatchNotificationPort;
+  readonly pageVisibility?: () => boolean;
+  /** Mounts the production posting region so port.show is reachable. */
+  readonly notificationRegion?: boolean;
+  /** Read-only observation of the context; never used to drive it. */
+  readonly probe?: (value: LiveWatchValue) => void;
+}
+
 function renderWatch(
   sections: readonly SectionKey[],
   watch = new FakeWatchClient(),
@@ -359,6 +401,7 @@ function renderWatch(
   productOverrides: Partial<ProductApiPort> = {},
   initialWatchableTerms?: readonly string[],
   initialSelected: readonly SectionKey[] = [],
+  options: RenderWatchOptions = {},
 ) {
   const result = render(
     <AppRouterProvider initialPath="/">
@@ -368,10 +411,14 @@ function renderWatch(
           initialSelected={initialSelected}
           initialWatchableTerms={initialWatchableTerms}
           runtime={runtime(watch, productOverrides)}
+          {...(options.notifications === undefined ? {} : { notifications: options.notifications })}
+          {...(options.pageVisibility === undefined ? {} : { pageVisibility: options.pageVisibility })}
         >
           <SelectionActions sections={sections} />
           <WatchWorkspace />
           <WatchToastRegion />
+          {options.notificationRegion === true ? <WatchNotificationRegion /> : null}
+          {options.probe === undefined ? null : <LiveWatchProbe publish={options.probe} />}
         </LiveWatchProvider>
       </BcspI18nProvider>
     </AppRouterProvider>,
@@ -501,6 +548,7 @@ describe('Watch workspace product flow', () => {
 
     expect(screen.getByRole('heading', { name: '实时监看控制台' })).toBeTruthy();
     expect(screen.getByText('提醒方式')).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: '此页面听不见时改用浏览器消息' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', {
       name: '将课节 00001 加入监看列表',
     }));
@@ -923,6 +971,105 @@ describe('Watch workspace product flow', () => {
       view.unmount();
       vi.useRealTimers();
     }
+  });
+
+  it('turns page notifications off from the real watch console control', async () => {
+    const watch = new FakeWatchClient();
+    const notifications = new FakeNotifications();
+    notifications.permission = 'granted';
+    renderWatch([section(1), section(2)], watch, new FakeAudioController(), 'en-US', {}, undefined, [], {
+      notifications,
+      pageVisibility: () => false,
+      notificationRegion: true,
+    });
+
+    // A hidden page with granted permission: an opening section is posted
+    // through the production region.
+    await act(async () => {
+      watch.emit(activeStart(section(1), 1));
+      emitVisibleAlert(watch, continuousEpisode(section(1), 1, 'UNACKNOWLEDGED'), 1);
+    });
+    expect(notifications.posted).toHaveLength(1);
+
+    // The user turns the real control off -- the checkbox in the console,
+    // not a provider call.
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'Browser messages when this page cannot be heard',
+    }));
+
+    // A second opening posts nothing.
+    await act(async () => {
+      emitVisibleAlert(watch, continuousEpisode(section(1), 2, 'UNACKNOWLEDGED'), 2);
+    });
+    expect(notifications.posted).toHaveLength(1);
+
+    // And a Start pressed while off never asks the browser for permission.
+    const askedBefore = notifications.asked.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00002 to the watch list' }));
+    fireEvent.click(screen.getByRole('button', { name: /Start selected/u }));
+    await waitFor(() => expect(watch.commands.some((command) => command.type === 'START_WATCH')).toBe(true));
+    expect(notifications.asked).toHaveLength(askedBefore);
+  });
+
+  it('clears the pending queue when the real control is switched off', async () => {
+    const watch = new FakeWatchClient();
+    const notifications = new FakeNotifications();
+    notifications.permission = 'granted';
+    const probe: { value: LiveWatchValue | null } = { value: null };
+    // No posting region mounted, so the queued request stays PENDING and the
+    // clearing is observable; the probe only reads.
+    renderWatch([section(1)], watch, new FakeAudioController(), 'en-US', {}, undefined, [], {
+      notifications,
+      pageVisibility: () => false,
+      probe: (value) => { probe.value = value; },
+    });
+
+    await act(async () => {
+      watch.emit(activeStart(section(1), 1));
+      emitVisibleAlert(watch, continuousEpisode(section(1), 1, 'UNACKNOWLEDGED'), 1);
+    });
+    expect(probe.value?.notifications).toHaveLength(1);
+
+    const control = () => screen.getByRole('checkbox', {
+      name: 'Browser messages when this page cannot be heard',
+    });
+    fireEvent.click(control());
+    expect(probe.value?.notifications).toHaveLength(0);
+
+    // Re-enabling does not resurrect what the user said not to deliver.
+    fireEvent.click(control());
+    expect(probe.value?.notifications).toHaveLength(0);
+  });
+
+  it('asks for permission inside the same gesture that re-enables the switch', async () => {
+    const watch = new FakeWatchClient();
+    const notifications = new FakeNotifications();
+    renderWatch([section(1)], watch, new FakeAudioController(), 'en-US', {}, undefined, [], {
+      notifications,
+      pageVisibility: () => false,
+      notificationRegion: true,
+    });
+
+    const control = () => screen.getByRole('checkbox', {
+      name: 'Browser messages when this page cannot be heard',
+    });
+    // Turning it OFF asks nothing.
+    fireEvent.click(control());
+    expect(notifications.asked).toHaveLength(0);
+
+    // Turning it ON asks exactly once, riding the click's user activation --
+    // the same boundary as the readiness region's recovery action.
+    fireEvent.click(control());
+    expect(notifications.asked).toHaveLength(1);
+    await act(async () => { await Promise.resolve(); });
+    expect(notifications.permission).toBe('granted');
+
+    // The granted permission actually delivers.
+    await act(async () => {
+      watch.emit(activeStart(section(1), 1));
+      emitVisibleAlert(watch, continuousEpisode(section(1), 1, 'UNACKNOWLEDGED'), 1);
+    });
+    expect(notifications.posted).toHaveLength(1);
   });
 
   it('keeps the populated Watch desk keyboard-native, named, and axe-clean', async () => {
