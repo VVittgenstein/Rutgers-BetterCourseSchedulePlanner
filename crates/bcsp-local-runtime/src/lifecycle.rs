@@ -14,7 +14,8 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::{
-    DesiredWatchCoordinator, ExistingLocalInstance, LOCAL_PRESENCE_SOCKET_PATH,
+    DesiredWatchCoordinator, ExistingLocalInstance, LOCAL_PRESENCE_SOCKET_PATH, LocalConsole,
+    LocalConsoleEvent, LocalConsoleLocale, LocalExitReason,
     LocalBootstrapError, LocalInstanceClaim, LocalInstanceError, LocalPathError,
     LocalPresenceRoute, LocalRouteExtension, LocalRuntimeCore, LocalRuntimePaths,
     LocalRuntimeState, LocalSurfaceFailure, LocalWatchRoute, OperationalGate, PersonalSurface,
@@ -26,37 +27,68 @@ use crate::{
 
 const EXISTING_INSTANCE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The language tag the process was started in, if the environment states one.
+///
+/// Consulted only when the user has not chosen a language in the page. The
+/// variables are the usual POSIX ones; Windows leaves them unset, which is the
+/// documented fall back to en-US rather than a failure.
+fn system_locale_tag() -> Option<String> {
+    for name in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(value) = std::env::var(name)
+            && !value.trim().is_empty()
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Asks the runtime to exit, and says who asked.
+///
+/// The reason travels with the request because the console has to tell the
+/// user WHY their program is closing. "No page returned" and "you pressed
+/// exit" look identical from inside a boolean, and only one of them is
+/// something the user might not have expected.
 #[derive(Clone)]
 struct LocalShutdownTrigger {
-    requested: watch::Sender<bool>,
+    requested: watch::Sender<Option<LocalExitReason>>,
 }
 
 impl LocalShutdownTrigger {
-    fn request(&self) {
-        self.requested.send_replace(true);
+    fn request(&self, reason: LocalExitReason) {
+        // First asker wins. A signal arriving during a presence countdown is
+        // the same shutdown, and re-labelling it halfway through would report
+        // a reason that did not start it.
+        self.requested.send_if_modified(|current| {
+            if current.is_some() {
+                return false;
+            }
+            *current = Some(reason);
+            true
+        });
     }
 }
 
 struct LocalShutdownListener {
-    requested: watch::Receiver<bool>,
+    requested: watch::Receiver<Option<LocalExitReason>>,
 }
 
 impl LocalShutdownListener {
-    async fn wait(&mut self) -> bool {
-        if *self.requested.borrow_and_update() {
-            return true;
+    async fn wait(&mut self) -> Option<LocalExitReason> {
+        if let Some(reason) = *self.requested.borrow_and_update() {
+            return Some(reason);
         }
         while self.requested.changed().await.is_ok() {
-            if *self.requested.borrow_and_update() {
-                return true;
+            if let Some(reason) = *self.requested.borrow_and_update() {
+                return Some(reason);
             }
         }
-        false
+        None
     }
 }
 
 fn local_shutdown_channel() -> (LocalShutdownTrigger, LocalShutdownListener) {
-    let (requested, receiver) = watch::channel(false);
+    let (requested, receiver) = watch::channel(None);
     (
         LocalShutdownTrigger { requested },
         LocalShutdownListener {
@@ -74,6 +106,7 @@ pub struct PreparedLocalRuntime {
     watch_route: Arc<LocalWatchRoute>,
     desired_watch: Arc<DesiredWatchCoordinator>,
     presence: Arc<LocalPresenceRoute>,
+    console: Arc<LocalConsole>,
     shutdown_trigger: LocalShutdownTrigger,
     target_refresh_demand: TargetRefreshDemand,
     prepared_serving: Arc<bcsp_application::PreparedServingRegistry>,
@@ -112,10 +145,24 @@ impl PreparedLocalRuntime {
         let desired_store = PersonalStateStore::open(operational.paths().database())
             .map_err(LocalBootstrapError::PersonalState)?;
         let desired_watch = Arc::new(DesiredWatchCoordinator::new(desired_store, watch.clone()));
-        let watch_route = Arc::new(LocalWatchRoute::new(
-            watch.clone(),
-            desired_watch.clone(),
-        ));
+        // The console speaks the language the user chose in the page, and
+        // falls back to the environment the process was started in. Reading
+        // it here means the very first line is already in the right language;
+        // a settings read that fails is not worth refusing to start over, so
+        // it falls back rather than propagating.
+        let console_settings = PersonalStateStore::open(operational.paths().database())
+            .ok()
+            .and_then(|store| store.settings().ok())
+            .map(|stored| stored.value.locale_override)
+            .unwrap_or_default();
+        let console = Arc::new(LocalConsole::new(LocalConsoleLocale::resolve(
+            console_settings,
+            system_locale_tag().as_deref(),
+        )));
+        let watch_route = Arc::new(
+            LocalWatchRoute::new(watch.clone(), desired_watch.clone())
+                .with_console(console.clone()),
+        );
         let personal = PersonalSurface::new(database, mutation_store, watch.clone())
             .with_target_refresh_demand(target_refresh_demand.clone())
             .with_service_status(service_status.clone())
@@ -129,11 +176,14 @@ impl PreparedLocalRuntime {
         // actually happens, and neither caller may bypass it.
         let presence_trigger = shutdown_trigger.clone();
         let exit_trigger = shutdown_trigger.clone();
-        let presence = Arc::new(LocalPresenceRoute::new(move || presence_trigger.request()));
+        let presence = Arc::new(
+            LocalPresenceRoute::new(move || presence_trigger.request(LocalExitReason::NoPages))
+                .with_console(console.clone()),
+        );
         let extension = Arc::new(LocalRouteExtension::with_product_routes(
             nonce.clone(),
             Box::new(personal),
-            move || shutdown_trigger.request(),
+            move || shutdown_trigger.request(LocalExitReason::Requested),
             product_routes,
         ));
         Ok(Self {
@@ -145,6 +195,7 @@ impl PreparedLocalRuntime {
             watch_route,
             desired_watch,
             presence,
+            console,
             shutdown_trigger: exit_trigger,
             target_refresh_demand,
             prepared_serving,
@@ -212,9 +263,15 @@ impl PreparedLocalRuntime {
     pub fn with_presence_countdown(mut self, countdown: Duration) -> Self {
         let trigger = self.shutdown_trigger.clone();
         self.presence = Arc::new(
-            LocalPresenceRoute::new(move || trigger.request()).with_countdown(countdown),
+            LocalPresenceRoute::new(move || trigger.request(LocalExitReason::NoPages))
+                .with_countdown(countdown)
+                .with_console(self.console.clone()),
         );
         self
+    }
+
+    pub fn console(&self) -> Arc<LocalConsole> {
+        self.console.clone()
     }
 
     pub const fn core(&self) -> &LocalRuntimeCore {
@@ -305,11 +362,10 @@ impl RunningLocalRuntime {
     ///
     /// The request only signals intent. Call [`Self::shutdown`] afterwards so
     /// watch transport, the HTTP server, and SQLite are closed in order.
-    pub async fn wait_for_local_exit_request(&mut self) -> Result<(), LocalRuntimeError> {
-        if self.prepared.shutdown_requests.wait().await {
-            Ok(())
-        } else {
-            Err(LocalRuntimeError::ShutdownRequestChannelClosed)
+    pub async fn wait_for_local_exit_request(&mut self) -> Result<LocalExitReason, LocalRuntimeError> {
+        match self.prepared.shutdown_requests.wait().await {
+            Some(reason) => Ok(reason),
+            None => Err(LocalRuntimeError::ShutdownRequestChannelClosed),
         }
     }
 
@@ -354,7 +410,18 @@ async fn run_primary(
     mut lease: PrimaryInstanceLease,
 ) -> Result<(), LocalRuntimeError> {
     let prepared = PreparedLocalRuntime::open(paths)?;
+    // Installed once the console exists, so the two gate codes reach the user
+    // in their own language rather than as a structured English event.
+    install_diagnostics(prepared.console());
     let mut running = prepared.start().await?;
+    // The ORIGIN, never the browser URL: that one carries the session nonce,
+    // and a console is a place people paste screenshots from.
+    running
+        .prepared()
+        .console()
+        .report(&LocalConsoleEvent::Started {
+            origin: running.origin().to_owned(),
+        });
     let browser_url = running.browser_url();
     if let Err(source) = lease.publish_browser_url(&browser_url) {
         let _ = running.shutdown().await;
@@ -368,33 +435,43 @@ async fn run_primary(
         });
     }
     let shutdown_request = wait_for_shutdown_request(&mut running).await;
+    let console = running.prepared().console();
+    console.report(&LocalConsoleEvent::Exiting {
+        reason: shutdown_request
+            .as_ref()
+            .copied()
+            .unwrap_or(LocalExitReason::Signal),
+    });
     let shutdown = running.shutdown().await;
+    console.report(&LocalConsoleEvent::Stopped);
     match (shutdown_request, shutdown) {
         (_, Err(error)) => Err(error),
         (Err(error), Ok(())) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(_), Ok(())) => Ok(()),
     }
 }
 
 #[cfg(not(windows))]
 async fn wait_for_shutdown_request(
     running: &mut RunningLocalRuntime,
-) -> Result<(), LocalRuntimeError> {
+) -> Result<LocalExitReason, LocalRuntimeError> {
     tokio::select! {
         request = running.wait_for_local_exit_request() => request,
-        signal = tokio::signal::ctrl_c() => signal.map_err(LocalRuntimeError::ShutdownSignal),
+        signal = tokio::signal::ctrl_c() => signal
+            .map(|()| LocalExitReason::Signal)
+            .map_err(LocalRuntimeError::ShutdownSignal),
     }
 }
 
 #[cfg(windows)]
 async fn wait_for_shutdown_request(
     running: &mut RunningLocalRuntime,
-) -> Result<(), LocalRuntimeError> {
+) -> Result<LocalExitReason, LocalRuntimeError> {
     let mut signals =
         WindowsShutdownSignals::install().map_err(LocalRuntimeError::ShutdownSignal)?;
     tokio::select! {
         request = running.wait_for_local_exit_request() => request,
-        () = signals.recv() => Ok(()),
+        () = signals.recv() => Ok(LocalExitReason::Signal),
     }
 }
 
@@ -428,6 +505,32 @@ impl WindowsShutdownSignals {
             _ = self.ctrl_shutdown.recv() => {}
         }
     }
+}
+
+/// Installs the diagnostic stream that sits behind the console.
+///
+/// Quiet by default, and deliberately so: the console above is the product
+/// surface, and a second stream repeating every INFO event would bury it. What
+/// this carries is what a user should see WITHOUT asking -- a warning or an
+/// error from anywhere in the runtime. `RUST_LOG` opens it up for anyone
+/// diagnosing a problem.
+fn install_diagnostics(console: Arc<LocalConsole>) {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::{EnvFilter, Layer};
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    let console_layer = crate::LocalConsoleLayer::new(console)
+        .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+    let _ = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .compact()
+                .with_filter(filter),
+        )
+        .with(console_layer)
+        .try_init();
 }
 
 pub fn run_blocking() -> Result<(), LocalRuntimeError> {
@@ -489,8 +592,19 @@ mod tests {
     #[tokio::test]
     async fn shutdown_request_is_not_lost_when_sent_before_the_waiter_starts() {
         let (trigger, mut listener) = local_shutdown_channel();
-        trigger.request();
-        assert!(listener.wait().await);
+        trigger.request(LocalExitReason::Requested);
+        assert_eq!(listener.wait().await, Some(LocalExitReason::Requested));
+    }
+
+    #[tokio::test]
+    async fn the_first_asker_decides_what_the_user_is_told() {
+        // A console signal arriving while a presence countdown is already
+        // shutting the runtime down is the same shutdown. Reporting the later
+        // reason would tell the user something that did not happen.
+        let (trigger, mut listener) = local_shutdown_channel();
+        trigger.request(LocalExitReason::NoPages);
+        trigger.request(LocalExitReason::Signal);
+        assert_eq!(listener.wait().await, Some(LocalExitReason::NoPages));
     }
 
     #[cfg(windows)]

@@ -6,6 +6,7 @@
 pub const PACKAGE_BOUNDARY: &str = "bcsp-local-runtime";
 
 mod bootstrap;
+mod console;
 mod desired;
 mod diagnostic;
 mod extension;
@@ -30,6 +31,10 @@ pub use desired::{
     DesiredWatchMutationResultV1, DesiredWatchMutationV1, DesiredWatchOutcomeV1, DesiredWatchOwner,
     DesiredWatchStateV1, LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_PATH,
     LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
+};
+pub use console::{
+    LocalConsole, LocalConsoleEvent, LocalConsoleLayer, LocalConsoleLocale, LocalConsoleSink,
+    LocalExitReason,
 };
 pub use diagnostic::StartupFailureReport;
 pub use extension::{

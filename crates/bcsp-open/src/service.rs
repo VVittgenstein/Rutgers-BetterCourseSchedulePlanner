@@ -590,6 +590,35 @@ where
         // guard drops here either way, releasing the serial lock).
         if let Some((mut gates, identity, route, decision)) = gate_advance.take() {
             if outcome.classification != OpenAttemptClassification::StaleCatalogRace {
+                // The one place the gate decision is both final and named.
+                // A hold is a warning because it is a user-visible product
+                // event -- the live feed is being withheld and the last good
+                // data is still in use -- and the local console shows
+                // warnings without being asked. A recovery is the same event
+                // ending, and is reported at the same level so the pair reads
+                // as a pair.
+                match decision.disposition {
+                    GateDisposition::Hold => tracing::info!(
+                        code = "OPEN_SNAPSHOT_GATE_HOLD",
+                        kind = ?decision.kind,
+                        target = ?target,
+                        "the snapshot integrity gate withheld a suspect open snapshot",
+                    ),
+                    GateDisposition::Apply => {
+                        if matches!(
+                            decision.kind,
+                            crate::gate::GateDecisionKind::QuarantineRecover
+                                | crate::gate::GateDecisionKind::QuarantineConfirm
+                        ) {
+                            tracing::warn!(
+                                code = "OPEN_SNAPSHOT_GATE_RELEASED",
+                                kind = ?decision.kind,
+                                target = ?target,
+                                "the snapshot integrity gate released a quarantined target",
+                            );
+                        }
+                    }
+                }
                 match route {
                     OpenGateRoute::Serving => gates.serving_mut().advance(&decision),
                     OpenGateRoute::Candidate => {

@@ -114,6 +114,26 @@ impl LocalWatchHistoryWriter {
     }
 
     fn persist_dispatch(&mut self, dispatch: &WatchDispatch) -> PersonalStateResult<()> {
+        // The one place every alert the runtime raises passes through. The
+        // code is what the local console turns into a line the user can read;
+        // the history write below is what makes it durable.
+        for event in &dispatch.events {
+            if let WatchServerEventV1::AlertUpdated { alert } = event
+                && alert.visible
+            {
+                let section = &alert.episode.section_key;
+                tracing::info!(
+                    code = "LOCAL_SECTION_OPEN",
+                    section = %format!(
+                        "{} {} {}",
+                        section.term().as_str(),
+                        section.campus().as_str(),
+                        section.index().as_str()
+                    ),
+                    "a watched section is open",
+                );
+            }
+        }
         let store = &mut self.store;
         let stop_reasons = dispatch
             .events

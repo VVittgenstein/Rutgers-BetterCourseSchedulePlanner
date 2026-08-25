@@ -122,6 +122,10 @@ pub struct LocalPresenceRoute {
     countdown: Duration,
     hello_deadline: Duration,
     request_exit: Box<dyn Fn() + Send + Sync>,
+    /// Where the user sees this happen. Presence is the one subsystem whose
+    /// events are entirely about the person at the keyboard -- a page opened,
+    /// a page closed, the program is about to exit -- so it reports them.
+    console: Option<std::sync::Arc<crate::LocalConsole>>,
 }
 
 impl LocalPresenceRoute {
@@ -142,6 +146,19 @@ impl LocalPresenceRoute {
             countdown: LOCAL_IDLE_EXIT_COUNTDOWN,
             hello_deadline: LOCAL_PRESENCE_HELLO_DEADLINE,
             request_exit: Box::new(request_exit),
+            console: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_console(mut self, console: std::sync::Arc<crate::LocalConsole>) -> Self {
+        self.console = Some(console);
+        self
+    }
+
+    fn report(&self, event: &crate::LocalConsoleEvent) {
+        if let Some(console) = &self.console {
+            console.report(event);
         }
     }
 
@@ -216,6 +233,9 @@ impl LocalPresenceRoute {
                     seconds = self.countdown.as_secs(),
                     "every page has closed; the runtime will exit unless one returns"
                 );
+                self.report(&crate::LocalConsoleEvent::ExitCountdown {
+                    seconds: self.countdown.as_secs(),
+                });
                 false
             }
             LocalPresencePhase::CountingDown { generation, due_at } => {
@@ -227,6 +247,7 @@ impl LocalPresenceRoute {
                     registry.announced_second = None;
                     registry.phase = LocalPresencePhase::Running;
                     tracing::info!(pages, "a page returned; the exit countdown is cancelled");
+                    self.report(&crate::LocalConsoleEvent::ExitCancelled { pages });
                     return false;
                 }
                 if now < due_at {
@@ -237,6 +258,13 @@ impl LocalPresenceRoute {
                             seconds = remaining,
                             "no page is open; exiting shortly unless one returns"
                         );
+                        // Once a second, not once a tick. The maintenance
+                        // timer runs four times a second, and a console that
+                        // repeated itself four times a second would bury
+                        // every other line in the window.
+                        self.report(&crate::LocalConsoleEvent::ExitCountdown {
+                            seconds: remaining,
+                        });
                     }
                     return false;
                 }
@@ -344,6 +372,7 @@ impl WebSocketExtension for LocalPresenceRoute {
                 );
             }
             tracing::info!(pages, "a page is open");
+            self.report(&crate::LocalConsoleEvent::PageOpened { pages });
             self.reconcile(&mut registry, now)
         };
         if exit {
@@ -364,7 +393,9 @@ impl WebSocketExtension for LocalPresenceRoute {
                 // replaced would otherwise delete a page that is right there.
                 if registry.tabs.get(&tab) == Some(&connection_id) {
                     registry.tabs.remove(&tab);
-                    tracing::info!(pages = registry.pages(), "a page closed");
+                    let pages = registry.pages();
+                    tracing::info!(pages, "a page closed");
+                    self.report(&crate::LocalConsoleEvent::PageClosed { pages });
                 }
             }
             self.reconcile(&mut registry, now)
@@ -594,6 +625,62 @@ mod tests {
 
         assert_eq!(*harness.exits.lock().expect("exit counter"), 0);
         assert_eq!(harness.route.state().pages, 1);
+    }
+
+    #[test]
+    fn the_console_shows_the_countdown_once_a_second_and_not_once_a_tick() {
+        #[derive(Default)]
+        struct Recorder {
+            lines: Mutex<Vec<String>>,
+        }
+        impl crate::LocalConsoleSink for std::sync::Arc<Recorder> {
+            fn line(&self, text: &str) {
+                self.lines.lock().expect("recorder").push(text.to_owned());
+            }
+        }
+
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let console = std::sync::Arc::new(
+            crate::LocalConsole::new(crate::LocalConsoleLocale::EnUs)
+                .with_sink(std::sync::Arc::new(recorder.clone())),
+        );
+        let route = LocalPresenceRoute::new(|| {})
+            .with_countdown(Duration::from_millis(2_500))
+            .with_console(console);
+
+        let (outbound, _inbound) = mpsc::unbounded_channel();
+        assert!(route.connect(trace(1), outbound));
+        route.receive_text(
+            trace(1),
+            &serde_json::to_string(&WsClientEnvelope::new(
+                trace(9_001),
+                LocalPresenceCommandV1::Hello {
+                    tab_id: trace(100),
+                },
+            ))
+            .expect("hello frame"),
+        );
+        route.disconnect(trace(1));
+
+        // The maintenance timer runs four times a second. The console must
+        // not: a countdown that repeated itself every 250ms would push every
+        // other line out of the window before the user could read it.
+        for _ in 0..12 {
+            route.tick();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        let lines = recorder.lines.lock().expect("recorder").clone();
+        let countdowns = lines
+            .iter()
+            .filter(|line| line.contains("Exiting in"))
+            .count();
+        assert!(lines.iter().any(|line| line.contains("A page is open")), "{lines:?}");
+        assert!(lines.iter().any(|line| line.contains("A page closed")), "{lines:?}");
+        assert!(
+            (2..=4).contains(&countdowns),
+            "expected one line per remaining second, saw {countdowns}: {lines:?}",
+        );
     }
 
     #[test]

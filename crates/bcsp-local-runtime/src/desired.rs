@@ -1380,6 +1380,14 @@ impl DesiredWatchCoordinator {
                 Some(WatchStartItemResultV1::Active {
                     active_watch_id, ..
                 }) => {
+                    // A stable code the local console turns into a line in
+                    // the user's language. Emitting rather than calling keeps
+                    // the coordinator ignorant of consoles and locales.
+                    tracing::info!(
+                        code = "LOCAL_WATCH_ARMED",
+                        section = %section_label(section),
+                        "a desired watch is now running",
+                    );
                     state.armed = Some(ArmedWatch {
                         authority_generation: generation,
                         revision: entry.revision,
@@ -1473,6 +1481,11 @@ impl DesiredWatchCoordinator {
             // An unknown watch has already achieved what the teardown wanted.
             Ok(()) | Err(WatchManagerError::UnknownWatch) => {
                 state.stopping = None;
+                tracing::info!(
+                    code = "LOCAL_WATCH_DISARMED",
+                    section = %section_label(section),
+                    "a desired watch is no longer running",
+                );
                 true
             }
             Err(error) => {
@@ -2508,4 +2521,17 @@ mod tests {
                 .expect("the other caller rotated");
         }
     }
+}
+
+
+/// How a section reads on the console: term, campus and index, and nothing
+/// else. It is what the user typed into the desk, so it is what they can
+/// match a console line back to.
+fn section_label(section: &SectionKey) -> String {
+    format!(
+        "{} {} {}",
+        section.term().as_str(),
+        section.campus().as_str(),
+        section.index().as_str()
+    )
 }

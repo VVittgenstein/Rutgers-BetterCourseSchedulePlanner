@@ -26,8 +26,8 @@ use time::OffsetDateTime;
 use tokio::sync::mpsc;
 
 use crate::{
-    DesiredWatchCoordinator, LocalPrimaryDatabase, LocalRuntimeCore,
-    history::LocalWatchHistorySink,
+    DesiredWatchCoordinator, LocalConsole, LocalConsoleEvent, LocalPrimaryDatabase,
+    LocalRuntimeCore, history::LocalWatchHistorySink,
 };
 
 /// Frozen path of the local presence route.
@@ -136,6 +136,7 @@ pub fn create_local_watch_socket(
 pub struct LocalWatchRoute {
     watch: Arc<SharedWatchSocket>,
     coordinator: Arc<DesiredWatchCoordinator>,
+    console: Option<Arc<LocalConsole>>,
 }
 
 impl LocalWatchRoute {
@@ -143,7 +144,23 @@ impl LocalWatchRoute {
         watch: Arc<SharedWatchSocket>,
         coordinator: Arc<DesiredWatchCoordinator>,
     ) -> Self {
-        Self { watch, coordinator }
+        Self {
+            watch,
+            coordinator,
+            console: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_console(mut self, console: Arc<LocalConsole>) -> Self {
+        self.console = Some(console);
+        self
+    }
+
+    fn report(&self, event: &LocalConsoleEvent) {
+        if let Some(console) = &self.console {
+            console.report(event);
+        }
     }
 
     fn reconcile_audience(&self) {
@@ -162,6 +179,7 @@ impl WebSocketExtension for LocalWatchRoute {
         // life, so this is the restore path after a restart as much as it is
         // the attach path.
         self.reconcile_audience();
+        self.report(&LocalConsoleEvent::AlertsAttached);
         true
     }
 
@@ -208,6 +226,9 @@ impl WebSocketExtension for LocalWatchRoute {
         // The last page leaving tears the physical watches down and keeps
         // every row: closing a tab is not the user changing their mind.
         self.reconcile_audience();
+        if self.watch.audience_connection_count() == 0 {
+            self.report(&LocalConsoleEvent::AlertsDetached);
+        }
     }
 
     fn tick(&self) {
