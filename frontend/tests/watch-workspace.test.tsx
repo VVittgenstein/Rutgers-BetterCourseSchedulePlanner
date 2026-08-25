@@ -30,6 +30,7 @@ import type {
   WatchClientPort,
   WatchClientCommandV1,
   WatchConnectionState,
+  WatchRecoveryState,
   WatchCueOutcome,
   WatchPolicyV1,
   WatchServerEventV1,
@@ -72,6 +73,32 @@ function deferred<T>() {
 
 class FakeWatchClient implements WatchClientPort {
   state: WatchConnectionState;
+  lastContactAt: number | null = null;
+  recovery: WatchRecoveryState = { phase: 'IDLE', attempt: 0, nextAttemptAt: null };
+  readonly #recoveryListeners = new Set<(state: WatchRecoveryState) => void>();
+  readonly #contactListeners = new Set<(at: number) => void>();
+
+  subscribeRecovery(listener: (state: WatchRecoveryState) => void): () => void {
+    this.#recoveryListeners.add(listener);
+    return () => this.#recoveryListeners.delete(listener);
+  }
+
+  subscribeContact(listener: (at: number) => void): () => void {
+    this.#contactListeners.add(listener);
+    return () => this.#contactListeners.delete(listener);
+  }
+
+  /** Drives the recovery phase the way the real transport would. */
+  recover(state: WatchRecoveryState): void {
+    this.recovery = state;
+    this.#recoveryListeners.forEach((listener) => listener(state));
+  }
+
+  /** The server proving it is there, at this moment. */
+  contact(at: number): void {
+    this.lastContactAt = at;
+    this.#contactListeners.forEach((listener) => listener(at));
+  }
   readonly commands: WatchClientCommandV1[] = [];
   readonly connect = vi.fn(() => this.setState('OPEN'));
   readonly disconnect = vi.fn(() => this.setState('CLOSED'));

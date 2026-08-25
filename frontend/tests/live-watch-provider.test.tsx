@@ -15,6 +15,7 @@ import type {
   WatchClientCommandV1,
   WatchClientPort,
   WatchConnectionState,
+  WatchRecoveryState,
   WatchCueOutcome,
   WatchPolicyV1,
   WatchServerEventV1,
@@ -54,6 +55,32 @@ const COUNTS = {
 
 class FakeWatch implements WatchClientPort {
   state: WatchConnectionState = 'OPEN';
+  lastContactAt: number | null = null;
+  recovery: WatchRecoveryState = { phase: 'IDLE', attempt: 0, nextAttemptAt: null };
+  readonly #recoveryListeners = new Set<(state: WatchRecoveryState) => void>();
+  readonly #contactListeners = new Set<(at: number) => void>();
+
+  subscribeRecovery(listener: (state: WatchRecoveryState) => void): () => void {
+    this.#recoveryListeners.add(listener);
+    return () => this.#recoveryListeners.delete(listener);
+  }
+
+  subscribeContact(listener: (at: number) => void): () => void {
+    this.#contactListeners.add(listener);
+    return () => this.#contactListeners.delete(listener);
+  }
+
+  /** Drives the recovery phase the way the real transport would. */
+  recover(state: WatchRecoveryState): void {
+    this.recovery = state;
+    this.#recoveryListeners.forEach((listener) => listener(state));
+  }
+
+  /** The server proving it is there, at this moment. */
+  contact(at: number): void {
+    this.lastContactAt = at;
+    this.#contactListeners.forEach((listener) => listener(at));
+  }
   readonly commands: WatchClientCommandV1[] = [];
   readonly connect = vi.fn(() => undefined);
   readonly disconnect = vi.fn(() => undefined);
@@ -99,6 +126,8 @@ class FakeWatch implements WatchClientPort {
 
 class FakeAudio {
   readonly outcomes: WatchCueOutcome[] = [];
+  readonly subscribeState = vi.fn(() => () => undefined);
+  readonly heal = vi.fn(async () => null);
   readonly unlock = vi.fn(async (): Promise<WatchAudioUnlockResult> => 'READY');
   readonly play = vi.fn((): WatchCueOutcome => this.outcomes.shift() ?? 'STARTED');
   readonly preview = vi.fn((): WatchCueOutcome => this.outcomes.shift() ?? 'STARTED');
@@ -893,8 +922,10 @@ describe('LiveWatchProvider', () => {
     const startsBeforeDisconnect = harness.watch.commands.filter(({ type }) => type === 'START_WATCH');
     expect(startsBeforeDisconnect).toHaveLength(1);
 
+    const connectsBeforeDisconnect = harness.watch.connect.mock.calls.length;
     await act(async () => {
       harness.value().disconnect();
+      harness.watch.recover({ phase: 'STOPPED_BY_USER', attempt: 0, nextAttemptAt: null });
       harness.watch.transition('CLOSED');
     });
     expect(harness.watch.disconnect).toHaveBeenCalledOnce();
@@ -907,13 +938,31 @@ describe('LiveWatchProvider', () => {
       code: 'CONNECTION_LOST',
     }));
 
-    await act(async () => harness.watch.transition('OPEN'));
+    // The barrier. Re-rendering the provider must not reach for the
+    // connection the user just gave up: `connect()` is an explicit decision,
+    // and calling it from a render is how a Disconnect gets undone by the
+    // next state change that happens to arrive.
+    await act(async () => {
+      harness.rerenderVolume(71);
+      await Promise.resolve();
+    });
+    expect(harness.watch.connect.mock.calls.length).toBe(connectsBeforeDisconnect);
+    expect(harness.value().recovery.phase).toBe('STOPPED_BY_USER');
+
+    // Only the user asking again lifts it -- and then this page's own plan
+    // comes back, because they never stopped watching the Section, only the
+    // connection.
+    await act(async () => {
+      harness.value().reconnect();
+      harness.watch.recover({ phase: 'IDLE', attempt: 0, nextAttemptAt: null });
+      harness.watch.transition('OPEN');
+    });
     expect(harness.value().connection).toBe('OPEN');
-    expect(harness.watch.commands.filter(({ type }) => type === 'START_WATCH')).toHaveLength(1);
+    expect(harness.watch.commands.filter(({ type }) => type === 'START_WATCH')).toHaveLength(2);
     await waitFor(() => expect(harness.value().selected).toEqual([SECTION_A]));
   });
 
-  it('releases a queued start when the first connection attempt fails', async () => {
+  it('re-arms what this page started when the connection comes back on its own', async () => {
     const harness = createHarness('IDLE');
     await selectAndStart(harness, [SECTION_A]);
     expect(harness.watch.connect).toHaveBeenCalledOnce();
@@ -927,7 +976,47 @@ describe('LiveWatchProvider', () => {
       code: 'CONNECTION_LOST',
     }));
 
+    // The attempt the user made did not survive the failed connection, but
+    // the decision they made did. Recovery reconnects, and the Section they
+    // pressed Start on is armed again -- exactly once, from the plan rather
+    // than from the selection.
     await act(async () => harness.watch.transition('OPEN'));
-    expect(harness.watch.commands.filter(({ type }) => type === 'START_WATCH')).toEqual([]);
+    const starts = harness.watch.commands.filter((command) => command.type === 'START_WATCH');
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toEqual({
+      type: 'START_WATCH',
+      items: [{ sectionKey: SECTION_A, policy: DEFAULT_WATCH_POLICY }],
+    });
+  });
+
+  it('does not re-arm a Section the user stopped before the connection came back', async () => {
+    const harness = createHarness('OPEN');
+    await selectAndStart(harness, [SECTION_A]);
+    await emit(harness, {
+      type: 'START_RESULT',
+      result: {
+        contractVersion: 1,
+        items: [{
+          sectionKey: SECTION_A,
+          status: 'ACTIVE',
+          activeWatchId: ACTIVE_A,
+          startedAt: AT,
+          reason: null,
+        }],
+      },
+    });
+    await act(async () => {
+      const [watch] = harness.value().active;
+      if (watch === undefined) throw new Error('expected an active watch');
+      harness.value().stop(watch);
+    });
+
+    await act(async () => harness.watch.transition('CLOSED'));
+    await act(async () => harness.watch.transition('OPEN'));
+
+    // One START from the press, one STOP from the stop, and nothing from the
+    // reconnect: a watch the user stopped stays stopped however many times
+    // the connection comes back.
+    expect(harness.watch.commands.filter(({ type }) => type === 'START_WATCH')).toHaveLength(1);
   });
 });

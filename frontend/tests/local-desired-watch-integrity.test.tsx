@@ -13,6 +13,7 @@ import type {
   WatchClientCommandV1,
   WatchClientPort,
   WatchConnectionState,
+  WatchRecoveryState,
   WatchPolicyV1,
   WatchServerEventV1,
   WsServerEnvelope,
@@ -102,6 +103,32 @@ function deferred<T>() {
 
 class FakeWatch implements WatchClientPort {
   state: WatchConnectionState = 'OPEN';
+  lastContactAt: number | null = null;
+  recovery: WatchRecoveryState = { phase: 'IDLE', attempt: 0, nextAttemptAt: null };
+  readonly #recoveryListeners = new Set<(state: WatchRecoveryState) => void>();
+  readonly #contactListeners = new Set<(at: number) => void>();
+
+  subscribeRecovery(listener: (state: WatchRecoveryState) => void): () => void {
+    this.#recoveryListeners.add(listener);
+    return () => this.#recoveryListeners.delete(listener);
+  }
+
+  subscribeContact(listener: (at: number) => void): () => void {
+    this.#contactListeners.add(listener);
+    return () => this.#contactListeners.delete(listener);
+  }
+
+  /** Drives the recovery phase the way the real transport would. */
+  recover(state: WatchRecoveryState): void {
+    this.recovery = state;
+    this.#recoveryListeners.forEach((listener) => listener(state));
+  }
+
+  /** The server proving it is there, at this moment. */
+  contact(at: number): void {
+    this.lastContactAt = at;
+    this.#contactListeners.forEach((listener) => listener(at));
+  }
   readonly commands: WatchClientCommandV1[] = [];
   readonly connect = vi.fn(() => undefined);
   readonly disconnect = vi.fn(() => undefined);
@@ -219,6 +246,8 @@ function silentAudio(): WatchAudioController {
     startContinuous = vi.fn(() => 'STARTED' as const);
     stopContinuous = vi.fn();
     dispose = vi.fn();
+    subscribeState = vi.fn(() => () => undefined);
+    heal = vi.fn(async () => null);
   })() as unknown as WatchAudioController;
 }
 

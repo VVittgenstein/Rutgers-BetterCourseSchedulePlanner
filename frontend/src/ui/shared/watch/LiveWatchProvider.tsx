@@ -19,21 +19,38 @@ import type {
   ProductRuntimePort,
   SectionKey,
   WatchAlertV1,
+  WatchAudioCueV1,
   WatchClientCommandV1,
   WatchConnectionState,
   WatchPolicyV1,
+  WatchRecoveryState,
   WatchServerEventV1,
   WatchStartItemV1,
   WsServerEnvelope,
 } from '../product';
-import { ProductClientError } from '../product';
+import { ProductClientError, WATCH_CONTACT_STALE_MILLISECONDS } from '../product';
 import {
   WatchAudioController,
   type WatchAudioUnlockResult,
 } from './audio';
+import {
+  createBrowserNotificationPort,
+  WATCH_RECOVERY_NOTIFICATION_GRACE_MILLISECONDS,
+  WatchNotificationLedger,
+  type WatchNotificationPermission,
+  type WatchNotificationPort,
+  type WatchNotificationRequest,
+} from './notification';
+import {
+  evaluateWatchReadiness,
+  isWatchContactFresh,
+  nextReadinessExpiry,
+  type WatchReadinessState,
+} from './readiness';
 
 import {
   findIntentEntry,
+  samePolicy,
   watchIntentState,
   type WatchIntentPort,
   type WatchIntentSnapshot,
@@ -125,6 +142,24 @@ export interface LiveWatchValue {
   readonly alerts: readonly WatchAlertV1[];
   readonly notices: readonly WatchNotice[];
   readonly connection: WatchConnectionState;
+  /**
+   * What the transport is doing about a connection it lost.
+   *
+   * Separate from `connection` because they answer different questions: one
+   * is the socket's state right now, the other is whether anything is going
+   * to be done about it and when. A page that is waiting out a backoff and a
+   * page whose user pressed Disconnect are both `CLOSED`, and telling the
+   * user the same thing about both would be a lie to one of them.
+   */
+  readonly recovery: WatchRecoveryState;
+  /** The five-ring truth chain. The only thing entitled to say "ready". */
+  readonly readiness: WatchReadinessState;
+  /** Page-level notifications this page decided are warranted, in order. */
+  readonly notifications: readonly WatchNotificationRequest[];
+  readonly notificationPermission: WatchNotificationPermission;
+  readonly notificationsEnabled: boolean;
+  /** The browser seam, so whatever renders a notification uses this one. */
+  readonly notificationPort: WatchNotificationPort;
   readonly audioState: WatchAudioState;
   readonly muted: boolean;
   readonly volume: number;
@@ -212,6 +247,19 @@ export interface LiveWatchValue {
   dismissAlert(alert: WatchAlertV1): void;
   dismissNotice(id: number): void;
   disconnect(): void;
+  /**
+   * Re-establishes the connection after the user stopped it.
+   *
+   * The same product control as before -- there is no separate Resume
+   * feature. It exists as its own callback only because a Disconnect is a
+   * hard barrier: nothing but an explicit ask lifts it, so the ask has to be
+   * expressible.
+   */
+  reconnect(): void;
+  /** Hands one decided notification to whatever renders it, then forgets it. */
+  consumeNotification(id: number): WatchNotificationRequest | null;
+  setNotificationsEnabled(enabled: boolean): void;
+  requestNotificationPermission(): void;
   enableSound(): Promise<WatchAudioUnlockResult>;
   testSound(): Promise<WatchAudioUnlockResult>;
   setMuted(muted: boolean): void;
@@ -354,6 +402,27 @@ function replaceByIdentity<T>(
   return values.map((value, valueIndex) => valueIndex === index ? next : value);
 }
 
+function defaultPageVisibility(): boolean {
+  // A host with no document cannot be hidden. Answering "hidden" there would
+  // put every server-rendered or test environment into the fallback branch.
+  if (typeof document === 'undefined') return true;
+  return document.visibilityState !== 'hidden';
+}
+
+/**
+ * The subject a failed cue belongs to.
+ *
+ * The same episode as the alert the user was already shown, when one can be
+ * found: "it opened" and "you did not hear it" are one thing to tell someone,
+ * not two. A cue with no matching alert falls back to its own identity, which
+ * still deduplicates it against itself.
+ */
+function cueSubject(cue: WatchAudioCueV1, alerts: readonly WatchAlertV1[]): string {
+  if (cue.trigger.kind === 'CONTINUOUS_EPISODE') return `episode:${cue.trigger.episodeId}`;
+  const alert = alerts.find((candidate) => candidate.episode.activeWatchId === cue.activeWatchId);
+  return alert === undefined ? `cue:${cue.cueId}` : `episode:${alert.episode.episodeId}`;
+}
+
 export interface LiveWatchProviderProps {
   readonly children: ReactNode;
   readonly runtime: ProductRuntimePort;
@@ -370,6 +439,20 @@ export interface LiveWatchProviderProps {
   readonly initialSelected?: readonly SectionKey[] | undefined;
   readonly initialWatchableTerms?: readonly string[] | undefined;
   readonly initialVolume?: number | undefined;
+  /**
+   * The browser's notification seam.
+   *
+   * Injected rather than reached for so a test can drive permission states,
+   * and so a host without the API is an ordinary `unsupported` answer instead
+   * of a crash.
+   */
+  readonly notifications?: WatchNotificationPort | undefined;
+  /** The in-app switch. A user who turns notifications off keeps them off. */
+  readonly initialNotificationsEnabled?: boolean | undefined;
+  readonly onNotificationsEnabledChange?: ((enabled: boolean) => void) | undefined;
+  /** Reads the page's visibility. Injected for the same reason as the clock. */
+  readonly pageVisibility?: (() => boolean) | undefined;
+  readonly clock?: (() => number) | undefined;
   readonly onSelectedChange?: ((selected: readonly SectionKey[]) => void) | undefined;
   readonly onVolumeChange?: ((volume: number) => void) | undefined;
 }
@@ -377,15 +460,28 @@ export interface LiveWatchProviderProps {
 export function LiveWatchProvider({
   audio,
   children,
+  clock,
   intent,
   initialSelected = [],
   initialWatchableTerms,
   initialVolume = 70,
+  initialNotificationsEnabled = true,
+  notifications,
+  onNotificationsEnabledChange,
   onSelectedChange,
   onVolumeChange,
+  pageVisibility,
   runtime,
 }: LiveWatchProviderProps) {
   const [audioController] = useState(() => audio ?? new WatchAudioController());
+  const [notificationPort] = useState<WatchNotificationPort>(
+    () => notifications ?? createBrowserNotificationPort(),
+  );
+  const now = useCallback(() => (clock ?? Date.now)(), [clock]);
+  const readVisibility = useCallback(
+    () => (pageVisibility ?? defaultPageVisibility)(),
+    [pageVisibility],
+  );
   const [selected, setSelected] = useState<readonly SectionKey[]>(() =>
     initialSelected.slice(0, MAX_SELECTED_SECTIONS));
   const [pending, setPending] = useState<readonly SectionKey[]>([]);
@@ -395,6 +491,25 @@ export function LiveWatchProvider({
   const [alerts, setAlerts] = useState<readonly WatchAlertV1[]>([]);
   const [notices, setNotices] = useState<readonly WatchNotice[]>([]);
   const [connection, setConnection] = useState<WatchConnectionState>(runtime.watch.state);
+  const [recovery, setRecovery] = useState<WatchRecoveryState>(() => runtime.watch.recovery);
+  /**
+   * When the server last proved it was there, as the page renders it.
+   *
+   * Held in state as well as read at evaluation time: the state is what makes
+   * a new heartbeat re-render the readiness surface, and the read is what
+   * makes an ABSENT heartbeat expire one. Neither alone is enough -- a hidden
+   * tab's timers are throttled, so a page that only scheduled an expiry could
+   * stay green for as long as the browser felt like sleeping it.
+   */
+  const [lastContactAt, setLastContactAt] = useState<number | null>(() => runtime.watch.lastContactAt);
+  const [contactEvaluatedAt, setContactEvaluatedAt] = useState<number>(() => now());
+  const [pageVisible, setPageVisible] = useState<boolean>(() => readVisibility());
+  const [notificationPermission, setNotificationPermission] = useState<WatchNotificationPermission>(
+    () => notificationPort.permission,
+  );
+  const [notificationsEnabled, setNotificationsEnabledState] = useState(initialNotificationsEnabled);
+  const [notificationQueue, setNotificationQueue] = useState<readonly WatchNotificationRequest[]>([]);
+  const [connectionPlanRevision, setConnectionPlanRevision] = useState(0);
   const [audioState, setAudioState] = useState<WatchAudioState>('MUTED');
   const [muted, setMutedState] = useState(true);
   const [volume, setVolumeState] = useState(() =>
@@ -606,6 +721,33 @@ export function LiveWatchProvider({
    */
   const cutoffReleaseAt = useRef<number | null>(null);
   const socketCutoffRef = useRef(false);
+  /**
+   * What THIS page asked to have watched, on a target with no durable intent.
+   *
+   * The re-arm plan, and deliberately not `selected`: a selection is a list
+   * of Sections the user is looking at, and re-arming from it would start
+   * watching things they never pressed Start on. Entries go in on an explicit
+   * Start and come out on an explicit Stop or Remove, on a `WATCH_STOPPED`
+   * frame, and when the page goes away. Nothing else edits it -- a transient
+   * arm failure is not the user changing their mind.
+   */
+  const connectionIntents = useRef(new Map<string, WatchStartItemV1>());
+  /**
+   * Bumped whenever the plan is edited, so what the page RENDERS about it can
+   * follow. The map itself stays a ref because the reconnect handler reads it
+   * synchronously, in the same turn the socket opens.
+   */
+  const bumpConnectionPlan = useCallback(() => setConnectionPlanRevision((value) => value + 1), []);
+  const notificationLedger = useRef(new WatchNotificationLedger());
+  const notificationsEnabledRef = useRef(notificationsEnabled);
+  const notificationPermissionRef = useRef(notificationPermission);
+  const pageVisibleRef = useRef(pageVisible);
+  const alertsRef = useRef(alerts);
+  const recoveryRef = useRef(recovery);
+  /** When the current outage began, or `null` while the page is connected. */
+  const outageSince = useRef<number | null>(null);
+  /** True once this outage has been announced, so a flap does not spam. */
+  const outageAnnounced = useRef(false);
 
   useEffect(() => { intentSnapshotRef.current = intentSnapshot; }, [intentSnapshot]);
   useEffect(() => { intentStatusRef.current = intentStatus; }, [intentStatus]);
@@ -618,6 +760,11 @@ export function LiveWatchProvider({
   useEffect(() => { telemetryResourcesRef.current = telemetryResources; }, [telemetryResources]);
   useEffect(() => { continuousEpisodeIdsRef.current = continuousEpisodeIds; }, [continuousEpisodeIds]);
   useEffect(() => { watchableTermsRef.current = watchableTerms; }, [watchableTerms]);
+  useEffect(() => { notificationsEnabledRef.current = notificationsEnabled; }, [notificationsEnabled]);
+  useEffect(() => { notificationPermissionRef.current = notificationPermission; }, [notificationPermission]);
+  useEffect(() => { pageVisibleRef.current = pageVisible; }, [pageVisible]);
+  useEffect(() => { alertsRef.current = alerts; }, [alerts]);
+  useEffect(() => { recoveryRef.current = recovery; }, [recovery]);
 
   const addNotice = useCallback((
     code: WatchNoticeCode,
@@ -634,6 +781,23 @@ export function LiveWatchProvider({
       ...(detail === undefined ? {} : { detail }),
     };
     setNotices((current) => [...current.slice(-5), notice]);
+  }, []);
+
+  /**
+   * Records that a page-level notification is warranted.
+   *
+   * The ledger decides whether it is a repeat; the switch and the permission
+   * decide whether it can be delivered at all. All three are asked here so
+   * that a page which cannot post one never queues it -- a request nobody
+   * will render is a promise the page cannot keep.
+   */
+  const queueNotification = useCallback((
+    request: WatchNotificationRequest | null,
+  ) => {
+    if (request === null) return;
+    if (!notificationsEnabledRef.current) return;
+    if (notificationPermissionRef.current !== 'granted') return;
+    setNotificationQueue((current) => [...current.slice(-7), request]);
   }, []);
 
   const updateTelemetryResource = useCallback((
@@ -1129,6 +1293,12 @@ export function LiveWatchProvider({
     }
     if (event.type === 'WATCH_STOPPED') {
       announcedAudioCaps.current.delete(event.stopped.activeWatchId);
+      // The server says this watch ended. Whatever ended it, re-arming it on
+      // the next reconnect would be this page reviving something it was told
+      // is over; the user can start it again if that is what they want.
+      if (connectionIntents.current.delete(sectionIdentity(event.stopped.sectionKey))) {
+        bumpConnectionPlan();
+      }
       setActive((current) => current.filter((watch) => watch.activeWatchId !== event.stopped.activeWatchId));
       setObservations((current) => current.filter((observation) =>
         !sameSection(observation.sectionKey, event.stopped.sectionKey)));
@@ -1202,6 +1372,18 @@ export function LiveWatchProvider({
           detail: 'OPEN_ALERT',
         };
         setNotices((current) => [...current.slice(-5), announcer]);
+        // A section opened. If the page cannot be seen, or its audio cannot
+        // actually play, the on-page alert is not something the user is going
+        // to notice -- which is the whole case a page-level notification
+        // exists for. A page that is visible with working audio gets nothing
+        // here; if its cue then fails, the branch below covers it.
+        if (!pageVisibleRef.current || audioStateRef.current !== 'READY') {
+          queueNotification(notificationLedger.current.request(
+            'SECTION_OPEN',
+            `episode:${event.alert.episode.episodeId}`,
+            event.alert.episode.sectionKey,
+          ));
+        }
       }
       return;
     }
@@ -1218,6 +1400,18 @@ export function LiveWatchProvider({
           audioStateRef.current = 'FAILED';
           setAudioState('FAILED');
           addNotice('AUDIO_FAILED', 'ALERT', disposition.cue.sectionKey);
+        }
+        // The ordering hole this fills: the alert arrived while the page
+        // looked healthy -- visible, audio READY -- so nothing was posted for
+        // it, and only now does the page learn that the sound did not play.
+        // Keyed by the same subject as the alert, so a section that was
+        // already announced is not announced twice.
+        if (outcome === 'AUTOPLAY_BLOCKED' || outcome === 'FAILED') {
+          queueNotification(notificationLedger.current.request(
+            'CUE_FAILED',
+            cueSubject(disposition.cue, alertsRef.current),
+            disposition.cue.sectionKey,
+          ));
         }
         send({
           type: 'REPORT_CUE_OUTCOME',
@@ -1246,20 +1440,59 @@ export function LiveWatchProvider({
         audioController.stopContinuous();
       }
     }
-  }, [addNotice, audioController, disprove, intent, loadBatchStatus, refreshIntent, send, startContinuousAudio]);
+  }, [addNotice, audioController, bumpConnectionPlan, disprove, intent, loadBatchStatus, queueNotification, refreshIntent, send, startContinuousAudio]);
 
   useEffect(() => {
     const unsubscribeEvents = runtime.watch.subscribe(handleServerEvent);
+    const unsubscribeRecovery = runtime.watch.subscribeRecovery?.((next) => {
+      recoveryRef.current = next;
+      setRecovery(next);
+      if (next.phase === 'IDLE') {
+        outageSince.current = null;
+        outageAnnounced.current = false;
+        notificationLedger.current.clearOutage();
+        return;
+      }
+      // The first attempt of an outage is what dates it. Later attempts are
+      // the same outage getting longer, and re-dating it there would mean the
+      // two-minute promise could never come due on a page that keeps
+      // retrying -- which is exactly the page it is for.
+      if (next.phase !== 'STOPPED_BY_USER' && outageSince.current === null) {
+        outageSince.current = now();
+      }
+    });
+    const unsubscribeContact = runtime.watch.subscribeContact?.((at) => {
+      setLastContactAt(at);
+      setContactEvaluatedAt(at);
+    });
     const unsubscribeState = runtime.watch.subscribeState((next) => {
       setConnection(next);
       if (next === 'OPEN') {
+        const reconnected = !hadConnection.current;
         hadConnection.current = true;
+        setLastContactAt(runtime.watch.lastContactAt);
+        setContactEvaluatedAt(now());
         // The cutoff is not lifted here. A socket being open again says the
         // page COULD learn what is running; it does not say what is. Only a
         // read issued from this point on can, so this is the line the release
         // is measured from.
         if (socketCutoffRef.current) cutoffReleaseAt.current = authorityIssued.current;
         sendQueuedStart();
+        // Rebuilding what this page had running is only for a target with no
+        // durable intent. Where the server holds the intent it also holds the
+        // watches, and re-arming from here would be this page asserting a
+        // second answer to a question the authority has already answered.
+        if (intent === undefined && reconnected && connectionIntents.current.size > 0) {
+          const items = [...connectionIntents.current.values()];
+          for (const item of items) {
+            pendingPolicies.current.set(sectionIdentity(item.sectionKey), item.policy);
+          }
+          const sections = items.map((item) => item.sectionKey);
+          pendingRef.current = sections;
+          setPending(sections);
+          queuedStart.current = items;
+          sendQueuedStart();
+        }
       } else if (next === 'CLOSED' || next === 'ERROR') {
         const connectionOwnedState = hadConnection.current
           || queuedStart.current !== null
@@ -1296,14 +1529,26 @@ export function LiveWatchProvider({
         continuousEpisodeIdsRef.current = [];
         setContinuousEpisodeIds([]);
         audioController.stopContinuous();
-        if (connectionOwnedState) addNotice('CONNECTION_LOST', 'ALERT');
+        setLastContactAt(null);
+        setContactEvaluatedAt(now());
+        // One announcement per outage, not one per attempt. Recovery makes a
+        // dropped connection a repeating event, and the toast region keeps
+        // only the last six notices -- an unannotated loop would push every
+        // other message the user needs off the screen while telling them the
+        // same thing each time.
+        if (connectionOwnedState && !outageAnnounced.current) {
+          outageAnnounced.current = true;
+          addNotice('CONNECTION_LOST', 'ALERT');
+        }
       }
     });
     return () => {
       unsubscribeEvents();
+      unsubscribeRecovery?.();
+      unsubscribeContact?.();
       unsubscribeState();
     };
-  }, [addNotice, audioController, disprove, handleServerEvent, runtime, sendQueuedStart]);
+  }, [addNotice, audioController, disprove, handleServerEvent, intent, now, runtime, sendQueuedStart]);
 
   // The first read, and the reconnection of intent to what is running.
   //
@@ -1334,13 +1579,70 @@ export function LiveWatchProvider({
   // A page with standing intent is an audience for it: the server tears every
   // physical watch down when the last page leaves, so a restored session only
   // comes back to life because a page attached.
+  //
+  // Gated on what the transport is DOING, not only on the socket's state. A
+  // closed socket is closed for two very different reasons, and `connect()`
+  // is an explicit user decision that clears the Disconnect barrier and
+  // restarts the backoff at one second. Calling it from a render would mean a
+  // Disconnect is undone by the next re-render, and a page waiting out a
+  // thirty-second backoff reattempts immediately, forever.
   useEffect(() => {
     if (intent === undefined || intentStatus !== 'READY') return;
+    if (recovery.phase !== 'IDLE') return;
     const wanted = intentSnapshot?.entries.some((entry) => entry.policy !== null) === true;
     if (wanted && runtime.watch.state !== 'OPEN' && runtime.watch.state !== 'CONNECTING') {
       runtime.watch.connect();
     }
-  }, [intent, intentSnapshot, intentStatus, runtime]);
+  }, [intent, intentSnapshot, intentStatus, recovery, runtime]);
+
+  /**
+   * Re-checks the whole chain whenever the page's circumstances change.
+   *
+   * Visibility is both an input to ring ④ and the moment a system is most
+   * likely to have suspended the audio context without saying so, so the two
+   * are checked together: coming back from hidden re-reads the browser's
+   * audio state and repairs it if it can, rather than trusting what the page
+   * believed before it was put to sleep.
+   */
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const recheck = () => {
+      const visible = readVisibility();
+      pageVisibleRef.current = visible;
+      setPageVisible(visible);
+      setNotificationPermission(notificationPort.permission);
+      setContactEvaluatedAt(now());
+      if (!visible) return;
+      void audioController.heal().then((state) => {
+        if (state === null || !audioProviderMounted.current) return;
+        // A repair may not unmute: silence the user chose is not a fault.
+        if (audioStateRef.current === 'UNLOCKING') return;
+        audioStateRef.current = state;
+        setAudioState(state);
+      });
+    };
+    document.addEventListener('visibilitychange', recheck);
+    globalThis.addEventListener?.('pageshow', recheck);
+    return () => {
+      document.removeEventListener('visibilitychange', recheck);
+      globalThis.removeEventListener?.('pageshow', recheck);
+    };
+  }, [audioController, notificationPort, now, readVisibility]);
+
+  /**
+   * Follows the browser's own audio state.
+   *
+   * The controller repairs itself; this is how the page's copy stops being a
+   * memory of what audio could do the last time anyone asked.
+   */
+  useEffect(() => {
+    const unsubscribe = audioController.subscribeState((state) => {
+      if (audioStateRef.current === 'UNLOCKING') return;
+      audioStateRef.current = state;
+      setAudioState(state);
+    });
+    return unsubscribe;
+  }, [audioController]);
 
   useEffect(() => {
     audioProviderMounted.current = true;
@@ -1419,6 +1721,10 @@ export function LiveWatchProvider({
     }
     if (intent === undefined
       && activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey))) return;
+    // Taking a Section off the desk takes it out of the plan too: a page that
+    // re-armed something the user removed would be watching a course they
+    // have no control for.
+    if (connectionIntents.current.delete(sectionIdentity(sectionKey))) bumpConnectionPlan();
     const next = selectedRef.current.filter((value) => !sameSection(value, sectionKey));
     selectedRef.current = next;
     telemetryEpoch.current += 1;
@@ -1427,7 +1733,7 @@ export function LiveWatchProvider({
     telemetryAbort.current?.abort();
     setSelected(next);
     onSelectedChange?.(next);
-  }, [addNotice, intent, isRemovable, onSelectedChange]);
+  }, [addNotice, bumpConnectionPlan, intent, isRemovable, onSelectedChange]);
 
   const enableSound = useCallback(async () => {
     audioStateRef.current = 'UNLOCKING';
@@ -1473,6 +1779,15 @@ export function LiveWatchProvider({
 
   const startSelected = useCallback(async (policy: WatchPolicyV1) => {
     if (startingRef.current) return;
+    // FIRST, before anything is awaited. The browser only honours a
+    // permission request while the user activation that triggered it is
+    // still live, and an `await` -- even on a promise that is already
+    // resolved -- ends it. Asked once: a browser that has answered stays
+    // answered, and the in-app switch is what changes the user's mind after
+    // that. The ANSWER is awaited later; only the ask has to be synchronous.
+    if (notificationsEnabledRef.current) {
+      void notificationPort.requestPermission().then(setNotificationPermission);
+    }
     // With durable intent, starting is a change to what the user WANTS
     // watched. The socket does not carry it: the server decides what is
     // running from the stored rows, so a page that also sent a START would
@@ -1518,6 +1833,13 @@ export function LiveWatchProvider({
     startingRef.current = true;
     setStarting(true);
     const items = inactive.map((sectionKey) => ({ sectionKey, policy }));
+    // The press is what puts a Section in this page's plan. It stays there
+    // across an unexpected close, and comes out only when the user stops it,
+    // removes it, or the server says the watch ended.
+    for (const item of items) {
+      connectionIntents.current.set(sectionIdentity(item.sectionKey), item);
+    }
+    bumpConnectionPlan();
     for (const item of items) pendingPolicies.current.set(sectionIdentity(item.sectionKey), policy);
     pendingRef.current = inactive;
     setPending(inactive);
@@ -1541,9 +1863,11 @@ export function LiveWatchProvider({
     }
   }, [
     addNotice,
+    bumpConnectionPlan,
     enableSound,
     gestureBasis,
     intent,
+    notificationPort,
     refreshIntent,
     runIntentBatch,
     runtime,
@@ -1559,8 +1883,11 @@ export function LiveWatchProvider({
 
   const stop = useCallback((watch: ActiveWatchView) => {
     if (stopSection(watch.sectionKey)) return;
+    // An explicit stop leaves the plan. A watch the user stopped must not
+    // come back because the connection did.
+    if (connectionIntents.current.delete(sectionIdentity(watch.sectionKey))) bumpConnectionPlan();
     send({ type: 'STOP_WATCH', watch: { activeWatchId: watch.activeWatchId, sectionKey: watch.sectionKey } });
-  }, [send, stopSection]);
+  }, [bumpConnectionPlan, send, stopSection]);
 
   const updatePolicy = useCallback((watch: ActiveWatchView, policy: WatchPolicyV1) => {
     if (intent !== undefined) {
@@ -1573,10 +1900,17 @@ export function LiveWatchProvider({
       policy,
     })) {
       announcedAudioCaps.current.delete(watch.activeWatchId);
+      // The plan holds what to re-arm WITH, so a policy the user changed has
+      // to move with it -- otherwise a reconnect restores the old one.
+      const identity = sectionIdentity(watch.sectionKey);
+      if (connectionIntents.current.has(identity)) {
+        connectionIntents.current.set(identity, { sectionKey: watch.sectionKey, policy });
+        bumpConnectionPlan();
+      }
       setActive((current) => current.map((value) =>
         value.activeWatchId === watch.activeWatchId ? { ...value, policy } : value));
     }
-  }, [intent, send, submitIntent]);
+  }, [bumpConnectionPlan, intent, send, submitIntent]);
 
   const acknowledge = useCallback((episode: OpenEpisodeV1) => {
     send({
@@ -1625,6 +1959,45 @@ export function LiveWatchProvider({
   }, [send]);
 
   const disconnect = useCallback(() => runtime.watch.disconnect(), [runtime]);
+  /**
+   * The user asking for the connection back.
+   *
+   * Deliberately the only thing in this provider that calls `connect()` on a
+   * page whose user disconnected. Everything else -- effects, renders,
+   * recovery -- is forbidden from lifting that barrier.
+   */
+  const reconnect = useCallback(() => {
+    outageSince.current = null;
+    outageAnnounced.current = false;
+    notificationLedger.current.clearOutage();
+    runtime.watch.connect();
+  }, [runtime]);
+  const consumeNotification = useCallback((id: number): WatchNotificationRequest | null => {
+    const request = notificationQueue.find((candidate) => candidate.id === id) ?? null;
+    if (request !== null) {
+      setNotificationQueue((current) => current.filter((candidate) => candidate.id !== id));
+    }
+    return request;
+  }, [notificationQueue]);
+  /**
+   * Asks the browser for notification permission from a user gesture.
+   *
+   * The recovery control behind a DEGRADED "hidden with no fallback": the
+   * user pressing it IS the activation the browser requires.
+   */
+  const requestNotificationPermission = useCallback(() => {
+    void notificationPort.requestPermission().then(setNotificationPermission);
+  }, [notificationPort]);
+  const setNotificationsEnabled = useCallback((enabled: boolean) => {
+    notificationsEnabledRef.current = enabled;
+    setNotificationsEnabledState(enabled);
+    onNotificationsEnabledChange?.(enabled);
+    // Turning them off drops what was queued: the user has just said they do
+    // not want to be told, and posting a backlog after that is the surface
+    // ignoring an instruction it was given.
+    if (!enabled) setNotificationQueue([]);
+    if (enabled) setNotificationPermission(notificationPort.permission);
+  }, [notificationPort, onNotificationsEnabledChange]);
   const setMuted = useCallback((next: boolean) => {
     mutedRef.current = next;
     setMutedState(next);
@@ -1767,6 +2140,118 @@ export function LiveWatchProvider({
     }
   }, [loadBatchStatus, loadSectionStatus]);
 
+  /**
+   * How many Sections the user wants watched, and how many are truly armed.
+   *
+   * Derived from the SAME projection the desk renders -- the disproved
+   * snapshot on a target with durable intent, this page's own plan on one
+   * without. Deriving it a second way is how a badge and a row end up
+   * disagreeing about the same watch, and the whole point of this surface is
+   * that they cannot.
+   */
+  const watchCoverage = useMemo<{ readonly wanted: number; readonly armed: number }>(() => {
+    if (intent === undefined) {
+      const wanted = connectionIntents.current.size;
+      if (wanted === 0) return { wanted: 0, armed: 0 };
+      const armed = [...connectionIntents.current.values()].filter((item) =>
+        effectiveActive.some((watch) =>
+          sameSection(watch.sectionKey, item.sectionKey) && samePolicy(watch.policy, item.policy))).length;
+      return { wanted, armed };
+    }
+    if (disprovedSnapshot === null) return { wanted: 0, armed: 0 };
+    const wanted = disprovedSnapshot.entries.filter((entry) => entry.policy !== null);
+    const armed = wanted.filter((entry) =>
+      watchIntentState(disprovedSnapshot, entry) === 'WATCHING').length;
+    return { wanted: wanted.length, armed };
+  }, [connectionPlanRevision, disprovedSnapshot, effectiveActive, intent]);
+
+  // Computed on EVERY render rather than memoised. The comparison is a
+  // subtraction, and doing it here is what makes an expired heartbeat expire:
+  // a memo keyed on the last event would answer with the clock as it was when
+  // that event happened, which in a throttled tab can be minutes ago.
+  // `contactEvaluatedAt` is only what guarantees a render eventually happens.
+  const contactFresh = isWatchContactFresh(lastContactAt, Math.max(now(), contactEvaluatedAt));
+  const readiness = useMemo<WatchReadinessState>(() => evaluateWatchReadiness({
+    wanted: watchCoverage.wanted,
+    armed: watchCoverage.armed,
+    connectionOpen: connection === 'OPEN',
+    recovery: recovery.phase,
+    connectionCutoff: socketCutoff,
+    hasContact: lastContactAt !== null,
+    contactFresh,
+    intentUnreadable: intent !== undefined && intentStatus !== 'READY' && intentStatus !== 'DISABLED',
+    audio: audioState === 'MUTED' ? null : audioState,
+    muted,
+    volume,
+    pageVisible,
+    notificationPermission,
+    notificationsEnabled,
+  }), [
+    audioState,
+    connection,
+    contactFresh,
+    intent,
+    intentStatus,
+    lastContactAt,
+    muted,
+    notificationPermission,
+    notificationsEnabled,
+    pageVisible,
+    recovery,
+    socketCutoff,
+    volume,
+    watchCoverage,
+  ]);
+
+  /**
+   * Expires the heartbeat claim even when nothing else happens.
+   *
+   * Without this the page keeps whatever it last rendered: a server that
+   * stops answering while its TCP connection stays up produces no event at
+   * all, and a page that only re-derived on events would hold a green light
+   * over it indefinitely. The re-evaluation reads the clock again, so a timer
+   * a hidden tab delayed still yields the truthful answer when it lands.
+   */
+  useEffect(() => {
+    const expiry = nextReadinessExpiry(lastContactAt);
+    if (expiry === null) return undefined;
+    const delay = Math.min(
+      MAX_BROWSER_TIMEOUT_MILLISECONDS,
+      Math.max(0, expiry - now() + 1),
+    );
+    const timer = globalThis.setTimeout(() => setContactEvaluatedAt(now()), delay);
+    return () => globalThis.clearTimeout(timer);
+  }, [lastContactAt, now]);
+
+  /**
+   * Tells the user when recovery has been failing long enough to matter.
+   *
+   * Two minutes is the approved grace: shorter and every lift-the-lid blip
+   * becomes a notification, longer and a page that stopped watching hours ago
+   * never says so.
+   */
+  useEffect(() => {
+    const since = outageSince.current;
+    if (since === null || recovery.phase === 'IDLE' || recovery.phase === 'STOPPED_BY_USER') {
+      return undefined;
+    }
+    const due = since + WATCH_RECOVERY_NOTIFICATION_GRACE_MILLISECONDS;
+    const announce = () => queueNotification(notificationLedger.current.requestOutage(
+      since,
+      now(),
+      WATCH_RECOVERY_NOTIFICATION_GRACE_MILLISECONDS,
+    ));
+    if (now() >= due) {
+      announce();
+      return undefined;
+    }
+    const timer = globalThis.setTimeout(announce, Math.min(
+      MAX_BROWSER_TIMEOUT_MILLISECONDS,
+      Math.max(0, due - now()),
+    ));
+    return () => globalThis.clearTimeout(timer);
+  }, [now, queueNotification, recovery]);
+
   const nextFreshnessExpiry = useMemo(() => {
     const now = Date.now();
     const expiries = [...sectionStatuses, ...batchStatuses]
@@ -1835,6 +2320,12 @@ export function LiveWatchProvider({
     alerts,
     notices,
     connection,
+    recovery,
+    readiness,
+    notifications: notificationQueue,
+    notificationPermission,
+    notificationsEnabled,
+    notificationPort,
     audioState,
     muted,
     volume,
@@ -1875,6 +2366,10 @@ export function LiveWatchProvider({
     dismissAlert,
     dismissNotice: (id) => setNotices((current) => current.filter((notice) => notice.id !== id)),
     disconnect,
+    reconnect,
+    consumeNotification,
+    setNotificationsEnabled,
+    requestNotificationPermission,
     enableSound,
     testSound,
     setMuted,
@@ -1890,10 +2385,20 @@ export function LiveWatchProvider({
     audioState,
     batchStatuses,
     connection,
+    consumeNotification,
     continuousEpisodeIds,
     disconnect,
     dismissAlert,
     enableSound,
+    notificationPermission,
+    notificationPort,
+    notificationQueue,
+    notificationsEnabled,
+    readiness,
+    requestNotificationPermission,
+    reconnect,
+    recovery,
+    setNotificationsEnabled,
     disprovedSnapshot,
     episodes,
     intentSaved,

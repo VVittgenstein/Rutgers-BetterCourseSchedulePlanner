@@ -62,6 +62,15 @@ export const WATCH_WORKSPACE_CSS = String.raw`
 .watch-telemetry__sections { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--bcsp-line); border-left: 1px solid var(--bcsp-line); }
 .watch-telemetry__section { min-width: 0; padding: var(--bcsp-space-3); border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); }
 .watch-telemetry__section p { margin: 0.35rem 0 0; }
+.watch-readiness { position: sticky; top: 0; z-index: 15; display: flex; flex-wrap: wrap; gap: var(--bcsp-space-2); align-items: center; justify-content: space-between; padding: var(--bcsp-space-2) var(--bcsp-space-3); border-bottom: 1px solid var(--bcsp-line); background: var(--bcsp-paper-raised); }
+.watch-readiness[data-bcsp-watch-readiness='DEGRADED'] { border-left: 6px solid var(--bcsp-accent); }
+.watch-readiness__summary { display: flex; flex-wrap: wrap; gap: var(--bcsp-space-2); align-items: baseline; margin: 0; }
+.watch-readiness__badge { font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.watch-readiness__badge[data-level='READY'] { color: var(--bcsp-ok, var(--bcsp-ink)); }
+.watch-readiness__badge[data-level='DEGRADED'] { color: var(--bcsp-accent); }
+.watch-readiness__reason { color: var(--bcsp-ink-muted); font-size: 0.78rem; overflow-wrap: anywhere; }
+.watch-readiness__action { min-height: 2.75rem; padding: 0.45rem 0.65rem; border: 1px solid var(--bcsp-line); border-radius: 0; color: var(--bcsp-ink); background: var(--bcsp-paper); font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; }
+.watch-readiness__action:focus-visible { outline: 3px solid var(--bcsp-focus, var(--bcsp-accent)); outline-offset: 2px; }
 .watch-toast-region { position: fixed; z-index: 30; right: var(--bcsp-space-3); bottom: calc(var(--bcsp-space-3) + env(safe-area-inset-bottom)); display: grid; width: min(28rem, calc(100vw - 2rem)); gap: var(--bcsp-space-1); pointer-events: none; }
 .watch-toast { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--bcsp-space-2); align-items: start; padding: var(--bcsp-space-3); border: 1px solid var(--bcsp-line); color: var(--bcsp-ink); background: var(--bcsp-paper-raised); opacity: 1; transform: translateY(0); transition: transform 180ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1)), opacity 140ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1)); pointer-events: auto; }
 @starting-style { .watch-toast { opacity: 0; transform: translateY(35%); } }

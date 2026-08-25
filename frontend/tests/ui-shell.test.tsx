@@ -172,11 +172,15 @@ function runtimeWith(
     } as ProductApiPort,
     watch: {
       state: 'IDLE',
+      lastContactAt: null,
+      recovery: { phase: 'IDLE', attempt: 0, nextAttemptAt: null },
       connect: vi.fn(),
       disconnect: vi.fn(),
       send: vi.fn(() => '00000000-0000-4000-8000-000000000001'),
       subscribe: vi.fn(() => () => undefined),
       subscribeState: vi.fn(() => () => undefined),
+      subscribeRecovery: vi.fn(() => () => undefined),
+      subscribeContact: vi.fn(() => () => undefined),
     },
   };
 }

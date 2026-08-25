@@ -45,6 +45,8 @@ import {
 import {
   LiveWatchProvider,
   useLiveWatch,
+  WatchNotificationRegion,
+  WatchReadinessRegion,
   WatchToastRegion,
   WatchWorkspace,
   WatchWorkspaceStyles,
@@ -620,6 +622,8 @@ function ReadyProduct({
         runtime={runtime}
       >
         <WatchWorkspaceStyles />
+        <WatchReadinessRegion />
+        <WatchNotificationRegion />
         <div hidden={extension !== undefined}>
           <ReadyRuntime experience={experience} runtime={runtime} />
         </div>
