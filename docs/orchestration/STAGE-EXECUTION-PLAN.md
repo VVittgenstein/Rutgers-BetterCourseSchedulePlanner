@@ -1,10 +1,10 @@
 # RBCSP 余下四阶段固定执行计划
 
-状态：**ACTIVE — 用户于 2026-08-24 冻结范围与顺序**
+状态：**ACTIVE — 用户于 2026-08-25 批准隔离 worktree 并行实现、串行集成**
 Orchestrator：Codex
 实现者：Claude
 产品负责人：用户
-当前产品代码基线：`feat/s2-alert-delivery@75cefb0`
+当前产品代码基线：`feat/s2-alert-delivery@553371f`（Stage 2 主交付；R1 窄修起点）
 
 ## 1. 唯一任务线
 
@@ -43,22 +43,23 @@ S2（P1/L1/L2/L3） → P2 → S4 → S3
 6. 若实现必须改变已冻结的用户行为、wire/数据库权威合同或政策边界，停止并交由用户决定，Claude
    与 Codex 都不得自行扩权。
 
-## 3. 每个 Stage 的固定协作方式
+## 3. 当前固定协作方式
 
-每次只详细编写和发出**当前一个完整 Stage**。未来 Stage 的详细 prompt 在前一 Stage 验收后，按新的
-真实 head 重新审计再写，避免提前写死已经漂移的内部实现。
+产品依赖顺序仍固定，但用户已撤销“必须等前一 Stage 验收后才开始后一 Stage 实现”。在文件所有权、参数、
+外部门和集成交叉点能够先冻结时，可以从同一 orchestration anchor 创建隔离 worktree 并行实现：
 
 ```text
-Codex：调查当前代码 → 写完整 Stage 结果/边界/验收合同与可复制 prompt
-用户：一次原样粘贴给 Claude
-Claude：用一个 dynamic workflow 自主规划、实现、验证和窄修
-Claude：整个 Stage 完成后只回报一次
-Codex：覆盖整个 Stage diff 集中审查一次
+Codex：同时调查各 Stage → 冻结 lane 结果/边界/参数/所有权/可复制 prompt
+用户：把四个 prompt 分别原样粘贴给四个 Claude
+Claude：各自在独立 worktree 用 dynamic workflow 实现并跑 focused tests
+Codex：收齐后先分别核对 diff，再按 Stage 2 R1 → 3 → 4 → 5 串行集成
+Codex：只在组合 head 集中跑一次重门并做一次组合审查
        ├─ 无 blocker → ACCEPTED / ACCEPTED_WITH_DEFERRED_DEBT
-       └─ 有 blocker → 最多一份集中 repair 包
+       └─ 有 blocker → 只对真实 blocker 发一份集中 repair 包
 ```
 
-不再恢复“小 slice 实现一次、全量测试一次、审查一次”的 M2/M3/M4 模式。
+不再恢复“小 slice 实现一次、全量测试一次、审查一次”的 M2/M3/M4 模式，也不让四个 worktree 同时跑
+workspace/frontend/archive 等重门。完整拓扑、所有权与冲突处理见 `PARALLEL-WAVE-1.md`。
 
 ## 4. Claude Dynamic Workflow 使用规则
 
@@ -130,7 +131,8 @@ frozen/discarded 页面不执行 JS，因此不承诺提醒必达。
 只完成已批准的公网重新上线加固 P2：H1–H9、H4 资源/背压边界、真实 public composition、配置、
 runbook 与相应 soak。H5 已有部分只做差距补齐和回归，不借机重写 session 系统。
 
-不夹带 S4、S3 或新产品能力。具体任务包在 Stage 2 验收后的真实 head 上另写。
+不夹带 S4、S3 或新产品能力。当前并行任务从同一 anchor 开发；最终必须在 Stage 2 R1 集成后的组合 head
+重放并验收。当前 Windows 环境只能到 `PENDING_LINUX_EVIDENCE`，不能冒充已通过真实 H9。
 
 ### Stage 4 — `STAGE-4`
 
@@ -139,15 +141,16 @@ runbook 与相应 soak。H5 已有部分只做差距补齐和回归，不借机�
 
 ### Stage 5 — `STAGE-5`
 
-S3 必须 evidence-first：先取得多个 target/时段的区间删失证据，再决定是否冻结 30/60 秒周期和
-safe offset。证据不足时，以 `NO_PRODUCTION_CHANGE / DEFERRED` 正常结束，不猜参数、不为了“完成四阶段”
-强改生产调度。证据充分才实现已批准的统一网格/重锚行为。
+S3 必须 evidence-first。现有数据已确认无法区分 30/60 秒和 safe offset，因此当前并行 lane 只实现离线
+analyzer/test/report，并以 `NO_PRODUCTION_CHANGE / DATA_REQUIRED` 正常结束；不在线采样、不改生产调度。
+未来另获采样授权且证据充分后，才新开统一网格/重锚实现。
 
 ## 7. 验证频率
 
-- Stage 内部：Claude 自主选择 focused tests，失败即修，避免每个 phase 跑全量门；
-- Stage final：workspace、frontend verify、architecture 与该 Stage 专项集成门各运行一次；
-- package/soak：只在 Stage 产品结果确实需要真实组装证明时运行；不为每个 commit 构建 archive；
+- 并行 lane 内：Claude 自主选择 focused tests，失败即修，不运行 workspace/frontend/archive 重门；
+- 串行集成 final：Codex 在四个 lane 组合 head 上把 workspace、frontend verify、architecture 与适用的
+  Stage 专项门各运行一次；
+- package/soak：只在最终组合产品结果确实需要真实组装证明时运行；不为每个 lane/commit 构建 archive；
 - security review：由 Codex 在涉及 session、资源或发布边界的 Stage final diff 上集中做；
 - negative proof：只要求最高风险合同具有判别力，不逐 helper 机械 revert；
 - transient：保存首次完整证据，同一 full gate 最多再跑一次、可定位 case 最多再跑两次；仍不复现则
@@ -160,5 +163,7 @@ safe offset。证据不足时，以 `NO_PRODUCTION_CHANGE / DEFERRED` 正常结�
 | S1 | 已完成 |
 | L1 / reduced desired | `ACCEPTED` at `75cefb0`，只回归 |
 | 旧 `M2-001` | `SUPERSEDED BEFORE IMPLEMENTATION` |
-| 当前 Stage | `STAGE-2/v1`，等待用户转发 |
-| 后续固定顺序 | `STAGE-3 (P2)` → `STAGE-4 (S4)` → `STAGE-5 (S3)` |
+| 当前 Wave | `PARALLEL-WAVE-1`：Stage 2 R1、Stage 3/P2、Stage 4/S4、Stage 5/S3 evidence 四个隔离 lane |
+| 实现方式 | 同一 orchestration anchor 并行；只跑 focused tests |
+| 固定集成顺序 | `STAGE-2-R1` → `STAGE-3 (P2)` → `STAGE-4 (S4)` → `STAGE-5 (S3 evidence)` |
+| 最终重门 | 仅在 Codex 串行组合 head 运行一次；P2 另保留 Linux/H9 外部门 |

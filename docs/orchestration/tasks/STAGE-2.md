@@ -1,6 +1,6 @@
 # Stage 2：S2（含 P1/L1/L2/L3）提醒生命周期完整收口
 
-状态：**READY — 等待用户原样转发给 Claude**
+状态：**DELIVERED — CODEX `CHANGES_REQUIRED`；`STAGE-2-R1/v2-parallel` 已签发**
 Prompt 版本：`STAGE-2/v1`
 Orchestrator：Codex
 实现者：Claude
@@ -228,3 +228,38 @@ Codex 已知工作树包含本轮 orchestration 文档以及两个必须保持�
 
 若 dynamic workflows 不可用，在修改产品代码前回报实际 version/plan/config 原因，不要静默改称普通
 subagent 流程。完成后按 A10 一次性回报；S2 是否 accepted 由 Codex 独立决定。
+
+## C. Codex Stage 2 独立验收记录（2026-08-25）
+
+- Claude 交付 head：`553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`；审查范围：
+  `75cefb0a27b85495d9b5a6e2c7f93b5590b3ee95..553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`；
+- 结论：`CHANGES_REQUIRED`。Stage 2 主体已落地，但 A1/A4 的音频真值、presence 回归优先、应用内通知
+  关闭入口和 A6/A8 policy 执行闭环仍有四个阻断；不得进入 Stage 3；
+- 已确认通过：shared 意外断线退避与显式 Disconnect 屏障、公网页面内 ticket validate/renew 与
+  reconnect plan、本地 desired/L1 回归、25 秒 heartbeat 与 authority/connection stamp、页面级
+  Notification 基础、local presence/60 秒倒计时、L3 控制台和 local/public target 边界；
+- 音频阻断：`unlock()` 清掉已知 output failure 后，只凭 context `running` 返回 READY。Codex 定向运行
+  得到 `failedCue=FAILED, falseRecovery=READY`，即失败仍存在却被无输出重试的恢复动作擦掉；
+  `heal()` 等待 held resume 前也不发布下降状态，Provider 可无限保留旧 READY；现有测试注释声称
+  “BLOCKED then READY”，实际只断言最终 READY；
+- presence 阻断：socket 在 CountingDown 被接入、withhold HELLO，tick 先进入 Exiting/request_exit 后，
+  迟到 HELLO 仍会写 tab、发送 REGISTERED 并报告 PageOpened；ordered shutdown 已不可取消，仍打开的页面
+  会被退出；现有测试只覆盖 Exiting 后新 connect，没有覆盖预先接入的 socket；
+- 通知控制阻断：Provider 有 `setNotificationsEnabled(false)`，但生产 UI 没有调用入口；测试通过直接注入
+  false/调用 Provider API 绕开了缺失的用户交互；
+- policy 阻断：`.github/workflows/public-ops.yml` 的新步骤只执行两项 Rust policy tests；全仓唯一 workflow
+  没有安装/执行 frontend `test:guard`。release-set 仅增加 required slug，Claude 只做 parser check，未完成
+  A8 要求的 non-archive 正反 self-test；
+- Codex final-head 独立重门：`cargo test --workspace` exit 0；两项 Rust architecture verifier 与两项
+  verifier self-test 全绿；串行 `frontend npm run verify` 为 guard 90、Vitest 333/333、typecheck、local/public
+  build 全绿；两个 diff-check 和三份 PowerShell parser check 全绿；
+- 第一次 frontend full gate 与 workspace 并发运行时，Vitest 有 20 个 fork worker 启动超时，未出现断言
+  failure（已有 9 files / 58 tests pass）；按 A8 预算在 Rust 完成后串行复跑一次即全绿，记录为环境资源
+  争用观察，不构成代码阻断；
+- Codex Security diff scan `4b394b71-967d-42bf-b8ac-8186c7cb5d22` 覆盖 34/34 inventory，封存为 0 个
+  可报告安全 finding。若干 localhost/self-only correctness/resource 候选按安全策略排除，但其中音频假绿与
+  presence 误退出仍按产品合同阻断；
+- 不要求本轮处理：P2/H4、S4/S3、N1–N3、permission 极窄外部撤权窗口、notification ledger 长期小量增长、
+  local presence 防御性连接帽、first-party Retry-After 超大值 clamp、已披露 console/UPDATE_POLICY 等债务；
+- 已生成一次集中窄修任务 `docs/orchestration/tasks/STAGE-2-R1.md`。本轮不构建 archive、不重跑完整安全
+  扫描、不扩大产品范围。

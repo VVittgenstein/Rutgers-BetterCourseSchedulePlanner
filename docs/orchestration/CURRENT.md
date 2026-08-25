@@ -1,7 +1,7 @@
 # RBCSP 当前工作总账与 Codex–Claude 协作协议
 
 状态：**ACTIVE — 当前唯一的工作恢复入口**
-最后更新：2026-08-24（America/New_York）
+最后更新：2026-08-25（America/New_York）
 维护者：Codex（orchestrator）
 产品决策者：用户
 实现者：Claude
@@ -92,7 +92,7 @@ Claude 不负责最终验收，也不能自行宣布整个 Stage 完成。
 
 ## 3. 实际通信链路
 
-当前没有假定 Codex 能直接向 Claude 会话发送消息。固定链路是：
+当前没有假定 Codex 能直接向 Claude 会话发送消息。普通单 lane 固定链路是：
 
 ```text
 Codex 同时生成「任务包」和「Claude Prompt」
@@ -110,6 +110,10 @@ Codex 独立审查仓库，不信任摘要
 ```
 
 用户无需重新组织、缩写或解释双方的输出。为了保留证据，应尽量原样转发。
+
+`PARALLEL-WAVE-1` 的批准例外是：Codex 一次生成四份自包含 prompt；用户分别复制给四个 Claude；Claude
+各自在 Codex 已建好的隔离 worktree 工作。用户把四份原始回报都交回后，Codex 才按冻结顺序串行集成和
+集中验收。角色不变：Claude 仍只实现，Codex 仍是唯一 orchestrator/验收者。
 
 ## 4. 任务包与 Claude Prompt 的固定格式
 
@@ -206,6 +210,8 @@ finding 一条一条往返、用户手工重组消息。新的固定规则：
    压测式追查；任一次复现则升级并诊断；
 9. 没有新的产品决定或真实阻断时，不再发起大设计循环；
 10. 用户只因产品选择、外部权限/部署或不可逆动作被打断。
+11. 经用户批准可把互相隔离的完整 Stage lane 从同一 anchor 并行实现；产品依赖顺序改为串行集成顺序，
+    全量测试和最终审查只在组合 head 做一次。具体以 `PARALLEL-WAVE-1.md` 为准。
 
 详细 Stage 与分级合同见 `docs/orchestration/STAGE-EXECUTION-PLAN.md`。
 
@@ -324,18 +330,19 @@ PUT /api/v1/local/desired-watch
 
 ## 12. 当前仓库检查点
 
-记录日期：2026-08-24。
+记录日期：2026-08-25。
 
 ```text
-当前检出：feat/s2-alert-delivery@75cefb0
+当前检出：feat/s2-alert-delivery@553371f
 origin/main：ae65958
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
-Claude R4 报告 head：75cefb0
-Codex R4 审查范围：b450ed0..75cefb0（全里程碑 a4f8d22..75cefb0）
+L1/R4 accepted head：75cefb0
+Claude Stage 2 报告 head：553371f
+Codex Stage 2 审查范围：75cefb0..553371f（全里程碑 a4f8d22..553371f）
 S2 分支：尚未合并、尚未发布
 当前产品源码工作树：无未提交源码；两个 conversation 归档目录未跟踪
-Codex orchestration 文档：已记录 R4 ACCEPTED；旧 M2 未实施即作废；当前任务为 STAGE-2
+Codex orchestration 文档：Stage 2 主交付已记录 CHANGES_REQUIRED；当前任务为 STAGE-2-R1
 现有 release/0.1.0：sourceCommit=7d5debef（2026-07-15，早于本轮工作）
 ```
 
@@ -346,14 +353,14 @@ Codex orchestration 文档：已记录 R4 ACCEPTED；旧 M2 未实施即作废�
 | 工作 | 状态 | 当前事实 |
 |---|---|---|
 | S1 | 代码完成并已合入 main；M0 窄修已写入 feature | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter；尚无新 release |
-| S2 | reduced desired/L1 纵向闭环已验收，仅 feature；完整 S2 未完成 | M1 已证明持久意图、真实物化、重启/reset 与组合并发；自动重连、完整 Readiness、音频、通知仍未做 |
+| S2 | 主体已实现，仅 feature；Codex `CHANGES_REQUIRED` | 自动重连、25 秒 Readiness、公网 P1 client、页面 Notification 已接线；音频仍可假绿，需 R1 窄修 |
 | S3 | 未开始正式实现 | 没有 GridAnchor/RebuildProfile；仅有不足以冻结参数的单校区数据 |
 | S4 | 未开始 | 代码中没有 `prepare_cached` |
-| P1 | 服务端半边完成，仅 feature；Stage S2 客户端待做 | validate、reserve lease、session 保护完成；公网尚无 mutable nonce holder/validate-before-connect |
+| P1 | Stage 2 主体已实现，仅 feature | mutable in-memory ticket、validate-before-connect、single-flight renew 与页面内 reconnect plan 已通过审查；公网部署仍被 P2/H4 阻断 |
 | P2 | 大部分未开始 | H5 基本完成、H4 只有 per-session cap；其余重新上线门未完成 |
 | L1 | `ACCEPTED`，仅 feature | desired 持久化、GET/PUT、materializer、UI、并发反例与真实包装三生命周期 E2E 均通过；尚未合并/发布 |
-| L2 | 只有通用 route seam | 无 presence、60 秒状态机或自动退出 |
-| L3 | 未开始 | 无可见业务日志与控制台倒计时 |
+| L2 | 主体已实现，R1 待关闭一个退出竞态 | local-only presence、HELLO、60 秒 countdown 与 ordered shutdown 已接线；pre-admitted late HELLO 可在 Exiting 后错误注册 |
+| L3 | 主体已实现，仅 feature | 启动/页面/监控/开放/Gate/倒计时/退出日志已接线；本轮无阻断 |
 
 ## 14. 已发现但尚未处理的关键漂移
 
@@ -381,17 +388,20 @@ Codex orchestration 文档：已记录 R4 ACCEPTED；旧 M2 未实施即作废�
 
 ### P1/S2
 
-- 公网前端没有 mutable nonce holder；
-- 没有调用 `/api/v1/session/validate`；
-- 没有共享自动重连/userStopped/退避状态机；公网也没有与 selection 分离的页面内 reconnect plan；
-- 心跳未进入 25 秒 Readiness；
-- AudioContext 自愈和页面级 Notification 尚未实现；
-- 公网 H4 全局容量和字节背压仍是部署阻断。
+- `75cefb0..553371f` 已实现 shared 退避重连/显式 Disconnect 屏障、公网 mutable ticket +
+  validate-before-connect、页面内 reconnect plan、25 秒心跳、authority/connection stamp Readiness、
+  AudioContext 自愈、页面 Notification、L2 presence 与 L3 控制台；
+- Codex 独立重门和 34/34 security diff inventory 已完成；传统可报告安全 finding 为 0；
+- Stage 2 仍有四个阻断：audio 已知 output failure 可被无输出重试擦掉，suspended held resume 期间不撤绿；
+  pre-admitted presence socket 可在 Exiting 后 HELLO/REGISTERED；生产 UI 无通知关闭入口；CI 未执行 frontend
+  Notification policy tests，release-set/CI-entry non-archive 判别门未闭合；
+- 上述四项集中进入 `STAGE-2-R1/v2-parallel`；不重写其余已经通过的 Stage 2 主体；
+- 公网 H4 全局容量和字节背压仍是 Stage 3/P2 部署阻断，不进入本次 R1。
 
 ### P2/L2/L3/S3/S4
 
 - P2 除 H5 与 per-session cap 外基本未开始；
-- L2/L3 未开始产品实现；
+- L2/L3 主体已在 `553371f` 实现；L2 只剩 R1 的 Exiting/late-HELLO 竞态，L3 本轮无阻断；
 - S4 为 0%；
 - S3 不得在只有 NB 单时段证据时直接修改生产周期。
 
@@ -404,34 +414,44 @@ Codex orchestration 文档：已记录 R4 ACCEPTED；旧 M2 未实施即作废�
 5. 真正重新上线还必须完成 P2 的配置项、真实组装测试和 10 分钟 Caddy+浏览器 soak；
 6. “已合入 main”不等于“已发布”；发布状态必须由候选 manifest 的 sourceCommit 证明。
 
-## 16. 当前 Stage
+## 16. 当前 Parallel Wave
 
-状态：**用户已撤销 M2/M3/M4 分别交付；`M2-001` 未实施即作废并并入
-`STAGE-2`，等待用户一次转发给 Claude。**
+状态：**`PARALLEL-WAVE-1` 已由用户批准。Codex 同时签发 Stage 2 R1、Stage 3/P2、Stage 4/S4 和
+Stage 5/S3 evidence 四个隔离 worktree 任务；实现并行，集成/重门/验收串行。**
 
 当前 Stage 2：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
 
-用户可见目标：
+Stage 2 主体已经实现的用户结果：
 
 - 意外断线、服务重启或长时间离线后，仍存活的页面自动退避重连；
-- 显式 Disconnect 绝不被自动连回，用户再次 Start 或明确 Resume 后才恢复；
+- 显式 Disconnect 绝不被自动连回，只有用户通过现有连接交互明确恢复；不新增独立 Resume 能力；
 - 公网页面每次连接前 single-flight validate 当前 nonce，失效时原子换新并只用新票握手；
 - 公网页面按页面内 connection intent 重建监控，不从 selection 猜测，也不复活已 STOP 的 section；
 - 本地重连继续由服务端 desired coordinator 物化，页面不得发送 legacy START；
-- 五环 Readiness、AudioContext 自愈与当前页面级 Notification 一次完成；
-- 本地 presence 证明任何浏览 tab 存活；最后页面离开 60 秒后复验再退出；
+- 五环 Readiness、AudioContext 自愈与当前页面级 Notification 已接线，但音频真值仍有假绿阻断；
+- 本地 presence 证明任何浏览 tab 存活；最后页面离开 60 秒后复验再退出，但 pre-admitted late HELLO
+  仍可能在 Exiting 后错误注册；
 - 控制台显示关键生命周期事件且不泄漏 nonce/session/请求体。
 
-Claude 使用一个官方 dynamic workflow 自行规划内部 phase、subagent、文件组织和 focused tests。Codex
-只冻结用户结果、协议/政策边界、验收场景和 final gates；并行 agents 默认只读，当前权威 checkout 的
-产品写入与 Git 提交由单一 integrator 串行完成，不得以“动态”为名扩展 Stage。
+R1 只关闭：音频输出证据/held resume 撤绿、Exiting 后 late HELLO、真实通知开关、frontend CI 与
+release-set/CI-entry non-archive policy 证据。该 Claude 在独立 worktree 使用官方 dynamic workflow；不
+写主 checkout，不扩展 Stage。
 
-建议不包含：
+R1 明确不包含：
 
 - H4/完整 P2；
 - S3/S4。
 
-Stage 通过只代表 S2/P1 client/L2/L3 功能完成；公网 deployment 仍由 H4/P2 阻断。
+其余三个并行 lane：
+
+- Stage 3 完成 P2 仓内实现和 Linux/H9 harness，但当前机器缺 Linux/Caddy，只能诚实停在
+  `PENDING_LINUX_EVIDENCE`；
+- Stage 4 只做 operational storage 单一 INSERT 的 `prepare_cached`；
+- Stage 5 只做离线区间删失 analyzer/test/report。现有数据 30s/60s 近似同分，预期终态是
+  `NO_PRODUCTION_CHANGE / DATA_REQUIRED`，不访问 Rutgers、不改生产 scheduler。
+
+完整路径、branch、文件所有权、冲突和重门纪律见 `docs/orchestration/PARALLEL-WAVE-1.md`。四个 Claude
+完成后，Codex 必须按 R1 → P2 → S4 → S3 evidence 串行回收，组合 head 只跑一次重门和一次集中审查。
 
 ## 17. 用户冻结的余下四阶段顺序
 
@@ -454,8 +474,8 @@ Stage 5 — STAGE-5
 ```
 
 发布不是额外产品 Stage；余下四阶段完成后再由 Codex 准备一次候选/发布门，并另行取得外部动作授权。
-当前只授权 Stage 2。完整阶段合同、分级政策与停止条件见
-`docs/orchestration/STAGE-EXECUTION-PLAN.md`。
+产品依赖顺序没有变化；当前授权的是四个隔离 lane 的并行**实现**，不是乱序验收或发布。完整阶段合同、
+分级政策与停止条件见 `docs/orchestration/STAGE-EXECUTION-PLAN.md`。
 
 ## 18. 不得复活的旧工作模式
 
@@ -471,6 +491,34 @@ Stage 5 — STAGE-5
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-08-25 — Parallel Wave 1：隔离并行实现、串行集成
+
+- 用户认为按 Stage 依次实现和依次审查仍过慢，批准多个 Claude 通过 worktree 并行工作；
+- Codex 对 P2、S4、S3 的真实代码路径、参数缺口、外部环境和交叉文件做了并行只读调查；
+- 冻结四个 lane：Stage 2 R1、Stage 3/P2、Stage 4/S4、Stage 5/S3 evidence；每个 lane 有独立 branch、
+  worktree、任务包与 `ultracode:` prompt；
+- P2 新冻结 per-socket 256 KiB、global outbound 64 MiB、write timeout 5s；保留 global 1024、per-client 64、
+  per-session 4；本机无法运行 Linux systemd+Caddy 600s H9，因此只允许报告 pending evidence；
+- S4 确认唯一热点为 operational storage 成功提交循环，rusqlite 只在该 crate 窄开 cache feature；
+- S3 现有 NB 数据下 30s/60s 都约解释 65/67，证据不足，当前只授权离线 analyzer 与
+  `NO_PRODUCTION_CHANGE / DATA_REQUIRED`；
+- 并行 worktree 只跑 focused tests；workspace/frontend/archive/security/soak 留给 Codex 串行组合 head，
+  避免已观测到的 Vitest/Cargo 资源争抢。
+
+### 2026-08-25 — Stage 2 主交付独立验收与 R1 窄修
+
+- Claude 在 `75cefb0..553371f` 一次实现 Stage 2 主体；Codex 固定同一范围检查 55 个 changed files，
+  独立复跑 workspace、frontend、architecture/self-tests、diff-check 与 PowerShell parser；
+- final-head Rust、architecture 和串行 frontend verify 全绿；第一次 frontend 与 Rust 并跑时出现 20 个
+  Vitest worker 启动超时、无断言 failure，按固定预算串行复跑一次即通过，记环境资源观察；
+- Codex Security scan `4b394b71-967d-42bf-b8ac-8186c7cb5d22` 完成 34/34 inventory，封存 0 个可报告
+  finding；
+- 独立审查确认四个 Stage blocker：audio known-failure 被无证据擦除与 held resume 假绿、presence pre-admitted
+  late HELLO 越过 Exiting、生产 UI 缺通知关闭入口、frontend Notification policy tests 未进入 CI 且
+  release-set/CI-entry non-archive self-test 不完整；
+- 结论为 `CHANGES_REQUIRED`，生成唯一一轮 `STAGE-2-R1/v1`；其余低严重度/防御性候选明确延期，不进入
+  P2/S4/S3，不构建 archive、不重复全量安全扫描。
 
 ### 2026-08-24 — 改为 Stage 级推进并允许非关键问题延期
 
@@ -554,20 +602,21 @@ Stage 5 — STAGE-5
 作出验收结论或批准进入下一里程碑时都必须更新。
 
 ```text
-Active task id: STAGE-2
-Milestone: Stage 2 complete S2 + P1/L1/L2/L3 closure
-Claude prompt prepared: YES
-Claude prompt forwarded: NO — 等待用户复制转发
-Prompt/version: STAGE-2/v1
-Expected base: feat/s2-alert-delivery@75cefb0
-Claude reported head: pending
-Codex review range: pending (expected 75cefb0..<head>)
-Codex verdict: NOT_STARTED
-Blocking findings: none; Stage work not yet implemented
+Active wave: PARALLEL-WAVE-1
+Lanes: STAGE-2-R1/v2-parallel; STAGE-3/v1-parallel; STAGE-4/v1-parallel; STAGE-5/v1-parallel-evidence
+Claude prompts prepared: YES — four self-contained prompts
+Expected product parent: feat/s2-alert-delivery@553371f
+Orchestration anchor: this committed document set
+Development: four isolated worktrees/branches, focused tests only
+Integration order: STAGE-2-R1 → STAGE-3/P2 → STAGE-4/S4 → STAGE-5/S3 evidence
+Heavy gates: one serial run on integrated head
+External gates: P2 Linux/systemd/Caddy 600s soak; real H8 deployment separately authorized
+Expected S3 outcome: NO_PRODUCTION_CHANGE / DATA_REQUIRED
+Codex current verdict: STAGE-2 CHANGES_REQUIRED; other lanes NOT_STARTED/PENDING IMPLEMENTATION
+Stage-2 blocker set: audio false READY; pre-admitted late HELLO after Exiting; no production notification-off control; frontend CI/release-set policy self-test closure missing
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Active task: STAGE-2/v1
-Next authorized action: 用户将 docs/orchestration/tasks/STAGE-2.md 中的 Claude Prompt 原样转发给 Claude
+Next authorized action: 用户将四个 task 文件 B 部分分别原样转发给四个 Claude；Codex 等待全部回报后串行集成审查
 ```
 
 验收结论只允许使用：
