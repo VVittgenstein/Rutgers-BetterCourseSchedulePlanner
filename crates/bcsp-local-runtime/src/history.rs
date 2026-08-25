@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use bcsp_application::WatchDispatchSink;
 use bcsp_contracts::{
-    OpenEpisodeState, OpenEpisodeV1, SystemTraceIdSource, TraceId, TraceIdSource,
+    OpenEpisodeState, OpenEpisodeV1, SystemTraceIdSource, TraceId, TraceIdSource, WatchAlertId,
     WatchServerEventV1, WatchStopReason,
 };
 use bcsp_local_user_state::{
@@ -31,6 +31,50 @@ enum LocalWatchHistoryWork {
 struct LocalWatchHistoryWriter {
     store: PersonalStateStore,
     run_id: TraceId,
+    announcements: OpenAnnouncements,
+}
+
+/// How many announced alerts are remembered before the oldest is forgotten.
+const ANNOUNCED_OPEN_CAPACITY: usize = 512;
+
+/// Which open alerts the console has already told the user about.
+///
+/// A section that stays open keeps producing `ALERT_UPDATED` for as long as
+/// the poll keeps finding it open. Announcing on the event itself would print
+/// the same line every poll and bury everything else in the window, so the
+/// user is told when it OPENS -- once -- and again only if it closes and
+/// opens later.
+#[derive(Default)]
+struct OpenAnnouncements {
+    seen: HashSet<WatchAlertId>,
+    /// The same ids in arrival order, so the set cannot grow without bound on
+    /// a long-running process. An alert evicted here can be announced again,
+    /// which is the right way round: repeating after five hundred distinct
+    /// alerts is a far smaller problem than a set that never stops growing.
+    order: VecDeque<WatchAlertId>,
+}
+
+impl OpenAnnouncements {
+    /// Whether this open alert is news.
+    fn opened(&mut self, alert: WatchAlertId) -> bool {
+        if !self.seen.insert(alert) {
+            return false;
+        }
+        self.order.push_back(alert);
+        if self.order.len() > ANNOUNCED_OPEN_CAPACITY
+            && let Some(evicted) = self.order.pop_front()
+        {
+            self.seen.remove(&evicted);
+        }
+        true
+    }
+
+    /// It closed or was dismissed, so a later opening is news again.
+    fn closed(&mut self, alert: WatchAlertId) {
+        if self.seen.remove(&alert) {
+            self.order.retain(|id| *id != alert);
+        }
+    }
 }
 
 impl LocalWatchHistorySink {
@@ -43,7 +87,14 @@ impl LocalWatchHistorySink {
         let (sender, receiver) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("bcsp-watch-history".to_owned())
-            .spawn(move || LocalWatchHistoryWriter { store, run_id }.run(receiver))
+            .spawn(move || {
+                LocalWatchHistoryWriter {
+                    store,
+                    run_id,
+                    announcements: OpenAnnouncements::default(),
+                }
+                .run(receiver)
+            })
             .expect("local watch history worker must start");
         Self {
             sender: Some(sender),
@@ -118,21 +169,27 @@ impl LocalWatchHistoryWriter {
         // code is what the local console turns into a line the user can read;
         // the history write below is what makes it durable.
         for event in &dispatch.events {
-            if let WatchServerEventV1::AlertUpdated { alert } = event
-                && alert.visible
-            {
-                let section = &alert.episode.section_key;
-                tracing::info!(
-                    code = "LOCAL_SECTION_OPEN",
-                    section = %format!(
-                        "{} {} {}",
-                        section.term().as_str(),
-                        section.campus().as_str(),
-                        section.index().as_str()
-                    ),
-                    "a watched section is open",
-                );
+            let WatchServerEventV1::AlertUpdated { alert } = event else {
+                continue;
+            };
+            if !alert.visible {
+                self.announcements.closed(alert.alert_id);
+                continue;
             }
+            if !self.announcements.opened(alert.alert_id) {
+                continue;
+            }
+            let section = &alert.episode.section_key;
+            tracing::info!(
+                code = "LOCAL_SECTION_OPEN",
+                section = %format!(
+                    "{} {} {}",
+                    section.term().as_str(),
+                    section.campus().as_str(),
+                    section.index().as_str()
+                ),
+                "a watched section is open",
+            );
         }
         let store = &mut self.store;
         let stop_reasons = dispatch
@@ -383,6 +440,35 @@ fn unix_millis(timestamp_nanos: i128) -> PersonalStateResult<UnixMillis> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_section_that_stays_open_is_announced_once() {
+        // The poll keeps finding it open, so the same alert arrives again and
+        // again. A console that printed each one would scroll every other
+        // line -- the countdown, the gate, the page events -- out of the
+        // window while telling the user nothing new.
+        let mut announcements = OpenAnnouncements::default();
+        let alert = WatchAlertId::new(trace(1));
+        assert!(announcements.opened(alert), "the first is news");
+        for _ in 0..50 {
+            assert!(!announcements.opened(alert), "a repeat is not");
+        }
+
+        // It closes. The next opening is news again.
+        announcements.closed(alert);
+        assert!(announcements.opened(alert));
+    }
+
+    #[test]
+    fn the_announcement_memory_is_bounded() {
+        let mut announcements = OpenAnnouncements::default();
+        for index in 0..(ANNOUNCED_OPEN_CAPACITY as u64 + 10) {
+            assert!(announcements.opened(WatchAlertId::new(trace(index))));
+        }
+        assert!(announcements.seen.len() <= ANNOUNCED_OPEN_CAPACITY);
+        assert_eq!(announcements.seen.len(), announcements.order.len());
+    }
+
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::str::FromStr;

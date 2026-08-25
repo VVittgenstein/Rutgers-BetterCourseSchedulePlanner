@@ -57,14 +57,45 @@ pub trait LocalConsoleSink: Send + Sync + 'static {
     fn line(&self, text: &str);
 }
 
-struct StdoutSink;
+/// How many lines may be waiting to be written before new ones are dropped.
+const CONSOLE_QUEUE_CAPACITY: usize = 512;
+
+/// Writes to stdout from a thread of its own.
+///
+/// Never from the caller's. Console lines are raised from inside the
+/// materialization lock, from the socket maintenance tick, and from the
+/// presence registry -- and a Windows console with a selection active BLOCKS
+/// every write until the user presses a key. Writing inline would let someone
+/// highlighting a line stall the runtime that is printing it.
+///
+/// The queue is bounded and a full queue drops the line rather than waiting.
+/// A console nobody is draining is not worth stopping the program for.
+struct StdoutSink {
+    lines: std::sync::mpsc::SyncSender<String>,
+}
+
+impl StdoutSink {
+    fn spawn() -> Self {
+        let (lines, receiver) = std::sync::mpsc::sync_channel::<String>(CONSOLE_QUEUE_CAPACITY);
+        // Detached on purpose: it ends when the sender is dropped, which is
+        // when the runtime that owns the console is gone.
+        let _ = std::thread::Builder::new()
+            .name("bcsp-console".to_owned())
+            .spawn(move || {
+                while let Ok(text) = receiver.recv() {
+                    // `println!` rather than tracing: this is the product's
+                    // own voice, and it must not be reformatted, filtered, or
+                    // JSON-wrapped by a subscriber meant for diagnostics.
+                    println!("{text}");
+                }
+            });
+        Self { lines }
+    }
+}
 
 impl LocalConsoleSink for StdoutSink {
     fn line(&self, text: &str) {
-        // `println!` rather than tracing: this is the product's own console
-        // voice, and it must not be reformatted, filtered, or JSON-wrapped by
-        // a subscriber configured for diagnostics.
-        println!("{text}");
+        let _ = self.lines.try_send(text.to_owned());
     }
 }
 
@@ -118,7 +149,7 @@ impl LocalConsole {
     pub fn new(locale: LocalConsoleLocale) -> Self {
         Self {
             locale,
-            sink: Arc::new(StdoutSink),
+            sink: Arc::new(StdoutSink::spawn()),
         }
     }
 

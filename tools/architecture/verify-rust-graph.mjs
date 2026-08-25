@@ -19,6 +19,28 @@ const PUBLIC_SOURCE_DENY_PATH = 'tools/architecture/public-source-deny.json';
 const PUBLIC_SOURCE_DENY_SEMANTIC_SHA256 = '8E61B137550FC661CD28AA1E4DAA7A74F10AF6F555B865D442934938E96C5AF5';
 const PUBLIC_SOURCE_MARKER_COUNT = 212;
 
+/**
+ * Markers this scanner keeps denying after they left the SHARED set.
+ *
+ * The page-level notification capability is a BROWSER capability: a page the
+ * user has open, with permission they granted, posting a message they will
+ * see. Rust is not that page. A notification raised here would fire with no
+ * page running and nothing able to check it, which is the thing the split was
+ * careful not to permit -- so the Rust closure keeps refusing all three, and
+ * this list is what keeps the two Rust scanners saying the same thing.
+ *
+ * Kept identical to `SUPPLEMENTAL_MARKERS` in
+ * verify-public-rust-zero-surface.mjs; the self-test compares them.
+ */
+export const SUPPLEMENTAL_RUST_MARKERS = Object.freeze({
+  LOCAL_RESET: Object.freeze(['local_user_data_reset']),
+  SYSTEM_NOTIFICATIONS: Object.freeze([
+    'browser_notification_api',
+    'desktop_notification',
+    'notification_permission',
+  ]),
+});
+
 const external = (req, usesDefaultFeatures, features = []) => Object.freeze({
   features: Object.freeze(features),
   req,
@@ -890,7 +912,11 @@ export function auditRustSourceFiles(files, denyDocument) {
       }
       const tokens = rustAuditTokens(source);
       for (const row of denyDocument.capabilities) {
-        for (const marker of row.markers) {
+        const markers = [
+          ...row.markers,
+          ...(SUPPLEMENTAL_RUST_MARKERS[row.capability] ?? []),
+        ];
+        for (const marker of markers) {
           const normalizedMarker = normalizeAuditToken(marker);
           const token = [...tokens].find((candidate) => candidate.includes(normalizedMarker));
           if (token) {

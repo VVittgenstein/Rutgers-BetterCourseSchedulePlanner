@@ -99,6 +99,13 @@ struct Registry {
     /// remove a binding that no longer belongs to it.
     tabs: HashMap<TraceId, TraceId>,
     phase: LocalPresencePhase,
+    /// Whether a page has ever been counted on this runtime.
+    ///
+    /// The countdown says every page has CLOSED, and before the first one
+    /// opens nothing has. A runtime that started counting at launch would
+    /// open its console with an alarming line about pages that never existed,
+    /// and would race the browser it just asked the operating system to open.
+    ever_counted_a_page: bool,
     generation: u64,
     /// The whole second the countdown last reported, so the console shows a
     /// countdown rather than a four-times-a-second stutter.
@@ -134,11 +141,8 @@ impl LocalPresenceRoute {
             registry: Mutex::new(Registry {
                 connections: HashMap::new(),
                 tabs: HashMap::new(),
-                // A runtime starts before its first page exists, so it starts
-                // counting down immediately. The page the launcher opens
-                // arrives well inside the window; a launch nobody responds to
-                // is exactly the case this exists for.
                 phase: LocalPresencePhase::Running,
+                ever_counted_a_page: false,
                 generation: 0,
                 announced_second: None,
                 sealed: false,
@@ -221,6 +225,11 @@ impl LocalPresenceRoute {
             LocalPresencePhase::Exiting => false,
             LocalPresencePhase::Running => {
                 if pages > 0 {
+                    return false;
+                }
+                if !registry.ever_counted_a_page {
+                    // Nothing has closed, because nothing has opened. The
+                    // runtime waits for the page the launcher is opening.
                     return false;
                 }
                 registry.generation += 1;
@@ -307,7 +316,10 @@ impl WebSocketExtension for LocalPresenceRoute {
     fn connect(&self, connection_id: TraceId, outbound: mpsc::UnboundedSender<String>) -> bool {
         let now = Instant::now();
         let mut registry = self.lock();
-        if registry.sealed {
+        if registry.sealed || registry.phase == LocalPresencePhase::Exiting {
+            // The exit has been asked for and the ordered shutdown is under
+            // way. Accepting a page here would count it, answer REGISTERED,
+            // and then take the runtime away from it a moment later.
             return false;
         }
         registry.connections.insert(
@@ -363,6 +375,7 @@ impl WebSocketExtension for LocalPresenceRoute {
             // already gone or about to be, and its late disconnect is
             // handled by comparing identity rather than presence.
             registry.tabs.insert(tab_id, connection_id);
+            registry.ever_counted_a_page = true;
             let pages = registry.pages();
             if let Some(connection) = registry.connections.get(&connection_id) {
                 Self::send(
@@ -419,7 +432,12 @@ impl WebSocketExtension for LocalPresenceRoute {
                 .collect()
         };
         for connection_id in expired {
-            self.close(connection_id, "presence connection never identified a tab");
+            // Re-checked under the lock inside `close_unidentified`. The list
+            // was taken a moment ago, and a HELLO that was merely slow can
+            // arrive in between: closing on the stale reading would drop a
+            // page that had just identified itself, and the count would go to
+            // zero under a tab that is right there.
+            self.close_unidentified(connection_id);
         }
         self.after_change(now);
     }
@@ -433,6 +451,30 @@ impl LocalPresenceRoute {
     /// disconnect through the ordinary path. Removing the record here as well
     /// keeps a refused connection from counting in the window before that
     /// happens.
+    /// Closes a connection that has still not said which tab it is.
+    ///
+    /// The check and the removal happen under one lock, so a HELLO that
+    /// landed after the sweep read the registry keeps its connection.
+    fn close_unidentified(&self, connection_id: TraceId) {
+        let now = Instant::now();
+        let exit = {
+            let mut registry = self.lock();
+            match registry.connections.get(&connection_id) {
+                Some(connection) if connection.tab.is_none() => {}
+                _ => return,
+            }
+            registry.connections.remove(&connection_id);
+            tracing::warn!(
+                reason = "presence connection never identified a tab",
+                "closed a local presence connection",
+            );
+            self.reconcile(&mut registry, now)
+        };
+        if exit {
+            (self.request_exit)();
+        }
+    }
+
     fn close(&self, connection_id: TraceId, reason: &'static str) {
         let now = Instant::now();
         let exit = {
@@ -440,13 +482,24 @@ impl LocalPresenceRoute {
             let Some(connection) = registry.connections.remove(&connection_id) else {
                 return;
             };
-            if let Some(tab) = connection.tab
+            let closed_a_page = if let Some(tab) = connection.tab
                 && registry.tabs.get(&tab) == Some(&connection_id)
             {
                 registry.tabs.remove(&tab);
-            }
+                true
+            } else {
+                false
+            };
             drop(connection);
             tracing::warn!(reason, "closed a local presence connection");
+            if closed_a_page {
+                // The user lost a page here just as surely as if the browser
+                // had closed it, and the console count would otherwise drift
+                // from what the runtime actually believes.
+                self.report(&crate::LocalConsoleEvent::PageClosed {
+                    pages: registry.pages(),
+                });
+            }
             self.reconcile(&mut registry, now)
         };
         if exit {
@@ -566,6 +619,47 @@ mod tests {
         harness.route.disconnect(trace(1));
         assert_eq!(harness.route.state().pages, 1);
         assert_eq!(harness.route.state().phase, LocalPresencePhase::Running);
+    }
+
+    #[test]
+    fn a_runtime_that_has_never_seen_a_page_does_not_count_down() {
+        // The launcher opens the browser right after the runtime binds, so
+        // there is a window where no page exists yet. Counting down there
+        // would open every session with an alarming line about pages that
+        // never existed, and would race the browser being opened.
+        let harness = harness(Duration::from_millis(40));
+        for _ in 0..6 {
+            harness.route.tick();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(harness.route.state().phase, LocalPresencePhase::Running);
+        assert_eq!(*harness.exits.lock().expect("exit counter"), 0);
+
+        // Once a page HAS been here, its leaving is the last page leaving.
+        let _inbound = attach(&harness.route, 1);
+        hello(&harness.route, 1, 100);
+        harness.route.disconnect(trace(1));
+        assert!(matches!(
+            harness.route.state().phase,
+            LocalPresencePhase::CountingDown { .. }
+        ));
+    }
+
+    #[test]
+    fn a_page_arriving_after_the_exit_was_asked_for_is_refused() {
+        let harness = harness(Duration::from_millis(40));
+        let _inbound = attach(&harness.route, 1);
+        hello(&harness.route, 1, 100);
+        harness.route.disconnect(trace(1));
+        std::thread::sleep(Duration::from_millis(60));
+        harness.route.tick();
+        assert_eq!(*harness.exits.lock().expect("exit counter"), 1);
+
+        // The ordered shutdown is under way. Accepting a page now would count
+        // it, answer REGISTERED, and take the runtime away a moment later.
+        let (outbound, _rejected) = mpsc::unbounded_channel();
+        assert!(!harness.route.connect(trace(2), outbound));
+        assert_eq!(harness.route.state().pages, 0);
     }
 
     #[test]

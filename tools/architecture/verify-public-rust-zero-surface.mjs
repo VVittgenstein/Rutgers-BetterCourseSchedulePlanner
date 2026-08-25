@@ -30,7 +30,7 @@ export const PUBLIC_RUST_SURFACE_SCOPES = Object.freeze({
 const DENY_PATH = 'tools/architecture/public-source-deny.json';
 const EXPECTED_CAPABILITY_COUNT = 18;
 const LOCAL_ONLY_PACKAGES = Object.freeze(['bcsp-local-user-state', 'bcsp-local-runtime', 'bcsp-local']);
-const SUPPLEMENTAL_MARKERS = Object.freeze({
+export const SUPPLEMENTAL_MARKERS = Object.freeze({
   LOCAL_RESET: Object.freeze(['local_user_data_reset']),
   // The page-level notification markers left the shared marker set so that a
   // BROWSER page which declares `current-page-notification` may use the

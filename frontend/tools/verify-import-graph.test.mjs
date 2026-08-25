@@ -93,7 +93,12 @@ test('permits a page-level notification only for a build that declares it', () =
   // `current-page-notification` may read the browser's own notification
   // permission and post one from the running page; a build that does not is
   // refused exactly as it was before the marker left the shared set.
+  // All three page-level markers, not only the one a current call site
+  // happens to spell. The declaration exempts the CAPABILITY, so the test has
+  // to be about the capability.
   const pageNotification = 'export const notificationPermission = "granted";\n'
+    + 'export const browserNotificationApi = 1;\n'
+    + 'export const desktopNotification = 1;\n'
     + 'export function SharedApplication() { return null; }\n';
   const files = baselineFiles();
   files.set('src/ui/shared/SharedApplication.tsx', pageNotification);
@@ -111,10 +116,12 @@ test('permits a page-level notification only for a build that declares it', () =
 
   const undeclared = analyze(files, denyInput(), new Set(['course-search']));
   assert.equal(undeclared.state, 'FAIL', 'an undeclared build must still be refused');
-  assert.ok(
-    undeclared.errors.some((error) => error.includes('matched notification_permission')),
-    undeclared.errors.join('\n'),
-  );
+  for (const marker of ['notification_permission', 'browser_notification_api', 'desktop_notification']) {
+    assert.ok(
+      undeclared.errors.some((error) => error.includes(`matched ${marker}`)),
+      `${marker}: ${undeclared.errors.join('\n')}`,
+    );
+  }
 });
 
 test('keeps refusing every notification surface a page cannot own', () => {

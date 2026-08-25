@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import {
   EXTERNAL_DEPENDENCY_SPEC,
   GRAPH_SPEC,
+  SUPPLEMENTAL_RUST_MARKERS,
   auditWorkspaceTargetSources,
   auditRustSourceFiles,
   createReport,
@@ -504,4 +505,29 @@ assert.deepEqual(JSON.parse(jsonText).rootManifestSections, [
 assert.equal(JSON.parse(jsonText).workspaceDefaultMembers, 15);
 assert.equal(jsonText.trim(), JSON.stringify(JSON.parse(jsonText)));
 
+
+// The two Rust scanners must refuse the same things. The page-level
+// notification markers left the SHARED set so a browser page that declares
+// the capability may use the browser API; nothing about that applies to Rust,
+// and a scanner that quietly stopped checking would leave the other one as
+// the only thing standing between a server-side notification and the public
+// build.
+{
+  const zeroSurface = await import('./verify-public-rust-zero-surface.mjs');
+  assert.deepEqual(
+    SUPPLEMENTAL_RUST_MARKERS,
+    zeroSurface.SUPPLEMENTAL_MARKERS,
+    'the two Rust scanners must apply the same supplemental markers',
+  );
+  for (const marker of ['notification_permission', 'browser_notification_api', 'desktop_notification']) {
+    const audit = auditRustSourceFiles(
+      new Map([['crates/bcsp-public-runtime/src/notify.rs', `fn ${marker}() {}`]]),
+      DENY_DOCUMENT,
+    );
+    assert.ok(
+      audit.violations.some((violation) => violation.marker === marker),
+      `${marker} must still be refused in the public Rust source closure`,
+    );
+  }
+}
 process.stdout.write('verify-rust-graph tests: PASS\n');

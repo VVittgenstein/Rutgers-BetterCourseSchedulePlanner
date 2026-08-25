@@ -436,14 +436,17 @@ async fn run_primary(
     }
     let shutdown_request = wait_for_shutdown_request(&mut running).await;
     let console = running.prepared().console();
-    console.report(&LocalConsoleEvent::Exiting {
-        reason: shutdown_request
-            .as_ref()
-            .copied()
-            .unwrap_or(LocalExitReason::Signal),
-    });
+    // Only a real request is reported as one. A shutdown that began because
+    // the request channel broke is not the user pressing exit, and saying so
+    // would be the console inventing a reason -- the error is reported
+    // through the exit code instead.
+    if let Ok(reason) = shutdown_request {
+        console.report(&LocalConsoleEvent::Exiting { reason });
+    }
     let shutdown = running.shutdown().await;
-    console.report(&LocalConsoleEvent::Stopped);
+    if shutdown.is_ok() {
+        console.report(&LocalConsoleEvent::Stopped);
+    }
     match (shutdown_request, shutdown) {
         (_, Err(error)) => Err(error),
         (Err(error), Ok(())) => Err(error),

@@ -597,11 +597,16 @@ where
                 // warnings without being asked. A recovery is the same event
                 // ending, and is reported at the same level so the pair reads
                 // as a pair.
+                // The target as a person writes it -- "92026 NB" -- because a
+                // console line built from this is read by one. A `?` here
+                // would put a Rust struct dump in front of the user.
+                let target_label =
+                    format!("{} {}", target.term().as_str(), target.campus().as_str());
                 match decision.disposition {
                     GateDisposition::Hold => tracing::info!(
                         code = "OPEN_SNAPSHOT_GATE_HOLD",
                         kind = ?decision.kind,
-                        target = ?target,
+                        target = %target_label,
                         "the snapshot integrity gate withheld a suspect open snapshot",
                     ),
                     GateDisposition::Apply => {
@@ -610,10 +615,13 @@ where
                             crate::gate::GateDecisionKind::QuarantineRecover
                                 | crate::gate::GateDecisionKind::QuarantineConfirm
                         ) {
-                            tracing::warn!(
+                            // Both at INFO. The pair is one story, and the
+                            // local console layer -- not the level -- decides
+                            // that they reach the user.
+                            tracing::info!(
                                 code = "OPEN_SNAPSHOT_GATE_RELEASED",
                                 kind = ?decision.kind,
-                                target = ?target,
+                                target = %target_label,
                                 "the snapshot integrity gate released a quarantined target",
                             );
                         }

@@ -1358,8 +1358,8 @@ async fn a_page_returning_inside_the_window_cancels_the_exit() {
     running.shutdown().await.unwrap();
 }
 
-/// A socket that never says which tab it is does not count, and does not keep
-/// the program alive. Transport ping/pong is not a page.
+/// A socket that never says which tab it is does not count, and does not
+/// hold the program open. Transport ping and pong are not a page.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_presence_socket_that_never_identifies_itself_is_not_a_page() {
     let temp = TestDirectory::new("presence-silent");
@@ -1374,9 +1374,16 @@ async fn a_presence_socket_that_never_identifies_itself_is_not_a_page() {
     let authority = origin.strip_prefix("http://").unwrap().to_owned();
     let nonce = running.nonce().as_str().to_owned();
 
+    // A real page first: the countdown is about the last page LEAVING, and
+    // this is what makes there be one.
+    let mut page = open_presence_socket(&authority, &origin, &nonce);
+    send_websocket_text(&mut page, &presence_hello("00000000-0000-4000-8000-0000000ab003"));
+    let _ = read_websocket_text(&mut page);
+
     // Held open, and silent. If an unidentified socket counted, this would
-    // keep the runtime alive forever.
+    // keep the runtime alive after the real page goes.
     let _silent = open_presence_socket(&authority, &origin, &nonce);
+    drop(page);
 
     tokio::time::timeout(
         Duration::from_secs(5),
@@ -1388,6 +1395,7 @@ async fn a_presence_socket_that_never_identifies_itself_is_not_a_page() {
 
     running.shutdown().await.unwrap();
 }
+
 
 
 /// The desired-watch path is an ordinary local HTTP resource, and a plain
