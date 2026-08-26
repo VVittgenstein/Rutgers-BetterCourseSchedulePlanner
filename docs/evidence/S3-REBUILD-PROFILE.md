@@ -3,7 +3,7 @@
 This offline analysis of locally captured openSections observation data (kept in the gitignored `data/` root; only these evidence documents are committed) reaches the verdict **NO_PRODUCTION_CHANGE** with qualifier **DATA_REQUIRED** from the A4 gate evaluation below. Unsatisfied gates: A4-1, A4-2, A4-3, A4-4, A4-6. All numbers are computed from interval-censored change brackets; no production behavior is changed by this lane.
 
 - A4-1 unsatisfied: campuses: NB(pc-2e9190844bde) only; NK missing; CM missing
-- A4-2 unsatisfied: windows: 3 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative off-peak brackets, none in peak): 1 (window labels: 0 peak-overlapping, 3 off-peak)
+- A4-2 unsatisfied: windows: 3 total; evidence sessions: 3 from 3 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets): 0; qualifying off-peak sessions (>=5 informative off-peak brackets, none in peak): 1 (window labels: 0 peak-overlapping, 3 off-peak)
 - A4-3 unsatisfied: c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate
 - A4-4 unsatisfied: not identifiable (not-distinguishable)
 - A4-6 unsatisfied: not evaluable: no distinguishable winner
@@ -23,6 +23,14 @@ This offline analysis of locally captured openSections observation data (kept in
 | 20260820T033451393Z-a8a40f98/samples.ndjson#w00 | 2026-08-20T03:34:51.458Z – 2026-08-20T03:34:51.792Z | 2026-08-19 23:34–23:34 ET | no | 1 | 0 |
 | 20260820T033527487Z-d92a8a35/samples.ndjson#w00 | 2026-08-20T03:35:27.541Z – 2026-08-20T03:35:48.086Z | 2026-08-19 23:35–23:35 ET | no | 3 | 0 |
 | 20260820T033701043Z-5745bc4a/samples.ndjson#w00 | 2026-08-20T03:37:01.121Z – 2026-08-20T05:42:20.043Z | 2026-08-19 23:37–08-20 01:42 ET | no | 554 | 67 |
+
+### Evidence sessions (server timeline)
+
+| sessionId | client windows | brackets | informative in-peak | informative off-peak | pure off-peak |
+|---|---|---:|---:|---:|---|
+| 20260820T033451393Z-a8a40f98/samples.ndjson::soc:2026:9:NB#s00 | 20260820T033451393Z-a8a40f98/samples.ndjson#w00 | 0 | 0 | 0 | yes |
+| 20260820T033527487Z-d92a8a35/samples.ndjson::soc:2026:9:NB#s00 | 20260820T033527487Z-d92a8a35/samples.ndjson#w00 | 0 | 0 | 0 | yes |
+| 20260820T033701043Z-5745bc4a/samples.ndjson::soc:2026:9:NB#s00 | 20260820T033701043Z-5745bc4a/samples.ndjson#w00 | 67 | 0 | 67 | yes |
 
 ## Bracket statistics
 
@@ -57,7 +65,7 @@ Not evaluable: no distinguishable winner.
 | id | requirement | satisfied | evidence |
 |---|---|---|---|
 | A4-1 | Multi-target evidence: at least NB, NK, CM independently evaluable from independent data provenance | no | campuses: NB(pc-2e9190844bde) only; NK missing; CM missing |
-| A4-2 | Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak window must hold no peak-hour bracket at all, so one straddling session cannot supply both sides | no | windows: 3 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative off-peak brackets, none in peak): 1 (window labels: 0 peak-overlapping, 3 off-peak) |
+| A4-2 | Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides | no | windows: 3 total; evidence sessions: 3 from 3 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets): 0; qualifying off-peak sessions (>=5 informative off-peak brackets, none in peak): 1 (window labels: 0 peak-overlapping, 3 off-peak) |
 | A4-3 | 30s vs 60s model distinguishable with consistent winner under per-(target,window) holdout | no | c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate |
 | A4-4 | Unified safe offset covers phase and positive jitter across all targets/windows | no | not identifiable (not-distinguishable) |
 | A4-5 | Report honestly handles server Date precision, client clock, and request latency; production conclusions rest on server-clock evidence | yes | server clock used; serverDate on 558 samples; qualifying groups with server evidence 1/1; +1s quantization widening applied; client-vs-server offset p50=-752 ms |
@@ -102,7 +110,7 @@ For NDJSON inputs the fingerprint is sha256 over `sha256(samples.ndjson) + "\n" 
 ## Missing evidence for a future GO
 
 - Independent capture runs for the missing campuses (NK and/or CM alongside NB), each with enough change brackets per window for holdout grouping.
-- At least one America/New_York 17:00–18:00 peak window and one independent off-peak window, each with ≥ 5 informative brackets of its own (an empty or single-sample window is metadata, not peak evidence) — peak and off-peak are classified from the server-clock bounds of individual brackets, not from the window label.
+- At least one America/New_York 17:00–18:00 peak evidence session and one independent off-peak session, each with ≥ 5 informative brackets of its own (an empty or single-sample window is metadata, not peak evidence). The two sessions must be separated on BOTH the client and the server timeline — client windows that the server clock shows to be one uninterrupted session count once — and peak/off-peak are classified from the server-clock bounds of individual brackets, not from the window label.
 - Enough brackets across ≥ 2 (target, window) groups for non-degenerate holdout, and a strict, holdout-consistent coverage win before any winner can be declared.
 - A winning model whose per-group phase intervals intersect and whose positive jitter is bounded, so one safe offset can be frozen.
 - Stability of the winner under all three checks: whole-target leave-out, (target, window) group leave-out, and deterministic top-k outlier removal.
