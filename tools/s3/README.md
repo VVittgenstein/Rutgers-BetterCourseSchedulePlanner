@@ -444,23 +444,93 @@ this way are counted per session as `uncorroboratedSeamCount` and named in the
 A4-2 evidence string. The grouping is reported in `evidenceSessions` (JSON) and
 in the `### Evidence sessions (server timeline)` table (Markdown).
 
-**The residual boundary, stated rather than implied.** To keep a forged split
-alive an attacker must move more than **half** of one window's offsets, and those
-same `Date` headers are the bracket bounds that window's peak or off-peak claim
-rests on: qualifying a side needs `MIN_GROUP_BRACKETS` server-informative
-brackets, hence at least ten dated samples, so the cheapest forgery rewrites six
-or more of the very `Date`s it is claiming as evidence. Done completely, that is
-no longer a detectable lie at all — a capture whose second half moved on both
-clocks is byte-for-byte what a real 11-minute pause produces, and it reaches GO
-on the frozen baseline, on v2.8.0 and here. The suite pins that as `BOUNDARY
-(A3)` rather than as a counterexample, and asserts the price: CE-20 needs 0
-edited `Date` cells, its rewritten twin needs 38. Bulk rewrites and from-scratch
-fabrication stay deferred per A3. In the MERGE direction a single cell still
-suffices and is harmless by the counting argument above. "Hold out one `Date`"
-and "delete one `Date`" are the same operation *per cell*, because an absent
-`Date` imposes no grouping constraint; that equivalence does **not** extend to
-k-cell rewrites, since deletions can only widen a measured seam while edits move
-it either way (`windows.test.mjs` pins both halves).
+### One uncorroborated seam voids the stream's client-window partition
+
+Seam corroboration as described above reads a statistic **of a window**, and the
+windows are drawn by the client clock — the attacker's. A window holding ONE
+dated sample has a median with breakdown point one, carries no bracket and claims
+nothing, and minting one is free: step the client clock at the peak boundary
+(CE-16's own primitive), step it again one sample later, and the sample in
+between is a client window of its own. Move that single `Date` with its own
+client column and the decoy corroborates the seam behind it, so the pure off-peak
+half of one server-contiguous straddling capture stands alone as an "independent"
+session while the peak half merges harmlessly with the decoy. That reached a
+six-gate **GO** on v2.9.0 for **one** edited `Date` cell out of 160 (CE-21), and
+for one moved plus one deleted cell at a second geometry with no deleted band at
+all (CE-22). A population floor on the corroborating window does not fix it — it
+only moves the price to `floor(F/2) + 1` cells, and it refuses honest data, since
+an honest short window carries no evidence of its own and making it unable to
+corroborate costs its neighbours their independence for nothing.
+
+The rule that does fix it reads the seam that **failed** rather than the window
+that passed. An uncorroborated seam is not an ambiguity; it is a proof. The
+client clock advanced across it by more than `sessionGapMs` MORE than the server
+clock did — that is exactly what `serverAdvance <= threshold` says while
+`segmentWindows` split on a client gap above the same threshold — so that
+stream's client clock is demonstrably stepped, and a stepped clock is not a
+trustworthy witness to **any** of that stream's window boundaries, including ones
+far from the step. So every evidence window of a stream holding an uncorroborated
+seam becomes ONE evidence session, reported as `clientClockStepVoided` on each
+session in the JSON.
+
+That is the fixpoint of the local rule rather than a bigger hammer bolted on:
+"a window touching an uncorroborated seam corroborates nothing" makes both of its
+seams fail, which makes its neighbours touch an uncorroborated seam, and the
+cascade reaches both ends of the stream. Stopping it at one or two hops just buys
+the attacker one or two more decoy windows (measured: decoy chains of length 2
+and 3 are refused here, and so are decoy widths 1, 2, 3 and 6 at jumps of 11, 15
+and 20 minutes). It is still only ever a MERGE, so it can never make A4-2 more
+permissive than the frozen A1 baseline.
+
+**What it costs honest data: nothing measurable.** An uncorroborated seam needs
+the client clock to run more than ten minutes ahead of the server clock inside
+one capture. D1/D2/D3 have none — their whole client-vs-server offset spread is
+6.5 s across 558 samples — and neither does any honest control in the suite: the
+~19 h two-session control, the genuine 11-minute pause (CONTROL (R3)) and the
+honest seam landing 2 s over the threshold (CONTROL (R3c)) all still reach GO,
+with `uncorroboratedSeamCount` and `clientClockStepVoided` zero and false
+throughout. CONTROL (R4) adds the shape this round's rejected alternative would
+have broken — an honest capture with a one-tick window between its off-peak and
+peak sessions. It reaches GO here; a population floor of six dated samples,
+measured in a scratch copy of this tree, answers `NO_PRODUCTION_CHANGE` on the
+same bytes because the stub can corroborate neither of its seams and drags both
+neighbours into one impure session. A capture that really does hold such a step is a capture with a
+client/server clock discontinuity, which the A2-2 contract names as a fail-closed
+trigger in so many words.
+
+**The residual boundary, measured rather than argued.** An earlier revision of
+this section claimed the price of keeping a forged split alive was "more than
+half of one window's offsets … hence at least ten dated samples, so six or more".
+Both halves of that were wrong: the window whose median must move need not carry
+any evidence (CE-21's decoy carries none), and the median has no population
+floor, so "more than half" was satisfied by one of one. The suite now measures
+the price instead of asserting it, in `BOUNDARY (A3b)`. Two independent
+requirements set it:
+
+- the server session index is an **order statistic**, `suffixMin - prefixMax`, so
+  a single surviving honest `Date` after the seam collapses `suffixMin` and pulls
+  the two windows back into one server session. **Every** `Date` the far window
+  still carries has to move, not a majority of them;
+- that window must still carry `MIN_GROUP_BRACKETS` server-informative in-peak
+  brackets, which needs the stable and the changed endpoint of each — 2 x
+  `MIN_GROUP_BRACKETS` = 10 dated samples at this geometry.
+
+Measured on those bytes: 0, 2, 4, 6 and 8 moved cells are all refused, 10 reaches
+GO, and keeping only 2, 3 or 4 ticks (fully forged) is refused on all three trees
+and loses A4-4 and A4-5 as well. So the minimum here is **10** `Date` cells per
+capture; a geometry where every poll saw a change could not go below
+`MIN_GROUP_BRACKETS + 1` = 6. At that price the second window has moved on BOTH
+clocks on every record it still dates — byte-for-byte what a real 11-minute pause
+produces, which is legitimate evidence, and it reaches GO on the frozen baseline,
+on v2.9.0 and here. `BOUNDARY (A3)` pins the same conclusion at the CE-20
+geometry. Bulk rewrites and from-scratch fabrication stay deferred per A3.
+
+In the MERGE direction a single cell still suffices and is harmless by the
+counting argument above. "Hold out one `Date`" and "delete one `Date`" are the
+same operation *per cell*, because an absent `Date` imposes no grouping
+constraint; that equivalence does **not** extend to k-cell rewrites, since
+deletions can only widen a measured seam while edits move it either way
+(`windows.test.mjs` pins both halves).
 
 A session qualifies on the peak side when ≥ 5 informative brackets **of one of
 its client windows** have comparison-clock bounds intersecting 17:00–18:00
