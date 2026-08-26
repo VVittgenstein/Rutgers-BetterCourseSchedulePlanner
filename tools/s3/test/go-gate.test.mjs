@@ -111,6 +111,16 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
     a2.evidence,
     "windows: 6 total; evidence sessions: 6 from 6 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets): 3; qualifying off-peak sessions (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
+  // The six client windows are six evidence sessions: the two sessions of each
+  // campus are ~19 h apart on the server clock too, so the server-timeline
+  // grouping keeps them independent and reports no merge.
+  assert.equal(json.evidenceSessions.length, 6);
+  assert.match(a2.evidence, /evidence sessions: 6 from 6 evidence window\(s\), grouped on the server timeline/);
+  assert.ok(!a2.evidence.includes("merged into a session"));
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 1);
+    assert.equal(sess.qualifiesPeak !== sess.qualifiesOffPeak, true, sess.sessionId);
+  }
   // Anti-lockout guard on the A2-2 fix: this control's peak evidence really is
   // SERVER-clock evidence, so tightening A4-2 to the comparison clock cannot
   // have turned the gate into a permanent NO. Re-derived here from the fixture

@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { segmentWindows, nyLabel, overlapsNyPeak, overlapsNyPeakStrict } from "../lib/windows.mjs";
+import {
+  segmentWindows,
+  assignServerSessions,
+  nyLabel,
+  overlapsNyPeak,
+  overlapsNyPeakStrict,
+} from "../lib/windows.mjs";
+import { WINDOW_GAP_MIN_MS } from "../lib/phase.mjs";
 
 function mk(startMs, endMs = startMs + 200) {
   return { clientStartMs: startMs, clientEndMs: endMs };
@@ -37,6 +44,69 @@ test("segmentWindows scales the gap threshold with 5x the interval", () => {
   assert.equal(segmentWindows(samples, 200, "in").length, 1);
   // null interval falls back to 60 s → 300 000 < floor → floor applies → split
   assert.equal(segmentWindows(samples, null, "in").length, 2);
+});
+
+function sv(startMs, serverMs) {
+  return { clientStartMs: startMs, clientEndMs: startMs + 200, serverDateMs: serverMs };
+}
+
+test("assignServerSessions splits on server gaps > max(10 min, 5x interval)", () => {
+  // interval 13 s -> the 600 000 ms floor applies. The CLIENT column is
+  // deliberately kept gapless here: what is under test is the server timeline.
+  const samples = [
+    sv(T0, T0),
+    sv(T0 + 13000, T0 + 13000),
+    sv(T0 + 26000, T0 + 26000),
+    sv(T0 + 39000, T0 + 26000 + 700000),
+    sv(T0 + 52000, T0 + 26000 + 713000),
+  ];
+  assert.deepEqual(assignServerSessions(samples, 13), [0, 0, 0, 1, 1]);
+  // Exactly at the threshold does not split (strict greater-than), one ms over
+  // does — the same boundary segmentWindows uses.
+  const atThreshold = [sv(T0, T0), sv(T0 + 1000, T0 + WINDOW_GAP_MIN_MS)];
+  const overThreshold = [sv(T0, T0), sv(T0 + 1000, T0 + WINDOW_GAP_MIN_MS + 1)];
+  assert.deepEqual(assignServerSessions(atThreshold, 13), [0, 0]);
+  assert.deepEqual(assignServerSessions(overThreshold, 13), [0, 1]);
+});
+
+test("assignServerSessions scales the gap threshold with 5x the interval", () => {
+  const samples = [sv(T0, T0), sv(T0 + 1000, T0 + 700000)];
+  assert.deepEqual(assignServerSessions(samples, 13), [0, 1]);
+  // interval 200 s -> threshold 1 000 000 ms > the floor: no split.
+  assert.deepEqual(assignServerSessions(samples, 200), [0, 0]);
+  // null interval falls back to 60 s -> 300 000 < floor -> floor applies.
+  assert.deepEqual(assignServerSessions(samples, null), [0, 1]);
+});
+
+test("assignServerSessions fails closed on missing and non-monotonic serverDates", () => {
+  // A deleted Date header must never manufacture a session split: the sample
+  // inherits the current index, and the gap is measured between the nearest
+  // samples that DO carry a Date.
+  const holed = [
+    sv(T0, T0),
+    sv(T0 + 13000, null),
+    sv(T0 + 26000, null),
+    sv(T0 + 39000, T0 + 39000),
+  ];
+  assert.deepEqual(assignServerSessions(holed, 13), [0, 0, 0, 0]);
+  // A hole that spans a real server gap still splits at the next dated sample.
+  const holedAcrossGap = [
+    sv(T0, T0),
+    sv(T0 + 13000, null),
+    sv(T0 + 26000, T0 + 700000),
+  ];
+  assert.deepEqual(assignServerSessions(holedAcrossGap, 13), [0, 0, 1]);
+  // Samples BEFORE the first observed Date carry null: the server timeline
+  // says nothing there, so they impose no grouping constraint.
+  const lateFirstDate = [sv(T0, null), sv(T0 + 13000, null), sv(T0 + 26000, T0 + 26000)];
+  assert.deepEqual(assignServerSessions(lateFirstDate, 13), [null, null, 0]);
+  // No Date anywhere: every index is null and sessions collapse to the client
+  // windows, i.e. exactly the pre-session behavior.
+  assert.deepEqual(assignServerSessions([sv(T0, null), sv(T0 + 1, null)], 13), [null, null]);
+  // Webfarm skew (a negative or zero server difference) never splits.
+  const skewed = [sv(T0, T0 + 5000), sv(T0 + 13000, T0), sv(T0 + 26000, T0)];
+  assert.deepEqual(assignServerSessions(skewed, 13), [0, 0, 0]);
+  assert.deepEqual(assignServerSessions([], 13), []);
 });
 
 test("nyLabel: overnight D1-shaped window crosses the NY calendar day", () => {
