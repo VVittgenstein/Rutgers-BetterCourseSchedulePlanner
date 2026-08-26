@@ -320,22 +320,67 @@ Dragging the last `Date` of a window backwards re-anchored the reference so the
 next honest sample "jumped" past the threshold; dragging the first `Date` of the
 next window forwards split on its own while every later sample rejoined it
 (CE-17, both directions). Under the order-statistic form a single edited cell
-moves the measured seam by at most one polling interval, because the extremes
-fall back to the second-latest and second-earliest `Date`; manufacturing a
-threshold-crossing seam costs a bulk rewrite of a whole window tail, not one
-cell. On a non-decreasing server timeline the two forms are identical — the real
-captures are non-decreasing, asserted in `local-data.test.mjs` — and in general
-the order-statistic seam is never larger than the adjacent difference, so
-sessions can only get coarser and A4-2 only stricter.
+cannot RAISE the measured seam at all wherever the seam has two or more dated
+samples on each side, because raising the suffix minimum needs every low `Date`
+after the seam raised and lowering the prefix maximum needs every high `Date`
+before it lowered. On a non-decreasing server timeline the two forms are
+identical — the real captures are non-decreasing, asserted in
+`local-data.test.mjs` — and in general the order-statistic seam is never larger
+than the adjacent difference, so the session partition is only ever coarser.
 
-Sessions are unions of **whole** windows, so the session partition is always a
-coarsening of the window partition and A4-2 is uniformly at least as strict as
-the window rule it replaced — nothing that failed before can pass now. Missing
-`Date` headers resolve toward merging (fail-closed: a deleted header cannot
-manufacture a split, and samples before the first observed `Date` impose no
-grouping at all, while their brackets stay unplaceable and still void their
-session's purity). A stream with no `Date` anywhere falls back to exactly its
-client windows and cannot reach GO regardless, because A4-5 fails closed on a
+**Coarser is not stricter, and a merge is not the fail-closed direction.** Both
+order statistics have breakdown point one in the MERGE direction: one `Date`
+placed low anywhere after the seam collapses the minimum, one placed high
+anywhere before it inflates the maximum, and either suppresses a genuine
+boundary. A4-2 counts informative brackets **per session** against
+`MIN_GROUP_BRACKETS`, so pooling two genuinely separated sub-threshold sessions
+manufactures a qualifying one — on the peak side directly, and on the off-peak
+side too, because the union of two pure off-peak sessions is still pure. A4-2 is
+therefore anti-monotone under coarsening on both sides, and no argument of the
+form "sessions can only get coarser, so nothing that failed can now pass" is
+valid here (CE-18, both directions, is exactly that failure).
+
+So the merge direction is closed by a different kind of statement, one that no
+seam statistic can make: a **leave-one-out stability test on the grouping A4-2
+consumes**. Per stream the analyzer recomputes the window grouping once per
+dated sample, each time with that one sample's `Date` held out. If any hold-out
+regroups the windows, one header decides this stream's session structure, the
+server timeline has not established it, and every session of that stream is
+voided — counted on neither the peak nor the off-peak side, reported as
+`serverGroupingAmbiguous` in `evidenceSessions` and named in the A4-2 evidence
+string. Voiding only removes evidence, so it can never turn a NO-GO into a GO.
+
+What that buys is stateable exactly. Let `G*` be the honest stream's grouping
+and `G_j` the honest stream's grouping with cell `j` held out, and suppose the
+honest capture is **1-robust**, i.e. `G_j = G*` for every `j`. An attacker who
+replaces cell `j` with any value produces some grouping `G`; holding cell `j`
+out of the forged stream leaves exactly the honest remaining cells, so the check
+computes `G_j = G*`. Hence either `G = G*` — the edit changed nothing A4-2 can
+see — or `G != G_j` and the check fires. **No single-cell `serverDate` edit can
+change the evidence grouping of a 1-robust capture without being flagged, in
+either direction.** Honest captures are 1-robust with enormous margin: their
+sessions are one continuous run, or runs separated by hours, and holding out the
+`Date` next to a real gap merely moves the boundary to the neighbouring sample
+inside the same client window. D1/D2/D3 produce one window per stream, where the
+grouping is the trivial singleton and the check cannot fire at all — which is
+why this costs zero drift on the committed evidence. It does **not** claim
+robustness against a bulk rewrite (deferred): an honest 11-minute pause moved on
+both clocks is such a rewrite and is required to stay GO.
+
+A missing
+`Date` header imposes **no grouping constraint at all**, wherever it sits. It
+used to inherit the running session index so that a deleted header could not
+manufacture a split — but inheriting is a vote for the earlier session, i.e. a
+merge, and deleting the first `Date` of the later client window made that window
+carry both indices and pooled it with the earlier one (CE-18, delete direction).
+Contributing nothing closes both directions: an index that does not exist cannot
+be shared, and a boundary is only ever placed at a dated sample. It also makes
+"hold out one `Date`" and "delete one `Date`" the same operation, which is why
+the leave-one-out check covers deletions as well as edits. A window left with no
+dated sample becomes its own group and gains nothing by it: with no server
+bounds its brackets are non-informative on the server clock, count on neither
+A4-2 side, and still break that group's off-peak purity. A stream with no `Date`
+anywhere falls back to exactly its client windows and cannot reach GO regardless, because A4-5 fails closed on a
 client-clock fallback. The grouping is reported in `evidenceSessions` (JSON)
 and in the `### Evidence sessions (server timeline)` table (Markdown).
 
