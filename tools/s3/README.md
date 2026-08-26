@@ -310,6 +310,24 @@ independent sessions has to rest on it too. The mirror hole is closed by the
 same rule: an edited serverDate inside one client window still leaves one
 session, because the client window itself is the link.
 
+The server-side gap is measured across a seam with **order statistics**, not
+between adjacent `Date` headers: at a candidate boundary `i` it is the earliest
+`Date` carried by any sample at or after `i`, minus the latest `Date` carried by
+any sample before it. The adjacent form let ONE forged `Date` mint a boundary,
+and a forger places it exactly at the client-window seam — the single position
+where a server split leaves the two client windows in disjoint sessions.
+Dragging the last `Date` of a window backwards re-anchored the reference so the
+next honest sample "jumped" past the threshold; dragging the first `Date` of the
+next window forwards split on its own while every later sample rejoined it
+(CE-17, both directions). Under the order-statistic form a single edited cell
+moves the measured seam by at most one polling interval, because the extremes
+fall back to the second-latest and second-earliest `Date`; manufacturing a
+threshold-crossing seam costs a bulk rewrite of a whole window tail, not one
+cell. On a non-decreasing server timeline the two forms are identical — the real
+captures are non-decreasing, asserted in `local-data.test.mjs` — and in general
+the order-statistic seam is never larger than the adjacent difference, so
+sessions can only get coarser and A4-2 only stricter.
+
 Sessions are unions of **whole** windows, so the session partition is always a
 coarsening of the window partition and A4-2 is uniformly at least as strict as
 the window rule it replaced — nothing that failed before can pass now. Missing
