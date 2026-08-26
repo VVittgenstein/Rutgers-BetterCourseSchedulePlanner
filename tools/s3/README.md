@@ -363,9 +363,11 @@ Two consequences, both exact:
 - **Forged merges and forged splits are both bounded.** Merging can only lower a
   session's per-window counts and can only break purity, so a pooling forgery —
   one edited `Date`, two, or a whole rewritten column — buys nothing. Splitting is
-  bounded from the other side: sessions are unions of *whole* client windows, so
-  the finest grouping reachable is the client-window partition itself, which is
-  the baseline. A forged split can at most restore the baseline's leniency.
+  bounded structurally from the other side: sessions are unions of *whole* client
+  windows, so the finest grouping reachable is the client-window partition itself,
+  which is the baseline. That bound alone is only the J1 floor, not the A2-2
+  objective — the client-window partition is exactly the leniency CE-16 exploits —
+  so the split direction is closed on top of it by **seam corroboration**, below.
 
 A previous revision (v2.7.1/v2.7.2) summed brackets over the session and bolted a
 **leave-one-out grouping check** on top: recompute the grouping once per dated
@@ -382,34 +384,83 @@ destroyed evidence hours away from the seam (CONTROL (R3c), which `d6ce282`
 answered `NO_PRODUCTION_CHANGE` and both the frozen baseline and the current tree
 answer `GO`).
 
-The residual boundary, stated rather than implied: a **bulk rewrite** of one
-whole side of a seam can still move the grouping, and stays deferred per A3. In
-the split direction that means raising every low `Date` after the seam or
-lowering every high `Date` before it — the breakdown point is the number of dated
-samples on the smaller side of the seam, not one or two. In the merge direction a
-single cell suffices, and is harmless by the counting argument above. "Hold out
-one `Date`" and "delete one `Date`" are the same operation *per cell*, because an
-absent `Date` imposes no grouping constraint; that equivalence does **not** extend
-to k-cell rewrites, since deletions can only widen a measured seam while edits
-move it either way (`windows.test.mjs` pins both halves).
-
-A missing
-`Date` header imposes **no grouping constraint at all**, wherever it sits. It
-used to inherit the running session index so that a deleted header could not
-manufacture a split — but inheriting is a vote for the earlier session, i.e. a
+A missing `Date` header imposes **no grouping constraint at all**, wherever it
+sits. It used to inherit the running session index so that a deleted header could
+not manufacture a split — but inheriting is a vote for the earlier session, i.e. a
 merge, and deleting the first `Date` of the later client window made that window
 carry both indices and pooled it with the earlier one (CE-18, delete direction).
 Contributing nothing closes the merge direction outright: an index that does not
-exist cannot be shared. It leaves the split direction open — enough deletions on
-one side of a seam widen it past the threshold — but a split can never buy more
-than the client-window partition, which is the baseline, and it costs the
-attacker the deleted samples' server bounds. A window left with no dated sample
-becomes its own group and gains nothing by it: with no server bounds its brackets
-are non-informative on the server clock, count on neither A4-2 side, and still
-break that group's off-peak purity. A stream with no `Date`
-anywhere falls back to exactly its client windows and cannot reach GO regardless, because A4-5 fails closed on a
-client-clock fallback. The grouping is reported in `evidenceSessions` (JSON)
-and in the `### Evidence sessions (server timeline)` table (Markdown).
+exist cannot be shared.
+
+It left the **split** direction open, and that was the hole the previous revision
+shipped with: deletions are not covered by the order-statistic breakdown count,
+because a deleted `Date` is not raised — it is removed from both order statistics.
+Dropping every `Date` in a band wider than the gap threshold therefore widens the
+measured seam for free, no value edited. Paired with the CE-16 client jump that
+was enough to split one server-contiguous 40-minute capture into a pure off-peak
+session and a peak session and reach a six-gate **GO** on v2.8.0, with every
+`Date` it used as evidence untouched (CE-20; the frozen baseline answers GO here
+too, so it was never a J1 regression — it was the A2-2 objective not being met).
+
+### Seam corroboration
+
+A client-window seam is a claim made entirely of client timestamps. Before two
+adjacent client windows may stand as independent evidence sessions, the server
+clock has to agree that the gap really passed — and it is asked in a way that
+does not read the `Date` headers at the seam at all. Each window contributes the
+**median** of `serverDate - requestStartedUtc` over its own dated samples, and
+
+```
+serverAdvance = (client start-to-start advance across the seam)
+              + (median offset of the later window - median offset of the earlier)
+```
+
+must exceed the same `max(10 min, 5 x intervalSeconds)` threshold. Two exact
+consequences:
+
+- A **genuine pause** moves both clocks, so the medians are equal and
+  `serverAdvance` is the client advance. Every honest control keeps its
+  boundaries: the ~19 h two-session control, the genuine 11-minute pause
+  (CONTROL (R3)), and the near-threshold seam whose 4 s slow poll leaves the
+  medians untouched (CONTROL (R3c)).
+- A **client-only jump** of `J` inflates the client advance by `J` and drags the
+  later median by exactly `-J`. The two cancel identically — for every `J`, with
+  no threshold slack to tune against — and what is left is the time that really
+  passed. Deleting `Date` headers around the seam changes which samples enter a
+  median, not where a median sits, so it buys nothing.
+
+Two details are load-bearing. The check is made between **adjacent** windows,
+because a boundary is a claim about one seam: comparing across an intervening
+window would let two jumps with a deleted band between them corroborate a gap
+that the samples inside the band prove was never a pause in the polling
+(CE-20b). And a window with **no `Date` at all** corroborates nothing, so both of
+its seams fail closed and it merges with its neighbours; it brought no server
+bracket bounds to begin with, and what the merge costs is its neighbours'
+independence and an off-peak neighbour's purity. Honest captures do not go there
+— D1/D2/D3 carry a `Date` on all 558 samples. A stream with no `Date` anywhere is
+exempt from the check (there is nothing to corroborate against) and cannot reach
+GO regardless, because A4-5 fails closed on a client-clock fallback. Seams merged
+this way are counted per session as `uncorroboratedSeamCount` and named in the
+A4-2 evidence string. The grouping is reported in `evidenceSessions` (JSON) and
+in the `### Evidence sessions (server timeline)` table (Markdown).
+
+**The residual boundary, stated rather than implied.** To keep a forged split
+alive an attacker must move more than **half** of one window's offsets, and those
+same `Date` headers are the bracket bounds that window's peak or off-peak claim
+rests on: qualifying a side needs `MIN_GROUP_BRACKETS` server-informative
+brackets, hence at least ten dated samples, so the cheapest forgery rewrites six
+or more of the very `Date`s it is claiming as evidence. Done completely, that is
+no longer a detectable lie at all — a capture whose second half moved on both
+clocks is byte-for-byte what a real 11-minute pause produces, and it reaches GO
+on the frozen baseline, on v2.8.0 and here. The suite pins that as `BOUNDARY
+(A3)` rather than as a counterexample, and asserts the price: CE-20 needs 0
+edited `Date` cells, its rewritten twin needs 38. Bulk rewrites and from-scratch
+fabrication stay deferred per A3. In the MERGE direction a single cell still
+suffices and is harmless by the counting argument above. "Hold out one `Date`"
+and "delete one `Date`" are the same operation *per cell*, because an absent
+`Date` imposes no grouping constraint; that equivalence does **not** extend to
+k-cell rewrites, since deletions can only widen a measured seam while edits move
+it either way (`windows.test.mjs` pins both halves).
 
 A session qualifies on the peak side when ≥ 5 informative brackets **of one of
 its client windows** have comparison-clock bounds intersecting 17:00–18:00
