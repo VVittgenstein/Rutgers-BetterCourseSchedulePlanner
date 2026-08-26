@@ -272,7 +272,7 @@ export function buildMdReport(ctx) {
     }
     if (unsatisfied.includes("A4-2")) {
       push(
-        `- At least one America/New_York 17:00–18:00 peak window and one independent off-peak window per target (the current evidence is a single overnight window).`,
+        `- At least one America/New_York 17:00–18:00 peak window and one independent off-peak window, each with ≥ 5 informative brackets of its own (an empty or single-sample window is metadata, not peak evidence).`,
       );
     }
     if (unsatisfied.includes("A4-3")) {

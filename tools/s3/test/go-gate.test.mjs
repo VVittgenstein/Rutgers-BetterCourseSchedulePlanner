@@ -101,7 +101,10 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   const peakWin = windows.find((w) => w.peakOverlap);
   assert.equal(peakWin.nyLabel, "2026-01-06 17:09–17:19 ET");
   const a2 = json.goGate.find((g) => g.id === "A4-2");
-  assert.equal(a2.evidence, "windows: 6 total, 3 peak-overlapping, 3 off-peak");
+  assert.equal(
+    a2.evidence,
+    "windows: 6 total; qualifying(informative>=5): 3 peak, 3 off-peak (raw: 3 peak, 3 off-peak)",
+  );
 
   // A4-3: strict win via a non-degenerate 6-group holdout.
   assert.equal(json.comparison.distinguishable, true);

@@ -209,17 +209,27 @@ export function evaluateGate(ctx) {
     evidence: a1Evidence,
   });
 
-  // A4-2: multiple independent time windows incl. NY peak and off-peak.
+  // A4-2: multiple independent time windows incl. NY peak and off-peak — each
+  // side must have at least one QUALIFYING window (>= MIN_GROUP_BRACKETS
+  // informative brackets of its own on the comparison clock). An empty or
+  // single-sample window is metadata, not peak evidence.
+  const isQualifyingWindow = (w) =>
+    w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource)).length >=
+    MIN_GROUP_BRACKETS;
   const totalWindows = ctx.windowsAll.length;
   const peakWindows = ctx.windowsAll.filter((w) => w.peakOverlap).length;
   const offPeakWindows = totalWindows - peakWindows;
-  const a2Satisfied = totalWindows >= 2 && peakWindows >= 1 && offPeakWindows >= 1;
+  const qualifyingPeak = ctx.windowsAll.filter((w) => w.peakOverlap && isQualifyingWindow(w)).length;
+  const qualifyingOffPeak = ctx.windowsAll.filter(
+    (w) => !w.peakOverlap && isQualifyingWindow(w),
+  ).length;
+  const a2Satisfied = qualifyingPeak >= 1 && qualifyingOffPeak >= 1;
   gate.push({
     id: "A4-2",
     requirement:
-      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window",
+      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets",
     satisfied: a2Satisfied,
-    evidence: `windows: ${totalWindows} total, ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak`,
+    evidence: `windows: ${totalWindows} total; qualifying(informative>=${MIN_GROUP_BRACKETS}): ${qualifyingPeak} peak, ${qualifyingOffPeak} off-peak (raw: ${peakWindows} peak, ${offPeakWindows} off-peak)`,
   });
 
   // A4-3: distinguishable winner under holdout.
