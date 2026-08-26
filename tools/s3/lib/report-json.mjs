@@ -232,9 +232,13 @@ export function buildJsonReport(ctx) {
         campusConflict: c.campusConflict,
         members: c.members.map((m) => ({ streamId: m.streamId, relation: m.relation })),
       })),
+      // Streams barred from all evidence (members of campus-conflicted
+      // classes); [] when every stream is evidence-eligible.
+      excludedStreamIds: provenance.excludedStreamIds,
     },
     bracketTotals: {
       total: bracketTotals.total,
+      excludedFromEvidence: bracketTotals.excludedFromEvidence,
       informative30: bracketTotals.informative30,
       informative60: bracketTotals.informative60,
       nonInformative30: bracketTotals.nonInformative30,
@@ -262,7 +266,9 @@ export function buildJsonReport(ctx) {
 
 // clockSource is the clock the model comparison selected ("server"/"client"),
 // so the headline totals always agree with the comparison's bracket handling.
-export function computeBracketTotals(brackets, counters, clockSource) {
+// excludedFromEvidence: brackets built from campus-conflicted provenance
+// streams — listed in the tables but barred from every evidence computation.
+export function computeBracketTotals(brackets, counters, clockSource, excludedFromEvidence = 0) {
   let informative30 = 0;
   let informative60 = 0;
   let nonInformative30 = 0;
@@ -279,6 +285,7 @@ export function computeBracketTotals(brackets, counters, clockSource) {
   }
   return {
     total: brackets.length,
+    excludedFromEvidence,
     informative30,
     informative60,
     nonInformative30,

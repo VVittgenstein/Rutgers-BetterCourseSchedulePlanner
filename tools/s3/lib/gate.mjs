@@ -329,41 +329,41 @@ export function assessStability({ brackets, comparison, clockSource }) {
 }
 
 // ctx: {
-//   targets: [{ targetId, campus, windows: [{ windowId, peakOverlap, brackets }] }],
-//   windowsAll: [{ windowId, peakOverlap }],
-//   brackets, comparison, safeOffset, clock, clockSource,
+//   windowsAll: [{ windowId, streamId, peakOverlap, excluded, brackets }],
+//       // ALL windows; excluded=true marks campus-conflicted provenance
+//   brackets,  // evidence brackets only (excluded streams already removed)
+//   comparison, safeOffset, clock, clockSource,
 //   provenance: buildProvenance() result, serverEvidence: assessServerClockEvidence() result
 // }
 export function evaluateGate(ctx) {
   const gate = [];
+  const evidenceWindows = ctx.windowsAll.filter((w) => w.excluded !== true);
 
   // A4-1: multi-target evidence counted by independent observation-data
   // provenance, not by campus labels. A provenance class contributes at most
-  // one campus; a class whose members carry conflicting campus labels (the
-  // copy-and-relabel attack) contributes nothing.
-  const targetQualifies = new Map();
-  for (const target of ctx.targets) {
-    targetQualifies.set(
-      target.targetId,
-      target.windows.some(
-        (w) =>
-          w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource)).length >=
-          MIN_GROUP_BRACKETS,
-      ),
-    );
+  // one campus, and only when one of its OWN member streams has a qualifying
+  // window (>= MIN_GROUP_BRACKETS informative brackets in a window built from
+  // that stream) — an evidentially worthless but clean series can never
+  // piggyback on qualifying windows that belong to another stream merely
+  // sharing its targetId. A class whose members carry conflicting campus
+  // labels (the copy-and-relabel attack) contributes nothing, and its member
+  // streams are excluded from all evidence upstream.
+  const streamQualifies = new Set();
+  for (const w of evidenceWindows) {
+    const informative = w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource)).length;
+    if (informative >= MIN_GROUP_BRACKETS) streamQualifies.add(w.streamId);
   }
-  const targetByStreamId = new Map(ctx.provenance.streams.map((s) => [s.streamId, s.targetId]));
   const coveredBy = new Map(); // campus -> classId (first covering class, classId asc)
   let conflictClassCount = 0;
+  let excludedStreamCount = 0;
   for (const cls of ctx.provenance.classes) {
     if (cls.campusConflict) {
       conflictClassCount += 1;
+      excludedStreamCount += cls.members.length;
       continue;
     }
     if (cls.campus === null || !REQUIRED_CAMPUSES.includes(cls.campus)) continue;
-    const qualifies = cls.members.some(
-      (m) => targetQualifies.get(targetByStreamId.get(m.streamId)) === true,
-    );
+    const qualifies = cls.members.some((m) => streamQualifies.has(m.streamId));
     if (qualifies && !coveredBy.has(cls.campus)) coveredBy.set(cls.campus, cls.classId);
   }
   const missingCampuses = REQUIRED_CAMPUSES.filter((c) => !coveredBy.has(c));
@@ -372,7 +372,7 @@ export function evaluateGate(ctx) {
   );
   const conflictSuffix =
     conflictClassCount > 0
-      ? `; ${conflictClassCount} class(es) with conflicting campus labels ignored`
+      ? `; ${conflictClassCount} class(es) with conflicting campus labels ignored and their ${excludedStreamCount} stream(s) excluded from all evidence`
       : "";
   const a1Satisfied = missingCampuses.length === 0;
   const a1Evidence = a1Satisfied
@@ -404,21 +404,24 @@ export function evaluateGate(ctx) {
     informativeBrackets(w).filter((b) => overlapsNyPeakStrict(b.clientLowerMs, b.clientUpperMs))
       .length;
   const totalWindows = ctx.windowsAll.length;
-  const peakWindows = ctx.windowsAll.filter((w) => w.peakOverlap).length;
-  const offPeakWindows = totalWindows - peakWindows;
-  const qualifyingPeak = ctx.windowsAll.filter(
+  const excludedWindows = totalWindows - evidenceWindows.length;
+  const peakWindows = evidenceWindows.filter((w) => w.peakOverlap).length;
+  const offPeakWindows = evidenceWindows.length - peakWindows;
+  const qualifyingPeak = evidenceWindows.filter(
     (w) => inPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
   ).length;
-  const qualifyingOffPeak = ctx.windowsAll.filter(
+  const qualifyingOffPeak = evidenceWindows.filter(
     (w) => !w.peakOverlap && informativeBrackets(w).length >= MIN_GROUP_BRACKETS,
   ).length;
   const a2Satisfied = qualifyingPeak >= 1 && qualifyingOffPeak >= 1;
+  const excludedNote =
+    excludedWindows > 0 ? ` (${excludedWindows} excluded: campus-conflicted provenance)` : "";
   gate.push({
     id: "A4-2",
     requirement:
       "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak evidence only from brackets overlapping the peak hour itself",
     satisfied: a2Satisfied,
-    evidence: `windows: ${totalWindows} total; qualifying peak (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeak}; qualifying off-peak (>=${MIN_GROUP_BRACKETS} informative brackets): ${qualifyingOffPeak} (raw: ${peakWindows} peak, ${offPeakWindows} off-peak)`,
+    evidence: `windows: ${totalWindows} total${excludedNote}; qualifying peak (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeak}; qualifying off-peak (>=${MIN_GROUP_BRACKETS} informative brackets): ${qualifyingOffPeak} (raw: ${peakWindows} peak, ${offPeakWindows} off-peak)`,
   });
 
   // A4-3: distinguishable winner under holdout.

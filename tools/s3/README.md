@@ -141,13 +141,27 @@ When the data exists at any candidate the test always runs — a checkout
 layout is never a reason to skip. Only when no candidate holds the data
 (e.g. CI) does it skip, and the skip message lists exactly what was probed.
 
-The counterexamples test file pins the four STAGE-5-R1 false-GO fixtures
-(relabeled provenance, empty peak window, stray serverDate over a client-clock
-fallback, single-target winner) to NO_PRODUCTION_CHANGE with the specific gate
-unsatisfied, while the go-gate test keeps proving a genuinely satisfying
-fixture still reaches GO.
+The counterexamples test file pins the adjudicated false-GO fixtures to
+NO_PRODUCTION_CHANGE: the four STAGE-5-R1 root causes (relabeled provenance,
+empty peak window, stray serverDate over a client-clock fallback,
+single-target winner) plus the second-round shapes — a window grazing
+17:00:00.000 ET at a single instant (CE-2b), an isolated peak-time sample
+merged into a pre-peak session by the gap rule (CE-2c), and a clean tiny
+series piggybacking on an excluded duplicate's windows (CE-1b) — while the
+go-gate test keeps proving a genuinely satisfying fixture still reaches GO.
+
+Provenance semantics: a class whose members carry conflicting campus labels
+contributes nothing to A4-1, and its member streams are **excluded from all
+evidence** (fits, comparison, server-clock evidence, safe offset, every gate);
+they stay listed in the descriptive tables, flagged by
+`provenance.excludedStreamIds` and `bracketTotals.excludedFromEvidence`. A
+clean class covers its campus only when one of its OWN member streams has a
+window with ≥ 5 informative brackets — qualification never travels through a
+shared targetId.
 
 Provenance boundary (documented on purpose): A4-1 merges observation series
 that are identical or contiguous slices of one another after removing
 metadata; derived series (subsampling, interleaving, edited deltas) are NOT
 detected — the gate defends against copy-and-relabel, it is not forensics.
+Byte-identical streams under the SAME campus label merge without conflict and
+stay evidence-eligible as one class; they cannot widen campus coverage.

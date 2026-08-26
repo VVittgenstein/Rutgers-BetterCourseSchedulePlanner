@@ -74,11 +74,74 @@ test("CE-1 (A4-1): one capture relabeled as NB/NK/CM is one provenance class, no
   assert.equal(a1.satisfied, false);
   assert.match(a1.evidence, /conflicting campus labels/);
   assert.match(a1.evidence, /NB missing; NK missing; CM missing/);
-  // Root-cause isolation: every other gate is genuinely satisfied.
+  // Campus-conflicted streams are barred from ALL evidence, not just from
+  // A4-1 coverage: with every stream contested, nothing supports any gate.
+  assert.equal(json.provenance.excludedStreamIds.length, 3);
+  assert.equal(json.bracketTotals.total, 120);
+  assert.equal(json.bracketTotals.excludedFromEvidence, 120);
+  assert.equal(json.comparison.commonInformativeCount, 0);
+  assert.equal(json.comparison.distinguishable, false);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
-    ["A4-1"],
+    ["A4-1", "A4-2", "A4-3", "A4-4", "A4-5", "A4-6"],
   );
+});
+
+test("CE-1b (A4-1): a clean tiny series cannot piggyback on an excluded duplicate's windows", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // Piggyback (second R1 review round): one real qualifying NB series is
+  // byte-copied into runNK-copy/runCM-copy (one campus-conflicted class), and
+  // three trivially distinct 3-bracket tiny series claim NB/NK/CM. On analyzer
+  // v2.0.0 (7260da8) the tiny clean classes borrowed the duplicate's
+  // qualifying windows through the shared targetId and the run reached
+  // `verdict=GO qualifier=none brackets=129` with all six gates satisfied.
+  const s1 = [
+    ...makeTickSeries({ baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1 }),
+    ...makeTickSeries({ baseMs: PEAK_BASE, periodMs: 30000, count: 20, startSeq: 100 }),
+  ];
+  makeRunDir(join(dir, "runNB"), { campus: "NB", samples: s1 });
+  makeRunDir(join(dir, "runNK-copy"), { campus: "NK", samples: s1 });
+  makeRunDir(join(dir, "runCM-copy"), { campus: "CM", samples: s1 });
+  let seq = 900;
+  for (const campus of ["NB", "NK", "CM"]) {
+    const tiny = makeTickSeries({
+      baseMs: OFF_PEAK_BASE + 7 * 3600 * 1000, periodMs: 31000, count: 3,
+      startSeq: seq, bodyPrefix: `${campus}-tiny-`,
+    });
+    seq += 50;
+    makeRunDir(join(dir, `run${campus}-tiny`), { campus, samples: tiny });
+  }
+
+  const out = analyze(dir, ["runNB", "runNK-copy", "runCM-copy", "runNB-tiny", "runNK-tiny", "runCM-tiny"]);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  // The duplicated trio is one campus-conflicted class; the tiny series are
+  // three clean classes of their own.
+  const conflicted = json.provenance.classes.filter((c) => c.campusConflict);
+  assert.equal(conflicted.length, 1);
+  assert.equal(conflicted[0].members.length, 3);
+  assert.equal(json.provenance.classes.length, 4);
+  assert.deepEqual(
+    json.provenance.excludedStreamIds,
+    conflicted[0].members.map((m) => m.streamId).sort(),
+  );
+  // No clean class qualifies from its own streams (3 brackets < 5), so no
+  // campus is covered — the duplicate's windows lend nothing.
+  const a1 = gateById(json, "A4-1");
+  assert.equal(a1.satisfied, false);
+  assert.match(a1.evidence, /campuses: none; NB missing; NK missing; CM missing/);
+  // And the excluded brackets do not feed the other gates either: only the
+  // 9 tiny brackets remain for the comparison (below the 10-bracket floor).
+  assert.equal(json.bracketTotals.total, 129);
+  assert.equal(json.bracketTotals.excludedFromEvidence, 120);
+  assert.equal(json.comparison.commonInformativeCount, 9);
+  assert.equal(json.comparison.distinguishable, false);
+  assert.equal(gateById(json, "A4-2").satisfied, false);
+  assert.match(gateById(json, "A4-2").evidence, /\(6 excluded: campus-conflicted provenance\)/);
+  assert.equal(json.decision.verdict, "NO_PRODUCTION_CHANGE");
 });
 
 test("CE-2 (A4-2): an isolated zero-change peak-time sample is not peak evidence", (t) => {

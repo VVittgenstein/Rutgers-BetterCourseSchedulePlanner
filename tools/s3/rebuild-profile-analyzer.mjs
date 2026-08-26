@@ -98,9 +98,12 @@ function main() {
       });
     }
     const target = targetsMap.get(targetId);
+    // Stream identity matches provenance.mjs: `${inputId}::${targetId}`.
+    const streamId = `${stream.inputId}::${targetId}`;
     const windows = segmentWindows(stream.samples, stream.intervalSeconds, stream.inputId);
     for (const win of windows) {
       const { brackets, counters: winCounters } = buildBrackets(win, stream.sourceKind);
+      win.streamId = streamId;
       win.nyLabel = nyLabel(win.utcStartMs, win.utcEndMs);
       win.peakOverlap = overlapsNyPeak(win.utcStartMs, win.utcEndMs);
       win.brackets = brackets;
@@ -119,33 +122,54 @@ function main() {
   // A4-1 gate counts campus coverage per provenance class, not per label).
   const provenance = buildProvenance(streams);
 
-  // 4. Clock analysis over all included samples (per-stream adjacency).
+  // 3c. Streams in a campus-conflicted provenance class (the copy-and-relabel
+  // attack) are excluded from ALL evidence below — model fits, the clock-source
+  // selection, the comparison, server-clock evidence, the safe offset, and
+  // every A4 gate. Contested observations cannot lend brackets, windows, or
+  // wins to anything. They stay listed in the descriptive tables, flagged via
+  // provenance.excludedStreamIds and bracketTotals.excludedFromEvidence.
+  const excludedStreamIds = provenance.classes
+    .filter((cls) => cls.campusConflict)
+    .flatMap((cls) => cls.members.map((m) => m.streamId))
+    .sort();
+  provenance.excludedStreamIds = excludedStreamIds;
+  const excludedStreams = new Set(excludedStreamIds);
+  for (const win of windowsAll) {
+    win.excluded = excludedStreams.has(win.streamId);
+  }
+  const evidenceBrackets = windowsAll
+    .filter((win) => !win.excluded)
+    .flatMap((win) => win.brackets);
+
+  // 4. Clock analysis over all included samples (per-stream adjacency). This
+  // is descriptive diagnostics; gate sufficiency (A4-5) is decided by
+  // assessServerClockEvidence over the evidence brackets only.
   const clock = analyzeClock(streams.map((s) => s.samples));
 
-  // 5. Fit the four model x clock combinations on all brackets.
+  // 5. Fit the four model x clock combinations on the evidence brackets.
   const fits = {};
   for (const periodMs of [30000, 60000]) {
     const key = periodMs === 30000 ? "m30" : "m60";
     fits[key] = {
-      server: clock.status === "unknown" ? null : fitPhase(allBrackets, periodMs, "server"),
-      client: fitPhase(allBrackets, periodMs, "client"),
+      server: clock.status === "unknown" ? null : fitPhase(evidenceBrackets, periodMs, "server"),
+      client: fitPhase(evidenceBrackets, periodMs, "client"),
     };
   }
 
   // 6. Clock-source selection, comparison + holdout.
   const serverCommonCount =
     clock.status === "server-date-available"
-      ? commonInformativeSet(allBrackets, "server").length
+      ? commonInformativeSet(evidenceBrackets, "server").length
       : 0;
   const useServer = serverCommonCount >= MIN_COMPARISON_BRACKETS;
   const clockSource = useServer ? "server" : "client";
   const clockFallback = !useServer;
-  const comparison = compareModels(allBrackets, clockSource);
+  const comparison = compareModels(evidenceBrackets, clockSource);
 
   // 6b. Server-clock evidence sufficiency (production gates fail closed on a
   // client-clock fallback or on qualifying groups without server brackets).
   const serverEvidence = assessServerClockEvidence({
-    brackets: allBrackets,
+    brackets: evidenceBrackets,
     clock,
     clockFallback,
   });
@@ -154,9 +178,8 @@ function main() {
   const safeOffset = assessSafeOffset(comparison, clock.status, serverEvidence);
   const targets = [...targetsMap.values()];
   const { goGate, decision } = evaluateGate({
-    targets,
     windowsAll,
-    brackets: allBrackets,
+    brackets: evidenceBrackets,
     comparison,
     safeOffset,
     clock,
@@ -187,8 +210,15 @@ function main() {
   });
   // Totals and per-bracket informative flags are computed on the SAME clock
   // the model comparison selected, so the report tables can never disagree
-  // with the comparison about which brackets counted.
-  const bracketTotals = computeBracketTotals(allBrackets, counters, clockSource);
+  // with the comparison about which brackets counted. Totals describe every
+  // built bracket; excludedFromEvidence says how many of them were barred
+  // from all evidence by campus-conflicted provenance.
+  const bracketTotals = computeBracketTotals(
+    allBrackets,
+    counters,
+    clockSource,
+    allBrackets.length - evidenceBrackets.length,
+  );
   const reportCtx = {
     normalizedCommand,
     inputs: ingests.map((i) => i.input),
