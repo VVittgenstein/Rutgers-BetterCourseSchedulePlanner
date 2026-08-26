@@ -1,20 +1,31 @@
-// End-to-end run against the real (gitignored, local-only) capture data.
-// Skips cleanly when the data is not present; asserts no literal numbers
-// beyond the pre-registered verdict/flags — everything else is recomputed
-// independently inside this test.
+// End-to-end run against the real capture data, which is LOCAL and gitignored
+// (data/open-sections-repro under the repo root) — it is never committed; only
+// the derived evidence documents under docs/evidence/ are.
+//
+// Data-root resolution (first hit wins; the test must NOT skip because of a
+// checkout layout when the data exists):
+//   1. $BCSP_OPEN_SECTIONS_REPRO_DIR — when set it is used as-is, nothing
+//      else is probed;
+//   2. `git rev-parse --show-toplevel` → <top>/data/open-sections-repro
+//      (plain repo-root checkout);
+//   3. `git rev-parse --git-common-dir` → <common>/.. /data/open-sections-repro
+//      (worktree checkout falling back to the shared main repo root).
+// Only when no candidate exists (e.g. CI without the local data) does the test
+// skip, and the skip message says exactly what was probed.
+//
+// Assertions use no literal numbers beyond the pre-registered verdict/flags —
+// everything else is recomputed independently inside this test.
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, isAbsolute } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { makeTmpDir, cleanup, runAnalyzer } from "./fixtures.mjs";
 
-const worktreeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const dataRoot =
-  process.env.BCSP_OPEN_SECTIONS_REPRO_DIR ??
-  resolve(worktreeRoot, "../../../data/open-sections-repro");
+const testDir = dirname(fileURLToPath(import.meta.url));
 
 const RUN_DIRS = [
   "20260820T033701043Z-5745bc4a",
@@ -22,6 +33,42 @@ const RUN_DIRS = [
   "20260820T033451393Z-a8a40f98",
 ];
 const D1 = RUN_DIRS[0];
+
+function gitOut(args) {
+  const res = spawnSync("git", ["-C", testDir, ...args], { encoding: "utf8" });
+  if (res.status !== 0 || typeof res.stdout !== "string") return null;
+  const out = res.stdout.trim();
+  return out.length > 0 ? out : null;
+}
+
+function resolveDataRoot() {
+  const envDir = process.env.BCSP_OPEN_SECTIONS_REPRO_DIR;
+  if (envDir) {
+    // Explicit override: used as-is, no further probing.
+    const candidates = [{ source: "BCSP_OPEN_SECTIONS_REPRO_DIR", dir: envDir }];
+    return { root: existsSync(envDir) ? envDir : null, candidates };
+  }
+  const candidates = [];
+  const top = gitOut(["rev-parse", "--show-toplevel"]);
+  if (top !== null) {
+    candidates.push({
+      source: "git rev-parse --show-toplevel",
+      dir: join(resolve(top), "data", "open-sections-repro"),
+    });
+  }
+  const common = gitOut(["rev-parse", "--git-common-dir"]);
+  if (common !== null) {
+    const commonAbs = isAbsolute(common) ? common : resolve(testDir, common);
+    candidates.push({
+      source: "git rev-parse --git-common-dir",
+      dir: join(resolve(commonAbs, ".."), "data", "open-sections-repro"),
+    });
+  }
+  for (const candidate of candidates) {
+    if (existsSync(candidate.dir)) return { root: candidate.dir, candidates };
+  }
+  return { root: null, candidates };
+}
 
 function includedRows(ndjsonPath) {
   return readFileSync(ndjsonPath, "utf8")
@@ -50,9 +97,13 @@ function bruteForceMaxCoverage(arcs, periodMs) {
   return best;
 }
 
-test("committed data: verdict, gates, and independent recomputation", (t) => {
-  if (!RUN_DIRS.every((d) => existsSync(join(dataRoot, d, "samples.ndjson")))) {
-    t.skip(`open-sections-repro data not present: ${dataRoot}`);
+test("local data: verdict, gates, and independent recomputation", (t) => {
+  const { root: dataRoot, candidates } = resolveDataRoot();
+  if (dataRoot === null || !RUN_DIRS.every((d) => existsSync(join(dataRoot, d, "samples.ndjson")))) {
+    const probed = candidates.map((c) => `${c.source} → ${c.dir}`).join("; ");
+    t.skip(
+      `local open-sections-repro data not present (never committed; set BCSP_OPEN_SECTIONS_REPRO_DIR to point at it). Probed: ${probed || "no candidates resolvable"}`,
+    );
     return;
   }
   const dir = makeTmpDir();
@@ -71,6 +122,23 @@ test("committed data: verdict, gates, and independent recomputation", (t) => {
   assert.equal(json.comparison.distinguishable, false);
   assert.equal(json.goGate.find((g) => g.id === "A4-1").satisfied, false);
   assert.equal(json.goGate.find((g) => g.id === "A4-2").satisfied, false);
+  // The comparison is not distinguishable, so stability is honestly not
+  // evaluable rather than reported as trivially passing.
+  assert.equal(json.comparison.stability, null);
+
+  // Server-clock evidence covers the qualifying groups: A4-5 holds even
+  // though the data gates keep the overall verdict at NO_PRODUCTION_CHANGE.
+  assert.equal(json.goGate.find((g) => g.id === "A4-5").satisfied, true);
+  assert.equal(json.clock.serverEvidence.sufficient, true);
+
+  // All three inputs are NB captures: whatever way the provenance classes
+  // merge (short runs may or may not be contained in the long one — both are
+  // legitimate), no class may claim a campus other than NB or a conflict.
+  assert.ok(json.provenance.classes.length >= 1);
+  for (const cls of json.provenance.classes) {
+    assert.equal(cls.campusConflict, false);
+    assert.equal(cls.campus, "NB");
+  }
 
   // Independent recount of D1 brackets: adjacent decodedBodySha256 diff over
   // included rows (minimal inline reader, no analyzer code).
