@@ -1,6 +1,6 @@
 {
   "schemaVersion": 4,
-  "toolVersion": "2.7.0",
+  "toolVersion": "2.7.1",
   "normalizedCommand": "rebuild-profile-analyzer --ndjson 20260820T033451393Z-a8a40f98/samples.ndjson --ndjson 20260820T033527487Z-d92a8a35/samples.ndjson --ndjson 20260820T033701043Z-5745bc4a/samples.ndjson --out-json S3-REBUILD-PROFILE.json --out-md S3-REBUILD-PROFILE.md",
   "inputs": [
     {
