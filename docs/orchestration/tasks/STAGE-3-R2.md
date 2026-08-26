@@ -31,6 +31,9 @@ CORE/full PASS 命名问题；这些实现和已有测试全部保留。Codex �
 
 #### H8 SSH：评价实际 root connection policy，否则失败
 
+- **本轮没有 Vultr/真实主机，也不取得真实 tuple。** 这里只实现供未来部署使用的只读输入接口、判定逻辑、
+  fixture 与 runbook；Claude 不得向用户索要 IP、hostname、SSH 配置、账号、密码或密钥，不得连接任何
+  主机。真实 tuple 上的执行证据保持 `PENDING_EXTERNAL_DEPLOYMENT`；
 - 不得再把固定 synthetic IP 矩阵当作上线 PASS 证据；
 - preflight 必须让 operator 明确提供实际管理连接所需的 root tuple 信息，或采用能同等可靠地评价该
   实际 tuple 的机制。至少要让 `sshd -T -C` 得到真实的 `user/root`、remote host/address、local
@@ -76,6 +79,7 @@ CORE/full PASS 命名问题；这些实现和已有测试全部保留。Codex �
 - 不修 manual workflow 任意 SHA、candidate trust、UFW app-profile、Ping 单独 deadline 判别器或其他
   deferred；
 - 不执行真实 DNS/UFW/SSH/Caddy/systemd 修改，不跑 600 秒 soak，不访问 Rutgers；
+- 不要求当前用户创建/开启 Vultr，不获取或保存任何真实 SSH 地址、凭据或密钥；
 - 不碰 S4、S3 analyzer、Stage 2 产品语义；
 - shared sender 若继续机械触及 local presence，必须保留主线已经验收的 Exiting/late-HELLO 行为，并在
   回报中列出 integration note；
@@ -101,6 +105,10 @@ Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage3
 codex/parallel-wave1-stage3-p2@6c7c7cd5c19a550034977bb2ad5ca845e4132648 上完成 STAGE-3-R2/v1。
 不要写主 checkout，不 reset/rebase/merge/push/tag/release，不修改 docs/orchestration/**，不访问 Rutgers，
 不执行真实 DNS/UFW/SSH/Caddy/systemd 改动或 600 秒 soak。
+
+当前没有开启 Vultr，也没有真实主机。本轮只实现未来 preflight 接收实际 SSH connection tuple 的只读
+接口、判定逻辑、fixture 和 runbook；不得向用户索要真实 IP/hostname/SSH 配置/账号/密码/密钥，不得连接
+任何主机。真实 tuple 的执行证据继续标为 PENDING_EXTERNAL_DEPLOYMENT，不能用 synthetic fixture 冒充。
 
 先完整阅读主 checkout 的
 Z:\Project\Rutgers-BetterCourseSchedulePlanner\docs\orchestration\tasks\STAGE-3-R2.md A 部分。
