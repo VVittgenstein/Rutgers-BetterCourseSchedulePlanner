@@ -103,7 +103,7 @@ export function buildMdReport(ctx) {
   // 3. Windows.
   push(`## Windows`);
   push();
-  push(`| windowId | UTC range | America/New_York | peak 17–18 ET? | samples | brackets |`);
+  push(`| windowId | UTC range | America/New_York | peak 17–18 ET? (label) | samples | brackets |`);
   push(`|---|---|---|---|---:|---:|`);
   for (const win of [...windowsAll].sort((a, b) => cmpStr(a.windowId, b.windowId))) {
     push(
@@ -322,7 +322,7 @@ export function buildMdReport(ctx) {
     }
     if (unsatisfied.includes("A4-2")) {
       push(
-        `- At least one America/New_York 17:00–18:00 peak window and one independent off-peak window, each with ≥ 5 informative brackets of its own (an empty or single-sample window is metadata, not peak evidence).`,
+        `- At least one America/New_York 17:00–18:00 peak window and one independent off-peak window, each with ≥ 5 informative brackets of its own (an empty or single-sample window is metadata, not peak evidence) — peak and off-peak are classified from the server-clock bounds of individual brackets, not from the window label.`,
       );
     }
     if (unsatisfied.includes("A4-3")) {

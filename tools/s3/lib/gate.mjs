@@ -13,6 +13,7 @@ import {
   bracketArc,
   arcContains,
   bracketBounds,
+  bracketWidthMs,
 } from "./phase.mjs";
 import { runHoldout, groupBrackets } from "./holdout.mjs";
 import { overlapsNyPeakStrict } from "./windows.mjs";
@@ -403,13 +404,23 @@ export function evaluateGate(ctx) {
       ? `; ${timeConflictClassCount} class(es) with conflicting absolute time anchors (time-translated or serverDate-edited duplicate observation series) ignored and their ${timeConflictStreamCount} stream(s) excluded from all evidence`
       : "");
   let duplicateStreamCount = 0;
+  let derivedMergeCount = 0;
   for (const cls of ctx.provenance.classes) {
     if (!cls.campusConflict && !cls.timeConflict) duplicateStreamCount += cls.members.length - 1;
+    // Members that joined their family as a re-slice or a subsample of another
+    // member rather than as a whole-series copy — reported so the reader can
+    // see that a derivation, not a byte-copy, was what stopped counting twice.
+    derivedMergeCount += cls.members.filter(
+      (m) => m.relation === "overlapping" || m.relation === "derived",
+    ).length;
   }
   const duplicateSuffix =
-    duplicateStreamCount > 0
-      ? `; ${duplicateStreamCount} duplicate stream(s) (identical/contained observation series) excluded from evidence — duplicates never add target coverage`
-      : "";
+    (duplicateStreamCount > 0
+      ? `; ${duplicateStreamCount} duplicate stream(s) (identical, contained, overlapping, or subsampled observation series) excluded from evidence — duplicates never add target coverage`
+      : "") +
+    (derivedMergeCount > 0
+      ? `; ${derivedMergeCount} stream(s) merged into an existing provenance family as overlapping slices or subsampled derivations`
+      : "");
   const a1Satisfied = missingCampuses.length === 0;
   const a1Evidence = a1Satisfied
     ? `campuses: ${coveredList.join(", ")} from ${ctx.provenance.classes.length} provenance classes${conflictSuffix}${duplicateSuffix}`
@@ -426,40 +437,90 @@ export function evaluateGate(ctx) {
 
   // A4-2: multiple independent time windows incl. NY peak and off-peak — each
   // side must have at least one QUALIFYING window (>= MIN_GROUP_BRACKETS
-  // informative brackets of its own on the comparison clock). Peak evidence is
-  // counted at the BRACKET level: a peak-qualifying window needs >=
-  // MIN_GROUP_BRACKETS informative brackets whose own client-time interval
-  // overlaps 17:00-18:00 ET with positive measure. A window that merely
-  // touches the boundary instant, or that merged an isolated zero-change
-  // peak-time sample into a rich pre-peak session, carries zero in-peak
-  // brackets and cannot satisfy the peak side. (Client bounds are used for the
-  // wall-clock peak test: they always exist, and the client-vs-server offset
-  // is orders of magnitude below the one-hour peak span.)
+  // informative brackets of its own on the comparison clock), and the two
+  // sides may not be the same single window.
+  //
+  // BOTH sides are classified per BRACKET on the COMPARISON clock — the same
+  // bounds the model comparison, the safe offset and A4-5 consume. Whenever a
+  // production GO is reachable that clock is the server clock, so a peak or
+  // off-peak claim always rests on the server's own Date evidence.
+  //
+  // The previous rule classified peak membership from the CLIENT outer
+  // envelope (stable requestStart, changed requestEnd] and the off-peak side
+  // from the window's client-envelope label. Both were forgeable without
+  // touching a single body, request start or serverDate: extending only
+  // `requestEndedUtc` dragged an off-peak bracket's client envelope across
+  // 17:00 ET and manufactured peak evidence, while a client clock running an
+  // hour slow labelled a wholly in-peak server window as off-peak. The
+  // client-vs-server offset is NOT "orders of magnitude below the peak span"
+  // when an attacker chooses it.
+  //
+  // A bracket with no usable bounds on the comparison clock classifies as
+  // neither side (fail closed — it must never fill in a production peak or
+  // off-peak gap). On the server clock that state is unreachable inside
+  // `informativeBrackets` because isInformative(_, _, "server") already
+  // requires both server bounds; the branch stays as a guard.
+  const bracketPeakState = (bracket, clockSource) => {
+    const { lowerMs, upperMs } = bracketBounds(bracket, clockSource);
+    if (lowerMs === null || upperMs === null) return "no-bounds";
+    return overlapsNyPeakStrict(lowerMs, upperMs) ? "in-peak" : "off-peak";
+  };
   const informativeBrackets = (w) => w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource));
   const inPeakInformativeCount = (w) =>
-    informativeBrackets(w).filter((b) => overlapsNyPeakStrict(b.clientLowerMs, b.clientUpperMs))
-      .length;
+    informativeBrackets(w).filter((b) => bracketPeakState(b, ctx.clockSource) === "in-peak").length;
+  const offPeakInformativeCount = (w) =>
+    informativeBrackets(w).filter((b) => bracketPeakState(b, ctx.clockSource) === "off-peak").length;
   const totalWindows = ctx.windowsAll.length;
   const excludedWindows = totalWindows - evidenceWindows.length;
+  // Window-level peakOverlap is the client-envelope LABEL rendered in the
+  // tables; it is reported for orientation and never used as evidence.
   const peakWindows = evidenceWindows.filter((w) => w.peakOverlap).length;
   const offPeakWindows = evidenceWindows.length - peakWindows;
-  const qualifyingPeak = evidenceWindows.filter(
+  const qualifyingPeakWindows = evidenceWindows.filter(
     (w) => inPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
-  ).length;
-  const qualifyingOffPeak = evidenceWindows.filter(
-    (w) => !w.peakOverlap && informativeBrackets(w).length >= MIN_GROUP_BRACKETS,
-  ).length;
-  const a2Satisfied = qualifyingPeak >= 1 && qualifyingOffPeak >= 1;
+  );
+  const qualifyingOffPeakWindows = evidenceWindows.filter(
+    (w) => offPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
+  );
+  const distinctWindowIds = new Set(
+    [...qualifyingPeakWindows, ...qualifyingOffPeakWindows].map((w) => w.windowId),
+  );
+  // "Multiple independent time windows": one window straddling 17:00 ET must
+  // not satisfy both sides by itself.
+  const a2Satisfied =
+    qualifyingPeakWindows.length >= 1 &&
+    qualifyingOffPeakWindows.length >= 1 &&
+    distinctWindowIds.size >= 2;
+  // Honest accounting of what the server-clock requirement drops: brackets the
+  // client clock would have called informative but that carry no usable server
+  // bounds, so they can qualify neither side.
+  const noServerBoundsInformative =
+    ctx.clockSource === "server"
+      ? evidenceWindows
+          .flatMap((w) => w.brackets)
+          .filter((b) => isInformative(b, 30000, "client") && bracketWidthMs(b, "server") === null)
+          .length
+      : 0;
   const excludedNote =
     excludedWindows > 0
       ? ` (${excludedWindows} excluded: conflicted (campus or time-anchor) or duplicate provenance)`
       : "";
+  const noServerBoundsNote =
+    noServerBoundsInformative > 0
+      ? `; ${noServerBoundsInformative} client-informative bracket(s) had no usable server bounds and could not qualify peak or off-peak evidence`
+      : "";
+  const singleWindowNote =
+    qualifyingPeakWindows.length >= 1 &&
+    qualifyingOffPeakWindows.length >= 1 &&
+    distinctWindowIds.size < 2
+      ? "; peak and off-peak evidence come from the same single window"
+      : "";
   gate.push({
     id: "A4-2",
     requirement:
-      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak evidence only from brackets overlapping the peak hour itself",
+      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime",
     satisfied: a2Satisfied,
-    evidence: `windows: ${totalWindows} total${excludedNote}; qualifying peak (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeak}; qualifying off-peak (>=${MIN_GROUP_BRACKETS} informative brackets): ${qualifyingOffPeak} (raw: ${peakWindows} peak, ${offPeakWindows} off-peak)`,
+    evidence: `windows: ${totalWindows} total${excludedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeakWindows.length}; qualifying off-peak (>=${MIN_GROUP_BRACKETS} informative off-peak brackets): ${qualifyingOffPeakWindows.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${singleWindowNote}`,
   });
 
   // A4-3: distinguishable winner under holdout.
