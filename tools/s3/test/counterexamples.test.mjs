@@ -34,6 +34,19 @@
 // could run):
 //   CE-8 (A4-1 drop-one relabels):     old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
 //   CE-8b (A4-2 shift + drop-one):     old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
+// The CE-9..CE-13 group pins the STAGE-5-R2 defects, which survived until
+// v2.6.0 — same protocol, verified by extracting the v2.5.0 tree
+// (commit b4e93f7a009c) and running its CLI on the same fixture bytes
+// (r2-fixtures.mjs builds them, so both trees see identical input):
+//   CE-9  (A4-1 overlapping slices):   old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
+//   CE-10 (A4-1 subsampled copies):    old stdout `verdict=GO qualifier=none brackets=180 distinguishable=true`
+//   CE-11 (A4-2 fake peak via end):    old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
+//   CE-11b (A4-2 minimal end edit):    old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
+//   CE-12 (A4-2 end-edited rep):       old stdout `verdict=GO qualifier=none brackets=80 distinguishable=true`
+//   CE-13 (A4-2 fake off-peak):        old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
+// The same builder module also produces the honest control that must STAY GO
+// on both trees (`verdict=GO qualifier=none brackets=120 distinguishable=true`),
+// which is what keeps these fixes from being a gate wired permanently shut.
 // This file asserts the CURRENT analyzer answers NO_PRODUCTION_CHANGE with the
 // specific gate unsatisfied for the specific reason, while the go-gate test
 // keeps proving that a genuinely satisfying fixture still reaches GO.
@@ -43,6 +56,20 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { makeTmpDir, cleanup, makeRunDir, makeTickSeries, makeSqliteDb, sampleRow, runAnalyzer } from "./fixtures.mjs";
+import {
+  buildOverlapSlices,
+  buildSubsampleDerived,
+  buildFakePeakByRequestEnd,
+  buildSubtleFakePeakByRequestEnd,
+  buildRepresentativeHijack,
+  buildFakeOffPeakByClientClock,
+  buildHonestControl,
+  SLICE_LEN,
+  SLICE_OFFSETS,
+  sliceBaseCapture,
+  denseBaseCapture,
+  SUBSAMPLE_STRIDES,
+} from "./r2-fixtures.mjs";
 
 // Jan 6 2026 is EST (UTC-5): the NY 17:00-18:00 peak is 22:00-23:00 UTC.
 const OFF_PEAK_BASE = Date.UTC(2026, 0, 6, 3, 0, 0); // 22:00 ET Jan 5 — off-peak
@@ -200,7 +227,7 @@ test("CE-2 (A4-2): an isolated zero-change peak-time sample is not peak evidence
   assert.equal(a2.satisfied, false);
   assert.equal(
     a2.evidence,
-    "windows: 6 total; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative brackets): 3 (raw: 3 peak, 3 off-peak)",
+    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative off-peak brackets): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
@@ -496,7 +523,7 @@ test("CE-5 (A4-1/A4-6): term-relabeled byte-copies of one capture are one target
   // and the winner collapses when the one real NB series is held out.
   const a1 = gateById(json, "A4-1");
   assert.equal(a1.satisfied, true);
-  assert.match(a1.evidence, /2 duplicate stream\(s\) \(identical\/contained observation series\) excluded from evidence/);
+  assert.match(a1.evidence, /2 duplicate stream\(s\) \(identical, contained, overlapping, or subsampled observation series\) excluded from evidence/);
   const st = json.comparison.stability;
   assert.equal(st.targets.count, 3);
   assert.equal(st.targets.pass, false);
@@ -948,4 +975,323 @@ test("CE-8b (A4-2): a client-shifted copy that also drops one serverDate cannot 
   assert.equal(honest.code, 0, honest.stderr);
   assert.match(honest.stdout, /verdict=NO_PRODUCTION_CHANGE/);
   assert.equal(gateById(honest.json, "A4-2").satisfied, false);
+});
+
+
+// ---- CE-9 / CE-10: derived observation series (STAGE-5-R2, A2-1) ----------
+// v2.5.0 merged only whole-series copies: `identical` fingerprints and a
+// shorter series wholly CONTAINED in a longer one. Two obvious derivations of a
+// single capture escaped both. Cutting one capture into three EQUAL-LENGTH,
+// heavily overlapping slices defeats containment (equal length, none inside
+// another) and mints three fingerprints; DECIMATING one capture at two
+// different strides changes every client delta and mints three more. Either
+// way the relabeled derivations posed as three independent campuses and
+// carried a full GO. Provenance now groups streams into FAMILIES: an
+// `overlapping` shared block of canonical entries and `derived` reuse of the
+// actual observation records both merge, and the merge is closed transitively.
+
+test("CE-9 (A4-1): three staggered overlapping slices of one capture are one family, not three targets", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // ONE capture (30 off-peak + 30 peak ticks of a true 30 s process) cut into
+  // three equal-length windows of 80 samples at offsets 0/20/40 and relabeled
+  // NB/NK/CM. Only sequence/sampleId are re-stamped: every body hash and both
+  // clock columns are the byte-identical reused records.
+  const runNames = buildOverlapSlices(dir);
+  const capture = sliceBaseCapture();
+  const keyOf = (row) => `${row.requestStartedUtc}\t${row.decodedBodySha256}`;
+  const sliceKeys = Object.values(SLICE_OFFSETS).map(
+    (off) => new Set(capture.slice(off, off + SLICE_LEN).map(keyOf)),
+  );
+  // The attack really is record REUSE, and the slices really are equal-length.
+  for (const keys of sliceKeys) assert.equal(keys.size, SLICE_LEN);
+  assert.equal([...sliceKeys[0]].filter((k) => sliceKeys[1].has(k)).length, 60);
+  assert.equal([...sliceKeys[1]].filter((k) => sliceKeys[2].has(k)).length, 60);
+  assert.equal([...sliceKeys[0]].filter((k) => sliceKeys[2].has(k)).length, 40);
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  assert.equal(json.provenance.classes.length, 1);
+  const family = json.provenance.classes[0];
+  assert.equal(family.members.length, 3);
+  assert.deepEqual(
+    family.members.map((m) => m.relation),
+    ["representative", "overlapping", "overlapping"],
+  );
+  for (const m of family.members.slice(1)) {
+    assert.notEqual(m.relatedTo, null);
+    assert.ok(m.matchedCount >= 4, `matchedCount ${m.matchedCount}`);
+  }
+  // Reused data under three campus labels: the family is campus-conflicted and
+  // every member is barred from all evidence.
+  assert.equal(family.campusConflict, true);
+  assert.equal(family.timeConflict, false);
+  assert.equal(family.campus, null);
+  assert.equal(json.provenance.excludedStreamIds.length, 3);
+  assert.deepEqual(json.provenance.duplicateStreamIds, []);
+  assert.equal(json.bracketTotals.total, 120);
+  assert.equal(json.bracketTotals.excludedFromEvidence, 120);
+
+  const a1 = gateById(json, "A4-1");
+  assert.equal(a1.satisfied, false);
+  assert.match(a1.evidence, /campuses: none; NB missing; NK missing; CM missing/);
+  assert.match(a1.evidence, /conflicting campus labels/);
+  assert.match(
+    a1.evidence,
+    /2 stream\(s\) merged into an existing provenance family as overlapping slices or subsampled derivations/,
+  );
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-1", "A4-2", "A4-3", "A4-4", "A4-5", "A4-6"],
+  );
+});
+
+test("CE-10 (A4-1): regular subsamples of one capture are one family, not three targets", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // ONE dense capture (3 s polling of a true 30 s process) written as NB, plus
+  // its every-2nd-record and every-3rd-record decimations relabeled NK and CM.
+  // Every derived client delta differs from the source's, so no fingerprint
+  // matches and no series is a contiguous slice of another — only reuse of the
+  // actual observation records exposes them.
+  const runNames = buildSubsampleDerived(dir);
+  const capture = denseBaseCapture();
+  const keyOf = (row) => `${row.requestStartedUtc}\t${row.decodedBodySha256}`;
+  const nbKeys = new Set(capture.map(keyOf));
+  const derivedKeys = Object.values(SUBSAMPLE_STRIDES).map(
+    (stride) => capture.filter((_, i) => i % stride === 0).map(keyOf),
+  );
+  for (const keys of derivedKeys) {
+    assert.equal(keys.every((k) => nbKeys.has(k)), true, "derived rows must be reused verbatim");
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  assert.equal(json.provenance.classes.length, 1);
+  const family = json.provenance.classes[0];
+  assert.equal(family.members.length, 3);
+  assert.deepEqual(
+    family.members.map((m) => m.relation),
+    ["representative", "derived", "derived"],
+  );
+  assert.deepEqual(
+    family.members.slice(1).map((m) => m.matchedCount).sort((a, b) => a - b),
+    [200, 300],
+  );
+  assert.equal(family.campusConflict, true);
+  assert.equal(family.timeConflict, false);
+  assert.equal(json.provenance.excludedStreamIds.length, 3);
+  assert.equal(json.bracketTotals.total, 180);
+  assert.equal(json.bracketTotals.excludedFromEvidence, 180);
+  const a1 = gateById(json, "A4-1");
+  assert.equal(a1.satisfied, false);
+  assert.match(a1.evidence, /campuses: none; NB missing; NK missing; CM missing/);
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-1", "A4-2", "A4-3", "A4-4", "A4-5", "A4-6"],
+  );
+
+  // Union case: with the SOURCE stream withheld, the two decimations still
+  // share every 6th record, so they remain one family and cannot pose as two
+  // independent campuses either. (The strictly transitive case — two
+  // derivations sharing NO record with each other — is pinned by the unit test
+  // "A~B and B~C but A NOT~C still collapses to ONE family".)
+  const pair = analyze(dir, ["runNK", "runCM"]);
+  assert.equal(pair.code, 0, pair.stderr);
+  assert.equal(pair.json.provenance.classes.length, 1);
+  assert.equal(pair.json.provenance.classes[0].campusConflict, true);
+  assert.match(pair.stdout, /verdict=NO_PRODUCTION_CHANGE/);
+});
+
+// ---- CE-11 .. CE-13: peak/off-peak on the comparison clock (R2, A2-2) ------
+// v2.5.0 decided the A4-2 peak side from each bracket's CLIENT outer envelope
+// (stable requestStart, changed requestEnd] and the off-peak side from the
+// window's client-envelope label, while the comparison, the safe offset and
+// A4-5 all ran on the SERVER clock. Both sides were therefore forgeable
+// without touching one body, request start or serverDate: extending only
+// `requestEndedUtc` dragged an off-peak bracket across 17:00 ET, and a client
+// clock running an hour slow relabeled a wholly in-peak server window as
+// off-peak. Both sides now classify per bracket on the comparison clock.
+
+test("CE-11 (A4-2): a peak claimed only through requestEndedUtc is not peak evidence", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // Three honest, independent campuses. Each gets a genuine off-peak session
+  // plus a second session whose bodies, request STARTS and serverDates all sit
+  // at 16:20-16:30 ET — only the changed rows' requestEndedUtc is rewritten to
+  // 17:05 ET, dragging all 20 client envelopes per window across the peak hour.
+  const runNames = buildFakePeakByRequestEnd(dir);
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  // Nothing else is wrong: the data is genuinely three independent campuses on
+  // the server clock, and every other gate holds. The verdict turns on A4-2.
+  assert.equal(json.provenance.classes.length, 3);
+  assert.equal(gateById(json, "A4-1").satisfied, true);
+  assert.equal(json.comparison.clockSource, "server");
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+  const a2 = gateById(json, "A4-2");
+  assert.equal(a2.satisfied, false);
+  assert.match(a2.evidence, /peak\/off-peak classified on the server clock/);
+  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
+  // The bait: the window LABEL (client envelope) still says peak-overlapping.
+  const windows = json.targets.flatMap((tgt) => tgt.windows);
+  assert.equal(windows.filter((w) => w.peakOverlap).length, 3);
+  assert.match(a2.evidence, /\(window labels: 3 peak-overlapping, 3 off-peak\)/);
+});
+
+test("CE-11b (A4-2): the minimal requestEndedUtc edit is caught too", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The same attack at the smallest edit that worked on v2.5.0: the session
+  // runs 16:49:59-16:59:39 ET and the changed rows simply carry a 150 s request
+  // end, so exactly MIN_GROUP_BRACKETS (5) client envelopes per window cross
+  // 17:00:00 ET. No absurd elapsed value is needed, which is why the fix has to
+  // be "classify on the server clock" and not "reject an implausible elapsed".
+  const runNames = buildSubtleFakePeakByRequestEnd(dir);
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  assert.equal(gateById(json, "A4-1").satisfied, true);
+  const a2 = gateById(json, "A4-2");
+  assert.equal(a2.satisfied, false);
+  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+});
+
+test("CE-12 (A4-1/A4-2): a copy that edited ONLY requestEndedUtc cannot become the clean representative", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // Two NB streams of the SAME off-peak capture differing ONLY in
+  // requestEndedUtc (the edited one dragged into the peak hour), named so the
+  // edited copy sorts first and wins the representative tie-break; NK and CM
+  // are honest off-peak only. On v2.5.0 the fingerprint (content-only) matched,
+  // the record check compared only client STARTS and serverDates, and the class
+  // stayed clean — so the HONEST twin was dropped as the duplicate and the
+  // edited copy supplied the run's only qualifying peak window.
+  const runNames = buildRepresentativeHijack(dir);
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  // The copy still MERGES (the fingerprint stays content-only, per the R1
+  // sixth-round ruling) — and the record check now covers the client END, so
+  // the family is voided instead of electing the edited copy.
+  const nbClass = json.provenance.classes.find((c) => c.members.length === 2);
+  assert.equal(nbClass.members[1].relation, "identical");
+  assert.equal(nbClass.timeConflict, true);
+  assert.equal(nbClass.campusConflict, false);
+  assert.equal(nbClass.timeConflictPairs.length, 1);
+  assert.equal(nbClass.timeConflictPairs[0].relation, "identical");
+  assert.deepEqual(
+    json.provenance.excludedStreamIds,
+    nbClass.members.map((m) => m.streamId).sort(),
+  );
+  assert.deepEqual(json.provenance.duplicateStreamIds, []);
+  const a2 = gateById(json, "A4-2");
+  assert.equal(a2.satisfied, false);
+  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
+  const a1 = gateById(json, "A4-1");
+  assert.equal(a1.satisfied, false);
+  assert.match(a1.evidence, /NB missing/);
+  assert.match(a1.evidence, /conflicting absolute time anchors/);
+
+  // Honest run (the un-edited twin alone): same A4-2 failure — the copy bought
+  // the attacker nothing.
+  const honest = analyze(dir, ["nb-b-honest", "runNK", "runCM"]);
+  assert.equal(honest.code, 0, honest.stderr);
+  assert.match(honest.stdout, /verdict=NO_PRODUCTION_CHANGE/);
+  assert.equal(gateById(honest.json, "A4-2").satisfied, false);
+  assert.match(
+    gateById(honest.json, "A4-2").evidence,
+    /qualifying peak \(>=5 informative in-peak brackets\): 0;/,
+  );
+});
+
+test("CE-13 (A4-2): a client clock running an hour slow cannot manufacture off-peak evidence", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The mirror hole. Each campus has (a) a session whose client timestamps read
+  // 16:10 ET but whose serverDates — the clock the comparison runs on — say
+  // 17:10 ET, and (b) an honest 17:40 ET peak session. Every bit of server
+  // evidence in the run lies inside 17:00-18:00 ET, yet v2.5.0 labeled the
+  // skewed window off-peak from its client envelope and satisfied A4-2.
+  const runNames = buildFakeOffPeakByClientClock(dir);
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  assert.equal(gateById(json, "A4-1").satisfied, true);
+  assert.equal(json.comparison.clockSource, "server");
+  const a2 = gateById(json, "A4-2");
+  assert.equal(a2.satisfied, false);
+  // Every qualifying window is a PEAK window on the server clock; the off-peak
+  // side, which the client labels claimed, has nothing.
+  assert.match(a2.evidence, /qualifying off-peak \(>=5 informative off-peak brackets\): 0/);
+  assert.match(a2.evidence, /\(window labels: 3 peak-overlapping, 3 off-peak\)/);
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+});
+
+test("CONTROL (R2): the honest three-campus fixture the R2 counterexamples are cut from still reaches GO", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The anti-lockout control for BOTH R2 fixes, built by the same module as
+  // CE-9..CE-13: three genuinely independent captures (disjoint bodySha
+  // namespaces, distinct tick geometry) whose peak sessions carry real
+  // server-clock peak evidence. Zero shared records, zero shared
+  // (bodySha, clientDelta) blocks — measured below, not assumed.
+  const runNames = buildHonestControl(dir);
+  const rows = runNames.map((name) =>
+    readFileSync(join(dir, name, "samples.ndjson"), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l)),
+  );
+  const keySets = rows.map((rs) => new Set(rs.map((r) => `${r.requestStartedUtc}\t${r.decodedBodySha256}`)));
+  const bodySets = rows.map((rs) => new Set(rs.map((r) => r.decodedBodySha256)));
+  for (const [i, j] of [[0, 1], [0, 2], [1, 2]]) {
+    assert.equal([...keySets[i]].filter((k) => keySets[j].has(k)).length, 0, "shared records");
+    assert.equal([...bodySets[i]].filter((b) => bodySets[j].has(b)).length, 0, "shared bodies");
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=GO qualifier=none brackets=120 distinguishable=true/);
+  const json = out.json;
+  assert.equal(json.provenance.classes.length, 3);
+  for (const cls of json.provenance.classes) {
+    assert.equal(cls.members.length, 1);
+    assert.equal(cls.members[0].relation, "representative");
+    assert.equal(cls.members[0].relatedTo, null);
+    assert.equal(cls.members[0].matchedCount, null);
+    assert.deepEqual(cls.timeConflictPairs, []);
+  }
+  for (const gate of json.goGate) {
+    assert.equal(gate.satisfied, true, `${gate.id}: ${gate.evidence}`);
+  }
+  assert.equal(
+    gateById(json, "A4-2").evidence,
+    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 3; qualifying off-peak (>=5 informative off-peak brackets): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
+  );
 });

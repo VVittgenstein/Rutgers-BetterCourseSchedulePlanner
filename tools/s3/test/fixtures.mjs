@@ -111,7 +111,15 @@ function cyc(value, k) {
 // Tick T_k = baseMs + k*periodMs + phaseMs (or ticks[k] when an explicit tick
 // array is given). Emits per k a stable sample at T_k - pre (body
 // {bodyPrefix}{k}) and a changed sample at T_k + post (body {bodyPrefix}{k+1});
-// serverDate = floor(sampleTime / 1000) s (1 s truncation) unless noServerDate.
+// serverDate = floor(sampleTime / 1000) s (1 s truncation) + serverOffsetMs,
+// unless noServerDate.
+//
+// changedEndMs(k), when given, overrides the CHANGED row's absolute
+// requestEndedUtc while leaving requestStartedUtc, decodedBodySha256 and
+// serverDate untouched — the single field the A4-2 counterexamples edit.
+// serverOffsetMs skews the recorded server clock away from the client clock,
+// which is the mirror edit. Both default to the identity, so every existing
+// caller emits byte-identical rows.
 export function makeTickSeries({
   baseMs,
   periodMs,
@@ -124,30 +132,62 @@ export function makeTickSeries({
   elapsedMs = 200,
   bodyPrefix = "v",
   ticks = null,
+  changedEndMs = null,
+  serverOffsetMs = 0,
 }) {
   const rows = [];
   let seq = startSeq;
   const n = ticks !== null ? ticks.length : count;
   for (let k = 0; k < n; k += 1) {
     const tick = ticks !== null ? ticks[k] : baseMs + k * periodMs + phaseMs;
-    for (const [offset, body] of [
+    const pair = [
       [-cyc(preMs, k), `${bodyPrefix}${k}`],
       [cyc(postMs, k), `${bodyPrefix}${k + 1}`],
-    ]) {
+    ];
+    for (let role = 0; role < pair.length; role += 1) {
+      const [offset, body] = pair[role];
       const t = tick + offset;
+      const endMs = role === 1 && changedEndMs !== null ? changedEndMs(k) : t + elapsedMs;
       rows.push(
         sampleRow({
           seq,
           startMs: t,
-          elapsedMs,
+          elapsedMs: endMs - t,
           bodySha: body,
-          serverDateMs: noServerDate ? null : Math.floor(t / 1000) * 1000,
+          serverDateMs: noServerDate ? null : Math.floor(t / 1000) * 1000 + serverOffsetMs,
         }),
       );
       seq += 1;
     }
   }
   return rows;
+}
+
+// Re-stamps sequence/sampleId so a derived export looks like a fresh capture.
+// EVERY other field — body hashes, both clock columns, elapsed, headers — stays
+// the byte-identical reused observation record. This is what makes the A2-1
+// fixtures reuse rather than fabricate.
+export function renumberRows(rows) {
+  return rows.map((row, i) => ({
+    ...row,
+    sequence: i + 1,
+    sampleId: `fixture_${String(i + 1).padStart(6, "0")}`,
+  }));
+}
+
+// A copy of `rows` with ONLY requestEndedUtc (and the elapsedMilliseconds that
+// mirrors it) rewritten; requestStartedUtc, decodedBodySha256 and serverDate
+// keep their exact recorded values.
+export function rewriteRequestEnds(rows, endForRow) {
+  return rows.map((row, i) => {
+    const startMs = Date.parse(row.requestStartedUtc);
+    const endMs = endForRow(i, startMs, row);
+    return {
+      ...row,
+      requestEndedUtc: new Date(endMs).toISOString(),
+      elapsedMilliseconds: endMs - startMs,
+    };
+  });
 }
 
 // LCG-seeded generic change process (spec Section 17): body version counts

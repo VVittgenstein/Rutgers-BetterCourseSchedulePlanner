@@ -1,17 +1,22 @@
-// Unit tests for observation-data provenance classes (A4-1's data layer).
-// The canonical series is metadata-free: identical or contiguously-contained
-// observation series merge into one class regardless of campus labels, input
-// ids, or file names. Known boundary (documented, asserted below): derived
-// series such as every-other-sample subsampling change the delta structure
-// and are NOT merged — this defends against copy-and-relabel, not forensics.
+// Unit tests for observation-data provenance families (A4-1's data layer).
+// The canonical series is metadata-free: identical, contiguously-contained,
+// overlapping, and subsample-derived observation series merge into one family
+// regardless of campus labels, input ids, or file names, and the merge is
+// closed transitively. Known boundary (documented, asserted below): what is
+// detected is REUSE of the same observation records — de novo fabrication of
+// body content or of the time grid is not, and neither is a partition that
+// reuses nothing.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildProvenance } from "../lib/provenance.mjs";
 
-function mkSample({ t, bodySha, serverDeltaMs = -600, targetId = "soc:2026:9:NB", campus = "NB" }) {
+function mkSample({ t, bodySha, serverDeltaMs = -600, endDeltaMs = 200, targetId = "soc:2026:9:NB", campus = "NB" }) {
   return {
     clientStartMs: t,
+    // Normalized samples always carry a request end; the undefined branch stays
+    // a fail-closed guard for streams that record none.
+    clientEndMs: endDeltaMs === null ? undefined : t + endDeltaMs,
     serverDateMs: serverDeltaMs === null ? null : t + serverDeltaMs,
     bodySha,
     targetId,
@@ -20,10 +25,12 @@ function mkSample({ t, bodySha, serverDeltaMs = -600, targetId = "soc:2026:9:NB"
 }
 
 // A simple 6-sample series: bodies a0..a5, 20 s apart.
-function mkSeries({ baseMs = 1_000_000, targetId = "soc:2026:9:NB", campus = "NB", prefix = "a", n = 6, stepMs = 20000 }) {
+function mkSeries({ baseMs = 1_000_000, targetId = "soc:2026:9:NB", campus = "NB", prefix = "a", n = 6, stepMs = 20000, endDeltaMs = 200 }) {
   const samples = [];
   for (let k = 0; k < n; k += 1) {
-    samples.push(mkSample({ t: baseMs + k * stepMs, bodySha: `${prefix}${k}`, targetId, campus }));
+    samples.push(
+      mkSample({ t: baseMs + k * stepMs, bodySha: `${prefix}${k}`, targetId, campus, endDeltaMs }),
+    );
   }
   return samples;
 }
@@ -198,16 +205,131 @@ test("different bodySha series does NOT merge", () => {
   assert.equal(p.classes.length, 2);
 });
 
-test("KNOWN BOUNDARY: every-other-sample subsampling is not detected as derived", () => {
+test("an every-other-sample subsample merges as a DERIVED member of the source family", () => {
   const full = mkSeries({ n: 8 });
   const everyOther = full.filter((_, i) => i % 2 === 0);
   const p = buildProvenance([
     { inputId: "full/samples.ndjson", samples: full },
     { inputId: "sub/samples.ndjson", samples: everyOther },
   ]);
-  // The subsample's deltas are doubled: not a contiguous slice, so it forms
-  // its own class. This is the documented limit of the provenance check.
-  assert.equal(p.classes.length, 2);
+  // The subsample's deltas are doubled, so it is neither identical nor a
+  // contiguous slice - but it reuses the source's actual observation records,
+  // which is what the derived relation keys on.
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].members[0].streamId, "full/samples.ndjson::soc:2026:9:NB");
+  assert.equal(p.classes[0].members[1].relation, "derived");
+  assert.equal(p.classes[0].members[1].relatedTo, "full/samples.ndjson::soc:2026:9:NB");
+  assert.equal(p.classes[0].members[1].matchedCount, 4);
+  // Genuine records, genuinely reused: no record disagreement.
+  assert.equal(p.classes[0].timeConflict, false);
+  assert.deepEqual(p.classes[0].timeConflictPairs, []);
+});
+
+test("three staggered overlapping slices of one capture are ONE family", () => {
+  // Equal-length slices: none is contained in another, and each pair shares a
+  // long contiguous run of (bodySha, clientDelta) entries spanning changes.
+  const full = mkSeries({ n: 20 });
+  const slices = [full.slice(0, 12), full.slice(4, 16), full.slice(8, 20)];
+  const p = buildProvenance(
+    slices.map((samples, i) => ({
+      inputId: `slice${i}/samples.ndjson`,
+      samples: samples.map((s) => ({ ...s, campus: ["NB", "NK", "CM"][i] })),
+    })),
+  );
+  assert.equal(p.classes.length, 1);
+  assert.deepEqual(
+    p.classes[0].members.map((m) => m.relation),
+    ["representative", "overlapping", "overlapping"],
+  );
+  for (const m of p.classes[0].members.slice(1)) {
+    assert.notEqual(m.relatedTo, null);
+    assert.ok(m.matchedCount >= 4, `matchedCount ${m.matchedCount}`);
+  }
+  // Three campus labels on one body of captured data: no coverage at all.
+  assert.equal(p.classes[0].campusConflict, true);
+  assert.equal(p.classes[0].campus, null);
+  assert.equal(p.classes[0].timeConflict, false);
+});
+
+test("A~B and B~C but A NOT~C still collapses to ONE family (transitive union)", () => {
+  // Two disjoint, phase-staggered subsamples of one source: each reuses the
+  // source's records, neither reuses the other's. Only the transitive closure
+  // keeps them from posing as two independent captures.
+  const full = mkSeries({ n: 12 });
+  const even = full.filter((_, i) => i % 2 === 0);
+  const odd = full.filter((_, i) => i % 2 === 1);
+  const evenKeys = new Set(even.map((s) => `${s.clientStartMs}\t${s.bodySha}`));
+  assert.equal(odd.filter((s) => evenKeys.has(`${s.clientStartMs}\t${s.bodySha}`)).length, 0);
+  const p = buildProvenance([
+    { inputId: "src/samples.ndjson", samples: full },
+    { inputId: "even/samples.ndjson", samples: even.map((s) => ({ ...s, campus: "NK" })) },
+    { inputId: "odd/samples.ndjson", samples: odd.map((s) => ({ ...s, campus: "CM" })) },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].members.length, 3);
+  assert.equal(p.classes[0].campusConflict, true);
+  // Without the source stream the two halves are genuinely unrelated data.
+  const split = buildProvenance([
+    { inputId: "even/samples.ndjson", samples: even },
+    { inputId: "odd/samples.ndjson", samples: odd },
+  ]);
+  assert.equal(split.classes.length, 2);
+});
+
+test("a family whose NON-tree edge disagrees is still a time conflict", () => {
+  // src-A and src-B are clean; A-B disagrees on the recorded request ends at
+  // the samples they share. Judging only the spanning tree would miss it.
+  const full = mkSeries({ n: 12 });
+  const even = full.filter((_, i) => i % 2 === 0);
+  const evenEdited = even.map((s) => ({ ...s, clientEndMs: s.clientEndMs + 5000 }));
+  const p = buildProvenance([
+    { inputId: "src/samples.ndjson", samples: full },
+    { inputId: "a-even/samples.ndjson", samples: even },
+    { inputId: "b-even/samples.ndjson", samples: evenEdited },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, true);
+  assert.ok(p.classes[0].timeConflictPairs.length >= 1);
+});
+
+test("a request-end-only edited copy merges and is a record conflict", () => {
+  // The A2-2 provenance hole: the fingerprint is content-only, so a copy that
+  // rewrote ONLY requestEndedUtc keeps the same fingerprint and merges - and
+  // the record agreement check (which now covers the client END) voids it,
+  // instead of letting the edited copy win the representative slot.
+  const genuine = mkSeries({});
+  const endEdited = genuine.map((s) => ({ ...s, clientEndMs: s.clientEndMs + 150000 }));
+  const p = buildProvenance([
+    { inputId: "runA/samples.ndjson", samples: genuine },
+    { inputId: "runB/samples.ndjson", samples: endEdited },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, true);
+  assert.equal(p.classes[0].campusConflict, false);
+});
+
+test("clientEndObserved false on one side suppresses the request-end comparison", () => {
+  // A SQLite stream records no request end (clientEndMs === clientStartMs).
+  // Comparing it against an NDJSON stream's real ends would flag every honest
+  // cross-format duplicate, so the end check is suppressed for such a pair.
+  const ndjson = mkSeries({});
+  const sqlite = ndjson.map((s) => ({
+    ...s,
+    clientEndMs: s.clientStartMs,
+    targetId: "db:soc-2026-9-NB",
+    campus: null,
+  }));
+  const p = buildProvenance([
+    { inputId: "run/samples.ndjson", samples: ndjson },
+    { inputId: "capture.sqlite", samples: sqlite },
+  ]);
+  assert.equal(
+    p.streams.find((x) => x.streamId.startsWith("capture.sqlite")).clientEndObserved,
+    false,
+  );
+  assert.equal(p.streams.find((x) => x.streamId.startsWith("run/")).clientEndObserved, true);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, false);
 });
 
 test("a copy with ONE serverDate deleted still merges — time-anchor conflict", () => {

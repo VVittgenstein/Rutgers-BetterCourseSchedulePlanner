@@ -8,6 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { makeTmpDir, cleanup, makeRunDir, makeTickSeries, runAnalyzer } from "./fixtures.mjs";
+import { overlapsNyPeakStrict } from "../lib/windows.mjs";
 
 // Jan 6 2026 is EST (UTC-5): the NY 17:00-18:00 peak is 22:00-23:00 UTC.
 const OFF_PEAK_BASE = Date.UTC(2026, 0, 6, 3, 0, 0); // 22:00 ET Jan 5 — off-peak
@@ -108,8 +109,35 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   const a2 = json.goGate.find((g) => g.id === "A4-2");
   assert.equal(
     a2.evidence,
-    "windows: 6 total; qualifying peak (>=5 informative in-peak brackets): 3; qualifying off-peak (>=5 informative brackets): 3 (raw: 3 peak, 3 off-peak)",
+    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 3; qualifying off-peak (>=5 informative off-peak brackets): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
+  // Anti-lockout guard on the A2-2 fix: this control's peak evidence really is
+  // SERVER-clock evidence, so tightening A4-2 to the comparison clock cannot
+  // have turned the gate into a permanent NO. Re-derived here from the fixture
+  // geometry alone (serverDate = floor(sampleTime / 1000) s, +1 s widening on
+  // the upper bound), with no analyzer output consulted.
+  assert.match(a2.evidence, /peak\/off-peak classified on the server clock/);
+  assert.equal(json.comparison.clockSource, "server");
+  for (const campus of ["NB", "NK", "CM"]) {
+    const shape = CAMPUS_SHAPE[campus];
+    for (const [baseMs, expectPeak] of [[OFF_PEAK_BASE, false], [PEAK_BASE, true]]) {
+      for (let k = 0; k < 20; k += 1) {
+        const tick = baseMs + k * 30000 + shape.phaseMs;
+        const serverLowerMs = Math.floor((tick - shape.preMs) / 1000) * 1000;
+        const serverUpperMs = Math.floor((tick + shape.postMs) / 1000) * 1000 + 1000;
+        assert.equal(
+          overlapsNyPeakStrict(serverLowerMs, serverUpperMs),
+          expectPeak,
+          `${campus} tick ${k} @ ${baseMs}`,
+        );
+      }
+    }
+  }
+  // Every peak-window bracket carries usable server bounds (a bracket without
+  // them can qualify neither side).
+  for (const win of windows) {
+    for (const b of win.brackets) assert.notEqual(b.serverWidthSeconds, null, b.bracketId);
+  }
 
   // A4-3: strict win via a non-degenerate 6-group holdout.
   assert.equal(json.comparison.distinguishable, true);

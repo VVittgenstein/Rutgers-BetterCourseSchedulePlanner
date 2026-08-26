@@ -131,14 +131,50 @@ test("local data: verdict, gates, and independent recomputation", (t) => {
   assert.equal(json.goGate.find((g) => g.id === "A4-5").satisfied, true);
   assert.equal(json.clock.serverEvidence.sufficient, true);
 
-  // All three inputs are NB captures: whatever way the provenance classes
-  // merge (short runs may or may not be contained in the long one — both are
-  // legitimate), no class may claim a campus other than NB or a conflict.
+  // All three inputs are NB captures: no class may claim a campus other than
+  // NB or a conflict.
   assert.ok(json.provenance.classes.length >= 1);
   for (const cls of json.provenance.classes) {
     assert.equal(cls.campusConflict, false);
     assert.equal(cls.campus, "NB");
   }
+
+  // Over-merge guard for the provenance-FAMILY thresholds: these three are
+  // genuinely separate captures of the same target minutes apart, so they must
+  // stay three single-member families. If a future threshold change merges
+  // them, the thresholds are wrong — this is the real-data calibration that
+  // no synthetic fixture can supply.
+  assert.equal(json.provenance.streams.length, 3);
+  assert.equal(json.provenance.classes.length, 3);
+  for (const cls of json.provenance.classes) {
+    assert.equal(cls.members.length, 1, cls.classId);
+    assert.equal(cls.members[0].relation, "representative");
+    assert.equal(cls.timeConflict, false);
+    assert.deepEqual(cls.timeConflictPairs, []);
+  }
+  assert.deepEqual(json.provenance.excludedStreamIds, []);
+  assert.deepEqual(json.provenance.duplicateStreamIds, []);
+  assert.equal(json.bracketTotals.excludedFromEvidence, 0);
+
+  // Independent check of the signal the family thresholds rest on: the three
+  // captures share no (requestStartedUtc, decodedBodySha256) record and no
+  // body hash at all, recomputed here straight from the NDJSON.
+  const rowsByRun = RUN_DIRS.map((d) => includedRows(join(dataRoot, d, "samples.ndjson")));
+  const keySets = rowsByRun.map(
+    (rows) => new Set(rows.map((r) => `${r.requestStartedUtc}\t${r.decodedBodySha256}`)),
+  );
+  const bodySets = rowsByRun.map((rows) => new Set(rows.map((r) => r.decodedBodySha256)));
+  for (const [i, j] of [[0, 1], [0, 2], [1, 2]]) {
+    assert.equal([...keySets[i]].filter((k) => keySets[j].has(k)).length, 0, "shared records");
+    assert.equal([...bodySets[i]].filter((b) => bodySets[j].has(b)).length, 0, "shared bodies");
+  }
+
+  // A4-2 classifies peak/off-peak on the comparison clock, and this data ran
+  // on the server clock.
+  assert.match(
+    json.goGate.find((g) => g.id === "A4-2").evidence,
+    /peak\/off-peak classified on the server clock/,
+  );
 
   // Independent recount of D1 brackets: adjacent decodedBodySha256 diff over
   // included rows (minimal inline reader, no analyzer code).
