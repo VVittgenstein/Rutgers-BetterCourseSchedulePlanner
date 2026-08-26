@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "toolVersion": "2.3.0",
+  "toolVersion": "2.4.0",
   "normalizedCommand": "rebuild-profile-analyzer --ndjson 20260820T033451393Z-a8a40f98/samples.ndjson --ndjson 20260820T033527487Z-d92a8a35/samples.ndjson --ndjson 20260820T033701043Z-5745bc4a/samples.ndjson --out-json S3-REBUILD-PROFILE.json --out-md S3-REBUILD-PROFILE.md",
   "inputs": [
     {
@@ -691,38 +691,26 @@
         "targetId": "soc:2026:9:NB",
         "campus": "NB",
         "sampleCount": 1,
-        "seriesFingerprint": "26764ef271fbdddb61b8ba7c85d1220600d9a74cbb27774ba7309806b8e32d26"
+        "seriesFingerprint": "8dc58724df7cc09852cf81a2f89d758c03bce0882486d9739fd3aecef5122543"
       },
       {
         "streamId": "20260820T033527487Z-d92a8a35/samples.ndjson::soc:2026:9:NB",
         "targetId": "soc:2026:9:NB",
         "campus": "NB",
         "sampleCount": 3,
-        "seriesFingerprint": "4f881a53c12943f58aed6e5dcc7c53088a2ef61de07b2bd2f8127d7e8244f298"
+        "seriesFingerprint": "963921982f36cc8710094e1146c9908305110e2eb4164d495a10a0dc03ec906f"
       },
       {
         "streamId": "20260820T033701043Z-5745bc4a/samples.ndjson::soc:2026:9:NB",
         "targetId": "soc:2026:9:NB",
         "campus": "NB",
         "sampleCount": 554,
-        "seriesFingerprint": "2ff7575c4c21c97f02061db5a5d236bbfb3fcb26e6165f6608d6217a28d889e2"
+        "seriesFingerprint": "410c9fab5775a201836fc2bb0a5c96859414e7e4ecaf4aa18ba68fc4e1ffbfdd"
       }
     ],
     "classes": [
       {
-        "classId": "pc-26764ef271fb",
-        "campus": "NB",
-        "campusConflict": false,
-        "timeConflict": false,
-        "members": [
-          {
-            "streamId": "20260820T033451393Z-a8a40f98/samples.ndjson::soc:2026:9:NB",
-            "relation": "representative"
-          }
-        ]
-      },
-      {
-        "classId": "pc-2ff7575c4c21",
+        "classId": "pc-410c9fab5775",
         "campus": "NB",
         "campusConflict": false,
         "timeConflict": false,
@@ -734,7 +722,19 @@
         ]
       },
       {
-        "classId": "pc-4f881a53c129",
+        "classId": "pc-8dc58724df7c",
+        "campus": "NB",
+        "campusConflict": false,
+        "timeConflict": false,
+        "members": [
+          {
+            "streamId": "20260820T033451393Z-a8a40f98/samples.ndjson::soc:2026:9:NB",
+            "relation": "representative"
+          }
+        ]
+      },
+      {
+        "classId": "pc-963921982f36",
         "campus": "NB",
         "campusConflict": false,
         "timeConflict": false,
@@ -880,7 +880,7 @@
       "id": "A4-1",
       "requirement": "Multi-target evidence: at least NB, NK, CM independently evaluable from independent data provenance",
       "satisfied": false,
-      "evidence": "campuses: NB(pc-2ff7575c4c21) only; NK missing; CM missing"
+      "evidence": "campuses: NB(pc-410c9fab5775) only; NK missing; CM missing"
     },
     {
       "id": "A4-2",
@@ -917,7 +917,7 @@
     "verdict": "NO_PRODUCTION_CHANGE",
     "qualifier": "DATA_REQUIRED",
     "reasons": [
-      "A4-1 unsatisfied: campuses: NB(pc-2ff7575c4c21) only; NK missing; CM missing",
+      "A4-1 unsatisfied: campuses: NB(pc-410c9fab5775) only; NK missing; CM missing",
       "A4-2 unsatisfied: windows: 3 total; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative brackets): 1 (raw: 0 peak, 3 off-peak)",
       "A4-3 unsatisfied: c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate",
       "A4-4 unsatisfied: not identifiable (not-distinguishable)",
