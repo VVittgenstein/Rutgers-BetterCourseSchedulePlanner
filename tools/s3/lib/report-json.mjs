@@ -224,17 +224,39 @@ export function buildJsonReport(ctx) {
         targetId: s.targetId,
         campus: s.campus,
         sampleCount: s.sampleCount,
+        // false when the stream records no client request end at all (every
+        // SQLite stream): the request-end record comparison is suppressed for
+        // any pair that includes such a stream.
+        clientEndObserved: s.clientEndObserved,
         seriesFingerprint: s.seriesFingerprint,
       })),
       classes: provenance.classes.map((c) => ({
         classId: c.classId,
         campus: c.campus,
         campusConflict: c.campusConflict,
-        // Members share canonical observation content but disagree about its
-        // absolute time (a time-translated copy): the whole class is barred
-        // from evidence, like a campus conflict.
+        // Members share captured observation data but disagree about its
+        // absolute time, its serverDates, or its request ends (a translated or
+        // field-edited copy): the whole family is barred from evidence, like a
+        // campus conflict.
         timeConflict: c.timeConflict,
-        members: c.members.map((m) => ({ streamId: m.streamId, relation: m.relation })),
+        // Every disagreeing pair in the family, not just the ones on the audit
+        // spanning tree; [] when the family is clean.
+        timeConflictPairs: c.timeConflictPairs.map((p) => ({
+          streamIdA: p.streamIdA,
+          streamIdB: p.streamIdB,
+          relation: p.relation,
+        })),
+        // relation: how the member joined the family — "representative",
+        // "identical", "contained", "overlapping" (a shared contiguous block of
+        // canonical entries) or "derived" (reused observation records).
+        // relatedTo/matchedCount describe that one attachment edge and are null
+        // on the representative.
+        members: c.members.map((m) => ({
+          streamId: m.streamId,
+          relation: m.relation,
+          relatedTo: m.relatedTo,
+          matchedCount: m.matchedCount,
+        })),
       })),
       // Streams barred from all evidence (members of campus-conflicted or
       // time-anchor-conflicted classes); [] when every stream is

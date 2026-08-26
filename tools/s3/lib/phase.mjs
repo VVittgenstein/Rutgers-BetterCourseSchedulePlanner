@@ -13,8 +13,8 @@ import { AnalyzerError, internalAssert } from "./errors.mjs";
 import { fmtRatio } from "./stable.mjs";
 
 // Shared constants (single source of truth; gate.mjs re-exports them).
-export const TOOL_VERSION = "2.5.0";
-export const SCHEMA_VERSION = 2;
+export const TOOL_VERSION = "2.6.0";
+export const SCHEMA_VERSION = 3;
 export const PERIODS_MS = [30000, 60000];
 export const SERVER_DATE_WIDEN_MS = 1000;
 export const CLIENT_TIME_REGRESSION_TOLERANCE_MS = 2000;
@@ -28,6 +28,30 @@ export const MIN_GROUP_BRACKETS = 5;
 // survive each removal.
 export const STABILITY_OUTLIER_KS = [1, 2];
 export const REQUIRED_CAMPUSES = ["NB", "NK", "CM"];
+// Provenance FAMILY thresholds (provenance.mjs / series-match.mjs). They decide
+// when two observation series are the same captured data reused, not two
+// independent captures.
+//
+// DERIVATION_MIN_BLOCK counts matching INTERIOR canonical entries, i.e. 4
+// matches means 5 consecutive samples agreeing on 5 body hashes AND on 4
+// exactly-equal millisecond client steps. Measured on the real local capture
+// (554 samples): the longest such repeat at any non-zero self-offset is 1, and
+// across the three independent local captures it is 0 — a factor-of-4 margin
+// over an empirical maximum of 1. An attacker cannot go below it and still
+// reuse enough of a session to qualify a window (MIN_GROUP_BRACKETS = 5).
+export const DERIVATION_MIN_BLOCK = 4;
+// …and that shared block must contain at least one BODY CHANGE. The one
+// plausible accidental long block is a stale run under an exactly-scheduled
+// poller (constant delta, one repeated body hash); such a block yields no
+// change bracket on either side, so requiring a change costs nothing defensively
+// and removes the whole coincidence class.
+export const DERIVATION_MIN_BLOCK_CHANGES = 1;
+// Reused (clientStartMs, bodySha) observation records. Two independent captures
+// never collide on even one (measured: 0 shared record keys between every pair
+// of the three local captures, and 0 between the disjoint halves of one of
+// them); a stream sharing fewer than 3 could not reach MIN_GROUP_BRACKETS
+// anyway, so 3 buys robustness without giving up any detection.
+export const DERIVATION_MIN_RECORDS = 3;
 export const NY_PEAK = { startHour: 17, endHour: 18, timeZone: "America/New_York" };
 
 export function bracketBounds(bracket, clockSource) {
