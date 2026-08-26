@@ -438,7 +438,7 @@ export function evaluateGate(ctx) {
   // A4-2: multiple independent time windows incl. NY peak and off-peak — each
   // side must have at least one QUALIFYING window (>= MIN_GROUP_BRACKETS
   // informative brackets of its own on the comparison clock), and the two
-  // sides may not be the same single window.
+  // sides may never be the same window.
   //
   // BOTH sides are classified per BRACKET on the COMPARISON clock — the same
   // bounds the model comparison, the safe offset and A4-5 consume. Whenever a
@@ -460,6 +460,23 @@ export function evaluateGate(ctx) {
   // off-peak gap). On the server clock that state is unreachable inside
   // `informativeBrackets` because isInformative(_, _, "server") already
   // requires both server bounds; the branch stays as a guard.
+  //
+  // The off-peak side additionally demands a PURE off-peak window: every one
+  // of that window's brackets must classify off-peak on the comparison clock.
+  // Without the purity clause a SINGLE session straddling 17:00 ET satisfies
+  // both sides by itself — its early brackets off-peak, its late ones in the
+  // peak hour — and a per-bracket rule would then be strictly WEAKER than the
+  // window-label rule it replaced, which required an off-peak window whose
+  // whole span sat outside the peak hour. Purity is checked over ALL of the
+  // window's brackets, not only the informative ones, so a straddling session
+  // cannot buy purity by making its peak-side brackets too wide to be
+  // informative or by dropping their `Date` headers.
+  //
+  // The peak side needs no mirror clause: brackets whose own comparison-clock
+  // bounds fall inside the peak hour ARE peak evidence wherever the rest of
+  // their window sits. The two qualifying sets are disjoint by construction
+  // (a qualifying peak window holds >= MIN_GROUP_BRACKETS in-peak brackets, so
+  // it is never pure) — asserted below rather than left to a count of ids.
   const bracketPeakState = (bracket, clockSource) => {
     const { lowerMs, upperMs } = bracketBounds(bracket, clockSource);
     if (lowerMs === null || upperMs === null) return "no-bounds";
@@ -470,6 +487,8 @@ export function evaluateGate(ctx) {
     informativeBrackets(w).filter((b) => bracketPeakState(b, ctx.clockSource) === "in-peak").length;
   const offPeakInformativeCount = (w) =>
     informativeBrackets(w).filter((b) => bracketPeakState(b, ctx.clockSource) === "off-peak").length;
+  const isPureOffPeakWindow = (w) =>
+    w.brackets.every((b) => bracketPeakState(b, ctx.clockSource) === "off-peak");
   const totalWindows = ctx.windowsAll.length;
   const excludedWindows = totalWindows - evidenceWindows.length;
   // Window-level peakOverlap is the client-envelope LABEL rendered in the
@@ -480,17 +499,22 @@ export function evaluateGate(ctx) {
     (w) => inPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
   );
   const qualifyingOffPeakWindows = evidenceWindows.filter(
-    (w) => offPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
+    (w) => isPureOffPeakWindow(w) && offPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
   );
-  const distinctWindowIds = new Set(
-    [...qualifyingPeakWindows, ...qualifyingOffPeakWindows].map((w) => w.windowId),
+  // Windows the purity clause refuses: enough off-peak brackets to qualify,
+  // but they also observed the peak hour (or time the comparison clock cannot
+  // place). Disclosed so a reader never has to guess why a window with plenty
+  // of off-peak brackets did not count.
+  const straddlingOffPeakWindows = evidenceWindows.filter(
+    (w) => !isPureOffPeakWindow(w) && offPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
+  ).length;
+  const peakWindowIds = new Set(qualifyingPeakWindows.map((w) => w.windowId));
+  internalAssert(
+    qualifyingOffPeakWindows.every((w) => !peakWindowIds.has(w.windowId)),
+    "A4-2 qualifying peak and off-peak window sets must be disjoint",
   );
-  // "Multiple independent time windows": one window straddling 17:00 ET must
-  // not satisfy both sides by itself.
   const a2Satisfied =
-    qualifyingPeakWindows.length >= 1 &&
-    qualifyingOffPeakWindows.length >= 1 &&
-    distinctWindowIds.size >= 2;
+    qualifyingPeakWindows.length >= 1 && qualifyingOffPeakWindows.length >= 1;
   // Honest accounting of what the server-clock requirement drops: brackets the
   // client clock would have called informative but that carry no usable server
   // bounds, so they can qualify neither side.
@@ -509,18 +533,16 @@ export function evaluateGate(ctx) {
     noServerBoundsInformative > 0
       ? `; ${noServerBoundsInformative} client-informative bracket(s) had no usable server bounds and could not qualify peak or off-peak evidence`
       : "";
-  const singleWindowNote =
-    qualifyingPeakWindows.length >= 1 &&
-    qualifyingOffPeakWindows.length >= 1 &&
-    distinctWindowIds.size < 2
-      ? "; peak and off-peak evidence come from the same single window"
+  const straddleNote =
+    straddlingOffPeakWindows > 0
+      ? `; ${straddlingOffPeakWindows} window(s) with >=${MIN_GROUP_BRACKETS} off-peak brackets also hold peak-hour or unclassifiable brackets and cannot supply off-peak evidence`
       : "";
   gate.push({
     id: "A4-2",
     requirement:
-      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime",
+      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak window must hold no peak-hour bracket at all, so one straddling session cannot supply both sides",
     satisfied: a2Satisfied,
-    evidence: `windows: ${totalWindows} total${excludedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeakWindows.length}; qualifying off-peak (>=${MIN_GROUP_BRACKETS} informative off-peak brackets): ${qualifyingOffPeakWindows.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${singleWindowNote}`,
+    evidence: `windows: ${totalWindows} total${excludedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeakWindows.length}; qualifying off-peak (>=${MIN_GROUP_BRACKETS} informative off-peak brackets, none in peak): ${qualifyingOffPeakWindows.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${straddleNote}`,
   });
 
   // A4-3: distinguishable winner under holdout.

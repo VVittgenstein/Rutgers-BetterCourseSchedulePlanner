@@ -109,7 +109,7 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   const a2 = json.goGate.find((g) => g.id === "A4-2");
   assert.equal(
     a2.evidence,
-    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 3; qualifying off-peak (>=5 informative off-peak brackets): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
+    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 3; qualifying off-peak (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
   // Anti-lockout guard on the A2-2 fix: this control's peak evidence really is
   // SERVER-clock evidence, so tightening A4-2 to the comparison clock cannot

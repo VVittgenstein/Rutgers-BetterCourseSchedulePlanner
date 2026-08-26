@@ -227,7 +227,7 @@ test("CE-2 (A4-2): an isolated zero-change peak-time sample is not peak evidence
   assert.equal(a2.satisfied, false);
   assert.equal(
     a2.evidence,
-    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative off-peak brackets): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
+    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
@@ -1245,7 +1245,7 @@ test("CE-13 (A4-2): a client clock running an hour slow cannot manufacture off-p
   assert.equal(a2.satisfied, false);
   // Every qualifying window is a PEAK window on the server clock; the off-peak
   // side, which the client labels claimed, has nothing.
-  assert.match(a2.evidence, /qualifying off-peak \(>=5 informative off-peak brackets\): 0/);
+  assert.match(a2.evidence, /qualifying off-peak \(>=5 informative off-peak brackets, none in peak\): 0/);
   assert.match(a2.evidence, /\(window labels: 3 peak-overlapping, 3 off-peak\)/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
@@ -1292,6 +1292,6 @@ test("CONTROL (R2): the honest three-campus fixture the R2 counterexamples are c
   }
   assert.equal(
     gateById(json, "A4-2").evidence,
-    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 3; qualifying off-peak (>=5 informative off-peak brackets): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
+    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 3; qualifying off-peak (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
 });
