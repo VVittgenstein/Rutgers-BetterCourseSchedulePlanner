@@ -12,6 +12,11 @@
 // extracting that tree and running its CLI on the same fixture bytes:
 //   CE-5 (A4-6 term-relabel copies):   old stdout `verdict=GO qualifier=none brackets=84 distinguishable=true`
 //   CE-5b (A4-6 SQLite duplicate):     old stdout `verdict=GO qualifier=none brackets=59 distinguishable=true`
+// The CE-6 pair pins the fourth-round time-translation defect, which survived
+// until v2.2.0 (commit 34158c9) — same protocol, verified by extracting that
+// tree and running its CLI on the same fixture bytes:
+//   CE-6 (A4-2 shifted byte-copy):     old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
+//   CE-6b (A4-2 longer shifted copy):  old stdout `verdict=GO qualifier=none brackets=121 distinguishable=true`
 // This file asserts the CURRENT analyzer answers NO_PRODUCTION_CHANGE with the
 // specific gate unsatisfied for the specific reason, while the go-gate test
 // keeps proving that a genuinely satisfying fixture still reaches GO.
@@ -145,7 +150,7 @@ test("CE-1b (A4-1): a clean tiny series cannot piggyback on an excluded duplicat
   assert.equal(json.comparison.commonInformativeCount, 9);
   assert.equal(json.comparison.distinguishable, false);
   assert.equal(gateById(json, "A4-2").satisfied, false);
-  assert.match(gateById(json, "A4-2").evidence, /\(6 excluded: campus-conflicted or duplicate provenance\)/);
+  assert.match(gateById(json, "A4-2").evidence, /\(6 excluded: conflicted \(campus or time-anchor\) or duplicate provenance\)/);
   assert.equal(json.decision.verdict, "NO_PRODUCTION_CHANGE");
 });
 
@@ -561,4 +566,137 @@ test("CE-5b (A4-1/A4-6): the same capture re-fed as SQLite content counts once, 
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-6"],
   );
+});
+
+// ---- CE-6 pair: time-translated duplicates (fourth round) ------------------
+// The canonical provenance series is deliberately translation-invariant, so a
+// byte-copy of a capture shifted by a whole number of seconds still merges
+// into the genuine capture's class. On v2.2.0 (34158c9) the class then chose a
+// single representative (longest member, streamId ascending on ties) and only
+// barred the OTHERS — letting the attacker elect the FABRICATED peak-hour
+// timeline as the sole evidence-eligible member and supply the only qualifying
+// A4-2 peak evidence. Now such a class is a time-anchor conflict: every member
+// is excluded from all evidence, like a campus conflict.
+
+// The exact per-campus tick shift used by both CE-6 fixtures: a joint client+
+// server translation by a whole number of seconds (here: whole minutes), which
+// preserves the canonical delta series byte-for-byte.
+function ce6ShiftRows(rows, shiftMs, startSeq = 1) {
+  return rows.map((row, i) => sampleRow({
+    seq: startSeq + i,
+    startMs: Date.parse(row.requestStartedUtc) + shiftMs,
+    elapsedMs: row.elapsedMilliseconds,
+    bodySha: row.decodedBodySha256,
+    serverDateMs: row.serverDate === null ? null : Date.parse(row.serverDate) + shiftMs,
+  }));
+}
+
+// Rich but OFF-PEAK-ONLY NK/CM runs (two off-peak sessions each, 3 h apart):
+// in the honest CE-6 world nobody has peak data, so A4-2 must stay unsatisfied.
+function ce6MakeOffPeakOnly(dir) {
+  for (const c of ["NK", "CM"]) {
+    makeRunDir(join(dir, `run${c}`), {
+      campus: c,
+      samples: [
+        ...makeTickSeries({ baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1, bodyPrefix: `${c}-jv`, ...CAMPUS_SHAPE[c] }),
+        ...makeTickSeries({ baseMs: OFF_PEAK_BASE + 3 * 3600 * 1000, periodMs: 30000, count: 20, startSeq: 500, bodyPrefix: `${c}-jw`, ...CAMPUS_SHAPE[c] }),
+      ],
+    });
+  }
+}
+
+test("CE-6 (A4-2): a time-translated byte-copy cannot supply the only peak evidence", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // Genuine NB capture: off-peak only. The attack adds a byte-copy translated
+  // into the 17:00-18:00 ET peak hour, relabeled term=1 so its streamId sorts
+  // BEFORE the genuine term=9 stream and wins the v2.2.0 representative
+  // tie-break among equal lengths.
+  const nbOff = makeTickSeries({ baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1, bodyPrefix: "NB-jv", ...CAMPUS_SHAPE.NB });
+  makeRunDir(join(dir, "runNB-t9"), { campus: "NB", term: "9", samples: nbOff });
+  makeRunDir(join(dir, "runNB-t1"), {
+    campus: "NB",
+    term: "1",
+    samples: ce6ShiftRows(nbOff, PEAK_BASE - OFF_PEAK_BASE),
+  });
+  ce6MakeOffPeakOnly(dir);
+
+  const out = analyze(dir, ["runNB-t1", "runNB-t9", "runNK", "runCM"]);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE/);
+
+  const json = out.json;
+  // The two NB streams merge (identical canonical series) but disagree about
+  // WHEN the data happened: time-anchor conflict, nobody counts.
+  const nbClass = json.provenance.classes.find((c) => c.members.length === 2);
+  assert.equal(nbClass.timeConflict, true);
+  assert.equal(nbClass.campusConflict, false);
+  assert.deepEqual(
+    json.provenance.excludedStreamIds,
+    nbClass.members.map((m) => m.streamId).sort(),
+  );
+  assert.deepEqual(json.provenance.duplicateStreamIds, []);
+  // The fabricated peak window is gone: zero qualifying peak evidence, and NB
+  // has no evidence-eligible class left, so A4-1 fails too.
+  const a2 = gateById(json, "A4-2");
+  assert.equal(a2.satisfied, false);
+  assert.match(a2.evidence, /qualifying peak \(>=\d+ informative in-peak brackets\): 0/);
+  const a1 = gateById(json, "A4-1");
+  assert.equal(a1.satisfied, false);
+  assert.match(a1.evidence, /conflicting absolute time anchors \(time-translated duplicate observation series\)/);
+
+  // Honest run (no shifted copy): same A4-2 failure — the copy changed nothing.
+  const honest = analyze(dir, ["runNB-t9", "runNK", "runCM"]);
+  assert.equal(honest.code, 0, honest.stderr);
+  assert.match(honest.stdout, /verdict=NO_PRODUCTION_CHANGE/);
+  assert.equal(gateById(honest.json, "A4-2").satisfied, false);
+});
+
+test("CE-6b (A4-2): a LONGER shifted copy cannot win the representative slot by length", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // Same attack without the naming tie-break: the shifted copy appends one
+  // extra tick continuing the body chain (NB-kv20 -> NB-kv21), so the genuine
+  // capture becomes a CONTAINED prefix and the fake is the longest member —
+  // the v2.2.0 representative regardless of stream naming.
+  const nbOff = makeTickSeries({ baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1, bodyPrefix: "NB-kv", ...CAMPUS_SHAPE.NB });
+  makeRunDir(join(dir, "runNB-a"), { campus: "NB", term: "9", samples: nbOff });
+  const shifted = ce6ShiftRows(nbOff, PEAK_BASE - OFF_PEAK_BASE);
+  const tick20 = PEAK_BASE + 20 * 30000;
+  const extra = [
+    sampleRow({ seq: 41, startMs: tick20 - CAMPUS_SHAPE.NB.preMs, bodySha: "NB-kv20", serverDateMs: Math.floor((tick20 - CAMPUS_SHAPE.NB.preMs) / 1000) * 1000 }),
+    sampleRow({ seq: 42, startMs: tick20 + CAMPUS_SHAPE.NB.postMs, bodySha: "NB-kv21", serverDateMs: Math.floor((tick20 + CAMPUS_SHAPE.NB.postMs) / 1000) * 1000 }),
+  ];
+  makeRunDir(join(dir, "runNB-z"), { campus: "NB", term: "1", samples: [...shifted, ...extra] });
+  for (const c of ["NK", "CM"]) {
+    makeRunDir(join(dir, `run${c}`), {
+      campus: c,
+      samples: [
+        ...makeTickSeries({ baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1, bodyPrefix: `${c}-kv`, ...CAMPUS_SHAPE[c] }),
+        ...makeTickSeries({ baseMs: OFF_PEAK_BASE + 3 * 3600 * 1000, periodMs: 30000, count: 20, startSeq: 500, bodyPrefix: `${c}-kw`, ...CAMPUS_SHAPE[c] }),
+      ],
+    });
+  }
+
+  const out = analyze(dir, ["runNB-a", "runNB-z", "runNK", "runCM"]);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE/);
+
+  const json = out.json;
+  const nbClass = json.provenance.classes.find((c) => c.members.length === 2);
+  // The fake IS the representative (longest) and the genuine capture is
+  // contained — but their absolute times disagree at every alignment offset,
+  // so the whole class is time-conflicted and excluded.
+  assert.match(nbClass.members[0].streamId, /runNB-z/);
+  assert.equal(nbClass.members[1].relation, "contained");
+  assert.equal(nbClass.timeConflict, true);
+  assert.deepEqual(
+    json.provenance.excludedStreamIds,
+    nbClass.members.map((m) => m.streamId).sort(),
+  );
+  assert.deepEqual(json.provenance.duplicateStreamIds, []);
+  const a2 = gateById(json, "A4-2");
+  assert.equal(a2.satisfied, false);
+  assert.match(a2.evidence, /qualifying peak \(>=\d+ informative in-peak brackets\): 0/);
+  assert.equal(gateById(json, "A4-1").satisfied, false);
 });

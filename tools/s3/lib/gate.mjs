@@ -335,8 +335,9 @@ export function assessStability({ brackets, comparison, clockSource }) {
 
 // ctx: {
 //   windowsAll: [{ windowId, streamId, peakOverlap, excluded, brackets }],
-//       // ALL windows; excluded=true marks campus-conflicted provenance or
-//       // a duplicate (non-representative) member of a clean class
+//       // ALL windows; excluded=true marks conflicted provenance (campus
+//       // labels or absolute time anchors) or a duplicate
+//       // (non-representative) member of a clean class
 //   brackets,  // evidence brackets only (excluded streams already removed)
 //   comparison, safeOffset, clock, clockSource,
 //   provenance: buildProvenance() result, serverEvidence: assessServerClockEvidence() result
@@ -352,7 +353,8 @@ export function evaluateGate(ctx) {
   // that stream) — an evidentially worthless but clean series can never
   // piggyback on qualifying windows that belong to another stream merely
   // sharing its targetId. A class whose members carry conflicting campus
-  // labels (the copy-and-relabel attack) contributes nothing, and its member
+  // labels (the copy-and-relabel attack) or conflicting absolute time anchors
+  // (the copy-and-translate attack) contributes nothing, and its member
   // streams are excluded from all evidence upstream. Non-representative
   // members of clean classes (identical/contained duplicates, e.g. the same
   // capture relabeled to another term or re-fed as SQLite) are also excluded
@@ -366,10 +368,23 @@ export function evaluateGate(ctx) {
   const coveredBy = new Map(); // campus -> classId (first covering class, classId asc)
   let conflictClassCount = 0;
   let excludedStreamCount = 0;
+  let timeConflictClassCount = 0;
+  let timeConflictStreamCount = 0;
   for (const cls of ctx.provenance.classes) {
-    if (cls.campusConflict) {
-      conflictClassCount += 1;
-      excludedStreamCount += cls.members.length;
+    if (cls.campusConflict || cls.timeConflict) {
+      if (cls.campusConflict) {
+        conflictClassCount += 1;
+        excludedStreamCount += cls.members.length;
+      }
+      // A time-anchor conflict (the same canonical series claimed at two
+      // different absolute times) voids the whole class even when every
+      // member agrees on the campus label: choosing a representative among
+      // disagreeing timelines would let a translated copy supply the only
+      // peak/off-peak/clock evidence.
+      if (cls.timeConflict && !cls.campusConflict) {
+        timeConflictClassCount += 1;
+        timeConflictStreamCount += cls.members.length;
+      }
       continue;
     }
     if (cls.campus === null || !REQUIRED_CAMPUSES.includes(cls.campus)) continue;
@@ -381,12 +396,15 @@ export function evaluateGate(ctx) {
     (c) => `${c}(${coveredBy.get(c)})`,
   );
   const conflictSuffix =
-    conflictClassCount > 0
+    (conflictClassCount > 0
       ? `; ${conflictClassCount} class(es) with conflicting campus labels ignored and their ${excludedStreamCount} stream(s) excluded from all evidence`
-      : "";
+      : "") +
+    (timeConflictClassCount > 0
+      ? `; ${timeConflictClassCount} class(es) with conflicting absolute time anchors (time-translated duplicate observation series) ignored and their ${timeConflictStreamCount} stream(s) excluded from all evidence`
+      : "");
   let duplicateStreamCount = 0;
   for (const cls of ctx.provenance.classes) {
-    if (!cls.campusConflict) duplicateStreamCount += cls.members.length - 1;
+    if (!cls.campusConflict && !cls.timeConflict) duplicateStreamCount += cls.members.length - 1;
   }
   const duplicateSuffix =
     duplicateStreamCount > 0
@@ -434,7 +452,7 @@ export function evaluateGate(ctx) {
   const a2Satisfied = qualifyingPeak >= 1 && qualifyingOffPeak >= 1;
   const excludedNote =
     excludedWindows > 0
-      ? ` (${excludedWindows} excluded: campus-conflicted or duplicate provenance)`
+      ? ` (${excludedWindows} excluded: conflicted (campus or time-anchor) or duplicate provenance)`
       : "";
   gate.push({
     id: "A4-2",

@@ -57,15 +57,44 @@ test("identical series under the SAME campus label is one class without conflict
   ]);
   assert.equal(p.classes.length, 1);
   assert.equal(p.classes[0].campusConflict, false);
+  // Byte-copies carry the exact same timestamps: no time-anchor conflict.
+  assert.equal(p.classes[0].timeConflict, false);
   assert.equal(p.classes[0].campus, "NB");
 });
 
-test("a pure joint time translation still merges (canonical series is delta-based)", () => {
+test("a pure joint time translation still merges — and flags a time-anchor conflict", () => {
   const p = buildProvenance([
     { inputId: "runA/samples.ndjson", samples: mkSeries({ baseMs: 1_000_000 }) },
     { inputId: "runB/samples.ndjson", samples: mkSeries({ baseMs: 9_000_000 }) },
   ]);
   assert.equal(p.classes.length, 1);
+  // The canonical series is translation-invariant, so the copies merge; but
+  // the members disagree about WHEN the shared data happened, so the class
+  // is time-conflicted and the analyzer bars every member from evidence.
+  assert.equal(p.classes[0].timeConflict, true);
+  assert.equal(p.classes[0].campusConflict, false);
+});
+
+test("a time-translated copy that is one tick LONGER (contained genuine) is a time-anchor conflict", () => {
+  // n5 geometry: the genuine capture is a contained prefix of a shifted copy
+  // that wins the representative slot by length. The genuine member matches
+  // the representative's content at offset 0 but not its absolute times.
+  const genuine = mkSeries({ baseMs: 1_000_000, n: 6 });
+  const shiftMs = 8_000_000;
+  const shifted = genuine.map((s) => ({
+    ...s,
+    clientStartMs: s.clientStartMs + shiftMs,
+    serverDateMs: s.serverDateMs === null ? null : s.serverDateMs + shiftMs,
+  }));
+  const extra = mkSample({ t: 1_000_000 + shiftMs + 6 * 20000, bodySha: "a6x" });
+  const p = buildProvenance([
+    { inputId: "runA/samples.ndjson", samples: genuine },
+    { inputId: "runZ/samples.ndjson", samples: [...shifted, extra] },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].members[0].streamId, "runZ/samples.ndjson::soc:2026:9:NB");
+  assert.equal(p.classes[0].members[1].relation, "contained");
+  assert.equal(p.classes[0].timeConflict, true);
 });
 
 test("prefix, suffix, and middle slices of a copy are 'contained' in the class", () => {
@@ -84,6 +113,8 @@ test("prefix, suffix, and middle slices of a copy are 'contained' in the class",
   assert.deepEqual(relations, ["representative", "contained", "contained", "contained"]);
   // The longest stream is the representative regardless of input order.
   assert.equal(p.classes[0].members[0].streamId, "full/samples.ndjson::soc:2026:9:NB");
+  // Genuine truncations keep the original absolute times: no time conflict.
+  assert.equal(p.classes[0].timeConflict, false);
 });
 
 test("different delta structure (different cadence/phase geometry) does NOT merge", () => {
@@ -141,6 +172,7 @@ test("cross-format duplicate (NDJSON vs SQLite normalized samples) merges when t
   assert.equal(p.classes.length, 1);
   // One member carries a campus, the other none: no conflict, campus kept.
   assert.equal(p.classes[0].campusConflict, false);
+  assert.equal(p.classes[0].timeConflict, false);
   assert.equal(p.classes[0].campus, "NB");
 });
 

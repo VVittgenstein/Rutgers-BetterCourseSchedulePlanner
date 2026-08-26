@@ -125,25 +125,31 @@ function main() {
   // 3c. Two provenance-based exclusions bar streams from ALL evidence below —
   // model fits, the clock-source selection, the comparison, server-clock
   // evidence, the safe offset, and every A4 gate:
-  //   (1) every stream of a campus-conflicted class (the copy-and-relabel
-  //       attack): contested observations cannot lend brackets, windows, or
-  //       wins to anything;
+  //   (1) every stream of a CONFLICTED class — conflicting campus labels (the
+  //       copy-and-relabel attack) or conflicting absolute time anchors (the
+  //       copy-and-translate attack: the same canonical series claimed at two
+  //       different times, e.g. an off-peak capture shifted into the peak
+  //       hour). Contested observations cannot lend brackets, windows, or
+  //       wins to anything; picking a representative among disagreeing
+  //       timelines would let the attacker choose WHICH absolute timeline
+  //       counts, so nobody counts;
   //   (2) every NON-representative member of a clean class (identical or
-  //       contained observation series): duplicated observation data counts
-  //       exactly ONCE, through the class representative. A capture copied
-  //       under a different targetId (term relabel) or re-fed through the
-  //       SQLite path therefore cannot inflate the comparison n, multiply
-  //       target-LOO folds, or widen campus coverage — evidence and stability
-  //       are effectively counted per provenance class.
+  //       contained observation series agreeing on campus and time):
+  //       duplicated observation data counts exactly ONCE, through the class
+  //       representative. A capture copied under a different targetId (term
+  //       relabel) or re-fed through the SQLite path therefore cannot inflate
+  //       the comparison n, multiply target-LOO folds, or widen campus
+  //       coverage — evidence and stability are effectively counted per
+  //       provenance class.
   // Excluded streams stay listed in the descriptive tables, flagged via
   // provenance.excludedStreamIds / provenance.duplicateStreamIds and
   // bracketTotals.excludedFromEvidence.
   const excludedStreamIds = provenance.classes
-    .filter((cls) => cls.campusConflict)
+    .filter((cls) => cls.campusConflict || cls.timeConflict)
     .flatMap((cls) => cls.members.map((m) => m.streamId))
     .sort();
   const duplicateStreamIds = provenance.classes
-    .filter((cls) => !cls.campusConflict)
+    .filter((cls) => !cls.campusConflict && !cls.timeConflict)
     .flatMap((cls) =>
       cls.members.filter((m) => m.relation !== "representative").map((m) => m.streamId),
     )
@@ -229,7 +235,8 @@ function main() {
   // the model comparison selected, so the report tables can never disagree
   // with the comparison about which brackets counted. Totals describe every
   // built bracket; excludedFromEvidence says how many of them were barred
-  // from all evidence by campus-conflicted or duplicate provenance.
+  // from all evidence by conflicted (campus or time-anchor) or duplicate
+  // provenance.
   const bracketTotals = computeBracketTotals(
     allBrackets,
     counters,

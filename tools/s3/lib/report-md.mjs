@@ -119,7 +119,7 @@ export function buildMdReport(ctx) {
   push();
   push(`- Total change brackets: ${bracketTotals.total}`);
   push(
-    `- Excluded from all evidence (campus-conflicted or duplicate provenance, see \`provenance.excludedStreamIds\` / \`provenance.duplicateStreamIds\`): ${bracketTotals.excludedFromEvidence}`,
+    `- Excluded from all evidence (conflicted — campus or time-anchor — or duplicate provenance, see \`provenance.excludedStreamIds\` / \`provenance.duplicateStreamIds\`): ${bracketTotals.excludedFromEvidence}`,
   );
   push(
     `- Informative (0 < width < period, ${clockSource} clock — the comparison clock): 30 s → ${bracketTotals.informative30}, 60 s → ${bracketTotals.informative60}; non-informative: 30 s → ${bracketTotals.nonInformative30}, 60 s → ${bracketTotals.nonInformative60}`,

@@ -21,7 +21,22 @@
 // delta structure are NOT detected as equivalent — this gate defends against
 // copy-and-relabel, it is not forensics against arbitrary fabrication. A pure
 // joint time translation of client and server clocks preserves the canonical
-// series and therefore still merges (fail-closed: fewer independent classes).
+// series and therefore still merges.
+//
+// Time-anchor conflict (fail-closed): the canonical series is deliberately
+// translation-invariant, so members of one class can still DISAGREE about
+// WHEN the shared observation data happened — e.g. a byte-copy of an off-peak
+// capture shifted by a whole number of seconds into the 17:00-18:00 ET peak
+// hour. Genuine duplicates of one capture (byte copies, SQLite re-ingests,
+// truncations) carry the exact recorded timestamps, so their absolute
+// client-clock times agree exactly at the aligned samples. When any member's
+// time anchor (clientStartMs of its first sample, compared at the alignment
+// offset inside the representative's series) differs from the
+// representative's, no deterministic choice among the conflicting timelines
+// is safe — the class is flagged timeConflict and the analyzer excludes EVERY
+// member from all evidence, exactly like a campus conflict. Tolerance is 0 ms
+// on purpose: both ingest paths parse the same recorded timestamp strings, so
+// any disagreement means the series was translated.
 
 import { sha256Text } from "./stable.mjs";
 
@@ -43,10 +58,14 @@ function fingerprintOf(entries) {
   return sha256Text(entries.map((e) => `${e.bodySha}\t${e.deltaMs}\t${e.serverDelta}`).join("\n"));
 }
 
-// Is series A a contiguous slice of series B (first delta of the slice
-// normalized to 0, matching A's own first delta of 0)?
-function isContainedIn(a, b) {
-  if (a.length === 0 || a.length > b.length) return false;
+// All offsets at which series A is a contiguous slice of series B (first
+// delta of the slice normalized to 0, matching A's own first delta of 0).
+// Every offset is returned (not just the first) so the time-anchor check can
+// accept a genuine truncation whose content happens to align at more than one
+// position: it agrees in absolute time at its true offset.
+function containmentOffsets(a, b) {
+  const offsets = [];
+  if (a.length === 0 || a.length > b.length) return offsets;
   for (let i = 0; i + a.length <= b.length; i += 1) {
     let match = true;
     for (let k = 0; k < a.length; k += 1) {
@@ -62,9 +81,9 @@ function isContainedIn(a, b) {
         break;
       }
     }
-    if (match) return true;
+    if (match) offsets.push(i);
   }
-  return false;
+  return offsets;
 }
 
 function cmpStr(a, b) {
@@ -86,6 +105,10 @@ export function buildProvenance(streams) {
       campus: first.campus,
       sampleCount: stream.samples.length,
       entries,
+      // Absolute client-clock times (NOT part of the fingerprint): used only
+      // for the time-anchor agreement check between class members.
+      startTimes: stream.samples.map((s) => s.clientStartMs),
+      firstStartMs: first.clientStartMs,
       seriesFingerprint: fingerprintOf(entries),
     });
   }
@@ -101,12 +124,28 @@ export function buildProvenance(streams) {
     let placed = false;
     for (const cls of classes) {
       if (stream.seriesFingerprint === cls.representative.seriesFingerprint) {
-        cls.members.push({ stream, relation: "identical" });
+        cls.members.push({
+          stream,
+          relation: "identical",
+          // Identical fingerprints share the whole delta series, so agreement
+          // of the first sample's absolute time means every sample agrees.
+          timeAligned: stream.firstStartMs === cls.representative.firstStartMs,
+        });
         placed = true;
         break;
       }
-      if (isContainedIn(stream.entries, cls.representative.entries)) {
-        cls.members.push({ stream, relation: "contained" });
+      const offsets = containmentOffsets(stream.entries, cls.representative.entries);
+      if (offsets.length > 0) {
+        cls.members.push({
+          stream,
+          relation: "contained",
+          // A genuine truncation agrees with the representative's absolute
+          // time at (at least) its true alignment offset; a time-translated
+          // copy agrees at none.
+          timeAligned: offsets.some(
+            (i) => cls.representative.startTimes[i] === stream.firstStartMs,
+          ),
+        });
         placed = true;
         break;
       }
@@ -114,7 +153,7 @@ export function buildProvenance(streams) {
     if (!placed) {
       classes.push({
         representative: stream,
-        members: [{ stream, relation: "representative" }],
+        members: [{ stream, relation: "representative", timeAligned: true }],
       });
     }
   }
@@ -125,10 +164,15 @@ export function buildProvenance(streams) {
         ...new Set(cls.members.map((m) => m.stream.campus).filter((c) => c !== null)),
       ];
       const campusConflict = campuses.length > 1;
+      // Members that share canonical content but disagree about WHEN it was
+      // observed: no representative choice among the timelines is safe, so
+      // the analyzer excludes every member from evidence (like campusConflict).
+      const timeConflict = cls.members.some((m) => m.timeAligned === false);
       return {
         classId: `pc-${cls.representative.seriesFingerprint.slice(0, 12)}`,
         campus: campusConflict || campuses.length === 0 ? null : campuses[0],
         campusConflict,
+        timeConflict,
         members: [...cls.members]
           .sort(
             (a, b) =>

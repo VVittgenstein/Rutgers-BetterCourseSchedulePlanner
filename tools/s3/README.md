@@ -149,29 +149,40 @@ single-target winner) plus the second-round shapes — a window grazing
 merged into a pre-peak session by the gap rule (CE-2c), a clean tiny
 series piggybacking on an excluded duplicate's windows (CE-1b), and
 duplicate-content target relabeling — one capture claimed under three terms
-(CE-5) or re-fed through the SQLite path (CE-5b) — while the go-gate test
-keeps proving a genuinely satisfying fixture still reaches GO.
+(CE-5) or re-fed through the SQLite path (CE-5b) — and time-translated
+byte-copies of one capture shifted into the peak hour, whether the shifted
+copy is byte-identical (CE-6) or extended by one tick so it wins the
+representative slot by length (CE-6b) — while the go-gate test keeps proving
+a genuinely satisfying fixture still reaches GO.
 
 Provenance semantics: a class whose members carry conflicting campus labels
-contributes nothing to A4-1, and its member streams are **excluded from all
-evidence** (fits, comparison, server-clock evidence, safe offset, every gate);
-they stay listed in the descriptive tables, flagged by
-`provenance.excludedStreamIds` and `bracketTotals.excludedFromEvidence`. In a
-clean (non-conflicted) class, only the **representative** stream (the longest
-member; streamId ascending on ties) is evidence-eligible: identical or
-contained duplicates are excluded from all evidence the same way and listed in
-`provenance.duplicateStreamIds`, so duplicated observation data counts exactly
-once no matter how it is relabeled — a capture copied under other term/target
-ids, or re-fed through the SQLite path, cannot inflate the comparison n,
-multiply whole-target leave-out folds, or widen campus coverage. A clean class
-covers its campus only when one of its OWN evidence-eligible streams (i.e. the
-representative) has a window with ≥ 5 informative brackets — qualification
-never travels through a shared targetId.
+— or conflicting **absolute time anchors** (the same canonical series claimed
+at two different times, i.e. a time-translated copy; `timeConflict` in the
+JSON) — contributes nothing to A4-1, and its member streams are **excluded
+from all evidence** (fits, comparison, server-clock evidence, safe offset,
+every gate); they stay listed in the descriptive tables, flagged by
+`provenance.excludedStreamIds` and `bracketTotals.excludedFromEvidence`.
+Genuine duplicates of one capture carry the exact recorded timestamps, so
+class members must agree exactly on the absolute client time at their aligned
+samples; any disagreement means someone translated the series, and no
+deterministic representative choice among disagreeing timelines is safe — so
+nobody in the class counts. In a clean (non-conflicted) class, only the
+**representative** stream (the longest member; streamId ascending on ties) is
+evidence-eligible: identical or contained duplicates are excluded from all
+evidence the same way and listed in `provenance.duplicateStreamIds`, so
+duplicated observation data counts exactly once no matter how it is relabeled
+— a capture copied under other term/target ids, or re-fed through the SQLite
+path, cannot inflate the comparison n, multiply whole-target leave-out folds,
+or widen campus coverage. A clean class covers its campus only when one of
+its OWN evidence-eligible streams (i.e. the representative) has a window with
+≥ 5 informative brackets — qualification never travels through a shared
+targetId.
 
 Provenance boundary (documented on purpose): A4-1 merges observation series
 that are identical or contiguous slices of one another after removing
 metadata; derived series (subsampling, interleaving, edited deltas) are NOT
-detected — the gate defends against copy-and-relabel, it is not forensics.
-Byte-identical streams under the SAME campus label merge without conflict into
+detected — the gate defends against copy-and-relabel and copy-and-translate,
+it is not forensics against de novo fabrication. Byte-identical streams under
+the SAME campus label and the SAME absolute times merge without conflict into
 one class whose representative alone stays evidence-eligible; they cannot
 widen campus coverage or add evidence.

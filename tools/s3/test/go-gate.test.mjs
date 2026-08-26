@@ -77,6 +77,7 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   assert.deepEqual(classCampuses, ["CM", "NB", "NK"]);
   for (const cls of json.provenance.classes) {
     assert.equal(cls.campusConflict, false);
+    assert.equal(cls.timeConflict, false);
     assert.equal(cls.members.length, 1);
     assert.equal(cls.members[0].relation, "representative");
   }
