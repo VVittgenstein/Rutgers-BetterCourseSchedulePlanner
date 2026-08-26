@@ -1201,6 +1201,14 @@ fn render_metrics(
         "bcsp_websocket_admitted_connections {}",
         capacity.global_active()
     );
+    // Monotonic, unlike bcsp_websocket_admitted_connections above: an
+    // observer with two readings can tell whether the connections it saw
+    // are the SAME ones. No client key, no session, no identity.
+    let _ = writeln!(
+        output,
+        "bcsp_websocket_admissions_granted {}",
+        capacity.admissions()
+    );
     let _ = writeln!(
         output,
         "bcsp_websocket_global_capacity_refusals {}",
@@ -2887,6 +2895,9 @@ mod tests {
             .expect("metrics body");
         for expected in [
             "bcsp_websocket_admitted_connections 1",
+            // One socket was admitted and one was refused, so exactly one
+            // admission was ever granted.
+            "bcsp_websocket_admissions_granted 1",
             "bcsp_websocket_global_capacity_refusals 0",
             "bcsp_websocket_client_capacity_refusals 1",
             "bcsp_websocket_outbound_queued_bytes 0",

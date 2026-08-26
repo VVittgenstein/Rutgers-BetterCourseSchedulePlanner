@@ -9,10 +9,13 @@
 # sequences, every PING acknowledged, a real `caddy reload` mid-soak that
 # the same socket and the same service MainPID must survive, MemoryCurrent
 # sampled every 30 seconds (each sample under 700 MiB, last-three growth
-# within 32 MiB of the first three), and the connection gauge never dropping
-# below the held socket. The acknowledgements are proven from the SERVER's
-# side too: its accepted-ACK counter, read before and after inside one
-# service invocation, must move by what the browser reports sending.
+# within 32 MiB of the first three), and exactly one public watch connection
+# at every sample. The acknowledgements are proven from the SERVER's side
+# too: its accepted-ACK counter, read before and after inside one service
+# invocation, must move by what the browser reports sending -- and because
+# that counter is a whole-process aggregate, the window is first shown to
+# have held this browser's socket and no other (nothing connected before it
+# armed, exactly one admission granted across the run).
 #
 # The soak core runs under the no-Rutgers drop-in and needs no data. The
 # assembled-composition browser gate (public START -> server watch -> event
@@ -258,23 +261,30 @@ SERVICE_INVOCATION="$(systemctl show --property InvocationID --value bcsp.servic
   exit 1
 }
 
-# H9 (R2): the server's OWN count of heartbeat ACKs it accepted -- decoded,
-# matched to a sequence it really issued, not a replay. Read on the loopback
-# metrics surface (the public edge 404s /metrics). An unreadable or absent
-# counter yields a marker the analyzer refuses: this is positive evidence or
-# it is nothing.
-read_accepted_ack_counter() {
-  local value
-  value="$(curl --silent --connect-timeout 2 --max-time 5 --header 'Host: planner.test' \
-    http://127.0.0.1:8080/metrics 2>/dev/null |
-    awk '$1 == "bcsp_websocket_heartbeat_acks_accepted" { print $2 }')" || value=""
+# H9: the server's own numbers, read on the loopback metrics surface (the
+# public edge 404s /metrics). An unreadable or absent metric yields a marker
+# the analyzer refuses: this is positive evidence or it is nothing.
+#
+#   heartbeat_acks_accepted   ACKs the server DECODED, matched to a sequence
+#                             it really issued, and took (R2)
+#   connections               public watch connections open right now
+#   admissions_granted        every admission ever granted, monotonic (R3):
+#                             its delta counts a replaced socket as two, which
+#                             a gauge reading 1 at every sample cannot
+read_public_metric() {
+  local name="$1" value
+  value="$(curl --silent --connect-timeout 2 --max-time 5 --header 'Host: planner.test' http://127.0.0.1:8080/metrics 2>/dev/null | awk -v metric="$name" '$1 == metric { print $2 }')" || value=""
   [[ -n "$value" ]] || value="COUNTER_READ_FAILURE"
   printf '%s\n' "$value"
 }
 
 # Taken INSIDE the invocation asserted above and again after the soak, so the
-# delta belongs to this run and to no other.
-ACK_BASELINE="$(read_accepted_ack_counter)"
+# deltas belong to this run and to no other. The accepted-ACK counter is a
+# whole-process aggregate, so it is only this browser's evidence if nothing
+# else is connected now and exactly one admission is granted later.
+ACK_BASELINE="$(read_public_metric bcsp_websocket_heartbeat_acks_accepted)"
+CONNECTIONS_BEFORE="$(read_public_metric bcsp_websocket_connections)"
+ADMISSIONS_BASELINE="$(read_public_metric bcsp_websocket_admissions_granted)"
 
 MEMORY_SAMPLES="$TEST_TMP/memory.samples"
 CONNECTION_SAMPLES="$TEST_TMP/connections.samples"
@@ -325,7 +335,7 @@ ARMED_EPOCH="$(date +%s)"
       || memory_value=""
     [[ -n "$memory_value" ]] || memory_value="SAMPLE_READ_FAILURE"
     printf '%s %s\n' "$(date +%s)" "$memory_value" >> "$MEMORY_SAMPLES"
-    connection_value="$(curl --silent --header 'Host: planner.test' \
+    connection_value="$(curl --silent --connect-timeout 2 --max-time 5 --header 'Host: planner.test' \
       http://127.0.0.1:8080/metrics 2>/dev/null |
       awk '$1 == "bcsp_websocket_connections" { print $2 }')" || connection_value=""
     [[ -n "$connection_value" ]] || connection_value="SAMPLE_READ_FAILURE"
@@ -377,7 +387,8 @@ SAMPLER_PID=""
 }
 # Same invocation, same counter: the delta is what THIS service accepted
 # while THIS browser held the socket.
-ACK_FINAL="$(read_accepted_ack_counter)"
+ACK_FINAL="$(read_public_metric bcsp_websocket_heartbeat_acks_accepted)"
+ADMISSIONS_FINAL="$(read_public_metric bcsp_websocket_admissions_granted)"
 # The driver counts an ACK when it SENDS one; the server logs (and only
 # logs) a frame it rejects. Zero rejections in THIS invocation's journal is
 # what upgrades "an ACK-shaped frame was sent" into "the server accepted
@@ -409,6 +420,9 @@ fi
 # every valid acknowledgement; this is not.
 "$SOAK_NODE" "$SOAK_DRIVER" --analyze-acks --ack-report "$ACK_REPORT" \
   --ack-baseline "$ACK_BASELINE" --ack-final "$ACK_FINAL" \
+  --connections-before "$CONNECTIONS_BEFORE" \
+  --admissions-baseline "$ADMISSIONS_BASELINE" \
+  --admissions-final "$ADMISSIONS_FINAL" \
   --expected-pings "$SOAK_EXPECTED_PINGS"
 bash "$OPS_ROOT/verify.sh"
 

@@ -110,6 +110,13 @@ pub(crate) struct WsConnectionCapacity {
     state: Mutex<CapacityState>,
     global_refusals: AtomicU64,
     client_refusals: AtomicU64,
+    /// Every admission this process has ever granted, monotonic for its
+    /// lifetime. The active count above answers "how many now"; this
+    /// answers "how many ever", which is the only way an observer holding
+    /// two readings can tell one connection that stayed from one that was
+    /// replaced by another. It carries no client key, no session, no
+    /// identity of any kind -- it is a count.
+    admissions: AtomicU64,
 }
 
 #[derive(Debug, Default)]
@@ -140,6 +147,7 @@ impl WsConnectionCapacity {
             state: Mutex::new(CapacityState::default()),
             global_refusals: AtomicU64::new(0),
             client_refusals: AtomicU64::new(0),
+            admissions: AtomicU64::new(0),
         })
     }
 
@@ -172,6 +180,9 @@ impl WsConnectionCapacity {
         state.global_active += 1;
         state.per_client.insert(client_key.clone(), current + 1);
         drop(state);
+        // Counted here and nowhere else: one increment per slot actually
+        // taken, so a refusal never moves it and a reconnect always does.
+        self.admissions.fetch_add(1, Ordering::SeqCst);
         Ok(WsCapacityPermit {
             capacity: Arc::clone(self),
             client_key,
@@ -183,6 +194,11 @@ impl WsConnectionCapacity {
         self.state
             .lock()
             .map_or(u32::MAX, |state| state.global_active)
+    }
+
+    /// Admissions granted since the process started; never decreases.
+    pub(crate) fn admissions(&self) -> u64 {
+        self.admissions.load(Ordering::SeqCst)
     }
 
     pub(crate) fn global_refusals(&self) -> u64 {
@@ -317,5 +333,41 @@ mod tests {
             "a released key must be forgotten"
         );
         assert_eq!(capacity.global_active(), 0);
+    }
+
+    /// H9 (R3): the soak reads this counter twice and subtracts. That only
+    /// means "one connection, the whole time" if the number counts slots
+    /// TAKEN -- never refusals, and never giving anything back on release.
+    /// A socket that went away and was replaced by another must be
+    /// indistinguishable from two admissions, because that is what it is.
+    #[test]
+    fn admissions_count_every_slot_taken_and_nothing_else() {
+        let capacity = WsConnectionCapacity::with_limits(1, 1);
+        assert_eq!(capacity.admissions(), 0);
+        let held = capacity.admit("holder".to_owned()).expect("the slot");
+        assert_eq!(capacity.admissions(), 1);
+        assert_eq!(
+            capacity.admit("newcomer".to_owned()).unwrap_err(),
+            WsCapacityError::GlobalExhausted
+        );
+        assert_eq!(
+            capacity.admissions(),
+            1,
+            "a refused connection was never admitted"
+        );
+        drop(held);
+        assert_eq!(
+            capacity.admissions(),
+            1,
+            "releasing a slot does not un-admit it"
+        );
+        let replacement = capacity.admit("newcomer".to_owned()).expect("the freed slot");
+        assert_eq!(
+            capacity.admissions(),
+            2,
+            "the replacement is a second admission, which is the whole point"
+        );
+        assert_eq!(capacity.global_active(), 1);
+        drop(replacement);
     }
 }

@@ -9,6 +9,13 @@
 // and the connection gauge; this script judges those samples afterwards via
 // --analyze-memory / --analyze-connections so the arithmetic is testable.
 //
+// The server's acknowledgement counter is a whole-process aggregate, so
+// --analyze-acks first proves the window belonged to this browser alone --
+// nothing connected before it armed, exactly one admission granted, exactly
+// one connection at every sample -- and only then reads the delta as this
+// socket's. A second socket could otherwise supply the acknowledgements the
+// target connection never had accepted.
+//
 // Modes:
 //   (soak)                node public-soak-browser.mjs --base-url URL \
 //                           --playwright-root PATH --armed-marker FILE \
@@ -19,10 +26,14 @@
 //   --analyze-connections F  judge `epoch count` connection-gauge samples
 //     (both require --window-start/--window-end epochs [--interval-seconds
 //      30] and refuse thin, holed, late, or truncated coverage)
-//   --analyze-acks        hold the SERVER's accepted-ACK counter delta
-//                           (--ack-baseline/--ack-final, read inside one
-//                           service invocation) against what the browser half
-//                           reported sending (--ack-report)
+//   --analyze-acks        prove the judged window held ONE connection
+//                           (--connections-before 0, and exactly one
+//                           admission across --admissions-baseline and
+//                           --admissions-final), then hold the SERVER's
+//                           accepted-ACK counter delta (--ack-baseline /
+//                           --ack-final, read inside one service invocation)
+//                           against what the browser half reported sending
+//                           (--ack-report)
 //   --self-test           prove the pure judgments on fixed fixtures
 //
 // The soak needs Playwright (borrowed from --playwright-root); the analyze
@@ -202,10 +213,11 @@ export function assertAcceptedAckEvidence({ baseline, finalReading, browserAcks,
     accepted >= expectedMinimum,
     `the server accepted ${accepted} heartbeat ACK(s) during the soak; the gate requires at least ${expectedMinimum}`,
   );
-  // Sound because the soak holds exactly ONE watch socket: the served page
-  // auto-connects only when it has standing watch intent, and this page never
-  // selects a Section. If that ever changes, this is the assertion that will
-  // say so.
+  // The bound is only meaningful because assertSoleAdmission has shown the
+  // window held one connection. On its own this arm is satisfied by any
+  // mixture of sockets summing to the expected number -- which is exactly
+  // how a second socket could once cover for a target whose ACKs the server
+  // ignored.
   assert.ok(
     accepted <= browserAcks + ACK_DELIVERY_TOLERANCE,
     `the server accepted ${accepted} ACK(s) but the browser sent ${browserAcks}; the counter is not counting acknowledgements`,
@@ -237,16 +249,57 @@ export function parseAckReport(text) {
   return report;
 }
 
-/** Judges the connection-gauge samples: the held socket must stay visible. */
+/**
+ * Judges the connection-gauge samples: EXACTLY one public watch connection,
+ * for every sample in the judged window.
+ *
+ * ">= 1" was the wrong question. The accepted-ACK counter is a whole-process
+ * aggregate, so a second socket answering pings of its own feeds it exactly
+ * as the soak socket does -- and a window that tolerated a 2 would let that
+ * second socket supply the acknowledgements the target connection never had
+ * accepted. One means one.
+ */
 export function analyzeConnectionSamples(samples) {
   assert.ok(samples.length > 0, 'no connection samples were recorded');
   for (const sample of samples) {
     assert.ok(
-      Number.isSafeInteger(sample) && sample >= 1,
-      `every connection sample must stay >= 1 while the soak socket is held, got ${sample}`,
+      Number.isSafeInteger(sample) && sample === 1,
+      `every connection sample must be exactly 1 -- the soak holds one socket and nothing else may be connected -- got ${sample}`,
     );
   }
   return { samples: samples.length };
+}
+
+/**
+ * The soak's ACK evidence is a whole-process aggregate, so the window has to
+ * be shown to contain exactly one connection: none before the browser
+ * arrived, and exactly one admission granted across the whole run.
+ *
+ * The gauge alone cannot say that -- a socket that dropped and was replaced
+ * reads as 1 at every sample. The admissions counter is monotonic, so its
+ * delta counts replacements too: one connection that stayed is a delta of
+ * one, and a reconnect, a second page, or a probe is not.
+ */
+export function assertSoleAdmission({ connectionsBefore, admissionsBaseline, admissionsFinal }) {
+  const before = parseCounterReading(connectionsBefore, 'the pre-soak connection gauge');
+  assert.equal(
+    before,
+    0,
+    `${before} public watch connection(s) were already open before the soak armed; the window would not be this browser's alone`,
+  );
+  const baseline = parseCounterReading(admissionsBaseline, 'the admissions baseline');
+  const finalReading = parseCounterReading(admissionsFinal, 'the admissions final reading');
+  assert.ok(
+    finalReading >= baseline,
+    `the admissions counter went backwards (${baseline} -> ${finalReading}); the readings are not comparable`,
+  );
+  const admissions = finalReading - baseline;
+  assert.equal(
+    admissions,
+    1,
+    `${admissions} public watch admission(s) were granted during the soak; this evidence is only the soak socket's if there was exactly one`,
+  );
+  return { admissions };
 }
 
 /**
@@ -322,10 +375,97 @@ function selfTest() {
     [400 * mib, 400 * mib, 400 * mib, 400 * mib, 432 * mib, 432 * mib, 432 * mib],
   );
 
-  // Connections: the gauge dropping to zero mid-soak is a lost socket.
-  analyzeConnectionSamples([1, 1, 2, 1]);
-  assert.throws(() => analyzeConnectionSamples([1, 0, 1]), /stay >= 1/);
+  // Connections: exactly one, every sample. Zero is a lost socket and two is
+  // a second connection whose acknowledgements would land in the same
+  // aggregate counter the soak reads.
+  analyzeConnectionSamples([1, 1, 1, 1]);
+  assert.throws(() => analyzeConnectionSamples([1, 0, 1]), /exactly 1/);
+  assert.throws(
+    () => analyzeConnectionSamples([1, 1, 2, 1]),
+    /exactly 1/,
+    'a second concurrent connection must fail the window',
+  );
   assert.throws(() => analyzeConnectionSamples([]), /no connection samples/);
+
+  // Sole admission: nothing connected before the browser, exactly one
+  // admission granted across the run.
+  const soleCase = (overrides) =>
+    assertSoleAdmission({
+      connectionsBefore: '0',
+      admissionsBaseline: '7',
+      admissionsFinal: '8',
+      ...overrides,
+    });
+  assert.deepEqual(soleCase({}), { admissions: 1 });
+  assert.throws(
+    () => soleCase({ connectionsBefore: '1' }),
+    /already open before the soak armed/,
+    'a connection that predates the browser makes the window ambiguous',
+  );
+  assert.throws(
+    () => soleCase({ admissionsFinal: '7' }),
+    /0 public watch admission/,
+    'the browser must have been admitted at all',
+  );
+  assert.throws(
+    () => soleCase({ admissionsFinal: '9' }),
+    /2 public watch admission/,
+    'a reconnect or a second page is a second admission',
+  );
+  assert.throws(
+    () => soleCase({ admissionsBaseline: '9', admissionsFinal: '8' }),
+    /went backwards/,
+    'a restarted counter cannot be subtracted',
+  );
+  // A poisoned capacity lock reports u32::MAX, which is a well-formed
+  // number and would sail through any range check. These are equality rules
+  // for exactly that reason.
+  assert.throws(() => soleCase({ connectionsBefore: '4294967295' }), /already open before/);
+  assert.throws(() => soleCase({ admissionsFinal: '4294967295' }), /public watch admission/);
+  for (const unreadable of ['COUNTER_READ_FAILURE', '', null, undefined]) {
+    assert.throws(() => soleCase({ connectionsBefore: unreadable }), /not a counter reading/);
+    assert.throws(() => soleCase({ admissionsBaseline: unreadable }), /not a counter reading/);
+    assert.throws(() => soleCase({ admissionsFinal: unreadable }), /not a counter reading/);
+  }
+
+  // THE R3 DISCRIMINATOR. The soak socket had every acknowledgement ignored;
+  // a second socket, connected for part of the window, had exactly as many
+  // accepted. The ACK arithmetic alone cannot tell the difference -- it sees
+  // the delta it expected -- and before R3 that was the whole judgment.
+  const secondSocket = {
+    connectionsBefore: '0',
+    admissionsBaseline: '4',
+    admissionsFinal: '6',
+    ackBaseline: '10',
+    ackFinal: '65',
+    browserAcks: 55,
+    connectionSamples: [1, 1, 2, 2, 1],
+  };
+  assert.deepEqual(
+    assertAcceptedAckEvidence({
+      baseline: secondSocket.ackBaseline,
+      finalReading: secondSocket.ackFinal,
+      browserAcks: secondSocket.browserAcks,
+      expectedMinimum: 50,
+    }),
+    { accepted: 55, browserAcks: 55 },
+    'the aggregate ACK judgment is satisfied by the impostor, which is why it cannot stand alone',
+  );
+  assert.throws(
+    () =>
+      assertSoleAdmission({
+        connectionsBefore: secondSocket.connectionsBefore,
+        admissionsBaseline: secondSocket.admissionsBaseline,
+        admissionsFinal: secondSocket.admissionsFinal,
+      }),
+    /2 public watch admission/,
+    'the second socket was admitted, and admissions do not lie about that',
+  );
+  assert.throws(
+    () => analyzeConnectionSamples(secondSocket.connectionSamples),
+    /exactly 1/,
+    'and it was visible in the window while it was connected',
+  );
 
   // Ping continuity: a restart, a gap, and a shortfall each refuse.
   assertPingContinuity(Array.from({ length: 60 }, (_, index) => index + 1), 50);
@@ -486,6 +626,9 @@ function parseArguments(argv) {
     analyzeAcks: false,
     ackBaseline: null,
     ackFinal: null,
+    connectionsBefore: null,
+    admissionsBaseline: null,
+    admissionsFinal: null,
     windowStart: null,
     windowEnd: null,
     intervalSeconds: 30,
@@ -540,6 +683,15 @@ function parseArguments(argv) {
         break;
       case '--ack-final':
         options.ackFinal = next();
+        break;
+      case '--connections-before':
+        options.connectionsBefore = next();
+        break;
+      case '--admissions-baseline':
+        options.admissionsBaseline = next();
+        break;
+      case '--admissions-final':
+        options.admissionsFinal = next();
         break;
       case '--window-start':
         options.windowStart = Number.parseInt(next(), 10);
@@ -766,6 +918,13 @@ async function main() {
   if (options.analyzeAcks) {
     assert.ok(options.ackReport, '--analyze-acks needs the browser half\'s --ack-report');
     const report = parseAckReport(readFileSync(options.ackReport, 'utf8'));
+    // Exclusivity first: an aggregate counter's delta says nothing about
+    // THIS socket until the window is known to have held only it.
+    const sole = assertSoleAdmission({
+      connectionsBefore: options.connectionsBefore,
+      admissionsBaseline: options.admissionsBaseline,
+      admissionsFinal: options.admissionsFinal,
+    });
     const verdict = assertAcceptedAckEvidence({
       baseline: options.ackBaseline,
       finalReading: options.ackFinal,
@@ -773,7 +932,7 @@ async function main() {
       expectedMinimum: options.expectedPings,
     });
     process.stdout.write(
-      `public-soak acks: PASS server_accepted=${verdict.accepted} browser_sent=${verdict.browserAcks}\n`,
+      `public-soak acks: PASS server_accepted=${verdict.accepted} browser_sent=${verdict.browserAcks} admissions=${sole.admissions}\n`,
     );
     return;
   }
