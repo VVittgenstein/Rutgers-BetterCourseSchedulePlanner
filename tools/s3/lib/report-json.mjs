@@ -290,17 +290,19 @@ export function buildJsonReport(ctx) {
         informativeCount: sess.informativeCount,
         inPeakInformativeCount: sess.inPeakInformativeCount,
         offPeakInformativeCount: sess.offPeakInformativeCount,
+        // The two counts the gate tests against MIN_GROUP_BRACKETS: the BEST
+        // single constituent client window, never the session total. A side
+        // pooled out of several windows is not evidence, so for a session of
+        // one window these equal the two counts above and for a merged session
+        // they are strictly smaller.
+        bestWindowInPeakInformativeCount: sess.bestWindowInPeakInformativeCount,
+        bestWindowOffPeakInformativeCount: sess.bestWindowOffPeakInformativeCount,
         // Purity is judged over ALL of the session's brackets, informative or
         // not: an off-peak session may hold no peak-hour and no unplaceable
         // bracket at all.
         pureOffPeak: sess.pureOffPeak,
         qualifiesPeak: sess.qualifiesPeak,
         qualifiesOffPeak: sess.qualifiesOffPeak,
-        // True when holding out ONE serverDate header would regroup this
-        // stream's client windows: the session boundaries are decided by a
-        // single Date cell, not by the server timeline, so A4-2 counts the
-        // session on neither side.
-        serverGroupingAmbiguous: sess.serverGroupingAmbiguous,
       })),
     bracketTotals: {
       total: bracketTotals.total,
