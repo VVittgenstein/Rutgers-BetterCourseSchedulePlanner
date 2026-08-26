@@ -162,6 +162,38 @@ ADAPT_ERRORS_ONLY_JSON="$TEST_TMP/adapt-errors-only.json"
 cat > "$ADAPT_ERRORS_ONLY_JSON" <<'JSON'
 {"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"static_response","status_code":503}]}]}],"terminal":true}],"errors":{"routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]}}}}}}
 JSON
+# R3: the handler chain INSIDE one route is a middleware chain. Caddy
+# answers at the static_response and never calls the proxy behind it, so
+# that proxy is not protection -- it is unreachable.
+ADAPT_CHAIN_SHADOW_JSON="$TEST_TMP/adapt-chain-shadow.json"
+cat > "$ADAPT_CHAIN_SHADOW_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"static_response","status_code":503,"body":"maintenance"},{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}],"terminal":true}]}}}}}
+JSON
+# ... but an ordinary middleware calls the next handler, so a proxy behind
+# THAT is reachable and must still count.
+ADAPT_CHAIN_MIDDLEWARE_JSON="$TEST_TMP/adapt-chain-middleware.json"
+cat > "$ADAPT_CHAIN_MIDDLEWARE_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"headers","response":{"set":{"X-Content-Type-Options":["nosniff"]}}},{"handler":"encode","encodings":{"gzip":{}}},{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}],"terminal":true}]}}}}}
+JSON
+# A handler whose next/terminal semantics this check does not model must be
+# refused, not assumed to continue into the proxy behind it.
+ADAPT_CHAIN_UNKNOWN_JSON="$TEST_TMP/adapt-chain-unknown.json"
+cat > "$ADAPT_CHAIN_UNKNOWN_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"some_plugin_handler"},{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}],"terminal":true}]}}}}}
+JSON
+# Two servers on the SAME origin port, on different listen addresses. The
+# protected proxy is on one interface; the public host is also served, by a
+# static response, on the other. Flattening the two and accepting "one of
+# them is protected" is the R3 false pass.
+ADAPT_SAME_PORT_SPLIT_JSON="$TEST_TMP/adapt-same-port-split.json"
+cat > "$ADAPT_SAME_PORT_SPLIT_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":["192.0.2.10:443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"static_response","status_code":503}]}]}],"terminal":true}]},"srv1":{"listen":["192.0.2.11:443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]}],"terminal":true}]}}}}}
+JSON
+# ... and the control: every listener that could take this host is protected.
+ADAPT_SAME_PORT_BOTH_JSON="$TEST_TMP/adapt-same-port-both.json"
+cat > "$ADAPT_SAME_PORT_BOTH_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":["192.0.2.10:443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]}],"terminal":true}]},"srv1":{"listen":["192.0.2.11:443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]}],"terminal":true}]}}}}}
+JSON
 # Fail-closed on a structure this check does not model: an unknown handler
 # nesting the routes that carry the protected proxy.
 ADAPT_OPAQUE_JSON="$TEST_TMP/adapt-opaque.json"
@@ -200,6 +232,11 @@ make_stub caddy-adapt-terminal-shadow "case \"\$1\" in adapt) cat '$ADAPT_TERMIN
 make_stub caddy-adapt-subroute-shadow "case \"\$1\" in adapt) cat '$ADAPT_SUBROUTE_SHADOW_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-other-listener "case \"\$1\" in adapt) cat '$ADAPT_OTHER_LISTENER_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-errors-only "case \"\$1\" in adapt) cat '$ADAPT_ERRORS_ONLY_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-chain-shadow "case \"\$1\" in adapt) cat '$ADAPT_CHAIN_SHADOW_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-chain-middleware "case \"\$1\" in adapt) cat '$ADAPT_CHAIN_MIDDLEWARE_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-chain-unknown "case \"\$1\" in adapt) cat '$ADAPT_CHAIN_UNKNOWN_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-same-port-split "case \"\$1\" in adapt) cat '$ADAPT_SAME_PORT_SPLIT_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-same-port-both "case \"\$1\" in adapt) cat '$ADAPT_SAME_PORT_BOTH_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-opaque "case \"\$1\" in adapt) cat '$ADAPT_OPAQUE_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-wildcard-ok "case \"\$1\" in adapt) cat '$ADAPT_WILDCARD_OK_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-nested-ok "case \"\$1\" in adapt) cat '$ADAPT_NESTED_OK_JSON' ;; *) exit 0 ;; esac"
@@ -493,6 +530,23 @@ PF_CADDY="$STUB_DIR/caddy-adapt-other-listener" jq_expect_fail 'protection on an
 # handle_errors routes run on an error, not on live traffic.
 PF_CADDY="$STUB_DIR/caddy-adapt-errors-only" jq_expect_fail 'proxy only in handle_errors' \
   'no active route for planner.example.test reaches' --caddyfile "$GOOD_CADDYFILE"
+
+# R3: a route's handlers are a middleware chain, so Caddy answers at the
+# static_response and never calls the proxy sitting behind it in the SAME
+# chain -- while an ordinary middleware does call the next handler, and the
+# proxy behind THAT is still protection.
+PF_CADDY="$STUB_DIR/caddy-adapt-chain-shadow" jq_expect_fail 'proxy shadowed inside one handler chain' \
+  'no active route for planner.example.test reaches' --caddyfile "$GOOD_CADDYFILE"
+PF_CADDY="$STUB_DIR/caddy-adapt-chain-middleware" jq_expect_pass 'proxy behind ordinary middleware' \
+  --caddyfile "$GOOD_CADDYFILE"
+PF_CADDY="$STUB_DIR/caddy-adapt-chain-unknown" jq_expect_fail 'unknown handler ahead of the proxy' \
+  'next/terminal semantics this check cannot interpret' --caddyfile "$GOOD_CADDYFILE"
+# ... and two servers on the same origin port are two interfaces, not one
+# pool: a protected proxy on one says nothing about the other.
+PF_CADDY="$STUB_DIR/caddy-adapt-same-port-split" jq_expect_fail 'protection on the other listen address' \
+  'no active route for planner.example.test reaches' --caddyfile "$GOOD_CADDYFILE"
+PF_CADDY="$STUB_DIR/caddy-adapt-same-port-both" jq_expect_pass 'every listener for the host protected' \
+  --caddyfile "$GOOD_CADDYFILE"
 
 # A structure this check does not model is refused, not walked hopefully.
 PF_CADDY="$STUB_DIR/caddy-adapt-opaque" jq_expect_fail 'uninterpretable nesting handler' \

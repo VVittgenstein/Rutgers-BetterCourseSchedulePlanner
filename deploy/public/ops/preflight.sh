@@ -581,53 +581,94 @@ def route_is_unconditional($public):
   else any(.match[]; matcher_set_is_host_only and matcher_set_applies($public))
   end;
 
-# Handlers that answer the request themselves, so nothing after them runs.
-def handler_terminates:
-  (.handler? // "")
-  | . == "static_response" or . == "file_server" or . == "abort" or . == "error";
-
-# Every reverse_proxy a request for $public can actually REACH in this route
-# list, in Caddy order: routes are tried in sequence, and the first
-# unconditional route that ends the request (terminal, or a handler that
-# answers) is the last one anything after it will ever see. A protected
-# proxy sitting behind a maintenance page is not protection.
+# What one handler does to the chain it sits in.
 #
-# "subroute" is the one handler the repository-supported configs use to nest
-# routes; anything else that nests is refused rather than assumed active.
-# handle_errors routes are deliberately NOT walked here: they run on an
-# error, so they cannot prove that live traffic reaches the service. The
-# whole-document obligation below still sees any proxy inside them.
-def proxies_in_routes($public):
+#   continue  ordinary middleware: it calls the next handler, so a proxy
+#             after it is still reachable
+#   stop      it answers the request itself and never calls next
+#   proxy     the thing being looked for; it also answers, so nothing after
+#             it in the same chain runs
+#   subroute  it runs a nested route list, and whether the chain continues
+#             afterwards depends on what happened in there
+#   unknown   refused -- guessing that an unrecognized handler continues is
+#             how an unreachable proxy gets counted as protection
+def handler_class:
+  if . == "reverse_proxy" then "proxy"
+  elif . == "subroute" then "subroute"
+  elif . == "headers" or . == "encode" or . == "rewrite" or . == "uri"
+    or . == "vars" or . == "request_body" or . == "templates" or . == "push"
+    or . == "map" or . == "tracing" or . == "authentication"
+  then "continue"
+  elif . == "static_response" or . == "file_server" or . == "abort"
+    or . == "error" or . == "acme_server" or . == "metrics"
+  then "stop"
+  else "unknown"
+  end;
+
+def chain_classes:
+  [ (.handle // [])[]
+    | if type != "object" then die("handler entry is not an object")
+      elif (.handler? | type) != "string" then die("handler entry has no handler name")
+      else (.handler | handler_class)
+      end ];
+
+# The index of the first handler that is not ordinary middleware, or -1.
+# Everything after it is unreachable, so nothing after it is even classified.
+def chain_stop_index:
+  chain_classes as $classes
+  | (first(range(0; $classes | length) | select($classes[.] != "continue")) // -1);
+
+# A route ends the request when it is marked terminal, or when its chain
+# reaches a handler that answers (or a subroute that might). Routes after it
+# never run.
+def route_ends_request:
+  (.terminal? == true) or (chain_stop_index >= 0);
+
+# Every reverse_proxy a request for $public can actually REACH, in Caddy
+# order, at BOTH levels.
+#
+# Between routes: they are tried in sequence, and the first unconditional
+# route that ends the request is the last one anything after it will ever
+# see. Within one route: the handlers are a middleware chain, so a proxy
+# sitting behind a respond in the SAME chain is never called -- Caddy answers
+# at the respond and returns. Counting it was the R3 false pass.
+#
+# handle_errors routes are deliberately NOT walked: they run on an error, so
+# they cannot prove that live traffic reaches the service. The whole-document
+# obligation below still sees any proxy inside them.
+def reachable_proxies($public):
   (if type != "array" then die("route list is not an array") else . end)
   | [ to_entries[] | select(.value | route_applies($public)) ] as $applying
   | [ $applying[]
-      | select(.value
-          | route_is_unconditional($public)
-            and ((.terminal? == true) or any((.handle // [])[]; handler_terminates)))
+      | select(.value | route_is_unconditional($public) and route_ends_request)
       | .key ] as $stops
   | (if ($stops | length) == 0 then $applying
      else ($stops | min) as $stop | [ $applying[] | select(.key <= $stop) ]
      end)
   | .[].value
-  | (.handle // []) as $handlers
-  | (if ($handlers | type) != "array" then die("route handle is not an array") else . end)
-  | $handlers[]
-  | if type != "object" then die("handler entry is not an object")
-    elif (.handler? | type) != "string" then die("handler entry has no handler name")
-    elif .handler == "reverse_proxy" then
-      (if has("handle_response")
-       then die("reverse_proxy nests handle_response routes")
-       else . end)
-    elif .handler == "subroute" then
-      ((.routes // []) | proxies_in_routes($public))
-    elif (has("routes") or has("handle")) then
-      die("handler \(.handler) nests routes this check cannot interpret")
-    else empty
+  | (.handle // []) as $chain
+  | (if ($chain | type) != "array" then die("route handle is not an array") else . end)
+  | chain_classes as $classes
+  | chain_stop_index as $index
+  | if $index < 0 then empty
+    elif $classes[$index] == "unknown"
+    then die("handler \($chain[$index].handler) has next/terminal semantics this check cannot interpret")
+    elif $classes[$index] == "stop" then empty
+    elif $classes[$index] == "proxy" then
+      ($chain[$index]
+       | if has("handle_response")
+         then die("reverse_proxy nests handle_response routes")
+         else . end)
+    else
+      (if ($index + 1) < ($chain | length)
+       then die("a subroute is followed by more handlers, and whether they run depends on its own routes")
+       else (($chain[$index].routes // []) | reachable_proxies($public))
+       end)
     end;
 
-# Only a server listening on the origin port carries the public traffic.
-# A server with no listen list at all is unknowable, so it is included
-# rather than excluded: over-including can only add obligations.
+# Does this server carry traffic for the origin port at all? A server with no
+# listen list is unknowable, so it is included rather than excluded:
+# over-including can only add obligations.
 def serves_public_port($public_port):
   (.listen // []) as $listen
   | if ($listen | type) != "array" then die("server listen is not an array")
@@ -652,9 +693,6 @@ def dials:
         end
     end;
 
-# The same local service under any of the spellings Caddy accepts. On the
-# public host a dial this cannot classify (a unix socket, an SRV lookup) is a
-# refusal: there we must vouch, so we may not shrug.
 def reaches_service:
   . as $dial
   | (sub("^.*:"; "")) as $dial_port
@@ -666,9 +704,6 @@ def reaches_service:
             or startswith("127."))
     end;
 
-# The same question asked of ANY proxy in the document, where we are only
-# looking for violations and an uninterpretable dial elsewhere must not
-# refuse the whole config.
 def dial_touches_service:
   if type != "string" then false
   else (sub("^.*:"; "")) as $dial_port
@@ -679,27 +714,39 @@ def dial_touches_service:
       end
   end;
 
-($host | ascii_downcase | sub("\\.$"; "")) as $public
+def reaching_proxies: [ .proxies[] | select(any(dials; reaches_service)) ];
+
+($host | ascii_downcase | sub("\.$"; "")) as $public
+# Servers are judged ONE BY ONE, never flattened. Two servers can listen on
+# the same port at different addresses, and a protected proxy on one
+# interface says nothing about the interface the public actually reaches --
+# so every server that could serve this host must satisfy the contract by
+# itself.
 | [ (.apps.http.servers // die("adapted config has no apps.http.servers"))
-    | if type != "object" then die("apps.http.servers is not an object") else .[] end
-    | if type != "object" then die("server entry is not an object") else . end
-    | select(serves_public_port($port)) ] as $public_servers
-| [ $public_servers[] | (.routes // []) | proxies_in_routes($public) ] as $host_proxies
+    | if type != "object" then die("apps.http.servers is not an object") else to_entries[] end
+    | if (.value | type) != "object" then die("server entry is not an object") else . end
+    | select(.value | serves_public_port($port))
+    | { name: .key,
+        listen: ((.value.listen // []) | map(tostring) | join(",")),
+        applies: (((.value.routes // []) | map(select(route_applies($public))) | length) > 0),
+        proxies: [ (.value.routes // []) | reachable_proxies($public) ] } ] as $servers
+| [ $servers[] | select(.applies) ] as $candidates
+| [ $candidates[] | select((reaching_proxies | length) == 0) ] as $unreached
+| [ $candidates[]
+    | select(any(reaching_proxies[]; .stream_close_delay? != $delay)) ] as $unprotected
 | [ .. | objects
     | select(.handler? == "reverse_proxy")
     | select(any((.upstreams // [])[]; .dial? | dial_touches_service)) ] as $service_proxies
-| if ($public_servers | length) == 0
-  then "no adapted server listens on port \($port), the port of the public origin"
+| if ($candidates | length) == 0
+  then "no adapted server on port \($port) serves \($public)"
   elif ($service_proxies | length) == 0
   then "no reverse_proxy anywhere reaches 127.0.0.1:8080"
   elif (all($service_proxies[]; .stream_close_delay? == $delay) | not)
   then "a reverse_proxy to 127.0.0.1:8080 carries no stream_close_delay 4h"
-  elif (any($host_proxies[]; any(dials; reaches_service)) | not)
-  then "no active route for \($public) reaches 127.0.0.1:8080"
-  elif (all($host_proxies[];
-            if any(dials; reaches_service)
-            then (.stream_close_delay? == $delay) else true end) | not)
-  then "an active reverse_proxy for \($public) carries no stream_close_delay 4h"
+  elif ($unreached | length) > 0
+  then "no active route for \($public) reaches 127.0.0.1:8080 on server \($unreached[0].name) (listen \($unreached[0].listen))"
+  elif ($unprotected | length) > 0
+  then "an active reverse_proxy for \($public) on server \($unprotected[0].name) (listen \($unprotected[0].listen)) carries no stream_close_delay 4h"
   else "OK"
   end
 '
