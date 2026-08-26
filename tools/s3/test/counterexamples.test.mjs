@@ -100,7 +100,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { makeTmpDir, cleanup, makeRunDir, makeTickSeries, makeSqliteDb, sampleRow, runAnalyzer } from "./fixtures.mjs";
+import {
+  makeTmpDir,
+  cleanup,
+  makeRunDir,
+  makeTickSeries,
+  makeSqliteDb,
+  sampleRow,
+  runAnalyzer,
+  assertA42NoWeakerThanFrozenBaseline,
+} from "./fixtures.mjs";
 import {
   buildOverlapSlices,
   buildSubsampleDerived,
@@ -123,6 +132,10 @@ import {
   buildHonestPausedSession,
   buildForgedServerSeam,
   buildPooledPeakChunks,
+  buildPooledPeakChunksMultiCell,
+  buildHonestNearThresholdSeam,
+  NEAR_THRESHOLD_CLIENT_GAP_MS,
+  SLOW_POLL_MS,
   pooledForgedRowIndex,
   POOLED_CHUNK_GAP_MS,
   POOLED_CHUNK_TICKS,
@@ -289,12 +302,13 @@ test("CE-2 (A4-2): an isolated zero-change peak-time sample is not peak evidence
   assert.equal(a2.satisfied, false);
   assert.equal(
     a2.evidence,
-    "windows: 6 total; evidence sessions: 6 from 6 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets): 0; qualifying off-peak sessions (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
+    "windows: 6 total; evidence sessions: 6 from 6 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets in one client window): 0; qualifying off-peak sessions (>=5 informative off-peak brackets in one client window, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+  assertA42NoWeakerThanFrozenBaseline(json);
 });
 
 test("CE-2b (A4-2): a window ending exactly at 17:00:00.000 ET has zero peak evidence", (t) => {
@@ -333,11 +347,12 @@ test("CE-2b (A4-2): a window ending exactly at 17:00:00.000 ET has zero peak evi
   // …but the gate demands brackets inside the hour, and there are none.
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 0;/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+  assertA42NoWeakerThanFrozenBaseline(json);
 });
 
 test("CE-2c (A4-2): a peak-time loner merged into a pre-peak session is still not peak evidence", (t) => {
@@ -378,11 +393,12 @@ test("CE-2c (A4-2): a peak-time loner merged into a pre-peak session is still no
   for (const win of mergedPeak) assert.equal(win.bracketCount, 20);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 0;/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+  assertA42NoWeakerThanFrozenBaseline(json);
 });
 
 test("CE-3 (A4-5): one stray serverDate does not license client-clock production conclusions", (t) => {
@@ -746,7 +762,7 @@ test("CE-6 (A4-2): a time-translated byte-copy cannot supply the only peak evide
   // has no evidence-eligible class left, so A4-1 fails too.
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets\): 0/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets in one client window\): 0/);
   const a1 = gateById(json, "A4-1");
   assert.equal(a1.satisfied, false);
   assert.match(a1.evidence, /conflicting absolute time anchors \(time-translated or serverDate-edited duplicate observation series\)/);
@@ -803,7 +819,7 @@ test("CE-6b (A4-2): a LONGER shifted copy cannot win the representative slot by 
   assert.deepEqual(json.provenance.duplicateStreamIds, []);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets\): 0/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets in one client window\): 0/);
   assert.equal(gateById(json, "A4-1").satisfied, false);
 });
 
@@ -866,7 +882,7 @@ test("CE-7 (A4-2): a CLIENT-ONLY shifted byte-copy cannot supply the only peak e
   assert.deepEqual(json.provenance.duplicateStreamIds, []);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets\): 0/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets in one client window\): 0/);
   const a1 = gateById(json, "A4-1");
   assert.equal(a1.satisfied, false);
   assert.match(a1.evidence, /NB missing/);
@@ -1026,7 +1042,7 @@ test("CE-8b (A4-2): a client-shifted copy that also drops one serverDate cannot 
   assert.deepEqual(json.provenance.duplicateStreamIds, []);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets\): 0/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets in one client window\): 0/);
   const a1 = gateById(json, "A4-1");
   assert.equal(a1.satisfied, false);
   assert.match(a1.evidence, /NB missing/);
@@ -1203,10 +1219,11 @@ test("CE-11 (A4-2): a peak claimed only through requestEndedUtc is not peak evid
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+  assertA42NoWeakerThanFrozenBaseline(json);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
   assert.match(a2.evidence, /peak\/off-peak classified on the server clock/);
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 0;/);
   // The bait: the window LABEL (client envelope) still says peak-overlapping.
   const windows = json.targets.flatMap((tgt) => tgt.windows);
   assert.equal(windows.filter((w) => w.peakOverlap).length, 3);
@@ -1230,11 +1247,12 @@ test("CE-11b (A4-2): the minimal requestEndedUtc edit is caught too", (t) => {
   assert.equal(gateById(json, "A4-1").satisfied, true);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 0;/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+  assertA42NoWeakerThanFrozenBaseline(json);
 });
 
 test("CE-12 (A4-1/A4-2): a copy that edited ONLY requestEndedUtc cannot become the clean representative", (t) => {
@@ -1269,7 +1287,7 @@ test("CE-12 (A4-1/A4-2): a copy that edited ONLY requestEndedUtc cannot become t
   assert.deepEqual(json.provenance.duplicateStreamIds, []);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 0;/);
   const a1 = gateById(json, "A4-1");
   assert.equal(a1.satisfied, false);
   assert.match(a1.evidence, /NB missing/);
@@ -1283,7 +1301,7 @@ test("CE-12 (A4-1/A4-2): a copy that edited ONLY requestEndedUtc cannot become t
   assert.equal(gateById(honest.json, "A4-2").satisfied, false);
   assert.match(
     gateById(honest.json, "A4-2").evidence,
-    /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/,
+    /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 0;/,
   );
 });
 
@@ -1307,12 +1325,13 @@ test("CE-13 (A4-2): a client clock running an hour slow cannot manufacture off-p
   assert.equal(a2.satisfied, false);
   // Every qualifying window is a PEAK window on the server clock; the off-peak
   // side, which the client labels claimed, has nothing.
-  assert.match(a2.evidence, /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 0/);
+  assert.match(a2.evidence, /qualifying off-peak sessions \(>=5 informative off-peak brackets in one client window, none in peak\): 0/);
   assert.match(a2.evidence, /\(window labels: 3 peak-overlapping, 3 off-peak\)/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+  assertA42NoWeakerThanFrozenBaseline(json);
 });
 
 test("CE-14 (A4-2): one session straddling 17:00 ET is not both a peak and an off-peak window", (t) => {
@@ -1339,10 +1358,10 @@ test("CE-14 (A4-2): one session straddling 17:00 ET is not both a peak and an of
     assert.equal(gate.satisfied, gate.id !== "A4-2", `${gate.id}: ${gate.evidence}`);
   }
   const a2 = gateById(json, "A4-2");
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 3;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 3;/);
   assert.match(
     a2.evidence,
-    /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 0/,
+    /qualifying off-peak sessions \(>=5 informative off-peak brackets in one client window, none in peak\): 0/,
   );
   assert.match(
     a2.evidence,
@@ -1352,6 +1371,7 @@ test("CE-14 (A4-2): one session straddling 17:00 ET is not both a peak and an of
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+  assertA42NoWeakerThanFrozenBaseline(json);
 
   // Measured, not assumed: one window per target, each holding both regimes.
   const windows = json.targets.flatMap((target) => target.windows);
@@ -1500,10 +1520,10 @@ test("CE-16 (A4-2): a client-clock jump inside one server-contiguous session is 
     a2.evidence,
     /3 client window\(s\) merged into a session with another client window/,
   );
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 3;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 3;/);
   assert.match(
     a2.evidence,
-    /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 0/,
+    /qualifying off-peak sessions \(>=5 informative off-peak brackets in one client window, none in peak\): 0/,
   );
   assert.match(
     a2.evidence,
@@ -1521,15 +1541,18 @@ test("CE-16 (A4-2): a client-clock jump inside one server-contiguous session is 
     assert.equal(sess.pureOffPeak, false);
     assert.equal(sess.qualifiesPeak, true);
     assert.equal(sess.qualifiesOffPeak, false);
-    // The server timeline here is honest and 1-robust: what refuses this run
-    // is the MERGE plus the purity clause, not the ambiguity void.
-    assert.equal(sess.serverGroupingAmbiguous, false);
+    // Every in-peak bracket sits in ONE of the two client windows, so the peak
+    // side is carried by a single window and is not pooled — what refuses this
+    // run is the MERGE plus the purity clause, nothing else.
+    assert.equal(sess.bestWindowInPeakInformativeCount, 10);
+    assert.equal(sess.bestWindowOffPeakInformativeCount, 10);
   }
 
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+  assertA42NoWeakerThanFrozenBaseline(json);
 });
 
 for (const direction of ["backwards", "forwards"]) {
@@ -1619,6 +1642,7 @@ for (const direction of ["backwards", "forwards"]) {
       json.decision.reasons.map((r) => r.split(" ")[0]),
       ["A4-2"],
     );
+    assertA42NoWeakerThanFrozenBaseline(json);
     // The client split really happened — 2 windows per target — and the server
     // timeline merged them back into one session per campus.
     assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 6);
@@ -1631,11 +1655,12 @@ for (const direction of ["backwards", "forwards"]) {
       assert.equal(sess.pureOffPeak, false);
       assert.equal(sess.qualifiesPeak, true);
       assert.equal(sess.qualifiesOffPeak, false);
-      // Holding out the forged cell leaves the same merged grouping, so the
-      // leave-one-out check does NOT fire here: the order-statistic seam alone
-      // is what refuses CE-17, and CE-18 is what needs the void. The two
-      // mechanisms are pinned separately on purpose.
-      assert.equal(sess.serverGroupingAmbiguous, false);
+      // The order-statistic seam alone is what refuses CE-17: the one forged
+      // cell never mints the boundary, so the two client windows stay in one
+      // session and the purity clause takes the off-peak side. The peak side is
+      // carried by a single client window, not pooled.
+      assert.equal(sess.bestWindowInPeakInformativeCount, 9);
+      assert.equal(sess.bestWindowOffPeakInformativeCount, 10);
     }
 
     const a2 = gateById(json, "A4-2");
@@ -1647,10 +1672,10 @@ for (const direction of ["backwards", "forwards"]) {
       a2.evidence,
       /3 client window\(s\) merged into a session with another client window/,
     );
-    assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 3;/);
+    assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 3;/);
     assert.match(
       a2.evidence,
-      /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 0/,
+      /qualifying off-peak sessions \(>=5 informative off-peak brackets in one client window, none in peak\): 0/,
     );
   });
 }
@@ -1692,6 +1717,7 @@ test("CONTROL (R3): a GENUINE 11-minute pause, moved on both clocks, still reach
   assert.equal(out.code, 0, out.stderr);
   assert.match(out.stdout, /verdict=GO qualifier=none brackets=60 distinguishable=true/);
   const json = out.json;
+  assertA42NoWeakerThanFrozenBaseline(json);
   for (const gate of json.goGate) {
     assert.equal(gate.satisfied, true, `${gate.id}: ${gate.evidence}`);
   }
@@ -1704,10 +1730,10 @@ test("CONTROL (R3): a GENUINE 11-minute pause, moved on both clocks, still reach
     /evidence sessions: 6 from 6 evidence window\(s\), grouped on the server timeline/,
   );
   assert.ok(!a2.evidence.includes("merged into a session"));
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 3;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 3;/);
   assert.match(
     a2.evidence,
-    /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 3/,
+    /qualifying off-peak sessions \(>=5 informative off-peak brackets in one client window, none in peak\): 3/,
   );
   assert.equal(json.evidenceSessions.filter((sess) => sess.pureOffPeak).length, 3);
   for (const sess of json.evidenceSessions) {
@@ -1757,6 +1783,7 @@ test("CONTROL (R2): the honest three-campus fixture the R2 counterexamples are c
   assert.equal(out.code, 0, out.stderr);
   assert.match(out.stdout, /verdict=GO qualifier=none brackets=120 distinguishable=true/);
   const json = out.json;
+  assertA42NoWeakerThanFrozenBaseline(json);
   assert.equal(json.provenance.classes.length, 3);
   for (const cls of json.provenance.classes) {
     assert.equal(cls.members.length, 1);
@@ -1770,7 +1797,7 @@ test("CONTROL (R2): the honest three-campus fixture the R2 counterexamples are c
   }
   assert.equal(
     gateById(json, "A4-2").evidence,
-    "windows: 6 total; evidence sessions: 6 from 6 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets): 3; qualifying off-peak sessions (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
+    "windows: 6 total; evidence sessions: 6 from 6 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets in one client window): 3; qualifying off-peak sessions (>=5 informative off-peak brackets in one client window, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
   // Six windows, six sessions, no merge note: the ~19 h separation survives
   // the coarsening, and each session qualifies exactly one side.
@@ -1827,12 +1854,14 @@ test("CE-18 (A4-2) BASELINE: two honest sub-threshold peak chunks are a legitima
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
-  // Nine client windows, nine sessions: no pooling, nothing ambiguous.
+  assertA42NoWeakerThanFrozenBaseline(json);
+  // Nine client windows, nine sessions: no pooling at all.
   assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 9);
   assert.equal(json.evidenceSessions.length, 9);
   for (const sess of json.evidenceSessions) {
     assert.equal(sess.windowIds.length, 1);
-    assert.equal(sess.serverGroupingAmbiguous, false);
+    assert.equal(sess.bestWindowInPeakInformativeCount, sess.inPeakInformativeCount);
+    assert.equal(sess.bestWindowOffPeakInformativeCount, sess.offPeakInformativeCount);
   }
   // Off-peak side satisfied, peak side short by one bracket per chunk — the
   // honest reason A4-2 fails.
@@ -1844,12 +1873,12 @@ test("CE-18 (A4-2) BASELINE: two honest sub-threshold peak chunks are a legitima
     assert.equal(sess.qualifiesPeak, false);
   }
   const a2 = gateById(json, "A4-2");
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 0;/);
   assert.match(
     a2.evidence,
-    /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 3/,
+    /qualifying off-peak sessions \(>=5 informative off-peak brackets in one client window, none in peak\): 3/,
   );
-  assert.doesNotMatch(a2.evidence, /supplied no evidence because holding out/);
+  assert.doesNotMatch(a2.evidence, /only by pooling several client windows/);
 });
 
 for (const mode of ["merge-backwards", "merge-forwards"]) {
@@ -1915,10 +1944,12 @@ for (const mode of ["merge-backwards", "merge-forwards"]) {
       json.decision.reasons.map((r) => r.split(" ")[0]),
       ["A4-2"],
     );
+    assertA42NoWeakerThanFrozenBaseline(json);
     // The pooling DID happen — nine client windows collapse to six sessions,
     // and the pooled session really does hold 7 in-peak brackets, over the
-    // threshold. It buys nothing, because the grouping that produced it rests
-    // on one Date cell and the session therefore supplies no evidence.
+    // threshold. It buys nothing, because A4-2 takes the peak side from the
+    // BEST SINGLE client window of the session (4, under the threshold) and
+    // never from the session total.
     assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 9);
     assert.equal(json.evidenceSessions.length, 6);
     const pooled = json.evidenceSessions.filter((s) => s.windowIds.length === 2);
@@ -1927,22 +1958,27 @@ for (const mode of ["merge-backwards", "merge-forwards"]) {
       assert.equal(sess.bracketCount, 2 * POOLED_CHUNK_TICKS);
       assert.equal(sess.inPeakInformativeCount, 7);
       assert.ok(sess.inPeakInformativeCount >= MIN_GROUP_BRACKETS);
+      assert.ok(sess.bestWindowInPeakInformativeCount < MIN_GROUP_BRACKETS);
       assert.equal(sess.qualifiesPeak, false);
     }
+    // The honest off-peak session of every stream is UNTOUCHED by the forgery
+    // at the other end of the stream: it still qualifies the off-peak side.
+    // v2.7.1/v2.7.2 voided it too, which is the honest-data over-rejection the
+    // per-window rule replaced.
+    const offPeak = json.evidenceSessions.filter((s) => s.qualifiesOffPeak);
+    assert.equal(offPeak.length, 3);
     for (const sess of json.evidenceSessions) {
-      assert.equal(sess.serverGroupingAmbiguous, true);
       assert.equal(sess.qualifiesPeak, false);
-      assert.equal(sess.qualifiesOffPeak, false);
     }
     const a2 = gateById(json, "A4-2");
-    assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+    assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 0;/);
     assert.match(
       a2.evidence,
-      /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 0/,
+      /qualifying off-peak sessions \(>=5 informative off-peak brackets in one client window, none in peak\): 3/,
     );
     assert.match(
       a2.evidence,
-      /6 session\(s\) supplied no evidence because holding out ONE serverDate header regroups their stream's windows/,
+      /3 session\(s\) reached 5 brackets on a side only by pooling several client windows and supplied no evidence/,
     );
     // Every other gate is untouched by the void: A4-2 alone refuses.
     for (const gate of json.goGate) {
@@ -1999,15 +2035,16 @@ test("CE-18 (A4-2): DELETING one Date header cannot pool two server-separated se
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+  assertA42NoWeakerThanFrozenBaseline(json);
   // No pooling at all: nine windows, nine sessions, one window each.
   assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 9);
   assert.equal(json.evidenceSessions.length, 9);
   for (const sess of json.evidenceSessions) {
     assert.equal(sess.windowIds.length, 1);
-    // Nothing is ambiguous here: holding out a Date IS deleting it, so the
-    // grouping the analyzer reports is already the held-out grouping. The
-    // deletion is a no-op on the grouping rather than something to flag.
-    assert.equal(sess.serverGroupingAmbiguous, false);
+    // One window per session, so the session totals ARE the per-window counts
+    // the gate tests.
+    assert.equal(sess.bestWindowInPeakInformativeCount, sess.inPeakInformativeCount);
+    assert.equal(sess.bestWindowOffPeakInformativeCount, sess.offPeakInformativeCount);
     assert.ok(sess.inPeakInformativeCount < MIN_GROUP_BRACKETS);
     assert.equal(sess.qualifiesPeak, false);
   }
@@ -2019,6 +2056,168 @@ test("CE-18 (A4-2): DELETING one Date header cannot pool two server-separated se
     .sort();
   assert.deepEqual(chunkPeaks, [3, 3, 3, 4, 4, 4]);
   const a2 = gateById(json, "A4-2");
-  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets in one client window\): 0;/);
   assert.doesNotMatch(a2.evidence, /merged into a session with another client window/);
+});
+
+for (const cellCount of [2, 3, POOLED_CHUNK_TICKS * 2]) {
+  test(`CE-19 (A4-2): ${cellCount} forged Date cells cannot pool two server-separated sessions either`, (t) => {
+    const dir = makeTmpDir();
+    t.after(() => cleanup(dir));
+    // CE-18's pooling with k > 1 edited cells. v2.7.1/v2.7.2 answered CE-18
+    // with a leave-one-out check on the window GROUPING, which closes k = 1 by
+    // construction and nothing else: two low Dates in the later chunk keep the
+    // suffix minimum collapsed under EVERY single hold-out, so the grouping is
+    // stable, the check stays silent, and the pooled session qualified the peak
+    // side with brackets no single client window ever held. Measured on
+    // d6ce282 (v2.7.2) on these exact bytes: `verdict=GO qualifier=none
+    // brackets=84 distinguishable=true`, all six gates satisfied — while the
+    // FROZEN A1 baseline 2c7b53a87471 refuses them. That is a J1 violation
+    // (more permissive than the frozen baseline), which is why the defence is
+    // now counting rather than detecting.
+    const runNames = buildPooledPeakChunksMultiCell(dir, cellCount);
+
+    const honestDir = makeTmpDir();
+    t.after(() => cleanup(honestDir));
+    buildPooledPeakChunks(honestDir, "honest");
+
+    const rowsOf = (base, name) =>
+      readFileSync(join(base, name, "samples.ndjson"), "utf8")
+        .split("\n")
+        .filter((l) => l.length > 0)
+        .map((l) => JSON.parse(l));
+
+    // Nothing is fabricated: exactly `cellCount` serverDate cells differ from
+    // the honest twin, each moved by the real gap between the two chunks, and
+    // no other recorded field of any row differs.
+    for (const name of runNames) {
+      const honest = rowsOf(honestDir, name);
+      const forged = rowsOf(dir, name);
+      assert.equal(forged.length, honest.length);
+      const edits = forged
+        .map((r, k) => (JSON.stringify(r) === JSON.stringify(honest[k]) ? -1 : k))
+        .filter((k) => k >= 0);
+      assert.equal(edits.length, cellCount);
+      for (const k of edits) {
+        const changedFields = Object.keys(forged[k]).filter(
+          (f) => JSON.stringify(forged[k][f]) !== JSON.stringify(honest[k][f]),
+        );
+        assert.deepEqual(changedFields, ["serverDate"]);
+        assert.equal(
+          Date.parse(honest[k].serverDate) - Date.parse(forged[k].serverDate),
+          POOLED_CHUNK_GAP_MS,
+        );
+      }
+      // The CLIENT clock still shows both real separations.
+      const cliStarts = forged.map((r) => Date.parse(r.requestStartedUtc));
+      const cliGaps = cliStarts.slice(1).map((x, i) => x - cliStarts[i]);
+      assert.equal(cliGaps.filter((g) => g > WINDOW_GAP_MIN_MS).length, 2);
+    }
+
+    const out = analyze(dir, runNames);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=84/);
+    const json = out.json;
+    assert.deepEqual(
+      json.decision.reasons.map((r) => r.split(" ")[0]),
+      ["A4-2"],
+    );
+    // The pooling DID happen and the pooled session DOES clear the threshold in
+    // total. It buys nothing, because the peak side is taken from the best
+    // SINGLE client window, which is still the honest 4.
+    assert.equal(json.evidenceSessions.length, 6);
+    const pooled = json.evidenceSessions.filter((sess) => sess.windowIds.length === 2);
+    assert.equal(pooled.length, 3);
+    for (const sess of pooled) {
+      assert.ok(sess.inPeakInformativeCount >= MIN_GROUP_BRACKETS);
+      assert.ok(sess.bestWindowInPeakInformativeCount < MIN_GROUP_BRACKETS);
+      assert.equal(sess.qualifiesPeak, false);
+    }
+    // The honest off-peak session of each stream is untouched and still counts:
+    // the refusal is local to the pooled session, not a stream-wide void.
+    assert.equal(json.evidenceSessions.filter((sess) => sess.qualifiesOffPeak).length, 3);
+    const a2 = gateById(json, "A4-2");
+    assert.match(
+      a2.evidence,
+      /3 session\(s\) reached 5 brackets on a side only by pooling several client windows and supplied no evidence/,
+    );
+    assertA42NoWeakerThanFrozenBaseline(json);
+    for (const gate of json.goGate) {
+      assert.equal(gate.satisfied, gate.id !== "A4-2", `${gate.id}: ${gate.evidence}`);
+    }
+  });
+}
+
+test("CONTROL (R3c): an honest capture whose genuine seam lands near the threshold still reaches GO", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The anti-lockout control for the merge-direction defence, and the fixture
+  // that retired the leave-one-out grouping check. Four honest client windows
+  // per campus; the last two are separated by a GENUINE pause whose
+  // server-measured seam lands just under the session-gap threshold because the
+  // last poll before it was slow. Nothing is edited: the slow poll's Date is
+  // where a slow response puts it.
+  //
+  // v2.7.1/v2.7.2 answered `verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED
+  // brackets=240 distinguishable=true` on these exact bytes, with A4-2 the sole
+  // unsatisfied gate and ALL NINE sessions voided — including the off-peak
+  // session 19 hours away from the seam and the peak session 70 minutes away,
+  // because that void was stream-wide. The frozen A1 baseline 2c7b53a87471
+  // answers GO, and so must any successor.
+  const runNames = buildHonestNearThresholdSeam(dir);
+
+  const rowsByRun = runNames.map((name) =>
+    readFileSync(join(dir, name, "samples.ndjson"), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l)),
+  );
+
+  // The geometry the control depends on, recomputed from the bytes rather than
+  // trusted: across the late seam the CLIENT gap is above the threshold (so the
+  // client really does split) while the SERVER-measured seam is below it (so the
+  // server timeline really does read one session), and the difference is exactly
+  // the one slow poll.
+  for (const rows of rowsByRun) {
+    const cliStarts = rows.map((r) => Date.parse(r.requestStartedUtc));
+    const srvDates = rows.map((r) => Date.parse(r.serverDate));
+    const cliGaps = cliStarts.slice(1).map((x, i) => x - cliStarts[i]);
+    const bigCli = cliGaps.filter((g) => g > WINDOW_GAP_MIN_MS);
+    assert.equal(bigCli.length, 3, "three client window boundaries: 19 h, 70 min, the pause");
+    const seamIdx = cliGaps.indexOf(bigCli[bigCli.length - 1]);
+    assert.equal(cliGaps[seamIdx], NEAR_THRESHOLD_CLIENT_GAP_MS);
+    assert.ok(cliGaps[seamIdx] > WINDOW_GAP_MIN_MS);
+    const serverSeam = srvDates[seamIdx + 1] - srvDates[seamIdx];
+    assert.ok(serverSeam <= WINDOW_GAP_MIN_MS, "the server seam sits under the threshold");
+    assert.equal(cliGaps[seamIdx] - serverSeam, SLOW_POLL_MS);
+    // Every Date is present and the timeline is non-decreasing: this capture is
+    // honest in every respect the analyzer can inspect.
+    assert.equal(srvDates.filter((d) => Number.isNaN(d)).length, 0);
+    for (let i = 1; i < srvDates.length; i += 1) assert.ok(srvDates[i] >= srvDates[i - 1]);
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=GO qualifier=none brackets=240 distinguishable=true/);
+  const json = out.json;
+  for (const gate of json.goGate) assert.equal(gate.satisfied, true, `${gate.id}: ${gate.evidence}`);
+  assert.deepEqual(json.decision.reasons, []);
+
+  // Twelve client windows, nine sessions: only the two late chunks merge, which
+  // is what the server timeline says. The off-peak and peak sides come from
+  // windows nowhere near the seam.
+  assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 12);
+  assert.equal(json.evidenceSessions.length, 9);
+  const merged = json.evidenceSessions.filter((sess) => sess.windowIds.length === 2);
+  assert.equal(merged.length, 3);
+  assert.equal(json.evidenceSessions.filter((sess) => sess.qualifiesPeak).length, 3);
+  assert.equal(json.evidenceSessions.filter((sess) => sess.qualifiesOffPeak).length, 6);
+  for (const sess of merged) {
+    // The merged late session is pure off-peak and each of its windows carries
+    // the threshold on its own, so merging costs it nothing.
+    assert.equal(sess.pureOffPeak, true);
+    assert.ok(sess.bestWindowOffPeakInformativeCount >= MIN_GROUP_BRACKETS);
+    assert.equal(sess.qualifiesOffPeak, true);
+  }
+  assertA42NoWeakerThanFrozenBaseline(json);
 });

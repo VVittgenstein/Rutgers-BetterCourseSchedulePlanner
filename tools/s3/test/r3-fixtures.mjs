@@ -21,6 +21,7 @@ import {
   makeRunDir,
   makeTickSeries,
   renumberRows,
+  sampleRow,
   shiftClientClock,
   shiftServerDate,
 } from "./fixtures.mjs";
@@ -28,6 +29,7 @@ import {
   CAMPUS_SHAPE,
   PEAK_BASE,
   denseBaseCapture,
+  honestPeakSession,
   offPeakSession,
   straddleSession,
 } from "./r2-fixtures.mjs";
@@ -281,4 +283,122 @@ export function pooledForgedRowIndex(mode) {
   if (mode === "merge-forwards") return offPeakRows;
   if (mode === "merge-delete") return offPeakRows + chunkRows;
   throw new Error(`pooledForgedRowIndex: unknown mode ${mode}`);
+}
+
+// ---------------------------------------------------------------------------
+// CE-19: CE-18's pooling forgery again, with k edited Date cells instead of 1.
+//
+// v2.7.1/v2.7.2 answered CE-18 with a leave-one-out check on the window
+// GROUPING: recompute it with each dated sample's Date held out, and void the
+// stream's evidence if any hold-out regroups the windows. That closes k = 1 by
+// construction and NOTHING else. Two low Dates in the later chunk keep the
+// suffix minimum collapsed under every single hold-out, so the grouping is
+// stable, the check stays silent, and the pooled session qualifies the peak
+// side with brackets no single client window ever held.
+//
+// Measured on d6ce282 (v2.7.2), on the bytes this builder writes:
+//   k = 1  -> NO_PRODUCTION_CHANGE (the leave-one-out check fires)
+//   k = 2  -> GO qualifier=none brackets=84 distinguishable=true
+//   k = 3  -> GO ...
+//   k = 8  -> GO ...
+// while the frozen A1 baseline 2c7b53a87471 refuses all four (4 in-peak
+// brackets per client window, one below MIN_GROUP_BRACKETS). Accepting what the
+// frozen baseline refuses is the violation; the fixture pins it closed.
+//
+// Every edited cell moves by the same real gap the two chunks are apart, so the
+// forged Dates are values the capture itself produced elsewhere.
+// ---------------------------------------------------------------------------
+
+export function buildPooledPeakChunksMultiCell(dir, cellCount) {
+  for (const campus of CAMPUSES) {
+    const first = peakChunk(campus, PEAK_BASE, 100, "p1");
+    const second = peakChunk(campus, PEAK_BASE + POOLED_CHUNK_GAP_MS, 500, "p2").map((row, i) =>
+      i < cellCount ? shiftServerDate([row], -POOLED_CHUNK_GAP_MS)[0] : { ...row },
+    );
+    makeRunDir(join(dir, `run${campus}`), {
+      campus,
+      samples: [...offPeakSession(campus), ...first, ...second],
+    });
+  }
+  return RUN_NAMES;
+}
+
+// ---------------------------------------------------------------------------
+// CONTROL (R3c): the honest capture the leave-one-out check refused.
+//
+// Four client windows per campus, every one of them honest:
+//   #w00  the 20-tick off-peak session (22:00 ET the previous evening);
+//   #w01  the 20-tick peak session     (17:10 ET);
+//   #w02  a 20-tick late off-peak chunk (18:30 ET), closed by ONE extra stable
+//         poll that was SLOW — the response Date lands SLOW_POLL_MS after the
+//         request start, which is what a slow response records. It repeats the
+//         body the previous sample already carried and is not a bracket
+//         endpoint, so it changes no bracket bound;
+//   #w03  a 20-tick chunk after a GENUINE pause.
+//
+// The pause is real on both clocks. Because the last poll before it was slow,
+// the client gap (measured between request starts) is SLOW_POLL_MS LONGER than
+// the server-measured seam (between Date headers) — routine, and enough to put
+// the seam just under the session-gap threshold while the client gap sits just
+// over it. So the two late chunks are one evidence session, which is what the
+// server timeline actually says, and #w00 and #w01 are untouched: the off-peak
+// and peak sides are supplied by two windows separated by 19 hours and 70
+// minutes respectively.
+//
+// v2.7.1/v2.7.2 answered NO_PRODUCTION_CHANGE on these bytes: the near-threshold
+// seam made one hold-out regroup the stream, and the void is STREAM-WIDE, so it
+// took #w00 and #w01 with it. The frozen A1 baseline 2c7b53a87471 answers GO,
+// and so must any successor.
+// ---------------------------------------------------------------------------
+
+// One slow poll: 4 s from request start to the server's Date. Small enough to
+// be unremarkable, large enough to exceed the 1 s Date truncation.
+export const SLOW_POLL_MS = 4000;
+// 18:30 ET — comfortably after the peak hour, so #w02/#w03 are pure off-peak.
+export const LATE_OFFPEAK_BASE = Date.UTC(2026, 0, 6, 23, 30, 0);
+// Client gap across the genuine pause. Above WINDOW_GAP_MIN_MS (so the client
+// really does split) and within SLOW_POLL_MS of it (so the server-measured seam
+// lands just below). The test re-derives both inequalities from lib/phase.mjs.
+export const NEAR_THRESHOLD_CLIENT_GAP_MS = 602000;
+
+export function buildHonestNearThresholdSeam(dir) {
+  for (const campus of CAMPUSES) {
+    const shape = CAMPUS_SHAPE[campus];
+    const late = makeTickSeries({
+      baseMs: LATE_OFFPEAK_BASE,
+      periodMs: 30000,
+      count: 20,
+      startSeq: 900,
+      bodyPrefix: `${campus}-l1-`,
+      ...shape,
+    });
+    const lastRow = late[late.length - 1];
+    const slowStartMs = Date.parse(lastRow.requestStartedUtc) + 20000;
+    late.push(
+      sampleRow({
+        seq: 1200,
+        startMs: slowStartMs,
+        elapsedMs: SLOW_POLL_MS + 200,
+        bodySha: lastRow.decodedBodySha256,
+        serverDateMs: Math.floor((slowStartMs + SLOW_POLL_MS) / 1000) * 1000,
+      }),
+    );
+    // Place the resumed chunk so its FIRST request start sits exactly
+    // NEAR_THRESHOLD_CLIENT_GAP_MS after the slow poll's request start.
+    const resumedBase =
+      slowStartMs + NEAR_THRESHOLD_CLIENT_GAP_MS - shape.phaseMs + shape.preMs;
+    const resumed = makeTickSeries({
+      baseMs: resumedBase,
+      periodMs: 30000,
+      count: 20,
+      startSeq: 1300,
+      bodyPrefix: `${campus}-l2-`,
+      ...shape,
+    });
+    makeRunDir(join(dir, `run${campus}`), {
+      campus,
+      samples: [...offPeakSession(campus), ...honestPeakSession(campus), ...late, ...resumed],
+    });
+  }
+  return RUN_NAMES;
 }

@@ -9,6 +9,8 @@ import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
+import assert from "node:assert/strict";
+import { MIN_GROUP_BRACKETS } from "../lib/phase.mjs";
 
 export const ANALYZER_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -355,4 +357,52 @@ export function fakeBracket({
     clientWidthMs: upperMs - lowerMs,
     serverWidthMs: upperMs - lowerMs,
   };
+}
+
+// STAGE-5-R3/v1 J1, made executable: A4-2 must never be more permissive than
+// the FROZEN A1 baseline 2c7b53a87471, whose rule was "some evidence WINDOW
+// holds >= MIN_GROUP_BRACKETS informative in-peak brackets, and some OTHER,
+// purely off-peak evidence window holds >= MIN_GROUP_BRACKETS informative
+// off-peak brackets".
+//
+// This is checked structurally rather than by shelling out to the old tree, and
+// it is the same statement: a session qualifies the peak side only when ONE of
+// its client windows holds the brackets on its own (bestWindowInPeak...), and
+// the off-peak side only when the whole session is pure — hence every window in
+// it is — and one window holds the brackets on its own. Sessions partition the
+// evidence windows, so two distinct qualifying sessions name two distinct
+// witness windows. Whenever A4-2 is satisfied here, the baseline's per-window
+// rule is satisfied on the same input.
+export function assertA42NoWeakerThanFrozenBaseline(json) {
+  const a2 = json.goGate.find((g) => g.id === "A4-2");
+  const sessions = json.evidenceSessions ?? [];
+  const peak = sessions.filter((sess) => sess.qualifiesPeak);
+  const offPeak = sessions.filter((sess) => sess.qualifiesOffPeak);
+  assert.equal(a2.satisfied, peak.length >= 1 && offPeak.length >= 1);
+  for (const sess of peak) {
+    assert.ok(
+      sess.bestWindowInPeakInformativeCount >= MIN_GROUP_BRACKETS,
+      `${sess.sessionId}: peak side pooled across windows`,
+    );
+    assert.ok(sess.bestWindowInPeakInformativeCount <= sess.inPeakInformativeCount);
+  }
+  for (const sess of offPeak) {
+    assert.equal(sess.pureOffPeak, true, `${sess.sessionId}: off-peak side not pure`);
+    assert.ok(
+      sess.bestWindowOffPeakInformativeCount >= MIN_GROUP_BRACKETS,
+      `${sess.sessionId}: off-peak side pooled across windows`,
+    );
+    assert.ok(sess.bestWindowOffPeakInformativeCount <= sess.offPeakInformativeCount);
+  }
+  // The two witness windows are distinct: qualifying peak and off-peak sessions
+  // are disjoint (a peak-qualifying session holds an in-peak bracket and is
+  // therefore not pure), and sessions never share a window.
+  const seen = new Set();
+  for (const sess of sessions) {
+    for (const windowId of sess.windowIds) {
+      assert.ok(!seen.has(windowId), `window ${windowId} in two sessions`);
+      seen.add(windowId);
+    }
+  }
+  for (const sess of peak) assert.ok(!offPeak.includes(sess));
 }

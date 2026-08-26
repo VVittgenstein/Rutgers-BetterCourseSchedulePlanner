@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   segmentWindows,
   assignServerSessions,
-  serverGroupingRobustness,
   nyLabel,
   overlapsNyPeak,
   overlapsNyPeakStrict,
@@ -161,14 +160,15 @@ test("assignServerSessions measures the seam with order statistics, so ONE forge
   ];
   assert.deepEqual(assignServerSessions(genuineWithSpike, 13), [0, 0, 1, 1, 1]);
 
-  // COARSENING, stated rather than implied — AND NOT A SAFE DIRECTION. A Date
-  // that falls back into the earlier range AFTER a real gap collapses
-  // suffixMin, so this rule reads the two sides as one session. That is a
-  // MERGE, and a merge is emphatically not fail-closed: A4-2 counts brackets
-  // per session, so pooling two sub-threshold sessions manufactures a
-  // qualifying one. This function is deliberately NOT the defence against it
-  // — serverGroupingRobustness is, and the next test pins that. What is
-  // asserted here is only the reading itself.
+  // COARSENING, stated rather than implied. A Date that falls back into the
+  // earlier range AFTER a real gap collapses suffixMin, so this rule reads the
+  // two sides as one session. That is a MERGE, and one cell is enough to buy
+  // it — breakdown point ONE in this direction, permanently. This function is
+  // deliberately NOT the defence against it: A4-2 requires a side to be carried
+  // by ONE constituent client window, so a merged session's counts are the best
+  // single window's counts and pooling manufactures nothing. What is asserted
+  // here is only the reading itself; counterexamples.test.mjs pins the gate
+  // consequence for k = 1, 2, 3 and 8 edited cells.
   const genuineWithLateRegression = [
     sv(T0, T0),
     sv(T0 + 13000, T0 + 13000),
@@ -188,82 +188,76 @@ test("assignServerSessions measures the seam with order statistics, so ONE forge
   assert.deepEqual(assignServerSessions(monotone, 13), [0, 0, 1, 1]);
 });
 
-test("serverGroupingRobustness catches the MERGE a single Date cell would buy", () => {
-  // The mirror of the forged split above, and the one the order-statistic seam
-  // cannot see: two client windows separated by a genuine 700 s server gap,
-  // with ONE Date inside the LATER window dragged back into the earlier
-  // window's range. suffixMin collapses, the seam vanishes, both windows land
-  // in session 0 and A4-2 would count their brackets together.
-  const forgedMerge = [
-    sv(T0, T0),
-    sv(T0 + 13000, T0 + 13000),
-    sv(T0 + 26000, T0 + 700000),
-    sv(T0 + 39000, T0 + 26000),
-  ];
-  const twoWindows = [0, 0, 1, 1];
-  assert.deepEqual(assignServerSessions(forgedMerge, 13), [0, 0, 0, 0]);
-  const merged = serverGroupingRobustness(forgedMerge, 13, twoWindows, 2);
-  assert.equal(merged.robust, false);
-  // Holding out the one regressed cell restores the separation, which is
-  // exactly the statement "one Date header decided this grouping".
-  assert.equal(merged.decidedByIndex, 3);
-  assert.equal(merged.grouping, "0,0");
-  assert.equal(merged.heldOutGrouping, "0,1");
-
-  // Its HONEST twin — the same two windows, the same real gap, no regressed
-  // cell — is 1-robust: every single hold-out still leaves two sessions. This
-  // is the anti-lockout half: the check must not fire on honest separation.
-  const honestPair = [
+// WHAT ASSIGNING SESSIONS DOES AND DOES NOT ESTABLISH, stated exactly, because
+// the previous two rounds both overclaimed here.
+//
+// SPLIT direction (an attacker manufacturing a session boundary): the seam is
+// an order statistic over two SETS, so raising it needs every low Date in the
+// suffix raised or every high Date in the prefix lowered. The breakdown point
+// is the number of dated samples on the smaller side of the seam, not one.
+//
+// MERGE direction (an attacker suppressing a genuine boundary): breakdown point
+// ONE, and no seam statistic can fix that — a single number is always pushable
+// by a single cell. v2.7.1/v2.7.2 bolted a leave-one-out grouping check on top;
+// it refused honest captures whose genuine seam landed within one polling gap
+// of the threshold and it still admitted every two-cell pooling forgery, so it
+// was removed. The merge direction is instead harmless by construction: A4-2
+// takes each side's count from the BEST SINGLE constituent client window, so a
+// merged session can never count more than its best part.
+//
+// HOLD-OUT IS NOT DELETION IN GENERAL. Now that an absent Date imposes no
+// grouping constraint, holding out one cell and deleting it produce the same
+// index array — but that equivalence is per-cell only. It does NOT extend to
+// "any k-cell rewrite behaves like k deletions": deletions can only widen a
+// measured seam (raise suffixMin, lower prefixMax), while an edit can move it
+// either way, and two edited cells already reach a grouping no single deletion
+// reaches. The test below pins both halves.
+test("assignServerSessions: deletion widens a seam, and two cells beat one", () => {
+  const twoRealSessions = [
     sv(T0, T0),
     sv(T0 + 13000, T0 + 13000),
     sv(T0 + 26000, T0 + 700000),
     sv(T0 + 39000, T0 + 713000),
   ];
-  assert.deepEqual(assignServerSessions(honestPair, 13), [0, 0, 1, 1]);
-  const honest = serverGroupingRobustness(honestPair, 13, twoWindows, 2);
-  assert.equal(honest.robust, true);
-  assert.equal(honest.decidedByIndex, null);
-  assert.equal(honest.grouping, "0,1");
+  assert.deepEqual(assignServerSessions(twoRealSessions, 13), [0, 0, 1, 1]);
 
-  // Holding out the LAST Date of the first window or the FIRST Date of the
-  // second moves the boundary to the neighbouring sample, which lies in the
-  // same client window — so the grouping does not move. That is why an honest
-  // capture survives a check with a breakdown point of one.
-  assert.deepEqual(assignServerSessions(honestPair.filter((_, i) => i !== 1), 13), [0, 1, 1]);
-  assert.deepEqual(assignServerSessions(honestPair.filter((_, i) => i !== 2), 13), [0, 0, 1]);
+  // Deleting the first Date of the later session moves the boundary one sample
+  // later; the separation itself only grows. Deletion is a widening operation.
+  const deletedFirstOfSecond = twoRealSessions.map((s, i) =>
+    i === 2 ? sv(s.clientStartMs, null) : s,
+  );
+  assert.deepEqual(assignServerSessions(deletedFirstOfSecond, 13), [0, 0, null, 1]);
 
-  // One continuous window: nothing to regroup, so the check cannot fire. This
-  // is the shape of every real capture in docs/evidence (one window per
-  // stream), which is why the rule is a provable no-op there.
-  const oneRun = [sv(T0, T0), sv(T0 + 13000, T0 + 13000), sv(T0 + 26000, T0 + 26000)];
-  assert.equal(serverGroupingRobustness(oneRun, 13, [0, 0, 0], 1).robust, true);
-  // A regression that does NOT move any boundary buys nothing and is not
-  // flagged: the check is about the grouping, not about monotonicity.
+  // ONE edited cell can suppress the boundary entirely — the merge direction's
+  // breakdown point of one, asserted rather than argued.
+  const oneCellMerge = twoRealSessions.map((s, i) =>
+    i === 3 ? sv(s.clientStartMs, T0 + 26000) : s,
+  );
+  assert.deepEqual(assignServerSessions(oneCellMerge, 13), [0, 0, 0, 0]);
+
+  // ...and it survives holding out any single cell, which is precisely why a
+  // leave-one-out check on the GROUPING cannot be the defence: hold out the one
+  // edited cell here and the boundary comes back, but with TWO edited cells
+  // (below) every single hold-out still shows the merged grouping.
+  const twoCellMerge = twoRealSessions.map((s, i) =>
+    i >= 2 ? sv(s.clientStartMs, T0 + 26000 + (i - 2) * 1000) : s,
+  );
+  assert.deepEqual(assignServerSessions(twoCellMerge, 13), [0, 0, 0, 0]);
+  for (let j = 0; j < twoCellMerge.length; j += 1) {
+    const held = twoCellMerge.map((s, i) => (i === j ? sv(s.clientStartMs, null) : s));
+    const idx = assignServerSessions(held, 13).filter((v) => v !== null);
+    assert.deepEqual(new Set(idx), new Set([0]), `hold-out ${j} still reads one session`);
+  }
+
+  // A stream with no Date anywhere imposes no grouping at all, and the empty
+  // stream is not a special case.
+  assert.deepEqual(assignServerSessions([sv(T0, null), sv(T0 + 13000, null)], 13), [null, null]);
+  assert.deepEqual(assignServerSessions([], 13), []);
+
+  // A regression that moves no boundary (webfarm skew inside one session) is
+  // simply read as one session; it is not an error condition.
   const skewedRun = [sv(T0, T0 + 5000), sv(T0 + 13000, T0), sv(T0 + 26000, T0 + 26000)];
-  assert.equal(serverGroupingRobustness(skewedRun, 13, [0, 0, 0], 1).robust, true);
-
-  // Undated samples make no claim, so they are never held out, and a stream
-  // with no Date anywhere imposes no grouping at all.
-  const undated = [sv(T0, null), sv(T0 + 13000, null)];
-  assert.equal(serverGroupingRobustness(undated, 13, [0, 1], 2).robust, true);
-  assert.equal(serverGroupingRobustness(undated, 13, [0, 1], 2).grouping, "0,1");
-  assert.equal(serverGroupingRobustness([], 13, [], 0).robust, true);
-
-  // HOLDING OUT A Date IS EXACTLY DELETING IT, now that an absent Date imposes
-  // no grouping constraint — which is what makes this one check cover the
-  // deletion vector as well as the edit vector. Deleting the FIRST Date of the
-  // later window is the deletion that used to pool the two windows; here the
-  // grouping is unchanged, so there is nothing to flag and nothing gained.
-  const deletedFirstOfSecondWindow = [
-    sv(T0, T0),
-    sv(T0 + 13000, T0 + 13000),
-    sv(T0 + 26000, null),
-    sv(T0 + 39000, T0 + 713000),
-  ];
-  assert.deepEqual(assignServerSessions(deletedFirstOfSecondWindow, 13), [0, 0, null, 1]);
-  const deleted = serverGroupingRobustness(deletedFirstOfSecondWindow, 13, twoWindows, 2);
-  assert.equal(deleted.robust, true);
-  assert.equal(deleted.grouping, honest.grouping);
+  assert.deepEqual(assignServerSessions(skewedRun, 13), [0, 0, 0]);
 });
 
 test("nyLabel: overnight D1-shaped window crosses the NY calendar day", () => {

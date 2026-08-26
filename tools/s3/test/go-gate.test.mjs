@@ -7,7 +7,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { makeTmpDir, cleanup, makeRunDir, makeTickSeries, runAnalyzer } from "./fixtures.mjs";
+import {
+  makeTmpDir,
+  cleanup,
+  makeRunDir,
+  makeTickSeries,
+  runAnalyzer,
+  assertA42NoWeakerThanFrozenBaseline,
+} from "./fixtures.mjs";
 import { overlapsNyPeakStrict } from "../lib/windows.mjs";
 
 // Jan 6 2026 is EST (UTC-5): the NY 17:00-18:00 peak is 22:00-23:00 UTC.
@@ -62,6 +69,9 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   assert.equal(json.decision.verdict, "GO");
   assert.equal(json.decision.qualifier, undefined);
   assert.deepEqual(json.decision.reasons, []);
+  // J1: a GO here must also be a GO under the frozen 2c7b53a87471 per-window
+  // rule — the session grouping may only ever be stricter, never looser.
+  assertA42NoWeakerThanFrozenBaseline(json);
   for (const gate of json.goGate) {
     assert.equal(gate.satisfied, true, `${gate.id} must be satisfied: ${gate.evidence}`);
   }
@@ -109,7 +119,7 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   const a2 = json.goGate.find((g) => g.id === "A4-2");
   assert.equal(
     a2.evidence,
-    "windows: 6 total; evidence sessions: 6 from 6 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets): 3; qualifying off-peak sessions (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
+    "windows: 6 total; evidence sessions: 6 from 6 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets in one client window): 3; qualifying off-peak sessions (>=5 informative off-peak brackets in one client window, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
   // The six client windows are six evidence sessions: the two sessions of each
   // campus are ~19 h apart on the server clock too, so the server-timeline
