@@ -44,6 +44,7 @@ export function buildMdReport(ctx) {
     clockSource,
     clockFallback,
     clock,
+    serverEvidence,
     safeOffset,
     goGate,
     decision,
@@ -204,6 +205,11 @@ export function buildMdReport(ctx) {
     `- **Server Date regressions** (adjacent samples, > 1 s backwards): ${clock.serverDateRegressions}; samples missing serverDate: ${clock.serverDateMissingCount}. The webfarm rotates multiple backends (\`X-Server-Name\`), so small skew between backends is expected and is why non-positive-width server brackets are dropped (${bracketTotals.serverNonPositiveWidth} here).`,
   );
   push(
+    `- **Server-clock evidence coverage**: sufficient = **${serverEvidence.sufficient}**${
+      serverEvidence.reason !== null ? ` (reason: \`${serverEvidence.reason}\`)` : ""
+    }; server-informative comparison brackets: ${serverEvidence.serverCommonCount}; qualifying groups with server evidence: ${serverEvidence.groupsWithServer}/${serverEvidence.groupsTotal}. Production GO and any safe offset require the comparison itself to run on the server clock with server brackets covering every qualifying group; a client-clock fallback fails these gates closed.`,
+  );
+  push(
     `- **Caching**: \`cache-control: max-age=30\` means an intermediary cache could quantize observations; bracket endpoints with \`age > 0\`: ${bracketTotals.ageGreaterThanZeroEndpoints}.`,
   );
   push(
@@ -284,7 +290,9 @@ export function buildMdReport(ctx) {
       push(`- A winning model whose per-group phase intervals intersect and whose positive jitter is bounded, so one safe offset can be frozen.`);
     }
     if (unsatisfied.includes("A4-5")) {
-      push(`- Captures that retain the server \`Date\` header so server-clock analysis is possible.`);
+      push(
+        `- Captures that retain the server \`Date\` header with enough server-clock brackets to cover every qualifying group, so production conclusions never rest on a client-clock fallback.`,
+      );
     }
     if (unsatisfied.includes("A4-6")) {
       push(`- Stability of the winner under leave-out of any single (target, window) group.`);

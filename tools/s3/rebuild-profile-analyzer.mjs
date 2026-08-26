@@ -21,7 +21,13 @@ import {
   MIN_COMPARISON_BRACKETS,
   fitPhase,
 } from "./lib/phase.mjs";
-import { compareModels, assessSafeOffset, evaluateGate, commonInformativeSet } from "./lib/gate.mjs";
+import {
+  compareModels,
+  assessSafeOffset,
+  assessServerClockEvidence,
+  evaluateGate,
+  commonInformativeSet,
+} from "./lib/gate.mjs";
 import { buildJsonReport, computeBracketTotals } from "./lib/report-json.mjs";
 import { buildMdReport } from "./lib/report-md.mjs";
 
@@ -136,8 +142,16 @@ function main() {
   const clockFallback = !useServer;
   const comparison = compareModels(allBrackets, clockSource);
 
+  // 6b. Server-clock evidence sufficiency (production gates fail closed on a
+  // client-clock fallback or on qualifying groups without server brackets).
+  const serverEvidence = assessServerClockEvidence({
+    brackets: allBrackets,
+    clock,
+    clockFallback,
+  });
+
   // 7. Safe offset + A4 gate.
-  const safeOffset = assessSafeOffset(comparison, clock.status);
+  const safeOffset = assessSafeOffset(comparison, clock.status, serverEvidence);
   const targets = [...targetsMap.values()];
   const { goGate, decision } = evaluateGate({
     targets,
@@ -148,6 +162,7 @@ function main() {
     clock,
     clockSource,
     provenance,
+    serverEvidence,
   });
 
   // 8. Re-verify all input fingerprints (read-only guarantee) before writing.
@@ -187,6 +202,7 @@ function main() {
     clockSource,
     clockFallback,
     clock,
+    serverEvidence,
     safeOffset,
     goGate,
     decision,

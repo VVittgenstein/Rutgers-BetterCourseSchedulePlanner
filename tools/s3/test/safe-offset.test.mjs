@@ -45,6 +45,8 @@ function fakeComparison(comparisonSet) {
   };
 }
 
+const SUFFICIENT = { sufficient: true, reason: null, serverCommonCount: 10, groupsTotal: 2, groupsWithServer: 2 };
+
 test("disjoint per-group phase intervals → phase-intervals-disjoint-across-groups", () => {
   const groupA = [];
   const groupB = [];
@@ -54,7 +56,7 @@ test("disjoint per-group phase intervals → phase-intervals-disjoint-across-gro
     const tickB = 500 * MIN + k * 30000 + 9000; // phase 9 000
     groupB.push(fakeBracket({ id: `b#${k}`, lowerMs: tickB - 400, upperMs: tickB + 400, windowId: "b#w00" }));
   }
-  const res = assessSafeOffset(fakeComparison([...groupA, ...groupB]), "server-date-available");
+  const res = assessSafeOffset(fakeComparison([...groupA, ...groupB]), "server-date-available", SUFFICIENT);
   assert.equal(res.identifiable, false);
   assert.equal(res.reason, "phase-intervals-disjoint-across-groups");
 });
@@ -69,26 +71,56 @@ test("unbounded positive jitter → jitter-unbounded", () => {
     const tickB = 500 * MIN + k * 30000;
     groupB.push(fakeBracket({ id: `b#${k}`, lowerMs: tickB - 400, upperMs: tickB + 16000, windowId: "b#w00" }));
   }
-  const res = assessSafeOffset(fakeComparison([...groupA, ...groupB]), "server-date-available");
+  const res = assessSafeOffset(fakeComparison([...groupA, ...groupB]), "server-date-available", SUFFICIENT);
   assert.equal(res.identifiable, false);
   assert.equal(res.reason, "jitter-unbounded");
 });
 
 test("not distinguishable / degenerate holdout reasons take precedence", () => {
   const set = [fakeBracket({ id: "x", lowerMs: 0, upperMs: 1000 })];
-  assert.deepEqual(assessSafeOffset({ ...fakeComparison(set), distinguishable: false }, "server-date-available"), {
-    identifiable: false,
-    reason: "not-distinguishable",
-  });
+  assert.deepEqual(
+    assessSafeOffset({ ...fakeComparison(set), distinguishable: false }, "server-date-available", SUFFICIENT),
+    {
+      identifiable: false,
+      reason: "not-distinguishable",
+    },
+  );
   assert.deepEqual(
     assessSafeOffset(
       { ...fakeComparison(set), holdout: { degenerate: true } },
       "server-date-available",
+      SUFFICIENT,
     ),
     { identifiable: false, reason: "holdout-degenerate" },
   );
-  assert.deepEqual(assessSafeOffset(fakeComparison(set), "unknown"), {
-    identifiable: false,
-    reason: "clock-unknown",
-  });
+  assert.deepEqual(
+    assessSafeOffset(fakeComparison(set), "unknown", {
+      sufficient: false,
+      reason: "server-date-absent",
+      serverCommonCount: 0,
+      groupsTotal: 0,
+      groupsWithServer: 0,
+    }),
+    {
+      identifiable: false,
+      reason: "clock-unknown",
+    },
+  );
+});
+
+test("insufficient server-clock evidence blocks the safe offset before anything else non-clock", () => {
+  const set = [fakeBracket({ id: "x", lowerMs: 0, upperMs: 1000 })];
+  for (const reason of ["client-clock-fallback", "groups-missing-server-evidence", "no-qualifying-groups"]) {
+    const res = assessSafeOffset(fakeComparison(set), "server-date-available", {
+      sufficient: false,
+      reason,
+      serverCommonCount: 3,
+      groupsTotal: 2,
+      groupsWithServer: 1,
+    });
+    assert.deepEqual(res, {
+      identifiable: false,
+      reason: `server-clock-evidence-insufficient:${reason}`,
+    });
+  }
 });

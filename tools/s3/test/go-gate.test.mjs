@@ -115,6 +115,13 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   assert.equal(json.comparison.holdout.groupCount, 6);
   assert.equal(json.comparison.holdout.folds.length, 6);
 
+  // A4-5: the comparison runs on the server clock with server evidence in
+  // every qualifying group.
+  const a5 = json.goGate.find((g) => g.id === "A4-5");
+  assert.match(a5.evidence, /qualifying groups with server evidence 6\/6/);
+  assert.equal(json.clock.serverEvidence.sufficient, true);
+  assert.equal(json.clock.serverEvidence.reason, null);
+
   // A4-4 / A4-6 via their gate rows are asserted satisfied above; spot-check.
   assert.equal(json.safeOffset.identifiable, true);
   const a6 = json.goGate.find((g) => g.id === "A4-6");

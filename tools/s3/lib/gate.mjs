@@ -96,9 +96,69 @@ function intersectIntervalSets(setA, setB, periodMs) {
   return out;
 }
 
-export function assessSafeOffset(comparison, clockStatus) {
+// Is there enough SERVER-clock evidence to base production conclusions on?
+// A stray serverDate on some unrelated sample is not evidence: the comparison
+// itself must run on the server clock (no client fallback) and every
+// qualifying (target, window) group must have its own server-clock brackets.
+export function assessServerClockEvidence({ brackets, clock, clockFallback }) {
+  if (clock.status !== "server-date-available") {
+    return {
+      sufficient: false,
+      reason: "server-date-absent",
+      serverCommonCount: 0,
+      groupsTotal: 0,
+      groupsWithServer: 0,
+    };
+  }
+  const serverCommonCount = commonInformativeSet(brackets, "server").length;
+  if (clockFallback === true) {
+    return {
+      sufficient: false,
+      reason: "client-clock-fallback",
+      serverCommonCount,
+      groupsTotal: 0,
+      groupsWithServer: 0,
+    };
+  }
+  const clientGroups = groupBrackets(commonInformativeSet(brackets, "client"));
+  const groupsTotal = clientGroups.length;
+  if (groupsTotal === 0) {
+    return {
+      sufficient: false,
+      reason: "no-qualifying-groups",
+      serverCommonCount,
+      groupsTotal: 0,
+      groupsWithServer: 0,
+    };
+  }
+  let groupsWithServer = 0;
+  for (const group of clientGroups) {
+    const serverInformative = group.brackets.filter((b) =>
+      isInformative(b, 30000, "server"),
+    ).length;
+    if (serverInformative >= MIN_GROUP_BRACKETS) groupsWithServer += 1;
+  }
+  if (groupsWithServer < groupsTotal) {
+    return {
+      sufficient: false,
+      reason: "groups-missing-server-evidence",
+      serverCommonCount,
+      groupsTotal,
+      groupsWithServer,
+    };
+  }
+  return { sufficient: true, reason: null, serverCommonCount, groupsTotal, groupsWithServer };
+}
+
+export function assessSafeOffset(comparison, clockStatus, serverEvidence) {
   if (clockStatus === "unknown") {
     return { identifiable: false, reason: "clock-unknown" };
+  }
+  if (serverEvidence.sufficient !== true) {
+    return {
+      identifiable: false,
+      reason: `server-clock-evidence-insufficient:${serverEvidence.reason}`,
+    };
   }
   if (!comparison.distinguishable) {
     return { identifiable: false, reason: "not-distinguishable" };
@@ -252,15 +312,29 @@ export function evaluateGate(ctx) {
       : `not identifiable (${so.reason})`,
   });
 
-  // A4-5: honest clock handling — structurally satisfiable by the tool itself.
-  const a5Satisfied = ctx.clock.status === "server-date-available";
+  // A4-5: production conclusions must rest on server-clock evidence — the
+  // comparison itself on the server clock, with server brackets covering every
+  // qualifying group. A stray serverDate on an unrelated sample changes nothing.
+  const se = ctx.serverEvidence;
+  const a5Satisfied = se.sufficient === true;
+  let a5Evidence;
+  if (a5Satisfied) {
+    a5Evidence = `server clock used; serverDate on ${ctx.clock.offsetDistribution.sampleCount} samples; qualifying groups with server evidence ${se.groupsWithServer}/${se.groupsTotal}; +1s quantization widening applied; client-vs-server offset p50=${ctx.clock.offsetDistribution.p50Ms} ms`;
+  } else if (se.reason === "server-date-absent") {
+    a5Evidence = "serverDate absent; client-clock-only";
+  } else if (se.reason === "client-clock-fallback") {
+    a5Evidence = `client-clock fallback: only ${se.serverCommonCount} server-informative comparison brackets (< ${MIN_COMPARISON_BRACKETS})`;
+  } else if (se.reason === "no-qualifying-groups") {
+    a5Evidence = "no qualifying groups";
+  } else {
+    a5Evidence = `server evidence missing in ${se.groupsTotal - se.groupsWithServer}/${se.groupsTotal} qualifying groups`;
+  }
   gate.push({
     id: "A4-5",
-    requirement: "Report honestly handles server Date precision, client clock, and request latency",
+    requirement:
+      "Report honestly handles server Date precision, client clock, and request latency; production conclusions rest on server-clock evidence",
     satisfied: a5Satisfied,
-    evidence: a5Satisfied
-      ? `serverDate present on ${ctx.clock.offsetDistribution.sampleCount} samples; +1s quantization widening applied; client-vs-server offset p50=${ctx.clock.offsetDistribution.p50Ms} ms`
-      : "serverDate absent; client-clock-only",
+    evidence: a5Evidence,
   });
 
   // A4-6: stability under leave-out of any single group.

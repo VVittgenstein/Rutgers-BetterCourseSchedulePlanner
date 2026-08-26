@@ -37,6 +37,7 @@ export function buildJsonReport(ctx) {
     clockSource,
     clockFallback,
     clock,
+    serverEvidence,
     safeOffset,
     goGate,
     decision,
@@ -143,6 +144,13 @@ export function buildJsonReport(ctx) {
           },
     serverDateRegressions: clock.serverDateRegressions,
     serverDateMissingCount: clock.serverDateMissingCount,
+    serverEvidence: {
+      sufficient: serverEvidence.sufficient,
+      reason: serverEvidence.reason,
+      serverCommonCount: serverEvidence.serverCommonCount,
+      groupsTotal: serverEvidence.groupsTotal,
+      groupsWithServer: serverEvidence.groupsWithServer,
+    },
   };
 
   const safeOffsetJson = { identifiable: safeOffset.identifiable };
