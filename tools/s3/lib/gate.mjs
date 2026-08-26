@@ -353,13 +353,16 @@ function zeroPad2(n) {
 // is the window partition itself (segmentWindows already split on client-clock
 // gaps); the server half links two windows whenever they share a server
 // session index, which assignServerSessions derives from serverDate gaps under
-// the SAME max(10 min, 5 x interval) rule.
+// the SAME max(10 min, 5 x interval) rule, measured across the seam as
+// suffixMin - prefixMax so that no single forged Date can mint a boundary.
 //
 // Independence therefore has to hold on BOTH clocks. That closes two mirror
 // forgeries with one rule: a client-clock jump inside one server-contiguous
 // session no longer mints two evidence groups (the shared server index links
 // the windows back together), and an edited serverDate inside one client
-// window never did (the window itself is the link).
+// window never did (the window itself is the link). The third mirror — a
+// forged Date at the client-window SEAM, which is the one place a server split
+// would separate the two windows — is closed inside assignServerSessions.
 //
 // Sessions are unions of WHOLE windows, so the session partition is always a
 // COARSENING of the window partition: sessionCount <= evidenceWindowCount, and

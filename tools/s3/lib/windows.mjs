@@ -44,39 +44,88 @@ export function segmentWindows(samples, intervalSeconds, inputId) {
 // sample stream in the same sequence order. Returns an array of session
 // indices aligned 1:1 with `samples`.
 //
-// Same gap rule, same comparison, same threshold as segmentWindows — the
-// server-side statement is exactly as strong as the client-side one, never
-// weaker. The sample ORDER is never re-derived from the Date headers: an
-// edited or skewed serverDate must not be able to reorder records.
+// Same gap rule, same threshold and the same strict greater-than comparison as
+// segmentWindows — the server-side statement is exactly as strong as the
+// client-side one, never weaker. The sample ORDER is never re-derived from the
+// Date headers: an edited or skewed serverDate must not be able to reorder
+// records.
+//
+// THE SEAM IS MEASURED WITH ORDER STATISTICS, NOT WITH THE ADJACENT PAIR.
+// A candidate boundary at sample i is a claim about two SETS: everything the
+// server timeline has already reached, and the earliest point everything from
+// i onward reaches. So the gap is measured as
+//
+//     suffixMin(i) - prefixMax(i)
+//        prefixMax(i) = the LATEST Date carried by any dated sample before i
+//        suffixMin(i) = the EARLIEST Date carried by any dated sample at or
+//                       after i
+//
+// and never as `serverDateMs[i] - serverDateMs[i-1]`. The adjacent-pair form
+// let ONE forged Date mint a session boundary from either side:
+//   - drag the last Date of a client window BACKWARDS and the next honest
+//     sample's difference is measured from a value the timeline itself
+//     contradicts, so the honest sample "jumps forward" past the threshold;
+//   - drag the first Date of the next client window FORWARDS past the
+//     threshold and it splits on its own, while every later sample rejoins it
+//     because their difference from the inflated value is negative.
+// Both forgeries put the manufactured boundary exactly at a client-window edge,
+// which is the only place it buys a second independent evidence group.
+// Under the order-statistic form a single edited Date moves the measured seam
+// by at most the distance from the extreme sample to the next one — one polling
+// interval — because prefixMax falls back to the second-latest Date and
+// suffixMin to the second-earliest. Manufacturing a > gapMs seam therefore
+// costs an attacker a bulk rewrite of the whole tail of a window, not one cell.
+//
+// On a NON-DECREASING server timeline the two forms are identical: prefixMax(i)
+// is then serverDateMs[i-1] and suffixMin(i) is serverDateMs[i]. Real captures
+// are non-decreasing (local-data.test.mjs asserts it on D1/D2/D3), so this is a
+// no-op on honest data. In general suffixMin(i) - prefixMax(i) <= the adjacent
+// difference, so the new rule splits only where the old one did: sessions are a
+// COARSENING, and A4-2 can only get stricter, never more permissive.
 //
 // Two degenerate cases, both resolved in the MERGING (fail-closed) direction,
 // because a session split is what buys an attacker a second independent
 // evidence group:
 //   - a sample whose serverDate is absent inherits the current index, so
-//     DELETING a Date header can never manufacture a split;
+//     DELETING a Date header can never manufacture a split, and an undated
+//     sample sitting across a real gap stays with the EARLIER session (the
+//     boundary is only ever placed at a dated sample);
 //   - samples before the first observed serverDate carry null — "the server
 //     timeline says nothing here" — so they impose no grouping constraint at
 //     all. Their brackets have no server bounds, classify as no-bounds, can
 //     supply no evidence, and still break their session's off-peak purity, so
 //     the null case buys an attacker nothing either.
-// A negative or zero server difference (webfarm skew) never splits.
+// A negative or zero measured seam (webfarm skew) never splits.
 export function assignServerSessions(samples, intervalSeconds) {
   const gapMs = Math.max(
     WINDOW_GAP_MIN_MS,
     WINDOW_GAP_INTERVAL_FACTOR * (intervalSeconds ?? 60) * 1000,
   );
+  const n = samples.length;
+  const serverMs = samples.map((s) => s.serverDateMs ?? null);
+  // suffixMin[i] = the earliest Date at or after i (null when there is none).
+  const suffixMin = new Array(n + 1).fill(null);
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const v = serverMs[i];
+    suffixMin[i] =
+      v === null
+        ? suffixMin[i + 1]
+        : suffixMin[i + 1] === null
+          ? v
+          : Math.min(v, suffixMin[i + 1]);
+  }
   const indices = [];
   let current = null;
-  let lastServerMs = null;
-  for (const sample of samples) {
-    const serverMs = sample.serverDateMs ?? null;
-    if (serverMs === null) {
+  let prefixMax = null; // the latest Date carried by any dated sample before i
+  for (let i = 0; i < n; i += 1) {
+    const v = serverMs[i];
+    if (v === null) {
       indices.push(current);
       continue;
     }
     if (current === null) current = 0;
-    else if (serverMs - lastServerMs > gapMs) current += 1;
-    lastServerMs = serverMs;
+    else if (prefixMax !== null && suffixMin[i] - prefixMax > gapMs) current += 1;
+    prefixMax = prefixMax === null ? v : Math.max(prefixMax, v);
     indices.push(current);
   }
   return indices;
