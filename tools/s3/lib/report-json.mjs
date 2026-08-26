@@ -235,6 +235,10 @@ export function buildJsonReport(ctx) {
       // Streams barred from all evidence (members of campus-conflicted
       // classes); [] when every stream is evidence-eligible.
       excludedStreamIds: provenance.excludedStreamIds,
+      // Non-representative members of clean classes (identical/contained
+      // observation series) — also barred from all evidence so duplicated
+      // data counts once; [] when every clean class has a single member.
+      duplicateStreamIds: provenance.duplicateStreamIds,
     },
     bracketTotals: {
       total: bracketTotals.total,
@@ -267,7 +271,8 @@ export function buildJsonReport(ctx) {
 // clockSource is the clock the model comparison selected ("server"/"client"),
 // so the headline totals always agree with the comparison's bracket handling.
 // excludedFromEvidence: brackets built from campus-conflicted provenance
-// streams — listed in the tables but barred from every evidence computation.
+// streams or from duplicate (non-representative) members of clean classes —
+// listed in the tables but barred from every evidence computation.
 export function computeBracketTotals(brackets, counters, clockSource, excludedFromEvidence = 0) {
   let informative30 = 0;
   let informative60 = 0;

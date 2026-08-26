@@ -88,6 +88,7 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   );
   // Nothing is contested: every stream is evidence-eligible.
   assert.deepEqual(json.provenance.excludedStreamIds, []);
+  assert.deepEqual(json.provenance.duplicateStreamIds, []);
   assert.equal(json.bracketTotals.excludedFromEvidence, 0);
 
   // Window segmentation: each of the 3 inputs split into #w00 + #w01.

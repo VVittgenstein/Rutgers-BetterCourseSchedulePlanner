@@ -7,6 +7,11 @@
 //   CE-2 (A4-2 empty peak window):     old stdout `verdict=GO qualifier=none brackets=60 distinguishable=true`
 //   CE-3 (A4-5 stray serverDate):      old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
 //   CE-4 (A4-6 single-target winner):  old stdout `verdict=GO qualifier=none brackets=30 distinguishable=true`
+// The CE-5 pair pins the third-round duplicate-content amplification defect,
+// which survived until v2.1.0 (commit 6795fed) — same protocol, verified by
+// extracting that tree and running its CLI on the same fixture bytes:
+//   CE-5 (A4-6 term-relabel copies):   old stdout `verdict=GO qualifier=none brackets=84 distinguishable=true`
+//   CE-5b (A4-6 SQLite duplicate):     old stdout `verdict=GO qualifier=none brackets=59 distinguishable=true`
 // This file asserts the CURRENT analyzer answers NO_PRODUCTION_CHANGE with the
 // specific gate unsatisfied for the specific reason, while the go-gate test
 // keeps proving that a genuinely satisfying fixture still reaches GO.
@@ -15,7 +20,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { makeTmpDir, cleanup, makeRunDir, makeTickSeries, sampleRow, runAnalyzer } from "./fixtures.mjs";
+import { makeTmpDir, cleanup, makeRunDir, makeTickSeries, makeSqliteDb, sampleRow, runAnalyzer } from "./fixtures.mjs";
 
 // Jan 6 2026 is EST (UTC-5): the NY 17:00-18:00 peak is 22:00-23:00 UTC.
 const OFF_PEAK_BASE = Date.UTC(2026, 0, 6, 3, 0, 0); // 22:00 ET Jan 5 — off-peak
@@ -140,7 +145,7 @@ test("CE-1b (A4-1): a clean tiny series cannot piggyback on an excluded duplicat
   assert.equal(json.comparison.commonInformativeCount, 9);
   assert.equal(json.comparison.distinguishable, false);
   assert.equal(gateById(json, "A4-2").satisfied, false);
-  assert.match(gateById(json, "A4-2").evidence, /\(6 excluded: campus-conflicted provenance\)/);
+  assert.match(gateById(json, "A4-2").evidence, /\(6 excluded: campus-conflicted or duplicate provenance\)/);
   assert.equal(json.decision.verdict, "NO_PRODUCTION_CHANGE");
 });
 
@@ -400,4 +405,160 @@ test("CE-4 (A4-6): a winner carried by one target does not survive whole-target 
   assert.equal(out2.code, 0, out2.stderr);
   assert.equal(out2.json.comparison.reason, "equal-coverage-30s-adds-no-explanatory-power");
   assert.equal(out2.json.comparison.distinguishable, false);
+});
+
+// Shared geometry for the CE-5 pair: the whole 30 s signal lives in ONE
+// odd-tick NB capture (2 even + 10 odd ticks per window on the 60 s circle);
+// NK and CM are individually 60 s-compatible even-grid series. Without
+// duplication this is exactly the CE-4 family: NO-GO via whole-target
+// leave-out. The attacks below try to fake target independence by duplicating
+// the NB observation data under other labels.
+const ce5OddTicks = (base) => [
+  ...Array.from({ length: 2 }, (_, i) => base + i * 60000),
+  ...Array.from({ length: 10 }, (_, i) => base + (i + 1) * 60000 + 30000),
+];
+const ce5EvenTicks = (base) => Array.from({ length: 6 }, (_, i) => base + i * 60000);
+function ce5NbSamples() {
+  return [
+    ...makeTickSeries({ ticks: ce5OddTicks(OFF_PEAK_BASE), startSeq: 1, bodyPrefix: "NB-tv" }),
+    ...makeTickSeries({ ticks: ce5OddTicks(PEAK_BASE), startSeq: 500, bodyPrefix: "NB-tv" }),
+  ];
+}
+
+test("CE-5 (A4-1/A4-6): term-relabeled byte-copies of one capture are one target, not three", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The SAME odd-tick NB capture written byte-identically into three run dirs
+  // whose run.json uri differs only in term=9/1/7 (same campus NB — no campus
+  // conflict), plus the weak even-grid NK/CM series. On analyzer v2.1.0
+  // (6795fed) the three copies stayed evidence-eligible (only campus conflicts
+  // were flagged): target-LOO counted 5 targets, three of them one provenance
+  // class, and the comparison n was inflated by the copies.
+  const nbSamples = ce5NbSamples();
+  for (const term of ["9", "1", "7"]) {
+    makeRunDir(join(dir, `runNB-t${term}`), { campus: "NB", term, samples: nbSamples });
+  }
+  makeRunDir(join(dir, "runNK"), {
+    campus: "NK",
+    samples: makeTickSeries({ ticks: ce5EvenTicks(OFF_PEAK_BASE), startSeq: 1, bodyPrefix: "NK-tv" }),
+  });
+  makeRunDir(join(dir, "runCM"), {
+    campus: "CM",
+    samples: makeTickSeries({ ticks: ce5EvenTicks(OFF_PEAK_BASE), startSeq: 1, bodyPrefix: "CM-tv" }),
+  });
+
+  const out = analyze(dir, ["runNB-t9", "runNB-t1", "runNB-t7", "runNK", "runCM"]);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=none/);
+
+  const json = out.json;
+  // One provenance class holds all three relabeled copies; the representative
+  // (lowest streamId among equal lengths: term 1) alone stays evidence-eligible.
+  assert.equal(json.provenance.classes.length, 3);
+  const nbClass = json.provenance.classes.find((c) => c.members.length === 3);
+  assert.equal(nbClass.campusConflict, false);
+  assert.equal(nbClass.campus, "NB");
+  assert.deepEqual(
+    json.provenance.duplicateStreamIds,
+    nbClass.members.filter((m) => m.relation !== "representative").map((m) => m.streamId).sort(),
+  );
+  assert.equal(json.provenance.duplicateStreamIds.length, 2);
+  assert.deepEqual(json.provenance.excludedStreamIds, []);
+  // The copies' 48 brackets are barred from evidence: the comparison runs on
+  // the same 36 brackets the honest single-copy run would use.
+  assert.equal(json.bracketTotals.total, 84);
+  assert.equal(json.bracketTotals.excludedFromEvidence, 48);
+  assert.equal(json.comparison.commonInformativeCount, 36);
+  // A4-1 is honestly satisfied (there really is NB+NK+CM data) — the failure
+  // is A4-6: with duplicates carrying no evidence, target-LOO sees 3 targets
+  // and the winner collapses when the one real NB series is held out.
+  const a1 = gateById(json, "A4-1");
+  assert.equal(a1.satisfied, true);
+  assert.match(a1.evidence, /2 duplicate stream\(s\) \(identical\/contained observation series\) excluded from evidence/);
+  const st = json.comparison.stability;
+  assert.equal(st.targets.count, 3);
+  assert.equal(st.targets.pass, false);
+  const a6 = gateById(json, "A4-6");
+  assert.equal(a6.satisfied, false);
+  assert.match(a6.evidence, /target-LOO failed: held-out soc:2026:1:NB/);
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-6"],
+  );
+
+  // Cross-check: the identical data WITHOUT duplication reaches the same
+  // decision for the same reason — duplication changed nothing.
+  const single = analyze(dir, ["runNB-t9", "runNK", "runCM"]);
+  assert.equal(single.code, 0, single.stderr);
+  assert.equal(single.json.comparison.commonInformativeCount, 36);
+  assert.deepEqual(
+    single.json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-6"],
+  );
+});
+
+test("CE-5b (A4-1/A4-6): the same capture re-fed as SQLite content counts once, not twice", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The identical observation series fed once as NDJSON (campus NB) and once
+  // as a SQLite database under a different target id. Duplicate detection
+  // already merged them into one class on v2.1.0 (6795fed), but both members
+  // stayed evidence-eligible: target-LOO counted the pair as 2 independent
+  // targets and the comparison double-counted the brackets.
+  const nbSamples = ce5NbSamples();
+  makeRunDir(join(dir, "runNB"), { campus: "NB", samples: nbSamples });
+  makeSqliteDb(join(dir, "dup.sqlite"), {
+    targets: [{
+      targetId: "batch-NB-mirror",
+      observations: nbSamples.map((row, i) => ({
+        seq: i + 1,
+        observedAtMs: Date.parse(row.requestStartedUtc),
+        bodySha: row.decodedBodySha256,
+        responseDateMs: row.serverDate === null ? null : Date.parse(row.serverDate),
+        bodyChanged: i === 0 ? 0 : nbSamples[i - 1].decodedBodySha256 === row.decodedBodySha256 ? 0 : 1,
+      })),
+    }],
+  });
+  makeRunDir(join(dir, "runNK"), {
+    campus: "NK",
+    samples: makeTickSeries({ ticks: ce5EvenTicks(OFF_PEAK_BASE), startSeq: 1, bodyPrefix: "NK-dv" }),
+  });
+  makeRunDir(join(dir, "runCM"), {
+    campus: "CM",
+    samples: makeTickSeries({ ticks: ce5EvenTicks(OFF_PEAK_BASE), startSeq: 1, bodyPrefix: "CM-dv" }),
+  });
+
+  const out = runAnalyzer([
+    "--ndjson", join(dir, "runNB"),
+    "--sqlite", join(dir, "dup.sqlite"),
+    "--ndjson", join(dir, "runNK"),
+    "--ndjson", join(dir, "runCM"),
+    "--out-json", join(dir, "out.json"),
+    "--out-md", join(dir, "out.md"),
+  ]);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=none/);
+
+  const json = out.json;
+  // The NDJSON and SQLite streams merged into one class; the SQLite stream is
+  // the representative (equal length, lowest streamId), the NDJSON copy is the
+  // excluded duplicate. The class still carries campus NB from its member.
+  const dupClass = json.provenance.classes.find((c) => c.members.length === 2);
+  assert.equal(dupClass.campusConflict, false);
+  assert.equal(dupClass.campus, "NB");
+  assert.equal(dupClass.members[0].relation, "representative");
+  assert.match(dupClass.members[0].streamId, /^dup\.sqlite::db:batch-NB-mirror$/);
+  assert.deepEqual(json.provenance.duplicateStreamIds, [dupClass.members[1].streamId]);
+  assert.equal(json.bracketTotals.excludedFromEvidence, 24);
+  // Target-LOO sees 3 targets (mirror, NK, CM) and fails when the one real
+  // series is held out — the duplicated content cannot back itself up.
+  const st = json.comparison.stability;
+  assert.equal(st.targets.count, 3);
+  const a6 = gateById(json, "A4-6");
+  assert.equal(a6.satisfied, false);
+  assert.match(a6.evidence, /target-LOO failed: held-out db:batch-NB-mirror/);
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-6"],
+  );
 });

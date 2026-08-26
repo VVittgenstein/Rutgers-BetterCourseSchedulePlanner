@@ -146,22 +146,32 @@ NO_PRODUCTION_CHANGE: the four STAGE-5-R1 root causes (relabeled provenance,
 empty peak window, stray serverDate over a client-clock fallback,
 single-target winner) plus the second-round shapes — a window grazing
 17:00:00.000 ET at a single instant (CE-2b), an isolated peak-time sample
-merged into a pre-peak session by the gap rule (CE-2c), and a clean tiny
-series piggybacking on an excluded duplicate's windows (CE-1b) — while the
-go-gate test keeps proving a genuinely satisfying fixture still reaches GO.
+merged into a pre-peak session by the gap rule (CE-2c), a clean tiny
+series piggybacking on an excluded duplicate's windows (CE-1b), and
+duplicate-content target relabeling — one capture claimed under three terms
+(CE-5) or re-fed through the SQLite path (CE-5b) — while the go-gate test
+keeps proving a genuinely satisfying fixture still reaches GO.
 
 Provenance semantics: a class whose members carry conflicting campus labels
 contributes nothing to A4-1, and its member streams are **excluded from all
 evidence** (fits, comparison, server-clock evidence, safe offset, every gate);
 they stay listed in the descriptive tables, flagged by
-`provenance.excludedStreamIds` and `bracketTotals.excludedFromEvidence`. A
-clean class covers its campus only when one of its OWN member streams has a
-window with ≥ 5 informative brackets — qualification never travels through a
-shared targetId.
+`provenance.excludedStreamIds` and `bracketTotals.excludedFromEvidence`. In a
+clean (non-conflicted) class, only the **representative** stream (the longest
+member; streamId ascending on ties) is evidence-eligible: identical or
+contained duplicates are excluded from all evidence the same way and listed in
+`provenance.duplicateStreamIds`, so duplicated observation data counts exactly
+once no matter how it is relabeled — a capture copied under other term/target
+ids, or re-fed through the SQLite path, cannot inflate the comparison n,
+multiply whole-target leave-out folds, or widen campus coverage. A clean class
+covers its campus only when one of its OWN evidence-eligible streams (i.e. the
+representative) has a window with ≥ 5 informative brackets — qualification
+never travels through a shared targetId.
 
 Provenance boundary (documented on purpose): A4-1 merges observation series
 that are identical or contiguous slices of one another after removing
 metadata; derived series (subsampling, interleaving, edited deltas) are NOT
 detected — the gate defends against copy-and-relabel, it is not forensics.
-Byte-identical streams under the SAME campus label merge without conflict and
-stay evidence-eligible as one class; they cannot widen campus coverage.
+Byte-identical streams under the SAME campus label merge without conflict into
+one class whose representative alone stays evidence-eligible; they cannot
+widen campus coverage or add evidence.

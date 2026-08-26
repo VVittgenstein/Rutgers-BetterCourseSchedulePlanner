@@ -122,18 +122,35 @@ function main() {
   // A4-1 gate counts campus coverage per provenance class, not per label).
   const provenance = buildProvenance(streams);
 
-  // 3c. Streams in a campus-conflicted provenance class (the copy-and-relabel
-  // attack) are excluded from ALL evidence below — model fits, the clock-source
-  // selection, the comparison, server-clock evidence, the safe offset, and
-  // every A4 gate. Contested observations cannot lend brackets, windows, or
-  // wins to anything. They stay listed in the descriptive tables, flagged via
-  // provenance.excludedStreamIds and bracketTotals.excludedFromEvidence.
+  // 3c. Two provenance-based exclusions bar streams from ALL evidence below —
+  // model fits, the clock-source selection, the comparison, server-clock
+  // evidence, the safe offset, and every A4 gate:
+  //   (1) every stream of a campus-conflicted class (the copy-and-relabel
+  //       attack): contested observations cannot lend brackets, windows, or
+  //       wins to anything;
+  //   (2) every NON-representative member of a clean class (identical or
+  //       contained observation series): duplicated observation data counts
+  //       exactly ONCE, through the class representative. A capture copied
+  //       under a different targetId (term relabel) or re-fed through the
+  //       SQLite path therefore cannot inflate the comparison n, multiply
+  //       target-LOO folds, or widen campus coverage — evidence and stability
+  //       are effectively counted per provenance class.
+  // Excluded streams stay listed in the descriptive tables, flagged via
+  // provenance.excludedStreamIds / provenance.duplicateStreamIds and
+  // bracketTotals.excludedFromEvidence.
   const excludedStreamIds = provenance.classes
     .filter((cls) => cls.campusConflict)
     .flatMap((cls) => cls.members.map((m) => m.streamId))
     .sort();
+  const duplicateStreamIds = provenance.classes
+    .filter((cls) => !cls.campusConflict)
+    .flatMap((cls) =>
+      cls.members.filter((m) => m.relation !== "representative").map((m) => m.streamId),
+    )
+    .sort();
   provenance.excludedStreamIds = excludedStreamIds;
-  const excludedStreams = new Set(excludedStreamIds);
+  provenance.duplicateStreamIds = duplicateStreamIds;
+  const excludedStreams = new Set([...excludedStreamIds, ...duplicateStreamIds]);
   for (const win of windowsAll) {
     win.excluded = excludedStreams.has(win.streamId);
   }
@@ -212,7 +229,7 @@ function main() {
   // the model comparison selected, so the report tables can never disagree
   // with the comparison about which brackets counted. Totals describe every
   // built bracket; excludedFromEvidence says how many of them were barred
-  // from all evidence by campus-conflicted provenance.
+  // from all evidence by campus-conflicted or duplicate provenance.
   const bracketTotals = computeBracketTotals(
     allBrackets,
     counters,

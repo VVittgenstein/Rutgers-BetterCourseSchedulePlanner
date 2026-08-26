@@ -222,7 +222,12 @@ export function assessStability({ brackets, comparison, clockSource }) {
   const cmp = comparison;
   const keepsWinner = (rerun) => rerun.distinguishable === true && rerun.winner === cmp.winner;
 
-  // (a) whole-target leave-out.
+  // (a) whole-target leave-out. Keying on targetId over the comparison set is
+  // sound only because duplicate provenance is excluded upstream: a relabeled
+  // copy of a capture contributes zero evidence brackets, so its targetId can
+  // never appear here as an extra fold. Distinct classes sharing a targetId
+  // (repeated genuine captures of one target) are held out together — the
+  // whole target leaves, which is the stricter test.
   const targetIds = [...new Set(cmp.comparisonSet.map((b) => b.targetId))].sort();
   let targets;
   if (targetIds.length < 2) {
@@ -330,7 +335,8 @@ export function assessStability({ brackets, comparison, clockSource }) {
 
 // ctx: {
 //   windowsAll: [{ windowId, streamId, peakOverlap, excluded, brackets }],
-//       // ALL windows; excluded=true marks campus-conflicted provenance
+//       // ALL windows; excluded=true marks campus-conflicted provenance or
+//       // a duplicate (non-representative) member of a clean class
 //   brackets,  // evidence brackets only (excluded streams already removed)
 //   comparison, safeOffset, clock, clockSource,
 //   provenance: buildProvenance() result, serverEvidence: assessServerClockEvidence() result
@@ -347,7 +353,11 @@ export function evaluateGate(ctx) {
   // piggyback on qualifying windows that belong to another stream merely
   // sharing its targetId. A class whose members carry conflicting campus
   // labels (the copy-and-relabel attack) contributes nothing, and its member
-  // streams are excluded from all evidence upstream.
+  // streams are excluded from all evidence upstream. Non-representative
+  // members of clean classes (identical/contained duplicates, e.g. the same
+  // capture relabeled to another term or re-fed as SQLite) are also excluded
+  // upstream, so only the representative's windows can qualify a class and
+  // duplicated data never multiplies evidence.
   const streamQualifies = new Set();
   for (const w of evidenceWindows) {
     const informative = w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource)).length;
@@ -374,12 +384,20 @@ export function evaluateGate(ctx) {
     conflictClassCount > 0
       ? `; ${conflictClassCount} class(es) with conflicting campus labels ignored and their ${excludedStreamCount} stream(s) excluded from all evidence`
       : "";
+  let duplicateStreamCount = 0;
+  for (const cls of ctx.provenance.classes) {
+    if (!cls.campusConflict) duplicateStreamCount += cls.members.length - 1;
+  }
+  const duplicateSuffix =
+    duplicateStreamCount > 0
+      ? `; ${duplicateStreamCount} duplicate stream(s) (identical/contained observation series) excluded from evidence — duplicates never add target coverage`
+      : "";
   const a1Satisfied = missingCampuses.length === 0;
   const a1Evidence = a1Satisfied
-    ? `campuses: ${coveredList.join(", ")} from ${ctx.provenance.classes.length} provenance classes${conflictSuffix}`
+    ? `campuses: ${coveredList.join(", ")} from ${ctx.provenance.classes.length} provenance classes${conflictSuffix}${duplicateSuffix}`
     : `campuses: ${coveredList.length > 0 ? coveredList.join(", ") + " only" : "none"}${missingCampuses
         .map((c) => `; ${c} missing`)
-        .join("")}${conflictSuffix}`;
+        .join("")}${conflictSuffix}${duplicateSuffix}`;
   gate.push({
     id: "A4-1",
     requirement:
@@ -415,7 +433,9 @@ export function evaluateGate(ctx) {
   ).length;
   const a2Satisfied = qualifyingPeak >= 1 && qualifyingOffPeak >= 1;
   const excludedNote =
-    excludedWindows > 0 ? ` (${excludedWindows} excluded: campus-conflicted provenance)` : "";
+    excludedWindows > 0
+      ? ` (${excludedWindows} excluded: campus-conflicted or duplicate provenance)`
+      : "";
   gate.push({
     id: "A4-2",
     requirement:

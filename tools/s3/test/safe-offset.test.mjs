@@ -11,11 +11,13 @@ const BASE_B = Date.UTC(2026, 0, 6, 9, 0, 0);
 test("identifiable fixture: distinguishable + overlapping phases + bounded jitter", (t) => {
   const dir = makeTmpDir();
   t.after(() => cleanup(dir));
+  // Distinct bodySha namespaces: identical canonical series would merge into
+  // one provenance class and the duplicate would be excluded from evidence.
   makeRunDir(join(dir, "runA"), {
-    samples: makeTickSeries({ baseMs: BASE_A, periodMs: 30000, count: 20 }),
+    samples: makeTickSeries({ baseMs: BASE_A, periodMs: 30000, count: 20, bodyPrefix: "va" }),
   });
   makeRunDir(join(dir, "runB"), {
-    samples: makeTickSeries({ baseMs: BASE_B, periodMs: 30000, count: 20 }),
+    samples: makeTickSeries({ baseMs: BASE_B, periodMs: 30000, count: 20, bodyPrefix: "vb" }),
   });
   const out = runAnalyzer([
     "--ndjson", join(dir, "runA"),

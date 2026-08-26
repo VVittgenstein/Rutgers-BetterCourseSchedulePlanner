@@ -7,11 +7,14 @@ const BASE_A = Date.UTC(2026, 0, 6, 3, 0, 0);
 const BASE_B = Date.UTC(2026, 0, 6, 9, 0, 0);
 
 function runTwoGroups(dir, periodMs, opts = {}) {
+  // Distinct bodySha namespaces per session: two genuinely independent
+  // captures never share a canonical observation series, and identical series
+  // would merge into one provenance class (duplicate excluded from evidence).
   makeRunDir(join(dir, "runA"), {
-    samples: makeTickSeries({ baseMs: BASE_A, periodMs, count: 20, ...opts }),
+    samples: makeTickSeries({ baseMs: BASE_A, periodMs, count: 20, bodyPrefix: "va", ...opts }),
   });
   makeRunDir(join(dir, "runB"), {
-    samples: makeTickSeries({ baseMs: BASE_B, periodMs, count: 20, ...opts }),
+    samples: makeTickSeries({ baseMs: BASE_B, periodMs, count: 20, bodyPrefix: "vb", ...opts }),
   });
   return runAnalyzer([
     "--ndjson", join(dir, "runA"),
