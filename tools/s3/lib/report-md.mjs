@@ -177,6 +177,47 @@ export function buildMdReport(ctx) {
   );
   push();
 
+  // 5b. Stability (A4-6): the three checks are reported separately — a
+  // (target, window) group is never presented as a target.
+  push(`### Stability (A4-6)`);
+  push();
+  const st = comparison.stability;
+  if (st === null) {
+    push(`Not evaluable: no distinguishable winner.`);
+  } else {
+    const foldStr = (f) => `held-out ${f.heldOut} → ${f.distinguishable ? f.winner : f.reason}`;
+    if (st.targets.degenerate) {
+      push(
+        `- **Whole-target leave-out**: degenerate — single target in the comparison set; NOT satisfied.`,
+      );
+    } else {
+      push(
+        `- **Whole-target leave-out** (${st.targets.count} folds): ${st.targets.pass ? "pass" : "FAIL"} — ${st.targets.folds.map(foldStr).join("; ")}`,
+      );
+    }
+    if (st.groups.degenerate) {
+      push(
+        `- **Group leave-out**: degenerate — single (target, window) group in the comparison set; NOT satisfied.`,
+      );
+    } else {
+      push(
+        `- **Group leave-out** (${st.groups.count} folds): ${st.groups.pass ? "pass" : "FAIL"} — ${st.groups.folds.map(foldStr).join("; ")}`,
+      );
+    }
+    if (st.outliers.residualCount === 0) {
+      push(
+        `- **Outlier sensitivity** (residual top-k): pass (vacuous) — no residual brackets under the winning fit; removal has nothing to act on.`,
+      );
+    } else {
+      push(
+        `- **Outlier sensitivity** (residual top-k, ${st.outliers.residualCount} residuals): ${st.outliers.pass ? "pass" : "FAIL"} — ${st.outliers.runs
+          .map((r) => `k=${r.k} removed [${r.removedBracketIds.join(", ")}] → ${r.distinguishable ? r.winner : r.reason}`)
+          .join("; ")}`,
+      );
+    }
+  }
+  push();
+
   // 6. A4 gate.
   push(`## A4 gate`);
   push();
@@ -295,7 +336,9 @@ export function buildMdReport(ctx) {
       );
     }
     if (unsatisfied.includes("A4-6")) {
-      push(`- Stability of the winner under leave-out of any single (target, window) group.`);
+      push(
+        `- Stability of the winner under all three checks: whole-target leave-out, (target, window) group leave-out, and deterministic top-k outlier removal.`,
+      );
     }
     push();
     push(

@@ -128,6 +128,48 @@ export function buildJsonReport(ctx) {
       })),
       consistentM30Win: comparison.holdout.consistentM30Win,
     },
+    stability:
+      comparison.stability === null
+        ? null
+        : {
+            targets: {
+              mode: comparison.stability.targets.mode,
+              degenerate: comparison.stability.targets.degenerate,
+              count: comparison.stability.targets.count,
+              folds: comparison.stability.targets.folds.map((f) => ({
+                heldOut: f.heldOut,
+                distinguishable: f.distinguishable,
+                winner: f.winner,
+                reason: f.reason,
+              })),
+              pass: comparison.stability.targets.pass,
+            },
+            groups: {
+              mode: comparison.stability.groups.mode,
+              degenerate: comparison.stability.groups.degenerate,
+              count: comparison.stability.groups.count,
+              folds: comparison.stability.groups.folds.map((f) => ({
+                heldOut: f.heldOut,
+                distinguishable: f.distinguishable,
+                winner: f.winner,
+                reason: f.reason,
+              })),
+              pass: comparison.stability.groups.pass,
+            },
+            outliers: {
+              mode: comparison.stability.outliers.mode,
+              residualCount: comparison.stability.outliers.residualCount,
+              runs: comparison.stability.outliers.runs.map((r) => ({
+                k: r.k,
+                removedBracketIds: r.removedBracketIds,
+                distinguishable: r.distinguishable,
+                winner: r.winner,
+                reason: r.reason,
+              })),
+              note: comparison.stability.outliers.note,
+              pass: comparison.stability.outliers.pass,
+            },
+          },
   };
 
   const clockJson = {

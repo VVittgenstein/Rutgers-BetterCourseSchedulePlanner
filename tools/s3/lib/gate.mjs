@@ -7,6 +7,7 @@ import {
   MIN_COMPARISON_BRACKETS,
   REQUIRED_CAMPUSES,
   MIN_GROUP_BRACKETS,
+  STABILITY_OUTLIER_KS,
   isInformative,
   fitPhase,
   bracketArc,
@@ -26,6 +27,7 @@ export {
   WINDOW_GAP_INTERVAL_FACTOR,
   MIN_COMPARISON_BRACKETS,
   MIN_GROUP_BRACKETS,
+  STABILITY_OUTLIER_KS,
   REQUIRED_CAMPUSES,
   NY_PEAK,
 } from "./phase.mjs";
@@ -209,6 +211,122 @@ export function assessSafeOffset(comparison, clockStatus, serverEvidence) {
   };
 }
 
+// Triple stability assessment behind A4-6 (only meaningful for a
+// distinguishable comparison): the winner must survive (a) whole-TARGET
+// leave-out, (b) (target, window) group leave-out, and (c) deterministic
+// removal of the top-k most-residual brackets. Each check is a bounded rerun
+// of compareModels on the reduced bracket set and is reported separately —
+// a group is never presented as a target.
+export function assessStability({ brackets, comparison, clockSource }) {
+  const cmp = comparison;
+  const keepsWinner = (rerun) => rerun.distinguishable === true && rerun.winner === cmp.winner;
+
+  // (a) whole-target leave-out.
+  const targetIds = [...new Set(cmp.comparisonSet.map((b) => b.targetId))].sort();
+  let targets;
+  if (targetIds.length < 2) {
+    targets = { mode: "target-loo", degenerate: true, count: targetIds.length, folds: [], pass: false };
+  } else {
+    const folds = targetIds.map((targetId) => {
+      const rerun = compareModels(
+        brackets.filter((b) => b.targetId !== targetId),
+        clockSource,
+      );
+      return {
+        heldOut: targetId,
+        distinguishable: rerun.distinguishable,
+        winner: rerun.winner,
+        reason: rerun.reason,
+      };
+    });
+    targets = {
+      mode: "target-loo",
+      degenerate: false,
+      count: targetIds.length,
+      folds,
+      pass: folds.every((f) => f.distinguishable === true && f.winner === cmp.winner),
+    };
+  }
+
+  // (b) (target, window) group leave-out.
+  const groupList = groupBrackets(cmp.comparisonSet);
+  let groups;
+  if (groupList.length < 2) {
+    groups = { mode: "group-loo", degenerate: true, count: groupList.length, folds: [], pass: false };
+  } else {
+    const folds = groupList.map((group) => {
+      const rerun = compareModels(
+        brackets.filter((b) => `${b.targetId}/${b.windowId}` !== group.groupId),
+        clockSource,
+      );
+      return {
+        heldOut: group.groupId,
+        distinguishable: rerun.distinguishable,
+        winner: rerun.winner,
+        reason: rerun.reason,
+      };
+    });
+    groups = {
+      mode: "group-loo",
+      degenerate: false,
+      count: groupList.length,
+      folds,
+      pass: folds.every((f) => f.distinguishable === true && f.winner === cmp.winner),
+    };
+  }
+
+  // (c) deterministic outlier sensitivity: rank the residual brackets of the
+  // winning fit by circular distance from the best phase (desc, bracketId asc
+  // tiebreak) and rerun with the top-k removed.
+  const periodMs = cmp.winner === "m30" ? 30000 : 60000;
+  const fit = fitPhase(cmp.comparisonSet, periodMs, clockSource);
+  const phiMs = fit.bestPhaseIntervals.length > 0 ? fit.bestPhaseIntervals[0].startMs : 0;
+  const residualIds = new Set(fit.residualBracketIds);
+  const cdist = (a, b) => {
+    const d = Math.abs(a - b);
+    return Math.min(d, periodMs - d);
+  };
+  const ranked = cmp.comparisonSet
+    .filter((b) => residualIds.has(b.bracketId))
+    .map((b) => {
+      const arc = bracketArc(b, periodMs, clockSource);
+      return {
+        bracketId: b.bracketId,
+        d: Math.min(cdist(phiMs, arc.startMs), cdist(phiMs, arc.endMs)),
+      };
+    })
+    .sort((x, y) => y.d - x.d || (x.bracketId < y.bracketId ? -1 : x.bracketId > y.bracketId ? 1 : 0));
+  const residualCount = ranked.length;
+  const runs = [];
+  let outliersPass = true;
+  for (const k of STABILITY_OUTLIER_KS) {
+    if (k > residualCount) continue;
+    const removedBracketIds = ranked.slice(0, k).map((r) => r.bracketId);
+    const removedSet = new Set(removedBracketIds);
+    const rerun = compareModels(
+      brackets.filter((b) => !removedSet.has(b.bracketId)),
+      clockSource,
+    );
+    runs.push({
+      k,
+      removedBracketIds,
+      distinguishable: rerun.distinguishable,
+      winner: rerun.winner,
+      reason: rerun.reason,
+    });
+    if (!keepsWinner(rerun)) outliersPass = false;
+  }
+  const outliers = {
+    mode: "residual-topk",
+    residualCount,
+    runs,
+    note: residualCount === 0 ? "no-residuals" : null,
+    pass: outliersPass,
+  };
+
+  return { targets, groups, outliers };
+}
+
 // ctx: {
 //   targets: [{ targetId, campus, windows: [{ windowId, peakOverlap, brackets }] }],
 //   windowsAll: [{ windowId, peakOverlap }],
@@ -337,26 +455,48 @@ export function evaluateGate(ctx) {
     evidence: a5Evidence,
   });
 
-  // A4-6: stability under leave-out of any single group.
+  // A4-6: triple stability — whole-target leave-out, group leave-out, and
+  // deterministic outlier removal must EACH keep the winner.
   let a6Satisfied = false;
   let a6Evidence = "not evaluable: no distinguishable winner";
+  let stability = null;
   if (cmp.distinguishable === true) {
-    const groups = groupBrackets(cmp.comparisonSet);
-    const stable = groups.every((group) => {
-      const remaining = ctx.brackets.filter(
-        (b) => `${b.targetId}/${b.windowId}` !== group.groupId,
-      );
-      const rerun = compareModels(remaining, ctx.clockSource);
-      return rerun.distinguishable === true && rerun.winner === cmp.winner;
+    stability = assessStability({
+      brackets: ctx.brackets,
+      comparison: cmp,
+      clockSource: ctx.clockSource,
     });
-    a6Satisfied = stable;
-    a6Evidence = stable
-      ? `winner ${cmp.winner} unchanged under leave-out of each of ${groups.length} groups`
-      : "winner not stable under single-group leave-out";
+    a6Satisfied = stability.targets.pass && stability.groups.pass && stability.outliers.pass;
+    if (a6Satisfied) {
+      a6Evidence = `stable: target-LOO ${stability.targets.count}/${stability.targets.count}, group-LOO ${stability.groups.count}/${stability.groups.count}, outlier top-k (k∈{${STABILITY_OUTLIER_KS.join(",")}}, ${stability.outliers.residualCount} residuals) winner unchanged`;
+    } else if (stability.targets.degenerate) {
+      a6Evidence = "target-LOO degenerate: single target in comparison set";
+    } else if (!stability.targets.pass) {
+      const fold = stability.targets.folds.find(
+        (f) => !(f.distinguishable === true && f.winner === cmp.winner),
+      );
+      a6Evidence = `target-LOO failed: held-out ${fold.heldOut} → ${fold.reason}`;
+    } else if (stability.groups.degenerate) {
+      a6Evidence = "group-LOO degenerate: single (target,window) group in comparison set";
+    } else if (!stability.groups.pass) {
+      const fold = stability.groups.folds.find(
+        (f) => !(f.distinguishable === true && f.winner === cmp.winner),
+      );
+      a6Evidence = `group-LOO failed: held-out ${fold.heldOut} → ${fold.reason}`;
+    } else {
+      const run = stability.outliers.runs.find(
+        (r) => !(r.distinguishable === true && r.winner === cmp.winner),
+      );
+      a6Evidence = `outlier removal failed: k=${run.k} → ${run.reason}`;
+    }
   }
+  // Exposed to the report layer as comparison.stability (null when the
+  // comparison is not distinguishable).
+  cmp.stability = stability;
   gate.push({
     id: "A4-6",
-    requirement: "Conclusions stable under leave-out of outliers / single target",
+    requirement:
+      "Conclusions stable under whole-target leave-out, (target,window) group leave-out, and deterministic outlier removal",
     satisfied: a6Satisfied,
     evidence: a6Evidence,
   });

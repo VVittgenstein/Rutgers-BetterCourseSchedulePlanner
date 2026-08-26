@@ -23,6 +23,10 @@ export const WINDOW_GAP_MIN_MS = 600000;
 export const WINDOW_GAP_INTERVAL_FACTOR = 5;
 export const MIN_COMPARISON_BRACKETS = 10;
 export const MIN_GROUP_BRACKETS = 5;
+// Deterministic outlier-sensitivity: remove the top-k most-residual brackets
+// (k from this list, capped at the residual count) and require the winner to
+// survive each removal.
+export const STABILITY_OUTLIER_KS = [1, 2];
 export const REQUIRED_CAMPUSES = ["NB", "NK", "CM"];
 export const NY_PEAK = { startHour: 17, endHour: 18, timeZone: "America/New_York" };
 

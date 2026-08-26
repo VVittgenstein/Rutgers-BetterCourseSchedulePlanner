@@ -125,7 +125,30 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   // A4-4 / A4-6 via their gate rows are asserted satisfied above; spot-check.
   assert.equal(json.safeOffset.identifiable, true);
   const a6 = json.goGate.find((g) => g.id === "A4-6");
-  assert.match(a6.evidence, /unchanged under leave-out of each of 6 groups/);
+  assert.match(a6.evidence, /stable: target-LOO 3\/3, group-LOO 6\/6/);
+
+  // A4-6 triple stability, each reported separately.
+  const st = json.comparison.stability;
+  assert.equal(st.targets.mode, "target-loo");
+  assert.equal(st.targets.degenerate, false);
+  assert.equal(st.targets.count, 3);
+  assert.equal(st.targets.folds.length, 3);
+  assert.equal(st.targets.pass, true);
+  for (const fold of st.targets.folds) {
+    assert.equal(fold.distinguishable, true);
+    assert.equal(fold.winner, "m30");
+  }
+  assert.equal(st.groups.mode, "group-loo");
+  assert.equal(st.groups.count, 6);
+  assert.equal(st.groups.pass, true);
+  assert.equal(st.outliers.mode, "residual-topk");
+  // Every bracket of this fixture is explained by the winning fit: outlier
+  // removal is honestly vacuous and says so.
+  assert.equal(st.outliers.residualCount, 0);
+  assert.deepEqual(st.outliers.runs, []);
+  assert.equal(st.outliers.note, "no-residuals");
+  assert.equal(st.outliers.pass, true);
+  assert.match(out.md, /no residual brackets under the winning fit/);
 
   // The MD headline renders the GO verdict without a qualifier.
   assert.match(out.md, /^# S3 Rebuild Cadence Evidence — Verdict: GO\n/);
