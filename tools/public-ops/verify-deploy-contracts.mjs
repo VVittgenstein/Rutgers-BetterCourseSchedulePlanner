@@ -238,4 +238,51 @@ assert.deepEqual(
   'release-inputs.json and bcsp_validate_candidate_root must agree on the shipped files',
 );
 
+// The Ubuntu 24.04 archive currently carries Caddy 2.6, which cannot parse
+// H2's stream_close_delay. The real-stack soak must therefore select an
+// official, immutable release asset, verify its bytes, and prove which
+// version it is about to use. Falling back to `apt install caddy` turns the
+// 600-second gate into an environment-dependent preflight failure.
+const workflow = read('.github/workflows/public-ops.yml');
+for (const fragment of [
+  'CADDY_VERSION: 2.11.4',
+  'CADDY_LINUX_AMD64_SHA256: 527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9',
+  'caddyserver/caddy/releases/download/v${CADDY_VERSION}',
+  'sha256sum --check --strict',
+  'test "$(caddy version | awk',
+]) {
+  assert.ok(workflow.includes(fragment), `the soak workflow must retain ${fragment}`);
+}
+assert.ok(
+  !/apt-get install[^\n]*\bcaddy\b/.test(workflow),
+  'the soak workflow must not fall back to Ubuntu\'s too-old Caddy package',
+);
+
+// H9 reads an aggregate accepted-ACK counter. Its pre-browser evidence must
+// bracket any competing capacity permit: monotonic admissions first, the
+// permit gauge second, and ACKs last. Sampling the post-upgrade connection
+// gauge would leave an upgrade-pending socket invisible.
+const soak = read('deploy/public/tests/public-soak.sh');
+const admissionsAt = soak.indexOf(
+  'ADMISSIONS_BASELINE="$(read_public_metric bcsp_websocket_admissions_granted)"',
+);
+const admittedAt = soak.indexOf(
+  'ADMITTED_BEFORE="$(read_public_metric bcsp_websocket_admitted_connections)"',
+);
+const ackAt = soak.indexOf(
+  'ACK_BASELINE="$(read_public_metric bcsp_websocket_heartbeat_acks_accepted)"',
+);
+assert.ok(
+  admissionsAt >= 0 && admissionsAt < admittedAt && admittedAt < ackAt,
+  'H9 must read admissions, the admitted permit gauge, then the ACK baseline',
+);
+assert.ok(
+  soak.includes('awk \'$1 == "bcsp_websocket_admitted_connections" { print $2 }\''),
+  'H9 samples must count upgrade-pending capacity permits, not only open sockets',
+);
+assert.ok(
+  soak.includes('--admitted-before "$ADMITTED_BEFORE"'),
+  'H9 must pass the pre-browser permit gauge to the evidence analyzer',
+);
+
 console.log('public deploy contracts: PASS');

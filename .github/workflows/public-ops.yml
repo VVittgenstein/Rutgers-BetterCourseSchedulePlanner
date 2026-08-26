@@ -276,6 +276,8 @@ jobs:
       REQUESTED_SOURCE_COMMIT: ${{ inputs.source_commit }}
       RUSTUP_TOOLCHAIN: 1.97.0
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      CADDY_VERSION: 2.11.4
+      CADDY_LINUX_AMD64_SHA256: 527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9
     defaults:
       run:
         shell: bash
@@ -330,8 +332,18 @@ jobs:
       - name: Install the soak host tools and the real browser
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ca-certificates caddy libnss3-tools sqlite3
-          sudo systemctl disable --now caddy.service || true
+          sudo apt-get install --yes ca-certificates curl jq libnss3-tools sqlite3
+          caddy_archive="$RUNNER_TEMP/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+          curl --fail --show-error --location --proto '=https' --tlsv1.2 \
+            --retry 5 --retry-all-errors \
+            --output "$caddy_archive" \
+            "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$CADDY_LINUX_AMD64_SHA256" "$caddy_archive" \
+            | sha256sum --check --strict
+          tar -xzf "$caddy_archive" -C "$RUNNER_TEMP" caddy
+          sudo install -m 0755 "$RUNNER_TEMP/caddy" /usr/local/bin/caddy
+          caddy version
+          test "$(caddy version | awk '{ print $1 }')" = "v${CADDY_VERSION}"
           npm ci --prefix frontend --no-audit --no-fund
           frontend/node_modules/.bin/playwright install --with-deps chromium
 

@@ -27,7 +27,7 @@
 //     (both require --window-start/--window-end epochs [--interval-seconds
 //      30] and refuse thin, holed, late, or truncated coverage)
 //   --analyze-acks        prove the judged window held ONE connection
-//                           (--connections-before 0, and exactly one
+//                           (--admitted-before 0, and exactly one
 //                           admission across --admissions-baseline and
 //                           --admissions-final), then hold the SERVER's
 //                           accepted-ACK counter delta (--ack-baseline /
@@ -272,7 +272,7 @@ export function analyzeConnectionSamples(samples) {
 
 /**
  * The soak's ACK evidence is a whole-process aggregate, so the window has to
- * be shown to contain exactly one connection: none before the browser
+ * be shown to contain exactly one capacity permit: none before the browser
  * arrived, and exactly one admission granted across the whole run.
  *
  * The gauge alone cannot say that -- a socket that dropped and was replaced
@@ -280,12 +280,12 @@ export function analyzeConnectionSamples(samples) {
  * delta counts replacements too: one connection that stayed is a delta of
  * one, and a reconnect, a second page, or a probe is not.
  */
-export function assertSoleAdmission({ connectionsBefore, admissionsBaseline, admissionsFinal }) {
-  const before = parseCounterReading(connectionsBefore, 'the pre-soak connection gauge');
+export function assertSoleAdmission({ admittedBefore, admissionsBaseline, admissionsFinal }) {
+  const before = parseCounterReading(admittedBefore, 'the pre-soak admitted-connection gauge');
   assert.equal(
     before,
     0,
-    `${before} public watch connection(s) were already open before the soak armed; the window would not be this browser's alone`,
+    `${before} public watch capacity permit(s) were already held before the soak armed; the window would not be this browser's alone`,
   );
   const baseline = parseCounterReading(admissionsBaseline, 'the admissions baseline');
   const finalReading = parseCounterReading(admissionsFinal, 'the admissions final reading');
@@ -387,20 +387,20 @@ function selfTest() {
   );
   assert.throws(() => analyzeConnectionSamples([]), /no connection samples/);
 
-  // Sole admission: nothing connected before the browser, exactly one
+  // Sole admission: no capacity permit before the browser, exactly one
   // admission granted across the run.
   const soleCase = (overrides) =>
     assertSoleAdmission({
-      connectionsBefore: '0',
+      admittedBefore: '0',
       admissionsBaseline: '7',
       admissionsFinal: '8',
       ...overrides,
     });
   assert.deepEqual(soleCase({}), { admissions: 1 });
   assert.throws(
-    () => soleCase({ connectionsBefore: '1' }),
-    /already open before the soak armed/,
-    'a connection that predates the browser makes the window ambiguous',
+    () => soleCase({ admittedBefore: '1' }),
+    /already held before the soak armed/,
+    'an admitted or upgrade-pending connection that predates the browser makes the window ambiguous',
   );
   assert.throws(
     () => soleCase({ admissionsFinal: '7' }),
@@ -421,10 +421,10 @@ function selfTest() {
   // reading is refused like any other wrong number -- a poisoned lock
   // somewhere reporting u32::MAX would be, and so is anything else that is
   // not exactly none-before and exactly one-admitted.
-  assert.throws(() => soleCase({ connectionsBefore: '4294967295' }), /already open before/);
+  assert.throws(() => soleCase({ admittedBefore: '4294967295' }), /already held before/);
   assert.throws(() => soleCase({ admissionsFinal: '4294967295' }), /public watch admission/);
   for (const unreadable of ['COUNTER_READ_FAILURE', '', null, undefined]) {
-    assert.throws(() => soleCase({ connectionsBefore: unreadable }), /not a counter reading/);
+    assert.throws(() => soleCase({ admittedBefore: unreadable }), /not a counter reading/);
     assert.throws(() => soleCase({ admissionsBaseline: unreadable }), /not a counter reading/);
     assert.throws(() => soleCase({ admissionsFinal: unreadable }), /not a counter reading/);
   }
@@ -434,7 +434,7 @@ function selfTest() {
   // accepted. The ACK arithmetic alone cannot tell the difference -- it sees
   // the delta it expected -- and before R3 that was the whole judgment.
   const secondSocket = {
-    connectionsBefore: '0',
+    admittedBefore: '0',
     admissionsBaseline: '4',
     admissionsFinal: '6',
     ackBaseline: '10',
@@ -455,7 +455,7 @@ function selfTest() {
   assert.throws(
     () =>
       assertSoleAdmission({
-        connectionsBefore: secondSocket.connectionsBefore,
+        admittedBefore: secondSocket.admittedBefore,
         admissionsBaseline: secondSocket.admissionsBaseline,
         admissionsFinal: secondSocket.admissionsFinal,
       }),
@@ -627,7 +627,7 @@ function parseArguments(argv) {
     analyzeAcks: false,
     ackBaseline: null,
     ackFinal: null,
-    connectionsBefore: null,
+    admittedBefore: null,
     admissionsBaseline: null,
     admissionsFinal: null,
     windowStart: null,
@@ -685,8 +685,8 @@ function parseArguments(argv) {
       case '--ack-final':
         options.ackFinal = next();
         break;
-      case '--connections-before':
-        options.connectionsBefore = next();
+      case '--admitted-before':
+        options.admittedBefore = next();
         break;
       case '--admissions-baseline':
         options.admissionsBaseline = next();
@@ -922,7 +922,7 @@ async function main() {
     // Exclusivity first: an aggregate counter's delta says nothing about
     // THIS socket until the window is known to have held only it.
     const sole = assertSoleAdmission({
-      connectionsBefore: options.connectionsBefore,
+      admittedBefore: options.admittedBefore,
       admissionsBaseline: options.admissionsBaseline,
       admissionsFinal: options.admissionsFinal,
     });

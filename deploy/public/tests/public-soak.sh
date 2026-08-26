@@ -267,7 +267,8 @@ SERVICE_INVOCATION="$(systemctl show --property InvocationID --value bcsp.servic
 #
 #   heartbeat_acks_accepted   ACKs the server DECODED, matched to a sequence
 #                             it really issued, and took (R2)
-#   connections               public watch connections open right now
+#   admitted_connections      capacity permits held right now, including
+#                             upgrade-pending sockets (R4)
 #   admissions_granted        every admission ever granted, monotonic (R3):
 #                             its delta counts a replaced socket as two, which
 #                             a gauge reading 1 at every sample cannot
@@ -279,12 +280,15 @@ read_public_metric() {
 }
 
 # Taken INSIDE the invocation asserted above and again after the soak, so the
-# deltas belong to this run and to no other. The accepted-ACK counter is a
-# whole-process aggregate, so it is only this browser's evidence if nothing
-# else is connected now and exactly one admission is granted later.
-ACK_BASELINE="$(read_public_metric bcsp_websocket_heartbeat_acks_accepted)"
-CONNECTIONS_BEFORE="$(read_public_metric bcsp_websocket_connections)"
+# deltas belong to this run and to no other. Read the monotonic admissions
+# baseline first, the permit gauge second, and the aggregate ACK baseline
+# last. That order closes both sides of the pre-browser window: a socket that
+# obtains a permit after the first read either appears in the gauge or moves
+# the final admissions delta, while an earlier socket's ACKs are excluded by
+# the last read.
 ADMISSIONS_BASELINE="$(read_public_metric bcsp_websocket_admissions_granted)"
+ADMITTED_BEFORE="$(read_public_metric bcsp_websocket_admitted_connections)"
+ACK_BASELINE="$(read_public_metric bcsp_websocket_heartbeat_acks_accepted)"
 
 MEMORY_SAMPLES="$TEST_TMP/memory.samples"
 CONNECTION_SAMPLES="$TEST_TMP/connections.samples"
@@ -323,8 +327,8 @@ done
 }
 ARMED_EPOCH="$(date +%s)"
 
-# Sample MemoryCurrent and the connection gauge every 30 seconds while the
-# soak socket is held. Every line is `epoch value`; a failed or empty read
+# Sample MemoryCurrent and the capacity-permit gauge every 30 seconds while
+# the soak socket is held. Every line is `epoch value`; a failed or empty read
 # writes a SAMPLE_READ_FAILURE value the analyzer refuses -- a sampler that
 # cannot see the service must fail the soak, not thin the evidence. The
 # done marker stops sampling BEFORE the driver closes its browser, so the
@@ -337,7 +341,7 @@ ARMED_EPOCH="$(date +%s)"
     printf '%s %s\n' "$(date +%s)" "$memory_value" >> "$MEMORY_SAMPLES"
     connection_value="$(curl --silent --connect-timeout 2 --max-time 5 --header 'Host: planner.test' \
       http://127.0.0.1:8080/metrics 2>/dev/null |
-      awk '$1 == "bcsp_websocket_connections" { print $2 }')" || connection_value=""
+      awk '$1 == "bcsp_websocket_admitted_connections" { print $2 }')" || connection_value=""
     [[ -n "$connection_value" ]] || connection_value="SAMPLE_READ_FAILURE"
     printf '%s %s\n' "$(date +%s)" "$connection_value" >> "$CONNECTION_SAMPLES"
     for _ in {1..120}; do
@@ -420,7 +424,7 @@ fi
 # every valid acknowledgement; this is not.
 "$SOAK_NODE" "$SOAK_DRIVER" --analyze-acks --ack-report "$ACK_REPORT" \
   --ack-baseline "$ACK_BASELINE" --ack-final "$ACK_FINAL" \
-  --connections-before "$CONNECTIONS_BEFORE" \
+  --admitted-before "$ADMITTED_BEFORE" \
   --admissions-baseline "$ADMISSIONS_BASELINE" \
   --admissions-final "$ADMISSIONS_FINAL" \
   --expected-pings "$SOAK_EXPECTED_PINGS"
