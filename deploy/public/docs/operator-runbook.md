@@ -187,11 +187,16 @@ contract by itself rather than borrow a sibling's protection. The `localhost:808
 `[::1]:8080` / `:8080` spellings are the same upstream as `127.0.0.1:8080`,
 so an unprotected one anywhere in the config fails the gate. A structure
 the check cannot interpret — a handler whose next/terminal behaviour it
-does not model (a plugin, say), an unknown handler nesting routes, a
-subroute with handlers after it, a negated or CEL host matcher, a host
+does not model (a plugin, say), a negated or CEL host matcher, a host
 matcher holding a placeholder, a listen address with no readable port — is
 refused rather than guessed at, so an exotic config may need simplifying
-before it can be vouched for. The
+before it can be vouched for. One family of shapes is not refused but is
+not counted either: a proxy that a `route`/`handle`/`try_files` wrapper
+might or might not reach — after that wrapper in the same chain, or in a
+later route behind one — because whether it runs depends on what happened
+inside the wrapper, and assuming it runs is the guess this check exists to
+avoid. Proxies INSIDE the wrapper count normally, so keep the
+`reverse_proxy` in the site block's own chain. The
 refusal names which of those it hit.
 
 The preflight does not replace the re-launch hard gates: the 600-second

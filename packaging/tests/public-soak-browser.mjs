@@ -417,9 +417,10 @@ function selfTest() {
     /went backwards/,
     'a restarted counter cannot be subtracted',
   );
-  // A poisoned capacity lock reports u32::MAX, which is a well-formed
-  // number and would sail through any range check. These are equality rules
-  // for exactly that reason.
+  // These are equality rules, not range checks, so a well-formed but absurd
+  // reading is refused like any other wrong number -- a poisoned lock
+  // somewhere reporting u32::MAX would be, and so is anything else that is
+  // not exactly none-before and exactly one-admitted.
   assert.throws(() => soleCase({ connectionsBefore: '4294967295' }), /already open before/);
   assert.throws(() => soleCase({ admissionsFinal: '4294967295' }), /public watch admission/);
   for (const unreadable of ['COUNTER_READ_FAILURE', '', null, undefined]) {

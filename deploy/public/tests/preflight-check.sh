@@ -361,6 +361,49 @@ jq_expect_fail() {
   fi
 }
 
+
+
+# The adapted-Caddy cases SKIP where jq is absent, so a message reworded in
+# ops/preflight.sh leaves their needles pointing at a string nothing prints
+# and nobody notices until CI. That is exactly how two of them drifted. This
+# check needs no jq: every jq-gated needle, with the host and the numbers
+# taken out, must still be findable in the script that is supposed to print
+# it.
+check_jq_needles_are_printable() {
+  local stale=0 needle fragment
+  while IFS= read -r needle; do
+    [[ -n "$needle" ]] || continue
+    # Longest run with no digits and no public host in it.
+    fragment="$(printf '%s\n' "$needle" |
+      sed 's/planner\.example\.test/\n/g; s/[0-9][0-9]*/\n/g' |
+      awk '{ if (length($0) > length(longest)) longest = $0 } END { print longest }')"
+    [[ "${#fragment}" -ge 10 ]] || continue
+    if ! grep -qF -- "$fragment" "$OPS_DIR/preflight.sh"; then
+      printf 'preflight-check: no message in preflight.sh contains: %s\n' "$fragment" >&2
+      stale=$((stale + 1))
+    fi
+  done < <(awk '
+    /jq_expect_fail/ {
+      line = $0
+      sub(/.*jq_expect_fail[[:space:]]+/, "", line)
+      count = split(line, parts, "\x27")
+      if (count >= 5) { print parts[4]; next }
+      pending = 1
+      next
+    }
+    pending {
+      count = split($0, parts, "\x27")
+      if (count >= 3) print parts[2]
+      pending = 0
+    }
+  ' "$SCRIPT_DIR/preflight-check.sh")
+  [[ "$stale" -eq 0 ]] || {
+    printf 'preflight-check: %s jq-gated needle(s) no longer match any message\n' "$stale" >&2
+    exit 1
+  }
+}
+check_jq_needles_are_printable
+
 # --- cases that need no jq (run everywhere) --------------------------------
 
 expect_pass 'healthy host, no caddyfile'
@@ -541,7 +584,7 @@ PF_CADDY="$STUB_DIR/caddy-adapt-subroute-shadow" jq_expect_fail 'proxy shadowed 
 # A protected proxy on a listener the public origin never reaches proves
 # nothing about the public origin.
 PF_CADDY="$STUB_DIR/caddy-adapt-other-listener" jq_expect_fail 'protection on another listener' \
-  'no adapted server listens on port 443' --caddyfile "$GOOD_CADDYFILE"
+  'no adapted server on port 443 serves' --caddyfile "$GOOD_CADDYFILE"
 # handle_errors routes run on an error, not on live traffic.
 PF_CADDY="$STUB_DIR/caddy-adapt-errors-only" jq_expect_fail 'proxy only in handle_errors' \
   'no active route for planner.example.test reaches' --caddyfile "$GOOD_CADDYFILE"
@@ -569,7 +612,7 @@ PF_CADDY="$STUB_DIR/caddy-adapt-same-port-both" jq_expect_pass 'every listener f
 
 # A structure this check does not model is refused, not walked hopefully.
 PF_CADDY="$STUB_DIR/caddy-adapt-opaque" jq_expect_fail 'uninterpretable nesting handler' \
-  'nests routes this check cannot interpret' --caddyfile "$GOOD_CADDYFILE"
+  'has next/terminal semantics this check cannot interpret' --caddyfile "$GOOD_CADDYFILE"
 
 # ... and the host binding must not over-refuse the shapes operators really
 # write: a covering wildcard, several names on one site block (mixed case,

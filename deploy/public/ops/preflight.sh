@@ -602,7 +602,7 @@ def route_is_unconditional($public):
 def handler_class:
   if . == "reverse_proxy" then "proxy"
   elif . == "subroute" then "subroute"
-  elif . == "headers" or . == "encode" or . == "rewrite" or . == "uri"
+  elif . == "headers" or . == "encode" or . == "rewrite"
     or . == "vars" or . == "request_body" or . == "templates" or . == "push"
     or . == "map" or . == "tracing" or . == "authentication"
   then "continue"
@@ -667,10 +667,14 @@ def reachable_proxies($public):
          then die("reverse_proxy nests handle_response routes")
          else . end)
     else
-      (if ($index + 1) < ($chain | length)
-       then die("a subroute is followed by more handlers, and whether they run depends on its own routes")
-       else (($chain[$index].routes // []) | reachable_proxies($public))
-       end)
+      # A subroute answers the request only if something inside it did, so
+      # what follows it in this chain is genuinely unknown. Walking INTO it
+      # is sound either way -- a proxy in there is reached whenever the
+      # subroute is -- while anything after it is simply not counted. That
+      # is the conservative half of the ambiguity, and it does not refuse
+      # the ordinary consolidated shapes (root, try_files, then a proxy)
+      # that Caddy merges into one chain.
+      (($chain[$index].routes // []) | reachable_proxies($public))
     end;
 
 # Does this server carry traffic for the origin port at all? A server with no
@@ -723,7 +727,7 @@ def dial_touches_service:
 
 def reaching_proxies: [ .proxies[] | select(any(dials; reaches_service)) ];
 
-($host | ascii_downcase | sub("\.$"; "")) as $public
+($host | ascii_downcase | sub("\\.$"; "")) as $public
 # Servers are judged ONE BY ONE, never flattened. Two servers can listen on
 # the same port at different addresses, and a protected proxy on one
 # interface says nothing about the interface the public actually reaches --
@@ -734,7 +738,8 @@ def reaching_proxies: [ .proxies[] | select(any(dials; reaches_service)) ];
     | if (.value | type) != "object" then die("server entry is not an object") else . end
     | select(.value | serves_public_port($port))
     | { name: .key,
-        listen: ((.value.listen // []) | map(tostring) | join(",")),
+        listen: (((.value.listen // []) | map(tostring) | join(","))
+                 | if . == "" then "unspecified" else . end),
         applies: (((.value.routes // []) | map(select(route_applies($public))) | length) > 0),
         proxies: [ (.value.routes // []) | reachable_proxies($public) ] } ] as $servers
 | [ $servers[] | select(.applies) ] as $candidates
