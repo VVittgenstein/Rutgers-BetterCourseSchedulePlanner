@@ -2,7 +2,7 @@
 
 This offline analysis of locally captured openSections observation data (kept in the gitignored `data/` root; only these evidence documents are committed) reaches the verdict **NO_PRODUCTION_CHANGE** with qualifier **DATA_REQUIRED** from the A4 gate evaluation below. Unsatisfied gates: A4-1, A4-2, A4-3, A4-4, A4-6. All numbers are computed from interval-censored change brackets; no production behavior is changed by this lane.
 
-- A4-1 unsatisfied: campuses: NB(pc-410c9fab5775) only; NK missing; CM missing
+- A4-1 unsatisfied: campuses: NB(pc-2e9190844bde) only; NK missing; CM missing
 - A4-2 unsatisfied: windows: 3 total; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative brackets): 1 (raw: 0 peak, 3 off-peak)
 - A4-3 unsatisfied: c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate
 - A4-4 unsatisfied: not identifiable (not-distinguishable)
@@ -56,7 +56,7 @@ Not evaluable: no distinguishable winner.
 
 | id | requirement | satisfied | evidence |
 |---|---|---|---|
-| A4-1 | Multi-target evidence: at least NB, NK, CM independently evaluable from independent data provenance | no | campuses: NB(pc-410c9fab5775) only; NK missing; CM missing |
+| A4-1 | Multi-target evidence: at least NB, NK, CM independently evaluable from independent data provenance | no | campuses: NB(pc-2e9190844bde) only; NK missing; CM missing |
 | A4-2 | Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak evidence only from brackets overlapping the peak hour itself | no | windows: 3 total; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative brackets): 1 (raw: 0 peak, 3 off-peak) |
 | A4-3 | 30s vs 60s model distinguishable with consistent winner under per-(target,window) holdout | no | c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate |
 | A4-4 | Unified safe offset covers phase and positive jitter across all targets/windows | no | not identifiable (not-distinguishable) |
