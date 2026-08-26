@@ -109,6 +109,75 @@ test("assignServerSessions fails closed on missing and non-monotonic serverDates
   assert.deepEqual(assignServerSessions([], 13), []);
 });
 
+test("assignServerSessions measures the seam with order statistics, so ONE forged Date cannot mint a split", () => {
+  // The seam at i is `earliest Date at or after i` minus `latest Date before
+  // i`, never `serverDateMs[i] - serverDateMs[i - 1]`. Both mirror forgeries
+  // below reach the adjacent-difference threshold and neither reaches this one.
+
+  // BACKWARDS: the sample that ENDS a group carries a Date dragged 700 s back.
+  // The adjacent reading measured the NEXT (honest) sample against that bogus
+  // value — 52 000 - (39 000 - 700 000) = 713 000 — and split. prefixMax simply
+  // ignores the regression and falls back to the previous honest Date.
+  const draggedBack = [
+    sv(T0, T0),
+    sv(T0 + 13000, T0 + 13000),
+    sv(T0 + 26000, T0 + 26000),
+    sv(T0 + 39000, T0 + 39000 - 700000),
+    sv(T0 + 52000, T0 + 52000),
+  ];
+  assert.equal(draggedBack[4].serverDateMs - draggedBack[3].serverDateMs, 713000);
+  assert.deepEqual(assignServerSessions(draggedBack, 13), [0, 0, 0, 0, 0]);
+
+  // FORWARDS: the sample that would START the new group carries a Date dragged
+  // 700 s forward. It cleared the adjacent threshold on its own, and every
+  // later sample rejoined it because their difference from the inflated value
+  // is negative — so the boundary landed exactly where the forger put it.
+  // suffixMin ignores the spike and reports the next honest Date instead.
+  const spikedForward = [
+    sv(T0, T0),
+    sv(T0 + 13000, T0 + 13000),
+    sv(T0 + 26000, T0 + 26000 + 700000),
+    sv(T0 + 39000, T0 + 39000),
+    sv(T0 + 52000, T0 + 52000),
+  ];
+  assert.equal(spikedForward[2].serverDateMs - spikedForward[1].serverDateMs, 713000);
+  assert.deepEqual(assignServerSessions(spikedForward, 13), [0, 0, 0, 0, 0]);
+
+  // A GENUINE separation still splits when a lone spike sits inside the later
+  // session: suffixMin is the honest first Date of that session, not the spike.
+  const genuineWithSpike = [
+    sv(T0, T0),
+    sv(T0 + 13000, T0 + 13000),
+    sv(T0 + 26000, T0 + 700000),
+    sv(T0 + 39000, T0 + 700000 + 900000),
+    sv(T0 + 52000, T0 + 713000),
+  ];
+  assert.deepEqual(assignServerSessions(genuineWithSpike, 13), [0, 0, 1, 1, 1]);
+
+  // INTENTIONAL COARSENING, stated rather than implied: a Date that falls back
+  // into the earlier range AFTER a real gap means the timeline no longer says
+  // "everything from here on is later than everything before". That reading is
+  // merged, which is the fail-closed direction — a session split is what buys
+  // an attacker a second independent evidence group, never a merge.
+  const genuineWithLateRegression = [
+    sv(T0, T0),
+    sv(T0 + 13000, T0 + 13000),
+    sv(T0 + 26000, T0 + 700000),
+    sv(T0 + 39000, T0 + 26000),
+  ];
+  assert.deepEqual(assignServerSessions(genuineWithLateRegression, 13), [0, 0, 0, 0]);
+
+  // On a NON-DECREASING timeline the two readings coincide exactly, which is
+  // why this change is a no-op on every honest capture.
+  const monotone = [
+    sv(T0, T0),
+    sv(T0 + 13000, T0 + 13000),
+    sv(T0 + 26000, T0 + 26000 + 700000),
+    sv(T0 + 39000, T0 + 39000 + 700000),
+  ];
+  assert.deepEqual(assignServerSessions(monotone, 13), [0, 0, 1, 1]);
+});
+
 test("nyLabel: overnight D1-shaped window crosses the NY calendar day", () => {
   const start = Date.UTC(2026, 7, 20, 3, 37, 1); // 2026-08-19 23:37 EDT
   const end = Date.UTC(2026, 7, 20, 5, 42, 20); // 2026-08-20 01:42 EDT

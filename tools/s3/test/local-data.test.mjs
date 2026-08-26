@@ -182,16 +182,24 @@ test("local data: verdict, gates, and independent recomputation", (t) => {
   // orders of magnitude below the gap rule), so grouping A4-2's evidence by
   // server session must reproduce the client windows exactly — one session per
   // input, no merges, no split.
-  const serverGapByRun = RUN_DIRS.map((d) => {
+  const serverGapsByRun = RUN_DIRS.map((d) => {
     const times = includedRows(join(dataRoot, d, "samples.ndjson")).map((r) =>
       Date.parse(r.serverDate),
     );
     // D3 holds a single row: no adjacent pair, hence no gap at all.
-    const gaps = times.slice(1).map((t, i) => t - times[i]);
-    return gaps.length === 0 ? 0 : Math.max(...gaps);
+    return times.slice(1).map((t, i) => t - times[i]);
   });
-  for (const gap of serverGapByRun) {
-    assert.ok(Number.isFinite(gap) && gap < WINDOW_GAP_MIN_MS / 10, `server gap ${gap} ms`);
+  for (const gaps of serverGapsByRun) {
+    const maxGap = gaps.length === 0 ? 0 : Math.max(...gaps);
+    assert.ok(Number.isFinite(maxGap) && maxGap < WINDOW_GAP_MIN_MS / 10, `server gap ${maxGap} ms`);
+    // Every real Date header here is non-decreasing, which is what makes the
+    // order-statistic seam (earliest Date at or after i, minus latest Date
+    // before it) BIT-IDENTICAL to the adjacent-difference reading on this data:
+    // prefixMax is then the previous Date and suffixMin the current one. The
+    // A2-2 seam hardening is therefore a no-op on every honest capture, and any
+    // future data set that is not non-decreasing has to fail here first.
+    const minGap = gaps.length === 0 ? 0 : Math.min(...gaps);
+    assert.ok(minGap >= 0, `server timeline runs backwards by ${minGap} ms`);
   }
   assert.equal(json.evidenceSessions.length, json.provenance.streams.length);
   for (const sess of json.evidenceSessions) assert.equal(sess.windowIds.length, 1);

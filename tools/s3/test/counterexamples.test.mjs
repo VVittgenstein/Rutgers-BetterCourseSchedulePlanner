@@ -68,6 +68,11 @@
 // mid-session client jump split ONE server-contiguous session into two
 // "independent" evidence windows):
 //   CE-16 (A4-2 client-clock jump):   old stdout `verdict=GO qualifier=none brackets=60 distinguishable=true`
+// CE-17 pins the escape hatch v2.7.0's own A2-2 fix left open — a single forged
+// serverDate at the client-window seam — and was verified the same way against
+// the v2.7.0 tree (commit bb7b434), which answered
+//   CE-17 backwards / CE-17 forwards: `verdict=GO qualifier=none brackets=57 distinguishable=true`
+// with all six gates satisfied.
 // The same builder module also produces the honest control that must STAY GO
 // on both trees (`verdict=GO qualifier=none brackets=120 distinguishable=true`),
 // which is what keeps these fixes from being a gate wired permanently shut.
@@ -93,13 +98,17 @@ import {
   SLICE_OFFSETS,
   sliceBaseCapture,
   denseBaseCapture,
+  straddleSession,
   SUBSAMPLE_STRIDES,
 } from "./r2-fixtures.mjs";
 import {
   buildTranslatedSubsampleDerived,
   buildClientJumpSplitSession,
   buildHonestPausedSession,
+  buildForgedServerSeam,
   CLIENT_JUMP_MS,
+  SEAM_JUMP_FROM_ROW,
+  SEAM_FORGERY_MS,
   TRANSLATED_SUBSAMPLE,
 } from "./r3-fixtures.mjs";
 import { WINDOW_GAP_MIN_MS } from "../lib/phase.mjs";
@@ -1499,6 +1508,124 @@ test("CE-16 (A4-2): a client-clock jump inside one server-contiguous session is 
     ["A4-2"],
   );
 });
+
+for (const direction of ["backwards", "forwards"]) {
+  test(`CE-17 (A4-2): one forged Date at the client-window seam does not mint a server session (${direction})`, (t) => {
+    const dir = makeTmpDir();
+    t.after(() => cleanup(dir));
+    // CE-16's shape with the seam moved onto the STABLE row of tick 10 (so no
+    // bracket bound is corrupted and the first half stays purely off-peak),
+    // plus ONE edited serverDate cell:
+    //   backwards - the last Date of #w00 dragged 700 s back;
+    //   forwards  - the first Date of #w01 dragged 700 s forward.
+    // v2.7.0 compared ADJACENT Date headers, so either edit made the seam read
+    // as a 709 s server gap, gave #w00 and #w01 disjoint server session indices
+    // and let one server-contiguous session supply both regimes again.
+    const runNames = buildForgedServerSeam(dir, direction);
+
+    const rowsByRun = runNames.map((name) =>
+      readFileSync(join(dir, name, "samples.ndjson"), "utf8")
+        .split("\n")
+        .filter((l) => l.length > 0)
+        .map((l) => JSON.parse(l)),
+    );
+
+    // Nothing is fabricated: against the honest capture this fixture is cut
+    // from, exactly ONE serverDate cell differs, every body hash is untouched,
+    // and the client columns differ exactly from the seam onward.
+    for (const [i, campus] of ["NB", "NK", "CM"].entries()) {
+      const honest = straddleSession(campus);
+      const forged = rowsByRun[i];
+      assert.equal(forged.length, honest.length);
+      const serverEdits = forged
+        .map((r, k) => (r.serverDate === honest[k].serverDate ? -1 : k))
+        .filter((k) => k >= 0);
+      assert.equal(serverEdits.length, 1, `serverDate edits: ${serverEdits}`);
+      assert.equal(serverEdits[0], direction === "backwards" ? SEAM_JUMP_FROM_ROW - 1 : SEAM_JUMP_FROM_ROW);
+      const clientEdits = forged
+        .map((r, k) => (r.requestStartedUtc === honest[k].requestStartedUtc ? -1 : k))
+        .filter((k) => k >= 0);
+      assert.deepEqual(
+        clientEdits,
+        honest.map((_, k) => k).filter((k) => k >= SEAM_JUMP_FROM_ROW),
+      );
+      for (let k = 0; k < forged.length; k += 1) {
+        assert.equal(forged[k].decodedBodySha256, honest[k].decodedBodySha256);
+      }
+    }
+
+    // Measured from the fixture bytes, thresholds imported rather than written
+    // as literals.
+    for (const rs of rowsByRun) {
+      const srv = rs.map((r) => Date.parse(r.serverDate));
+      const cli = rs.map((r) => Date.parse(r.requestStartedUtc));
+      const gapsOf = (v) => v.slice(1).map((x, k) => x - v[k]);
+      // The client jump is real and is the only client discontinuity.
+      assert.equal(gapsOf(cli).filter((g) => g > WINDOW_GAP_MIN_MS).length, 1);
+      // The ADJACENT-difference reading v2.7.0 used sees a server split at the
+      // seam and nowhere else — that is precisely the forgery.
+      const serverGaps = gapsOf(srv);
+      const adjacentSplits = serverGaps
+        .map((g, k) => (g > WINDOW_GAP_MIN_MS ? k + 1 : -1))
+        .filter((k) => k >= 0);
+      assert.deepEqual(adjacentSplits, [SEAM_JUMP_FROM_ROW]);
+      assert.ok(Math.max(...serverGaps) > SEAM_FORGERY_MS, `${Math.max(...serverGaps)}`);
+      // The ORDER-STATISTIC reading does not: the earliest Date at or after the
+      // seam minus the latest Date before it is one tick period, because the
+      // single forged cell drops out of both extremes.
+      const seam =
+        Math.min(...srv.slice(SEAM_JUMP_FROM_ROW)) - Math.max(...srv.slice(0, SEAM_JUMP_FROM_ROW));
+      assert.ok(seam > 0 && seam < WINDOW_GAP_MIN_MS / 10, `seam ${seam} ms`);
+      // Exactly one adjacent difference runs backwards: the other side of the
+      // same forged cell. Every other gap is an honest polling interval.
+      assert.equal(serverGaps.filter((g) => g < 0).length, 1);
+      const honestGaps = serverGaps.filter((g) => Math.abs(g) < SEAM_FORGERY_MS);
+      assert.ok(Math.max(...honestGaps) < WINDOW_GAP_MIN_MS / 10, `${Math.max(...honestGaps)}`);
+    }
+
+    const out = analyze(dir, runNames);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=57/);
+
+    const json = out.json;
+    // The same bait as CE-14 and CE-16: honest in every other respect.
+    for (const gate of json.goGate) {
+      assert.equal(gate.satisfied, gate.id !== "A4-2", `${gate.id}: ${gate.evidence}`);
+    }
+    assert.deepEqual(
+      json.decision.reasons.map((r) => r.split(" ")[0]),
+      ["A4-2"],
+    );
+    // The client split really happened — 2 windows per target — and the server
+    // timeline merged them back into one session per campus.
+    assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 6);
+    assert.equal(json.evidenceSessions.length, 3);
+    for (const sess of json.evidenceSessions) {
+      assert.equal(sess.windowIds.length, 2);
+      assert.equal(sess.bracketCount, 19);
+      assert.equal(sess.inPeakInformativeCount, 9);
+      assert.equal(sess.offPeakInformativeCount, 10);
+      assert.equal(sess.pureOffPeak, false);
+      assert.equal(sess.qualifiesPeak, true);
+      assert.equal(sess.qualifiesOffPeak, false);
+    }
+
+    const a2 = gateById(json, "A4-2");
+    assert.match(
+      a2.evidence,
+      /evidence sessions: 3 from 6 evidence window\(s\), grouped on the server timeline/,
+    );
+    assert.match(
+      a2.evidence,
+      /3 client window\(s\) merged into a session with another client window/,
+    );
+    assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 3;/);
+    assert.match(
+      a2.evidence,
+      /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 0/,
+    );
+  });
+}
 
 test("CONTROL (R3): a GENUINE 11-minute pause, moved on both clocks, still reaches GO", (t) => {
   const dir = makeTmpDir();

@@ -120,3 +120,63 @@ export function buildHonestPausedSession(dir) {
   }
   return RUN_NAMES;
 }
+
+// ---------------------------------------------------------------------------
+// CE-17: CE-16 again, plus the escape hatch the first A2-2 fix left open.
+//
+// Grouping A4-2's evidence by "client windows that share a server session
+// index" only helps while the server session index is itself hard to forge.
+// v2.7.0 derived it from the difference between ADJACENT Date headers, and that
+// let ONE edited Date manufacture a server-session boundary — placed, of
+// course, exactly at the client-window seam, the single position where a server
+// split leaves the two client windows in disjoint sessions and the merge never
+// happens. Two mirror-image forgeries, one cell each:
+//
+//   BACKWARDS: drag the LAST Date of #w00 back 700 s. v2.7.0 refused to split
+//     on the negative difference but still adopted the regressed value as the
+//     reference, so the next (honest) sample's difference was measured as
+//     9 s + 700 s = 709 s and split.
+//   FORWARDS: drag the FIRST Date of #w01 forward 700 s. That sample split on
+//     its own, and every later sample rejoined it because its difference from
+//     the inflated reference is negative — so the boundary landed on the seam
+//     and nowhere else.
+//
+// The seam sits at row 21, the STABLE row of tick 10: it ends #w00 without
+// being a bracket endpoint inside it, so neither edit corrupts a bracket bound
+// and the off-peak purity of the first half survives. (Put the same edit on a
+// CHANGED row and the bracket loses its server bounds, purity breaks and the
+// run already failed closed — which is why the hole needed its own fixture.)
+//
+// Everything else is CE-16: bodies, row order and the other 39 Date headers are
+// the honest capture's own, and the real adjacent server gaps never exceed 21 s.
+// ---------------------------------------------------------------------------
+
+// Row 21 is the stable row of tick 10 — see above. CE-16 cuts one row earlier,
+// on a changed row, which is why CE-16 needs no Date edit at all.
+export const SEAM_JUMP_FROM_ROW = 21;
+// 700 s: comfortably over max(WINDOW_GAP_MIN_MS, 5 x interval) for this
+// fixture's intervalSeconds of 13. The tests re-derive that from lib/phase.mjs.
+export const SEAM_FORGERY_MS = 700000;
+
+function bumpOneServerDate(rows, index, deltaMs) {
+  return rows.map((row, i) => (i === index ? shiftServerDate([row], deltaMs)[0] : { ...row }));
+}
+
+// direction: "backwards" edits the last Date of #w00, "forwards" the first Date
+// of #w01. Exactly ONE serverDate cell differs from the CE-16 shape either way.
+export function buildForgedServerSeam(dir, direction) {
+  for (const campus of CAMPUSES) {
+    const rows = straddleSession(campus);
+    let head = rows.slice(0, SEAM_JUMP_FROM_ROW);
+    let tail = shiftClientClock(rows.slice(SEAM_JUMP_FROM_ROW), CLIENT_JUMP_MS);
+    if (direction === "backwards") {
+      head = bumpOneServerDate(head, head.length - 1, -SEAM_FORGERY_MS);
+    } else if (direction === "forwards") {
+      tail = bumpOneServerDate(tail, 0, SEAM_FORGERY_MS);
+    } else {
+      throw new Error(`buildForgedServerSeam: unknown direction ${direction}`);
+    }
+    makeRunDir(join(dir, `run${campus}`), { campus, samples: [...head, ...tail] });
+  }
+  return RUN_NAMES;
+}
