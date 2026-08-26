@@ -1,4 +1,5 @@
-// Window segmentation and America/New_York peak-overlap classification.
+// Window segmentation, server-timeline session assignment, and
+// America/New_York peak-overlap classification.
 
 import {
   WINDOW_GAP_MIN_MS,
@@ -37,6 +38,48 @@ export function segmentWindows(samples, intervalSeconds, inputId) {
     }
   }
   return windows;
+}
+
+// Server-timeline counterpart of segmentWindows, for ONE (inputId, targetId)
+// sample stream in the same sequence order. Returns an array of session
+// indices aligned 1:1 with `samples`.
+//
+// Same gap rule, same comparison, same threshold as segmentWindows — the
+// server-side statement is exactly as strong as the client-side one, never
+// weaker. The sample ORDER is never re-derived from the Date headers: an
+// edited or skewed serverDate must not be able to reorder records.
+//
+// Two degenerate cases, both resolved in the MERGING (fail-closed) direction,
+// because a session split is what buys an attacker a second independent
+// evidence group:
+//   - a sample whose serverDate is absent inherits the current index, so
+//     DELETING a Date header can never manufacture a split;
+//   - samples before the first observed serverDate carry null — "the server
+//     timeline says nothing here" — so they impose no grouping constraint at
+//     all. Their brackets have no server bounds, classify as no-bounds, can
+//     supply no evidence, and still break their session's off-peak purity, so
+//     the null case buys an attacker nothing either.
+// A negative or zero server difference (webfarm skew) never splits.
+export function assignServerSessions(samples, intervalSeconds) {
+  const gapMs = Math.max(
+    WINDOW_GAP_MIN_MS,
+    WINDOW_GAP_INTERVAL_FACTOR * (intervalSeconds ?? 60) * 1000,
+  );
+  const indices = [];
+  let current = null;
+  let lastServerMs = null;
+  for (const sample of samples) {
+    const serverMs = sample.serverDateMs ?? null;
+    if (serverMs === null) {
+      indices.push(current);
+      continue;
+    }
+    if (current === null) current = 0;
+    else if (serverMs - lastServerMs > gapMs) current += 1;
+    lastServerMs = serverMs;
+    indices.push(current);
+  }
+  return indices;
 }
 
 const NY_PARTS_FMT = new Intl.DateTimeFormat("en-CA", {

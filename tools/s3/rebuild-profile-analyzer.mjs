@@ -14,7 +14,12 @@ import { sha256File } from "./lib/stable.mjs";
 import { ingestNdjson } from "./lib/ingest-ndjson.mjs";
 import { ingestSqlite } from "./lib/ingest-sqlite.mjs";
 import { buildProvenance } from "./lib/provenance.mjs";
-import { segmentWindows, nyLabel, overlapsNyPeak } from "./lib/windows.mjs";
+import {
+  segmentWindows,
+  assignServerSessions,
+  nyLabel,
+  overlapsNyPeak,
+} from "./lib/windows.mjs";
 import { buildBrackets } from "./lib/brackets.mjs";
 import { analyzeClock } from "./lib/clock.mjs";
 import {
@@ -101,9 +106,22 @@ function main() {
     // Stream identity matches provenance.mjs: `${inputId}::${targetId}`.
     const streamId = `${stream.inputId}::${targetId}`;
     const windows = segmentWindows(stream.samples, stream.intervalSeconds, stream.inputId);
+    // Server-timeline session index per sample, under the SAME gap rule the
+    // client windowing uses. A4-2 groups its evidence by windows that are
+    // contiguous on the client clock OR on the server clock, so a client-clock
+    // jump inside one server-contiguous session cannot pose as two independent
+    // evidence groups. The client windowId stays the display label.
+    const serverSessionIdx = assignServerSessions(stream.samples, stream.intervalSeconds);
+    const sessionOfSample = new Map();
+    for (let i = 0; i < stream.samples.length; i += 1) {
+      sessionOfSample.set(stream.samples[i], serverSessionIdx[i]);
+    }
     for (const win of windows) {
       const { brackets, counters: winCounters } = buildBrackets(win, stream.sourceKind);
       win.streamId = streamId;
+      win.serverSessionIndices = [...new Set(win.samples.map((sm) => sessionOfSample.get(sm)))]
+        .filter((v) => v !== null && v !== undefined)
+        .sort((x, y) => x - y);
       win.nyLabel = nyLabel(win.utcStartMs, win.utcEndMs);
       win.peakOverlap = overlapsNyPeak(win.utcStartMs, win.utcEndMs);
       win.brackets = brackets;
@@ -200,7 +218,7 @@ function main() {
   // 7. Safe offset + A4 gate.
   const safeOffset = assessSafeOffset(comparison, clock.status, serverEvidence);
   const targets = [...targetsMap.values()];
-  const { goGate, decision } = evaluateGate({
+  const { goGate, decision, evidenceSessions } = evaluateGate({
     windowsAll,
     brackets: evidenceBrackets,
     comparison,
@@ -249,6 +267,9 @@ function main() {
     targets,
     provenance,
     windowsAll,
+    // A4-2's evidence grouping, computed once inside the gate and threaded
+    // through so the report can never disagree with the gate about it.
+    evidenceSessions,
     brackets: allBrackets,
     bracketTotals,
     fits,

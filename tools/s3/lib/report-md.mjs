@@ -37,6 +37,7 @@ export function buildMdReport(ctx) {
     inputs,
     targets,
     windowsAll,
+    evidenceSessions,
     brackets,
     bracketTotals,
     fits,
@@ -110,6 +111,28 @@ export function buildMdReport(ctx) {
       `| ${win.windowId} | ${isoUtcMs(win.utcStartMs)} – ${isoUtcMs(win.utcEndMs)} | ${win.nyLabel} | ${
         win.peakOverlap ? "yes" : "no"
       } | ${win.samples.length} | ${win.brackets.length} |`,
+    );
+  }
+  push();
+
+  // 3b. Evidence sessions: A4-2's grouping unit. Client windows that the
+  // server timeline shows to be one uninterrupted session appear on one row,
+  // whatever the client clock claims. The window table above keeps its client
+  // labels for orientation.
+  push(`### Evidence sessions (server timeline)`);
+  push();
+  push(
+    `| sessionId | client windows | brackets | informative in-peak | informative off-peak | pure off-peak |`,
+  );
+  push(`|---|---|---:|---:|---:|---|`);
+  if (evidenceSessions.length === 0) {
+    push(`| — | — | 0 | 0 | 0 | — |`);
+  }
+  for (const sess of [...evidenceSessions].sort((a, b) => cmpStr(a.sessionId, b.sessionId))) {
+    push(
+      `| ${sess.sessionId} | ${sess.windowIds.join(", ")} | ${sess.bracketCount} | ${
+        sess.inPeakInformativeCount
+      } | ${sess.offPeakInformativeCount} | ${sess.pureOffPeak ? "yes" : "no"} |`,
     );
   }
   push();
@@ -322,7 +345,7 @@ export function buildMdReport(ctx) {
     }
     if (unsatisfied.includes("A4-2")) {
       push(
-        `- At least one America/New_York 17:00–18:00 peak window and one independent off-peak window, each with ≥ 5 informative brackets of its own (an empty or single-sample window is metadata, not peak evidence) — peak and off-peak are classified from the server-clock bounds of individual brackets, not from the window label.`,
+        `- At least one America/New_York 17:00–18:00 peak evidence session and one independent off-peak session, each with ≥ 5 informative brackets of its own (an empty or single-sample window is metadata, not peak evidence). The two sessions must be separated on BOTH the client and the server timeline — client windows that the server clock shows to be one uninterrupted session count once — and peak/off-peak are classified from the server-clock bounds of individual brackets, not from the window label.`,
       );
     }
     if (unsatisfied.includes("A4-3")) {

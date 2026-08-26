@@ -249,7 +249,7 @@ test("CE-2 (A4-2): an isolated zero-change peak-time sample is not peak evidence
   assert.equal(a2.satisfied, false);
   assert.equal(
     a2.evidence,
-    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
+    "windows: 6 total; evidence sessions: 6 from 6 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets): 0; qualifying off-peak sessions (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
@@ -293,7 +293,7 @@ test("CE-2b (A4-2): a window ending exactly at 17:00:00.000 ET has zero peak evi
   // …but the gate demands brackets inside the hour, and there are none.
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
@@ -338,7 +338,7 @@ test("CE-2c (A4-2): a peak-time loner merged into a pre-peak session is still no
   for (const win of mergedPeak) assert.equal(win.bracketCount, 20);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
@@ -706,7 +706,7 @@ test("CE-6 (A4-2): a time-translated byte-copy cannot supply the only peak evide
   // has no evidence-eligible class left, so A4-1 fails too.
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak \(>=\d+ informative in-peak brackets\): 0/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets\): 0/);
   const a1 = gateById(json, "A4-1");
   assert.equal(a1.satisfied, false);
   assert.match(a1.evidence, /conflicting absolute time anchors \(time-translated or serverDate-edited duplicate observation series\)/);
@@ -763,7 +763,7 @@ test("CE-6b (A4-2): a LONGER shifted copy cannot win the representative slot by 
   assert.deepEqual(json.provenance.duplicateStreamIds, []);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak \(>=\d+ informative in-peak brackets\): 0/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets\): 0/);
   assert.equal(gateById(json, "A4-1").satisfied, false);
 });
 
@@ -826,7 +826,7 @@ test("CE-7 (A4-2): a CLIENT-ONLY shifted byte-copy cannot supply the only peak e
   assert.deepEqual(json.provenance.duplicateStreamIds, []);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak \(>=\d+ informative in-peak brackets\): 0/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets\): 0/);
   const a1 = gateById(json, "A4-1");
   assert.equal(a1.satisfied, false);
   assert.match(a1.evidence, /NB missing/);
@@ -986,7 +986,7 @@ test("CE-8b (A4-2): a client-shifted copy that also drops one serverDate cannot 
   assert.deepEqual(json.provenance.duplicateStreamIds, []);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak \(>=\d+ informative in-peak brackets\): 0/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=\d+ informative in-peak brackets\): 0/);
   const a1 = gateById(json, "A4-1");
   assert.equal(a1.satisfied, false);
   assert.match(a1.evidence, /NB missing/);
@@ -1166,7 +1166,7 @@ test("CE-11 (A4-2): a peak claimed only through requestEndedUtc is not peak evid
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
   assert.match(a2.evidence, /peak\/off-peak classified on the server clock/);
-  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
   // The bait: the window LABEL (client envelope) still says peak-overlapping.
   const windows = json.targets.flatMap((tgt) => tgt.windows);
   assert.equal(windows.filter((w) => w.peakOverlap).length, 3);
@@ -1190,7 +1190,7 @@ test("CE-11b (A4-2): the minimal requestEndedUtc edit is caught too", (t) => {
   assert.equal(gateById(json, "A4-1").satisfied, true);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
@@ -1229,7 +1229,7 @@ test("CE-12 (A4-1/A4-2): a copy that edited ONLY requestEndedUtc cannot become t
   assert.deepEqual(json.provenance.duplicateStreamIds, []);
   const a2 = gateById(json, "A4-2");
   assert.equal(a2.satisfied, false);
-  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
   const a1 = gateById(json, "A4-1");
   assert.equal(a1.satisfied, false);
   assert.match(a1.evidence, /NB missing/);
@@ -1243,7 +1243,7 @@ test("CE-12 (A4-1/A4-2): a copy that edited ONLY requestEndedUtc cannot become t
   assert.equal(gateById(honest.json, "A4-2").satisfied, false);
   assert.match(
     gateById(honest.json, "A4-2").evidence,
-    /qualifying peak \(>=5 informative in-peak brackets\): 0;/,
+    /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/,
   );
 });
 
@@ -1267,7 +1267,7 @@ test("CE-13 (A4-2): a client clock running an hour slow cannot manufacture off-p
   assert.equal(a2.satisfied, false);
   // Every qualifying window is a PEAK window on the server clock; the off-peak
   // side, which the client labels claimed, has nothing.
-  assert.match(a2.evidence, /qualifying off-peak \(>=5 informative off-peak brackets, none in peak\): 0/);
+  assert.match(a2.evidence, /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 0/);
   assert.match(a2.evidence, /\(window labels: 3 peak-overlapping, 3 off-peak\)/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
@@ -1299,14 +1299,14 @@ test("CE-14 (A4-2): one session straddling 17:00 ET is not both a peak and an of
     assert.equal(gate.satisfied, gate.id !== "A4-2", `${gate.id}: ${gate.evidence}`);
   }
   const a2 = gateById(json, "A4-2");
-  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 3;/);
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 3;/);
   assert.match(
     a2.evidence,
-    /qualifying off-peak \(>=5 informative off-peak brackets, none in peak\): 0/,
+    /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 0/,
   );
   assert.match(
     a2.evidence,
-    /3 window\(s\) with >=5 off-peak brackets also hold peak-hour or unclassifiable brackets and cannot supply off-peak evidence/,
+    /3 session\(s\) with >=5 off-peak brackets also hold peak-hour or unclassifiable brackets and cannot supply off-peak evidence/,
   );
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
@@ -1446,6 +1446,6 @@ test("CONTROL (R2): the honest three-campus fixture the R2 counterexamples are c
   }
   assert.equal(
     gateById(json, "A4-2").evidence,
-    "windows: 6 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 3; qualifying off-peak (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
+    "windows: 6 total; evidence sessions: 6 from 6 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets): 3; qualifying off-peak sessions (>=5 informative off-peak brackets, none in peak): 3 (window labels: 3 peak-overlapping, 3 off-peak)",
   );
 });

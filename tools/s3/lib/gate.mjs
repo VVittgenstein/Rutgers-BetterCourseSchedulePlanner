@@ -34,6 +34,10 @@ export {
   NY_PEAK,
 } from "./phase.mjs";
 
+// Unit separator: never present in an inputId, a targetId, or a windowId, so
+// `${streamId}<US>${index}` cannot collide across streams.
+const SESSION_KEY_SEP = "\u001f";
+
 export function commonInformativeSet(brackets, clockSource) {
   // Informative for BOTH periods (width < 30 s implies width < 60 s).
   return brackets.filter((b) => isInformative(b, 30000, clockSource));
@@ -334,6 +338,103 @@ export function assessStability({ brackets, comparison, clockSource }) {
   return { targets, groups, outliers };
 }
 
+function cmpStrGate(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function zeroPad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+// A4-2's evidence grouping: EVIDENCE SESSIONS.
+//
+// A session is a maximal group of one stream's evidence windows that are
+// contiguous on the client timeline OR on the server timeline. The client half
+// is the window partition itself (segmentWindows already split on client-clock
+// gaps); the server half links two windows whenever they share a server
+// session index, which assignServerSessions derives from serverDate gaps under
+// the SAME max(10 min, 5 x interval) rule.
+//
+// Independence therefore has to hold on BOTH clocks. That closes two mirror
+// forgeries with one rule: a client-clock jump inside one server-contiguous
+// session no longer mints two evidence groups (the shared server index links
+// the windows back together), and an edited serverDate inside one client
+// window never did (the window itself is the link).
+//
+// Sessions are unions of WHOLE windows, so the session partition is always a
+// COARSENING of the window partition: sessionCount <= evidenceWindowCount, and
+// A4-2 can only become stricter than the window rule it replaces. The one
+// anti-lockout risk is genuinely separated windows merging, which the ~19 h
+// two-session control disproves.
+//
+// Scope is the STREAM (`${inputId}::${targetId}`), not the windowId: windowIds
+// are `${inputId}#wNN` and collide across the several targets of one SQLite
+// input.
+export function buildEvidenceSessions(evidenceWindows) {
+  const ordered = [...evidenceWindows].sort(
+    (a, b) => cmpStrGate(a.streamId, b.streamId) || cmpStrGate(a.windowId, b.windowId),
+  );
+  const parent = ordered.map((_, i) => i);
+  const find = (x) => {
+    let root = x;
+    while (parent[root] !== root) root = parent[root];
+    let cur = x;
+    while (parent[cur] !== root) {
+      const next = parent[cur];
+      parent[cur] = root;
+      cur = next;
+    }
+    return root;
+  };
+  const union = (x, y) => {
+    const rx = find(x);
+    const ry = find(y);
+    if (rx !== ry) parent[Math.max(rx, ry)] = Math.min(rx, ry);
+  };
+  // `${streamId}` and the index are joined by a character no id can contain.
+  const firstHolderOf = new Map();
+  for (let i = 0; i < ordered.length; i += 1) {
+    for (const idx of ordered[i].serverSessionIndices ?? []) {
+      const key = `${ordered[i].streamId}${SESSION_KEY_SEP}${idx}`;
+      const prev = firstHolderOf.get(key);
+      if (prev === undefined) firstHolderOf.set(key, i);
+      else union(prev, i);
+    }
+  }
+  const components = new Map(); // root rank -> [rank, ...] ascending
+  for (let i = 0; i < ordered.length; i += 1) {
+    const root = find(i);
+    if (!components.has(root)) components.set(root, []);
+    components.get(root).push(i);
+  }
+  const sessions = [];
+  const perStreamCount = new Map();
+  // Components are keyed by their MINIMUM rank, and `ordered` is sorted by
+  // (streamId, windowId), so walking roots ascending numbers each stream's
+  // sessions in ascending order of their first client window.
+  for (const [, ranks] of [...components.entries()].sort((a, b) => a[0] - b[0])) {
+    const windows = ranks.map((r) => ordered[r]);
+    const streamIds = [...new Set(windows.map((w) => w.streamId))];
+    internalAssert(streamIds.length === 1, "an evidence session must not span streams");
+    const streamId = streamIds[0];
+    const n = perStreamCount.get(streamId) ?? 0;
+    perStreamCount.set(streamId, n + 1);
+    sessions.push({
+      sessionId: `${streamId}#s${zeroPad2(n)}`,
+      streamId,
+      windowIds: windows.map((w) => w.windowId),
+      // Whole windows in windowId order; each window's brackets are already in
+      // changedSeq order, so the concatenation is deterministic.
+      brackets: windows.flatMap((w) => w.brackets),
+    });
+  }
+  internalAssert(
+    sessions.reduce((acc, sess) => acc + sess.windowIds.length, 0) === evidenceWindows.length,
+    "every evidence window must land in exactly one evidence session",
+  );
+  return sessions;
+}
+
 // ctx: {
 //   windowsAll: [{ windowId, streamId, peakOverlap, excluded, brackets }],
 //       // ALL windows; excluded=true marks conflicted provenance (campus
@@ -436,9 +537,21 @@ export function evaluateGate(ctx) {
   });
 
   // A4-2: multiple independent time windows incl. NY peak and off-peak — each
-  // side must have at least one QUALIFYING window (>= MIN_GROUP_BRACKETS
-  // informative brackets of its own on the comparison clock), and the two
-  // sides may never be the same window.
+  // side must have at least one QUALIFYING EVIDENCE SESSION (>=
+  // MIN_GROUP_BRACKETS informative brackets of its own on the comparison
+  // clock), and the two sides may never be the same session.
+  //
+  // The grouping unit is the SESSION, not the client window. Client windows
+  // are cut on client-clock gaps alone, so jumping the client clock forward
+  // inside ONE server-contiguous session split it into #w00 and #w01 and let
+  // that single session supply the off-peak side from its first half and the
+  // peak side from its second — CE-14's shape with a forged claim of
+  // independence bolted on, and every bracket bound involved genuinely
+  // server-derived. Production GO already requires the server clock, so
+  // "independent session" must be provable on the server timeline too:
+  // buildEvidenceSessions merges windows that are contiguous on EITHER clock
+  // under the same max(10 min, 5 x interval) rule. The client windowId
+  // survives as the display label in the tables.
   //
   // BOTH sides are classified per BRACKET on the COMPARISON clock — the same
   // bounds the model comparison, the safe offset and A4-5 consume. Whenever a
@@ -482,39 +595,57 @@ export function evaluateGate(ctx) {
     if (lowerMs === null || upperMs === null) return "no-bounds";
     return overlapsNyPeakStrict(lowerMs, upperMs) ? "in-peak" : "off-peak";
   };
-  const informativeBrackets = (w) => w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource));
-  const inPeakInformativeCount = (w) =>
-    informativeBrackets(w).filter((b) => bracketPeakState(b, ctx.clockSource) === "in-peak").length;
-  const offPeakInformativeCount = (w) =>
-    informativeBrackets(w).filter((b) => bracketPeakState(b, ctx.clockSource) === "off-peak").length;
-  const isPureOffPeakWindow = (w) =>
-    w.brackets.every((b) => bracketPeakState(b, ctx.clockSource) === "off-peak");
+  const sessions = buildEvidenceSessions(evidenceWindows);
+  const informativeBrackets = (sess) =>
+    sess.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource));
+  const inPeakInformativeCount = (sess) =>
+    informativeBrackets(sess).filter((b) => bracketPeakState(b, ctx.clockSource) === "in-peak")
+      .length;
+  const offPeakInformativeCount = (sess) =>
+    informativeBrackets(sess).filter((b) => bracketPeakState(b, ctx.clockSource) === "off-peak")
+      .length;
+  const isPureOffPeakSession = (sess) =>
+    sess.brackets.every((b) => bracketPeakState(b, ctx.clockSource) === "off-peak");
   const totalWindows = ctx.windowsAll.length;
   const excludedWindows = totalWindows - evidenceWindows.length;
   // Window-level peakOverlap is the client-envelope LABEL rendered in the
   // tables; it is reported for orientation and never used as evidence.
   const peakWindows = evidenceWindows.filter((w) => w.peakOverlap).length;
   const offPeakWindows = evidenceWindows.length - peakWindows;
-  const qualifyingPeakWindows = evidenceWindows.filter(
-    (w) => inPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
+  const qualifyingPeakSessions = sessions.filter(
+    (sess) => inPeakInformativeCount(sess) >= MIN_GROUP_BRACKETS,
   );
-  const qualifyingOffPeakWindows = evidenceWindows.filter(
-    (w) => isPureOffPeakWindow(w) && offPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
+  const qualifyingOffPeakSessions = sessions.filter(
+    (sess) => isPureOffPeakSession(sess) && offPeakInformativeCount(sess) >= MIN_GROUP_BRACKETS,
   );
-  // Windows the purity clause refuses: enough off-peak brackets to qualify,
+  // Sessions the purity clause refuses: enough off-peak brackets to qualify,
   // but they also observed the peak hour (or time the comparison clock cannot
-  // place). Disclosed so a reader never has to guess why a window with plenty
+  // place). Disclosed so a reader never has to guess why a session with plenty
   // of off-peak brackets did not count.
-  const straddlingOffPeakWindows = evidenceWindows.filter(
-    (w) => !isPureOffPeakWindow(w) && offPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
+  const straddlingOffPeakSessions = sessions.filter(
+    (sess) => !isPureOffPeakSession(sess) && offPeakInformativeCount(sess) >= MIN_GROUP_BRACKETS,
   ).length;
-  const peakWindowIds = new Set(qualifyingPeakWindows.map((w) => w.windowId));
+  const qualifyingPeakIds = new Set(qualifyingPeakSessions.map((sess) => sess.sessionId));
+  const qualifyingOffPeakIds = new Set(qualifyingOffPeakSessions.map((sess) => sess.sessionId));
   internalAssert(
-    qualifyingOffPeakWindows.every((w) => !peakWindowIds.has(w.windowId)),
-    "A4-2 qualifying peak and off-peak window sets must be disjoint",
+    qualifyingOffPeakSessions.every((sess) => !qualifyingPeakIds.has(sess.sessionId)),
+    "A4-2 qualifying peak and off-peak session sets must be disjoint",
   );
-  const a2Satisfied =
-    qualifyingPeakWindows.length >= 1 && qualifyingOffPeakWindows.length >= 1;
+  const a2Satisfied = qualifyingPeakSessions.length >= 1 && qualifyingOffPeakSessions.length >= 1;
+  // Reported to the JSON/MD layer, computed once here so the tables and the
+  // gate string can never disagree about the grouping.
+  const evidenceSessions = sessions.map((sess) => ({
+    sessionId: sess.sessionId,
+    streamId: sess.streamId,
+    windowIds: [...sess.windowIds],
+    bracketCount: sess.brackets.length,
+    informativeCount: informativeBrackets(sess).length,
+    inPeakInformativeCount: inPeakInformativeCount(sess),
+    offPeakInformativeCount: offPeakInformativeCount(sess),
+    pureOffPeak: isPureOffPeakSession(sess),
+    qualifiesPeak: qualifyingPeakIds.has(sess.sessionId),
+    qualifiesOffPeak: qualifyingOffPeakIds.has(sess.sessionId),
+  }));
   // Honest accounting of what the server-clock requirement drops: brackets the
   // client clock would have called informative but that carry no usable server
   // bounds, so they can qualify neither side.
@@ -529,20 +660,25 @@ export function evaluateGate(ctx) {
     excludedWindows > 0
       ? ` (${excludedWindows} excluded: conflicted (campus or time-anchor) or duplicate provenance)`
       : "";
+  const mergedWindowCount = evidenceWindows.length - sessions.length;
+  const mergedNote =
+    mergedWindowCount > 0
+      ? `; ${mergedWindowCount} client window(s) merged into a session with another client window`
+      : "";
   const noServerBoundsNote =
     noServerBoundsInformative > 0
       ? `; ${noServerBoundsInformative} client-informative bracket(s) had no usable server bounds and could not qualify peak or off-peak evidence`
       : "";
   const straddleNote =
-    straddlingOffPeakWindows > 0
-      ? `; ${straddlingOffPeakWindows} window(s) with >=${MIN_GROUP_BRACKETS} off-peak brackets also hold peak-hour or unclassifiable brackets and cannot supply off-peak evidence`
+    straddlingOffPeakSessions > 0
+      ? `; ${straddlingOffPeakSessions} session(s) with >=${MIN_GROUP_BRACKETS} off-peak brackets also hold peak-hour or unclassifiable brackets and cannot supply off-peak evidence`
       : "";
   gate.push({
     id: "A4-2",
     requirement:
-      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak window must hold no peak-hour bracket at all, so one straddling session cannot supply both sides",
+      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides",
     satisfied: a2Satisfied,
-    evidence: `windows: ${totalWindows} total${excludedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeakWindows.length}; qualifying off-peak (>=${MIN_GROUP_BRACKETS} informative off-peak brackets, none in peak): ${qualifyingOffPeakWindows.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${straddleNote}`,
+    evidence: `windows: ${totalWindows} total${excludedNote}; evidence sessions: ${sessions.length} from ${evidenceWindows.length} evidence window(s), grouped on the server timeline${mergedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak sessions (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeakSessions.length}; qualifying off-peak sessions (>=${MIN_GROUP_BRACKETS} informative off-peak brackets, none in peak): ${qualifyingOffPeakSessions.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${straddleNote}`,
   });
 
   // A4-3: distinguishable winner under holdout.
@@ -646,7 +782,7 @@ export function evaluateGate(ctx) {
   if (verdict !== "GO" && dataRequired) decision.qualifier = "DATA_REQUIRED";
   decision.reasons = unsatisfied.map((g) => `${g.id} unsatisfied: ${g.evidence}`);
 
-  return { goGate: gate, decision };
+  return { goGate: gate, decision, evidenceSessions };
 }
 
 // Diagnostic helper referenced by tests: an arc-membership check identical to

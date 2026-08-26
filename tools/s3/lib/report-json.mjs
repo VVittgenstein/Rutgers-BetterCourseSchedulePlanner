@@ -31,6 +31,7 @@ export function buildJsonReport(ctx) {
     inputs,
     targets,
     provenance,
+    evidenceSessions,
     bracketTotals,
     fits,
     comparison,
@@ -272,6 +273,30 @@ export function buildJsonReport(ctx) {
       // data counts once; [] when every clean class has a single member.
       duplicateStreamIds: provenance.duplicateStreamIds,
     },
+    // A4-2's evidence grouping. A session is a maximal group of one stream's
+    // evidence windows that are contiguous on the client timeline OR on the
+    // server timeline, under the same max(10 min, 5 x interval) gap rule. Two
+    // client windows sharing a sessionId are NOT independent evidence: the
+    // server clock says they are one uninterrupted session, whatever the
+    // client clock claims. Excluded (conflicted or duplicate) windows carry no
+    // session at all.
+    evidenceSessions: [...evidenceSessions]
+      .sort((a, b) => cmpStr(a.sessionId, b.sessionId))
+      .map((sess) => ({
+        sessionId: sess.sessionId,
+        streamId: sess.streamId,
+        windowIds: [...sess.windowIds].sort(cmpStr),
+        bracketCount: sess.bracketCount,
+        informativeCount: sess.informativeCount,
+        inPeakInformativeCount: sess.inPeakInformativeCount,
+        offPeakInformativeCount: sess.offPeakInformativeCount,
+        // Purity is judged over ALL of the session's brackets, informative or
+        // not: an off-peak session may hold no peak-hour and no unplaceable
+        // bracket at all.
+        pureOffPeak: sess.pureOffPeak,
+        qualifiesPeak: sess.qualifiesPeak,
+        qualifiesOffPeak: sess.qualifiesOffPeak,
+      })),
     bracketTotals: {
       total: bracketTotals.total,
       excludedFromEvidence: bracketTotals.excludedFromEvidence,
