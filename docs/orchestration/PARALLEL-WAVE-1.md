@@ -1,6 +1,6 @@
 # Parallel Wave 1：四个隔离实现 lane 与串行集成合同
 
-状态：**R1 REVIEWED — Stage 4 accepted；Stage 3/5 进入最后两条并行 R2**
+状态：**R2 REVIEWED — Stage 4 accepted；Stage 3/5 进入精确反例 R3**
 日期：2026-08-26
 Orchestrator：Codex
 实现者：四个相互隔离的 Claude 会话
@@ -148,3 +148,15 @@ Stage 5 的正常成功结果可以是 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`。
 Codex 独立复跑：Stage 3 Rust focused 116+52+44；Stage 4 operational-storage 61 非 doc + 2 doctest；
 Stage 5 analyzer 96/96、0 skip。两份 R2 只处理表中 blocker；Stage 4 的 minor/deferred 和三个 lane 已披露的
 普通技术债均不触发新修复。R2 可并行，集成顺序仍严格为 B → C → D，组合 head 只跑一次重门。
+
+## 10. R2 Codex 裁定（2026-08-26）
+
+| Lane | R2 head | 裁定 | 下一步 |
+|---|---|---|---|
+| B / Stage 3 | `df79aa4` | `CHANGES_REQUIRED`；SSH actual tuple 与 fresh ACK 计数点已关；同-route handler/listener 仍可让不可达 Caddy proxy PASS，aggregate ACK 未证明只属于 soak socket | `tasks/STAGE-3-R3.md` |
+| C / Stage 4 | `69c7cb1` | `ACCEPTED`，结论不变 | 等待 B 后串行集成，不再启动 Claude |
+| D / Stage 5 | `2c7b53a` | `CHANGES_REQUIRED`；119/119 通过但 translated subsample 与 server-contiguous/client-jump 两条反例均在最终 head 实测 GO | `tasks/STAGE-5-R3.md` |
+
+Codex 独立复跑 Stage 3 Rust 117+52、无-jq preflight 7 pass/31 refusal、soak self-test/deploy contracts；
+Stage 5 analyzer 119/119、0 skip。R3 严格只关闭表中四条已复现假阳性：不重开 SSH、不连接 Vultr、不加入
+任意伪造/逐样本抖动/完全不重叠分割，不清理普通技术债。R3 仍可并行，集成顺序 B → C → D 不变。

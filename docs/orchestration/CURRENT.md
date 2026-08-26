@@ -333,7 +333,7 @@ PUT /api/v1/local/desired-watch
 记录日期：2026-08-26。
 
 ```text
-当前检出：feat/s2-alert-delivery@abba027（产品集成 head 仍为 6a35c74）
+当前检出：feat/s2-alert-delivery（产品集成 head 仍为 6a35c74；其后仅 orchestration 文档）
 origin/main：ae65958
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
@@ -342,7 +342,7 @@ Claude Stage 2 主交付 head：553371f；R1 lane head：5af49d9
 Codex Stage 2 最终集成 head：6a35c74
 S2 分支：尚未合并、尚未发布
 当前产品源码工作树：无未提交源码；两个 conversation 归档目录未跟踪
-Codex orchestration 文档：Stage 2 ACCEPTED；Stage 4 R1 ACCEPTED 待串行回收；Stage 3/5 进入 R2
+Codex orchestration 文档：Stage 2 ACCEPTED；Stage 4 R1 ACCEPTED 待串行回收；Stage 3/5 进入 R3
 现有 release/0.1.0：sourceCommit=7d5debef（2026-07-15，早于本轮工作）
 ```
 
@@ -354,10 +354,10 @@ Codex orchestration 文档：Stage 2 ACCEPTED；Stage 4 R1 ACCEPTED 待串行回
 |---|---|---|
 | S1 | 代码完成并已合入 main；M0 窄修已写入 feature | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter；尚无新 release |
 | S2 | `ACCEPTED`，仅 feature | R1 四个 blocker 已关闭并集成；尚未 merge/release，公网仍被 P2 阻断 |
-| S3 | evidence lane `CHANGES_REQUIRED` | 当前 NO-GO 正确、96/96 focused tests 通过；重叠派生 capture 与 client-end peak 仍可假 GO，进入 Stage 5 R2；仍零 production scheduler change |
+| S3 | evidence lane `CHANGES_REQUIRED` | 当前 NO-GO 正确、119/119 focused tests 通过；常量平移 subsample 与 client-jump/server-contiguous window 仍可实测 GO，进入 Stage 5 R3；仍零 production scheduler change |
 | S4 | `ACCEPTED`，待按顺序集成 | production raw SQLite test API 已删除；`prepare_cached`、事务回滚、API 缺席证据与 61+2 focused tests 通过 |
 | P1 | Stage 2 主体已实现，仅 feature | mutable in-memory ticket、validate-before-connect、single-flight renew 与页面内 reconnect plan 已通过审查；公网部署仍被 P2/H4 阻断 |
-| P2 | R1 后仍 `CHANGES_REQUIRED` | pre-enqueue byte budget、采样完整性、CORE/full 命名已关闭；实际 SSH tuple、origin-bound Caddy route 与 server-accepted ACK 正证进入 R2；Linux evidence 仍外部 pending |
+| P2 | R2 后仍 `CHANGES_REQUIRED` | SSH actual tuple 与 fresh ACK 计数点已关闭；同-route Caddy handler/listener 归属及 aggregate ACK 的 soak-exclusive 归属进入 R3；Linux evidence 仍外部 pending |
 | L1 | `ACCEPTED`，仅 feature | desired 持久化、GET/PUT、materializer、UI、并发反例与真实包装三生命周期 E2E 均通过；尚未合并/发布 |
 | L2 | `ACCEPTED`，仅 feature | late HELLO 在 Exiting 后被同锁拒绝；presence/60 秒/ordered shutdown focused tests 通过 |
 | L3 | 主体已实现，仅 feature | 启动/页面/监控/开放/Gate/倒计时/退出日志已接线；本轮无阻断 |
@@ -398,15 +398,17 @@ Codex orchestration 文档：Stage 2 ACCEPTED；Stage 4 R1 ACCEPTED 待串行回
 
 ### P2/L2/L3/S3/S4
 
-- P2 R1 head `6c7c7cd` 已关闭 pre-enqueue budget、H9 采样/日志可读性与 CORE/full 命名；仍有实际 SSH
-  conditional tuple、Caddy origin host binding、server-accepted ACK 正证三项冻结 blocker，进入
-  `STAGE-3-R2`；完整 Linux/H8/H9 evidence 仍未执行；
+- P2 R2 head `df79aa4` 已关闭实际 SSH tuple 与服务端 fresh ACK accepted counter；Codex 实测 117+52 Rust
+  与 focused ops/self-tests 通过，但同一 Caddy route 内的 terminal handler 之后仍会把不可达 proxy 算作
+  active、同 port 不同 listener 可互相冒充，aggregate ACK delta 也未证明只属于本次 soak socket，进入
+  `STAGE-3-R3`；完整 Linux/H8/H9 evidence 仍未执行；
 - L2/L3 随 Stage 2 accepted；
 - S4 R1 head `69c7cb1` 已删除 production raw SQLite accessor；Codex 静态审查与 61+2 focused tests
   通过，结论 `ACCEPTED`，但依冻结顺序等待 P2 后再回收；
-- S3 evidence R1 head `b4e93f7` 已关闭原四项主要 false-GO 且 96/96 通过；同 capture 的重叠/规则派生
-  series 仍可增加 provenance 覆盖，client end 仍可把 off-peak server evidence 冒充 peak，进入
-  `STAGE-5-R2`；现有数据结论仍是不改生产。
+- S3 evidence R2 head `2c7b53a` 已关闭 overlap、普通 subsample、server peak/client-end 与单-window purity，
+  119/119 通过；Codex 仍实测得到两条完整 GO：规则 subsample 只做常量 client-clock 平移可逃出 family，
+  server 连续的一次 session 可被 client clock jump 切成 peak/off-peak 两个 window，进入 `STAGE-5-R3`；
+  现有数据结论仍是不改生产。
 
 ## 15. 发布和迁移硬门
 
@@ -419,8 +421,8 @@ Codex orchestration 文档：Stage 2 ACCEPTED；Stage 4 R1 ACCEPTED 待串行回
 
 ## 16. 当前 Parallel Wave
 
-状态：**Stage 2 已回收；Stage 4 R1 已 `ACCEPTED` 等待依序回收；Stage 3/5 R1 仍各有冻结合同假阳性，
-现并行签发 `STAGE-3-R2` 与 `STAGE-5-R2` 两份最后窄修。**
+状态：**Stage 2 已回收；Stage 4 R1 已 `ACCEPTED` 等待依序回收；Stage 3/5 R2 各仍有两条已复现的
+核心假阳性，现并行签发 `STAGE-3-R3` 与 `STAGE-5-R3` 两份精确反例修复。**
 
 当前 Stage 2：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
 
@@ -446,11 +448,11 @@ R1 明确不包含：
 
 当前三个 lane 的裁定：
 
-- Stage 3 R1：pre-enqueue budget、完整采样和命名已成立；实际 SSH tuple、Caddy origin route、server ACK
-  正证仍可 false PASS，进入 `STAGE-3-R2`；
+- Stage 3 R2：actual SSH 与 fresh accepted ACK 计数点已成立；Caddy handler/listener active-path 与
+  aggregate ACK 的 soak-exclusive 归属仍可 false PASS，进入 `STAGE-3-R3`；
 - Stage 4 R1：raw connection API 已封住，优化与回滚证据成立，`ACCEPTED`，无需再修；
-- Stage 5 R1：原四项主要假 GO 已修，但重叠派生 provenance 与 client-end peak 仍可假 GO，进入
-  `STAGE-5-R2`。
+- Stage 5 R2：普通 overlap/subsample 与 server peak/purity 已修，但 translated subsample 与
+  server-contiguous/client-jump window 仍可实测 GO，进入 `STAGE-5-R3`。
 
 两份 R2 可在原 worktree 并行；Stage 4 不再启动 Claude。Codex 收齐后仍按 P2 → S4 → S3 evidence
 串行回收，组合 head 只跑一次重门和一次集中审查。
@@ -620,17 +622,17 @@ Stage 5 — STAGE-5
 Active wave: PARALLEL-WAVE-1 final concentrated repair
 Accepted/integrated: STAGE-2-R1/v2-parallel at feat/s2-alert-delivery@6a35c74
 Accepted/waiting integration: STAGE-4-R1/v1 at 69c7cb1
-Repair lanes: STAGE-3-R2/v1; STAGE-5-R2/v1
-Repair bases: 6c7c7cd; b4e93f7
+Repair lanes: STAGE-3-R3/v1; STAGE-5-R3/v1
+Repair bases: df79aa4; 2c7b53a
 Development: same two isolated worktrees, focused tests only
-Integration order: STAGE-3-R2/P2 → accepted STAGE-4-R1/S4 → STAGE-5-R2/S3 evidence
+Integration order: STAGE-3-R3/P2 → accepted STAGE-4-R1/S4 → STAGE-5-R3/S3 evidence
 Heavy gates: one serial run after all three repaired lanes are accepted and integrated
 External gates: P2 Linux/systemd/Caddy 600s core plus full composition; real H8 deployment separately authorized
 S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3 CHANGES_REQUIRED; Stage 4 ACCEPTED; Stage 5 CHANGES_REQUIRED
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: 用户把 STAGE-3-R2 与 STAGE-5-R2 的 B 部分分别转发给原两个 Claude；Stage 4 不再启动
+Next authorized action: 用户把 STAGE-3-R3 与 STAGE-5-R3 的 B 部分分别转发给原两个 Claude；Stage 4 不再启动
 ```
 
 验收结论只允许使用：
