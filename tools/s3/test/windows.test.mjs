@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   segmentWindows,
   assignServerSessions,
+  clockOffsetMedianMs,
+  seamServerAdvanceMs,
   nyLabel,
   overlapsNyPeak,
   overlapsNyPeakStrict,
@@ -318,4 +320,79 @@ test("overlapsNyPeak: overnight and multi-day windows", () => {
   assert.equal(overlapsNyPeak(Date.UTC(2026, 7, 20, 3, 37, 1), Date.UTC(2026, 7, 20, 5, 42, 20)), false);
   // A window longer than 24 h necessarily crosses a peak hour.
   assert.equal(overlapsNyPeak(Date.UTC(2026, 7, 20, 0, 0, 0), Date.UTC(2026, 7, 21, 2, 0, 0)), true);
+});
+
+test("clockOffsetMedianMs is the LOWER median over dated samples only", () => {
+  assert.equal(clockOffsetMedianMs([]), null);
+  assert.equal(clockOffsetMedianMs([sv(T0, null), sv(T0 + 1000, null)]), null);
+  // Undated samples are skipped, not counted as zero.
+  assert.equal(clockOffsetMedianMs([sv(T0, T0 - 600), sv(T0 + 1000, null)]), -600);
+  // Odd count: the middle value. Even count: the LOWER of the two middles, so
+  // the result is always one of the observed offsets and never a half-integer.
+  const withOffsets = (offsets) => offsets.map((o, i) => sv(T0 + i * 1000, T0 + i * 1000 + o));
+  assert.equal(clockOffsetMedianMs(withOffsets([-600, -100, -900])), -600);
+  assert.equal(clockOffsetMedianMs(withOffsets([-600, -100, -900, -50])), -600);
+  // Robustness is the point: a minority of wildly edited Dates cannot move it.
+  const contaminated = [];
+  for (let i = 0; i < 11; i += 1) {
+    contaminated.push(sv(i * 1000, i * 1000 - 600 - (i < 5 ? 660000 : 0)));
+  }
+  assert.equal(clockOffsetMedianMs(contaminated), -600, "5 of 11 edited cells move nothing");
+  contaminated[5] = sv(5000, 5000 - 600 - 660000);
+  assert.equal(clockOffsetMedianMs(contaminated), -660600, "6 of 11 do");
+});
+
+test("seamServerAdvanceMs cancels a client-only jump exactly and passes a genuine pause", () => {
+  const win = (firstStart, lastStart, offset) => ({
+    utcStartMs: firstStart,
+    lastClientStartMs: lastStart,
+    clockOffsetMedianMs: offset,
+  });
+  const JUMP = 660000;
+  // Honest: 21 s of real time between the two windows' extreme samples, same
+  // offset on both sides.
+  assert.equal(seamServerAdvanceMs(win(T0, T0 + 21000, -600), win(T0 + 42000, T0 + 60000, -600)), 21000);
+  // A genuine pause moves both clocks: the client advance IS the server advance.
+  assert.equal(
+    seamServerAdvanceMs(win(T0, T0 + 21000, -600), win(T0 + 42000 + JUMP, T0 + 60000, -600)),
+    21000 + JUMP,
+  );
+  // A client-only jump of J inflates the client advance by J and drags the
+  // second window's median by exactly -J. The two cancel identically, for every
+  // J: what is left is the 21 s that really passed.
+  for (const j of [WINDOW_GAP_MIN_MS + 1, JUMP, 3 * JUMP]) {
+    assert.equal(
+      seamServerAdvanceMs(win(T0, T0 + 21000, -600), win(T0 + 42000 + j, T0 + 60000, -600 - j)),
+      21000,
+      `jump ${j}`,
+    );
+  }
+  // A window with no dated sample makes no claim, so the seam is unmeasurable
+  // — the caller treats null as "not corroborated" and merges.
+  assert.equal(seamServerAdvanceMs(win(T0, T0 + 21000, -600), win(T0 + 42000, T0 + 60000, null)), null);
+  assert.equal(seamServerAdvanceMs(win(T0, T0 + 21000, null), win(T0 + 42000, T0 + 60000, -600)), null);
+});
+
+test("seamServerAdvanceMs is blind to DELETED Dates around the seam", () => {
+  // The CE-20 shape in miniature: the client jumps 11 minutes and every Date in
+  // a band around the seam is dropped. Dropping changes which samples enter a
+  // median, not where the median sits, so the measured advance is unchanged.
+  const JUMP = 660000;
+  const honestOffsets = new Array(20).fill(-600);
+  const before = honestOffsets.map((o, i) => sv(T0 + i * 30000, T0 + i * 30000 + o));
+  const afterAll = honestOffsets.map((o, i) =>
+    sv(T0 + (20 + i) * 30000 + JUMP, T0 + (20 + i) * 30000 + o),
+  );
+  // Drop the first twelve Dates of the second window.
+  const afterHoled = afterAll.map((s, i) => (i < 12 ? sv(s.clientStartMs, null) : s));
+  const mkWin = (rows) => ({
+    utcStartMs: rows[0].clientStartMs,
+    lastClientStartMs: rows[rows.length - 1].clientStartMs,
+    clockOffsetMedianMs: clockOffsetMedianMs(rows),
+  });
+  const full = seamServerAdvanceMs(mkWin(before), mkWin(afterAll));
+  const holed = seamServerAdvanceMs(mkWin(before), mkWin(afterHoled));
+  assert.equal(full, 30000);
+  assert.equal(holed, 30000, "deleting Dates does not move the corroborated advance");
+  assert.ok(full <= WINDOW_GAP_MIN_MS, "and it stays under the threshold, so the seam merges");
 });

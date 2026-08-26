@@ -402,3 +402,104 @@ export function buildHonestNearThresholdSeam(dir) {
   }
   return RUN_NAMES;
 }
+
+// ---------------------------------------------------------------------------
+// CE-20: CE-16 again, plus the escape hatch v2.8.0 left open — the one the
+// STAGE-5-R3 A2-2 charter is actually about.
+//
+// v2.8.0 merged the two client windows of a jumped session because they shared
+// a SERVER session index, and assignServerSessions derives that index from
+// `suffixMin - prefixMax` across the seam. Deleting a wide enough band of Date
+// headers around the seam removes both order statistics from the region and
+// widens the measured seam for free — no Date is edited, only dropped, and
+// deletion is a primitive this tree already treats as in scope (CE-8, and
+// CE-18's merge-delete mode). With the band chosen so the surviving Dates of
+// the first window are all off-peak and the surviving Dates of the second are
+// all inside the peak hour, ONE server-contiguous 40-minute capture reached a
+// six-gate GO on v2.8.0 while every Date it used as evidence stayed honest.
+//
+// The geometry is CE-14's straddle stretched to 80 ticks (16:40-17:20 ET), for
+// one reason: a deleted band has to be WIDER than max(10 min, 5 x interval)
+// before it can widen the seam past the threshold at all, and a 20-tick session
+// is only ten minutes long.
+//
+// Modes:
+//   "honest"       no edits — the twin, one client window per campus;
+//   "delete"       the band only, no jump — still one client window;
+//   "jump"         the CE-16 client jump only, no deletions;
+//   "jump-delete"  the escape: jump AND band;
+//   "two-jumps"    jump at the band's start AND at its end, so the undated band
+//                  becomes a client window of its own that no longer touches
+//                  either dated window's seam;
+//   "rewrite"      the A3-deferred boundary: jump, band, and the surviving
+//                  Dates of the second half moved by the same 11 minutes, i.e.
+//                  a capture that really is indistinguishable from an honest
+//                  pause. It is expected to reach GO.
+// ---------------------------------------------------------------------------
+
+// 16:40 ET. 80 ticks of 30 s run to 17:19:30 ET, so tick 40 lands exactly on
+// 17:00 ET: ticks 0..39 close before the peak hour and ticks 40..79 inside it.
+export const LONG_STRADDLE_BASE = Date.UTC(2026, 0, 6, 21, 40, 0);
+export const LONG_STRADDLE_TICKS = 80;
+// The jump starts at tick 40 (row 80) — the peak boundary, which is what makes
+// the first client window purely off-peak.
+export const LONG_JUMP_FROM_TICK = 40;
+// Ticks 40..60 inclusive: 21 ticks = 42 rows = 10.5 minutes of Date headers,
+// the smallest band wider than WINDOW_GAP_MIN_MS at this 30 s cadence.
+export const DELETED_BAND_FROM_TICK = 40;
+export const DELETED_BAND_TO_TICK = 60;
+
+function longStraddleRows(campus) {
+  return makeTickSeries({
+    baseMs: LONG_STRADDLE_BASE,
+    periodMs: 30000,
+    count: LONG_STRADDLE_TICKS,
+    startSeq: 1,
+    bodyPrefix: `${campus}-ls-`,
+    ...CAMPUS_SHAPE[campus],
+  });
+}
+
+// Drops the `serverDate` of every row belonging to ticks [from, to]. Nothing
+// else changes: the rows stay, in order, with their bodies and both client
+// columns.
+function dropServerDates(rows, from, to) {
+  return rows.map((row, i) => {
+    const tick = Math.floor(i / 2);
+    return tick >= from && tick <= to ? { ...row, serverDate: null } : { ...row };
+  });
+}
+
+export function deleteBandRows(campus, mode) {
+  const cut = LONG_JUMP_FROM_TICK * 2;
+  const bandEndRow = (DELETED_BAND_TO_TICK + 1) * 2;
+  const drop = mode === "jump" ? false : mode !== "honest";
+  const rows = drop
+    ? dropServerDates(longStraddleRows(campus), DELETED_BAND_FROM_TICK, DELETED_BAND_TO_TICK)
+    : longStraddleRows(campus);
+  if (mode === "honest" || mode === "delete") return rows;
+  if (mode === "two-jumps") {
+    return [
+      ...rows.slice(0, cut),
+      ...shiftClientClock(rows.slice(cut, bandEndRow), CLIENT_JUMP_MS),
+      ...shiftClientClock(rows.slice(bandEndRow), 2 * CLIENT_JUMP_MS),
+    ];
+  }
+  const tail = shiftClientClock(rows.slice(cut), CLIENT_JUMP_MS);
+  if (mode !== "rewrite") return [...rows.slice(0, cut), ...tail];
+  // "rewrite": every Date the second window still carries moves with its client
+  // columns, which is what makes the result an honest pause rather than a lie.
+  const stillDated = bandEndRow - cut;
+  return [
+    ...rows.slice(0, cut),
+    ...tail.slice(0, stillDated),
+    ...shiftServerDate(tail.slice(stillDated), CLIENT_JUMP_MS),
+  ];
+}
+
+export function buildDeleteBandSplitSession(dir, mode) {
+  for (const campus of CAMPUSES) {
+    makeRunDir(join(dir, `run${campus}`), { campus, samples: deleteBandRows(campus, mode) });
+  }
+  return RUN_NAMES;
+}

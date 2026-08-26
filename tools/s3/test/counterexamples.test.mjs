@@ -134,6 +134,12 @@ import {
   buildPooledPeakChunks,
   buildPooledPeakChunksMultiCell,
   buildHonestNearThresholdSeam,
+  buildDeleteBandSplitSession,
+  deleteBandRows,
+  DELETED_BAND_FROM_TICK,
+  DELETED_BAND_TO_TICK,
+  LONG_JUMP_FROM_TICK,
+  LONG_STRADDLE_TICKS,
   NEAR_THRESHOLD_CLIENT_GAP_MS,
   SLOW_POLL_MS,
   pooledForgedRowIndex,
@@ -2219,5 +2225,213 @@ test("CONTROL (R3c): an honest capture whose genuine seam lands near the thresho
     assert.ok(sess.bestWindowOffPeakInformativeCount >= MIN_GROUP_BRACKETS);
     assert.equal(sess.qualifiesOffPeak, true);
   }
+  assertA42NoWeakerThanFrozenBaseline(json);
+});
+
+// ---------------------------------------------------------------------------
+// CE-20: a client-clock jump PLUS a deleted band of Date headers. The band is
+// what v2.8.0's grouping could not see through: it needs no forged value, only
+// dropped ones, and it widens `suffixMin - prefixMax` inside
+// assignServerSessions until one server-contiguous capture splits into two
+// "independent" evidence sessions.
+//
+// v2.9.0 stops reading the seam's own Dates for this decision. Each client
+// window contributes the MEDIAN of (serverDate - requestStart) over its own
+// dated samples, and the seam is corroborated only when
+//     (client start-to-start advance) + (median offset shift) > the gap rule.
+// A genuine pause moves both clocks, leaves the medians equal and keeps its
+// boundary; a client-only jump of J inflates the first term by J and the second
+// by exactly -J, so the two cancel and the boundary fails. Nothing about the
+// deleted band changes either median.
+// ---------------------------------------------------------------------------
+
+function readRows(dir, name) {
+  return readFileSync(join(dir, name, "samples.ndjson"), "utf8")
+    .split("\n")
+    .filter((l) => l.length > 0)
+    .map((l) => JSON.parse(l));
+}
+
+test("CE-20 (A4-2): a client jump plus a DELETED band of Dates is still one session", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  const runNames = buildDeleteBandSplitSession(dir, "jump-delete");
+
+  // What the bytes are, measured rather than asserted from the builder: the
+  // honest twin, with the client clock of ticks 40+ moved 11 minutes and the
+  // Date header of ticks 40..60 dropped. NOT ONE Date VALUE is edited.
+  for (const name of runNames) {
+    const rows = readRows(dir, name);
+    const honest = deleteBandRows(name.slice(3), "honest");
+    assert.equal(rows.length, honest.length);
+    const dropped = rows.filter((r) => r.serverDate === null);
+    assert.equal(dropped.length, (DELETED_BAND_TO_TICK - DELETED_BAND_FROM_TICK + 1) * 2);
+    assert.equal(
+      rows.filter((r, i) => r.serverDate !== null && r.serverDate !== honest[i].serverDate).length,
+      0,
+      "no Date VALUE is edited — only dropped",
+    );
+    assert.equal(
+      rows.filter((r, i) => r.decodedBodySha256 !== honest[i].decodedBodySha256).length,
+      0,
+    );
+    const shifted = rows.filter((r, i) => r.requestStartedUtc !== honest[i].requestStartedUtc);
+    assert.equal(shifted.length, (LONG_STRADDLE_TICKS - LONG_JUMP_FROM_TICK) * 2);
+    for (const r of shifted) {
+      const i = rows.indexOf(r);
+      assert.equal(
+        Date.parse(r.requestStartedUtc) - Date.parse(honest[i].requestStartedUtc),
+        CLIENT_JUMP_MS,
+      );
+    }
+    // The client clock splits; the surviving Dates make the seam look wide.
+    const cli = rows.map((r) => Date.parse(r.requestStartedUtc));
+    const srv = rows.filter((r) => r.serverDate !== null).map((r) => Date.parse(r.serverDate));
+    const gaps = (xs) => xs.slice(1).map((x, i) => x - xs[i]);
+    assert.equal(gaps(cli).filter((g) => g > WINDOW_GAP_MIN_MS).length, 1);
+    assert.equal(gaps(srv).filter((g) => g > WINDOW_GAP_MIN_MS).length, 1);
+    // …and the whole thing is one honest capture: the Dates never move
+    // backwards and the real server span is 40 minutes, not 51.
+    for (let i = 1; i < srv.length; i += 1) assert.ok(srv[i] >= srv[i - 1]);
+    assert.equal(srv[srv.length - 1] - srv[0], (LONG_STRADDLE_TICKS - 1) * 30000 + 9000);
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=240/);
+
+  const json = out.json;
+  // The bait: honest in every other respect, A4-2 the sole refusal.
+  for (const gate of json.goGate) {
+    assert.equal(gate.satisfied, gate.id !== "A4-2", `${gate.id}: ${gate.evidence}`);
+  }
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+
+  // Six client windows collapse to three sessions, one per campus, each holding
+  // both regimes and therefore impure — the CE-14 shape it always was.
+  assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 6);
+  assert.equal(json.evidenceSessions.length, 3);
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 2);
+    assert.equal(sess.uncorroboratedSeamCount, 1);
+    assert.equal(sess.pureOffPeak, false);
+    assert.equal(sess.qualifiesOffPeak, false);
+    assert.equal(sess.qualifiesPeak, true);
+  }
+  const a2 = gateById(json, "A4-2");
+  assert.match(
+    a2.evidence,
+    /3 client-window seam\(s\) were merged because the server clock did not corroborate the gap/,
+  );
+  assert.match(
+    a2.evidence,
+    /qualifying off-peak sessions \(>=5 informative off-peak brackets in one client window, none in peak\): 0/,
+  );
+  assertA42NoWeakerThanFrozenBaseline(json);
+});
+
+test("CE-20b (A4-2): two jumps around the deleted band do not buy a boundary either", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The refinement that matters: with a jump at BOTH ends of the deleted band,
+  // the undated rows become a client window of their own, so the two dated
+  // windows are no longer adjacent. Their medians would then corroborate a gap
+  // — honestly, because 21 real ticks separate them — while the 42 SAMPLES in
+  // between prove the polling never paused. A boundary is a claim about one
+  // seam, so it is checked at that seam, and an undated window corroborates
+  // neither of its own.
+  const runNames = buildDeleteBandSplitSession(dir, "two-jumps");
+  for (const name of runNames) {
+    const rows = readRows(dir, name);
+    const cli = rows.map((r) => Date.parse(r.requestStartedUtc));
+    const gaps = cli.slice(1).map((x, i) => x - cli[i]);
+    assert.equal(gaps.filter((g) => g > WINDOW_GAP_MIN_MS).length, 2, "two client boundaries");
+    // The middle window carries no Date at all.
+    const band = rows.slice(LONG_JUMP_FROM_TICK * 2, (DELETED_BAND_TO_TICK + 1) * 2);
+    assert.equal(band.filter((r) => r.serverDate !== null).length, 0);
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  const json = out.json;
+  assert.equal(gateById(json, "A4-2").satisfied, false);
+  assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 9);
+  assert.equal(json.evidenceSessions.length, 3);
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 3);
+    assert.equal(sess.uncorroboratedSeamCount, 2);
+    assert.equal(sess.qualifiesOffPeak, false);
+  }
+  assertA42NoWeakerThanFrozenBaseline(json);
+});
+
+for (const [mode, expected] of [
+  ["honest", "one client window, nothing edited"],
+  ["delete", "the band only, no client jump"],
+  ["jump", "the client jump only, every Date present"],
+]) {
+  test(`CE-20 control (A4-2): ${expected} is refused for the same old reason`, (t) => {
+    const dir = makeTmpDir();
+    t.after(() => cleanup(dir));
+    const runNames = buildDeleteBandSplitSession(dir, mode);
+    const out = analyze(dir, runNames);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=240/);
+    const json = out.json;
+    assert.equal(gateById(json, "A4-2").satisfied, false);
+    // One evidence session per campus either way: the jump-only mode reaches it
+    // through the shared server session index, the other two never split.
+    assert.equal(json.evidenceSessions.length, 3);
+    for (const sess of json.evidenceSessions) {
+      assert.equal(sess.pureOffPeak, false);
+      assert.equal(sess.qualifiesOffPeak, false);
+    }
+    assertA42NoWeakerThanFrozenBaseline(json);
+  });
+}
+
+test("BOUNDARY (A3): rewriting the surviving Dates with the client clock is a genuine pause and still reaches GO", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The residual, stated rather than implied. CE-20's forgery is closed because
+  // the second window's Dates contradict its client clock. An attacker who also
+  // moves those Dates removes the contradiction — and what is left is a record
+  // set that a capture which really did pause 11 minutes, and whose server
+  // omitted `Date` for the first 21 ticks after resuming, would produce
+  // byte-for-byte. There is nothing left in the data to tell the two apart, so
+  // this reaches GO on the frozen 2c7b53a87471 baseline, on v2.8.0 and here.
+  //
+  // What the round bought is the PRICE. CE-20 needed 0 edited Dates; this needs
+  // every Date the peak side rests on, asserted below.
+  const runNames = buildDeleteBandSplitSession(dir, "rewrite");
+  for (const name of runNames) {
+    const rows = readRows(dir, name);
+    const forged = deleteBandRows(name.slice(3), "jump-delete");
+    const edited = rows.filter((r, i) => r.serverDate !== forged[i].serverDate);
+    // Every Date the second client window still carries had to move, and each
+    // moved by exactly the client jump.
+    assert.equal(edited.length, (LONG_STRADDLE_TICKS - DELETED_BAND_TO_TICK - 1) * 2);
+    assert.ok(edited.length > 2 * MIN_GROUP_BRACKETS, "more than the evidence itself");
+    for (const r of edited) {
+      const i = rows.indexOf(r);
+      assert.equal(Date.parse(r.serverDate) - Date.parse(forged[i].serverDate), CLIENT_JUMP_MS);
+    }
+    // Nothing else differs from the closed forgery.
+    assert.equal(
+      rows.filter((r, i) => r.requestStartedUtc !== forged[i].requestStartedUtc).length,
+      0,
+    );
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=GO qualifier=none brackets=240 distinguishable=true/);
+  const json = out.json;
+  for (const gate of json.goGate) assert.equal(gate.satisfied, true, `${gate.id}: ${gate.evidence}`);
+  assert.equal(json.evidenceSessions.length, 6);
+  for (const sess of json.evidenceSessions) assert.equal(sess.uncorroboratedSeamCount, 0);
   assertA42NoWeakerThanFrozenBaseline(json);
 });
