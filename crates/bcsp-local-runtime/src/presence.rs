@@ -890,12 +890,12 @@ mod tests {
             .with_hello_deadline(Duration::from_secs(30))
             .with_console(console);
 
-        let (outbound, _inbound) = mpsc::unbounded_channel();
+        let (outbound, _inbound) = OutboundSender::unbounded_pair();
         assert!(route.connect(trace(1), outbound));
         hello(&route, 1, 100);
         route.disconnect(trace(1));
 
-        let (outbound, _withheld) = mpsc::unbounded_channel();
+        let (outbound, _withheld) = OutboundSender::unbounded_pair();
         assert!(route.connect(trace(2), outbound));
         std::thread::sleep(Duration::from_millis(80));
         route.tick();
