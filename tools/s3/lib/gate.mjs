@@ -354,7 +354,7 @@ export function evaluateGate(ctx) {
   // piggyback on qualifying windows that belong to another stream merely
   // sharing its targetId. A class whose members carry conflicting campus
   // labels (the copy-and-relabel attack) or conflicting absolute time anchors
-  // (the copy-and-translate attack) contributes nothing, and its member
+  // (the copy-and-translate / serverDate-edit attacks) contributes nothing, and its member
   // streams are excluded from all evidence upstream. Non-representative
   // members of clean classes (identical/contained duplicates, e.g. the same
   // capture relabeled to another term or re-fed as SQLite) are also excluded
@@ -377,10 +377,10 @@ export function evaluateGate(ctx) {
         excludedStreamCount += cls.members.length;
       }
       // A time-anchor conflict (the same canonical series claimed at two
-      // different absolute times) voids the whole class even when every
-      // member agrees on the campus label: choosing a representative among
-      // disagreeing timelines would let a translated copy supply the only
-      // peak/off-peak/clock evidence.
+      // different absolute times, or with edited/deleted serverDates) voids
+      // the whole class even when every member agrees on the campus label:
+      // choosing a representative among disagreeing records would let an
+      // edited copy supply the only peak/off-peak/clock evidence.
       if (cls.timeConflict && !cls.campusConflict) {
         timeConflictClassCount += 1;
         timeConflictStreamCount += cls.members.length;
@@ -400,7 +400,7 @@ export function evaluateGate(ctx) {
       ? `; ${conflictClassCount} class(es) with conflicting campus labels ignored and their ${excludedStreamCount} stream(s) excluded from all evidence`
       : "") +
     (timeConflictClassCount > 0
-      ? `; ${timeConflictClassCount} class(es) with conflicting absolute time anchors (time-translated duplicate observation series) ignored and their ${timeConflictStreamCount} stream(s) excluded from all evidence`
+      ? `; ${timeConflictClassCount} class(es) with conflicting absolute time anchors (time-translated or serverDate-edited duplicate observation series) ignored and their ${timeConflictStreamCount} stream(s) excluded from all evidence`
       : "");
   let duplicateStreamCount = 0;
   for (const cls of ctx.provenance.classes) {

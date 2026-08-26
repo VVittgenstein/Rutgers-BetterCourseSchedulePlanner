@@ -210,14 +210,57 @@ test("KNOWN BOUNDARY: every-other-sample subsampling is not detected as derived"
   assert.equal(p.classes.length, 2);
 });
 
-test("serverDate presence is part of the canonical series", () => {
+test("a copy with ONE serverDate deleted still merges — time-anchor conflict", () => {
+  // Sixth review round: serverDates are NOT part of the merge key (neither
+  // values nor missing-pattern). Deleting a single serverDate field from a
+  // byte-copy must not mint a fresh fingerprint and escape the class; it
+  // merges, and the record disagreement (presence mismatch at the aligned
+  // sample) voids the class.
+  const genuine = mkSeries({});
+  const oneDropped = genuine.map((s, i) => (i === 3 ? { ...s, serverDateMs: null } : s));
+  const p = buildProvenance([
+    { inputId: "runA/samples.ndjson", samples: genuine },
+    { inputId: "runB/samples.ndjson", samples: oneDropped },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, true);
+  assert.equal(p.classes[0].campusConflict, false);
+});
+
+test("a copy with ALL serverDates deleted still merges — time-anchor conflict", () => {
   const withServer = mkSeries({});
   const withoutServer = withServer.map((s) => ({ ...s, serverDateMs: null }));
   const p = buildProvenance([
     { inputId: "runA/samples.ndjson", samples: withServer },
     { inputId: "runB/samples.ndjson", samples: withoutServer },
   ]);
-  assert.equal(p.classes.length, 2);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, true);
+});
+
+test("a copy with ONE serverDate edited by 1 ms still merges — time-anchor conflict", () => {
+  // A per-sample server edit changes one rawServerDelta: under a merge key
+  // that carried the serverDelta column this too minted a fresh fingerprint.
+  const genuine = mkSeries({});
+  const edited = genuine.map((s, i) => (i === 2 ? { ...s, serverDateMs: s.serverDateMs + 1 } : s));
+  const p = buildProvenance([
+    { inputId: "runA/samples.ndjson", samples: genuine },
+    { inputId: "runB/samples.ndjson", samples: edited },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, true);
+});
+
+test("two serverDate-free byte-copies at the same absolute times merge WITHOUT conflict", () => {
+  // Agreement on absence is agreement: honest duplicates of a capture that
+  // never recorded serverDates must not be flagged.
+  const bare = mkSeries({}).map((s) => ({ ...s, serverDateMs: null }));
+  const p = buildProvenance([
+    { inputId: "runA/samples.ndjson", samples: bare },
+    { inputId: "runB/samples.ndjson", samples: bare },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, false);
 });
 
 test("cross-format duplicate (NDJSON vs SQLite normalized samples) merges when timestamps agree", () => {

@@ -151,9 +151,13 @@ series piggybacking on an excluded duplicate's windows (CE-1b), and
 duplicate-content target relabeling — one capture claimed under three terms
 (CE-5) or re-fed through the SQLite path (CE-5b) — and time-translated
 byte-copies of one capture shifted into the peak hour, whether the shifted
-copy is byte-identical (CE-6) or extended by one tick so it wins the
-representative slot by length (CE-6b) — while the go-gate test keeps proving
-a genuinely satisfying fixture still reaches GO.
+copy is byte-identical (CE-6), extended by one tick so it wins the
+representative slot by length (CE-6b), shifted in the client column only
+(CE-7), or nudged by a single millisecond under three relabels (CE-7b) — and
+serverDate deletions on a copy: relabeled copies that each delete one
+serverDate field (CE-8), and a client-shifted peak copy that also deletes one
+serverDate (CE-8b) — while the go-gate test keeps proving a genuinely
+satisfying fixture still reaches GO.
 
 Provenance semantics: a class whose members carry conflicting campus labels
 — or conflicting **absolute time anchors** (the same canonical series claimed
@@ -162,15 +166,18 @@ JSON) — contributes nothing to A4-1, and its member streams are **excluded
 from all evidence** (fits, comparison, server-clock evidence, safe offset,
 every gate); they stay listed in the descriptive tables, flagged by
 `provenance.excludedStreamIds` and `bracketTotals.excludedFromEvidence`.
-The canonical series is invariant to a CONSTANT shift of either clock column
-— client timestamps, serverDates, or both jointly, by hours or by a single
-millisecond — so any such translated copy still merges into the genuine
-capture's class instead of minting a fresh fingerprint. Genuine duplicates of
-one capture carry the exact recorded timestamps, so class members must agree
-exactly on the absolute client time AND the absolute server time (when
-recorded) at their aligned samples; any disagreement on either clock means
-someone translated the series, and no deterministic representative choice
-among disagreeing timelines is safe — so nobody in the class counts. In a clean (non-conflicted) class, only the
+The canonical series is the observation CONTENT alone — the bodySha sequence
+plus the client-clock delta structure. Absolute times and the whole serverDate
+column (values and missing-pattern alike) are deliberately NOT part of the
+merge key, so a copy whose clocks were translated (either column, jointly, by
+hours or by a single millisecond) or whose serverDates were edited or deleted
+(one field or all of them) still merges into the genuine capture's class
+instead of minting a fresh fingerprint. Genuine duplicates of one capture
+carry the exact recorded fields, so class members must agree exactly on the
+absolute client time AND on every recorded serverDate — value and presence —
+at their aligned samples; any disagreement means someone edited the series,
+and no deterministic representative choice among disagreeing records is safe
+— so nobody in the class counts. In a clean (non-conflicted) class, only the
 **representative** stream (the longest member; streamId ascending on ties) is
 evidence-eligible: identical or contained duplicates are excluded from all
 evidence the same way and listed in `provenance.duplicateStreamIds`, so
@@ -184,11 +191,14 @@ targetId.
 
 Provenance boundary (documented on purpose): A4-1 merges observation series
 that are identical or contiguous slices of one another after removing
-metadata and per-column constant clock shifts; derived series (subsampling,
-interleaving, edited deltas, a copy with its serverDates deleted — which A4-5
-then rejects for missing server evidence in its groups) are NOT detected as
-equivalent — the gate defends against copy-and-relabel and copy-and-translate
-(joint or single-column), it is not forensics against de novo fabrication.
+metadata and both clock columns; copies that touch only the clocks — a
+translation of either column, an edited serverDate, a deleted serverDate
+(one or all) — merge and are voided by the time-anchor conflict. What is NOT
+detected as equivalent is a series whose BODY content or CLIENT delta
+structure was edited de novo (every-other-sample subsampling, interleaving,
+edited client deltas, invented or removed samples) — the gate defends against
+copy-and-relabel and copy-and-edit of the clock columns, it is not forensics
+against de novo fabrication of observation content.
 Byte-identical streams under the SAME campus label and the SAME absolute
 times merge without conflict into one class whose representative alone stays
 evidence-eligible; they cannot widen campus coverage or add evidence.
