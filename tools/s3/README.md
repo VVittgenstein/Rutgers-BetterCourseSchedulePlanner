@@ -156,49 +156,123 @@ representative slot by length (CE-6b), shifted in the client column only
 (CE-7), or nudged by a single millisecond under three relabels (CE-7b) — and
 serverDate deletions on a copy: relabeled copies that each delete one
 serverDate field (CE-8), and a client-shifted peak copy that also deletes one
-serverDate (CE-8b) — while the go-gate test keeps proving a genuinely
-satisfying fixture still reaches GO.
+serverDate (CE-8b) — and the STAGE-5-R2 shapes: three equal-length,
+staggered, overlapping slices of one capture relabeled NB/NK/CM (CE-9), one
+capture plus two different-stride decimations of it (CE-10), a peak session
+claimed only by extending `requestEndedUtc` while every body, request start
+and `Date` stays off-peak (CE-11, and CE-11b at the minimal 150 s edit), a
+copy that edited only `requestEndedUtc` and so won the representative slot
+(CE-12), and a client clock running an hour slow that labeled a wholly in-peak
+server window off-peak (CE-13) — while the go-gate test and the R2 honest
+control keep proving a genuinely satisfying fixture still reaches GO.
 
-Provenance semantics: a class whose members carry conflicting campus labels
-— or conflicting **absolute time anchors** (the same canonical series claimed
-at two different times, i.e. a time-translated copy; `timeConflict` in the
-JSON) — contributes nothing to A4-1, and its member streams are **excluded
-from all evidence** (fits, comparison, server-clock evidence, safe offset,
-every gate); they stay listed in the descriptive tables, flagged by
-`provenance.excludedStreamIds` and `bracketTotals.excludedFromEvidence`.
-The canonical series is the observation CONTENT alone — the bodySha sequence
-plus the client-clock delta structure. Absolute times and the whole serverDate
-column (values and missing-pattern alike) are deliberately NOT part of the
-merge key, so a copy whose clocks were translated (either column, jointly, by
-hours or by a single millisecond) or whose serverDates were edited or deleted
-(one field or all of them) still merges into the genuine capture's class
-instead of minting a fresh fingerprint. Genuine duplicates of one capture
-carry the exact recorded fields, so class members must agree exactly on the
-absolute client time AND on every recorded serverDate — value and presence —
-at their aligned samples; any disagreement means someone edited the series,
-and no deterministic representative choice among disagreeing records is safe
-— so nobody in the class counts. In a clean (non-conflicted) class, only the
-**representative** stream (the longest member; streamId ascending on ties) is
-evidence-eligible: identical or contained duplicates are excluded from all
-evidence the same way and listed in `provenance.duplicateStreamIds`, so
-duplicated observation data counts exactly once no matter how it is relabeled
-— a capture copied under other term/target ids, or re-fed through the SQLite
-path, cannot inflate the comparison n, multiply whole-target leave-out folds,
-or widen campus coverage. A clean class covers its campus only when one of
-its OWN evidence-eligible streams (i.e. the representative) has a window with
-≥ 5 informative brackets — qualification never travels through a shared
-targetId.
+Provenance semantics: streams are grouped into **families** — one family per
+body of captured observation data — and a family whose members carry
+conflicting campus labels, or conflicting **records** (`timeConflict` in the
+JSON: the same captured data claimed at two different times, or carrying
+edited/deleted `Date` headers or request ends), contributes nothing to A4-1 and
+its member streams are **excluded from all evidence** (fits, comparison,
+server-clock evidence, safe offset, every gate); they stay listed in the
+descriptive tables, flagged by `provenance.excludedStreamIds` and
+`bracketTotals.excludedFromEvidence`.
 
-Provenance boundary (documented on purpose): A4-1 merges observation series
-that are identical or contiguous slices of one another after removing
-metadata and both clock columns; copies that touch only the clocks — a
-translation of either column, an edited serverDate, a deleted serverDate
-(one or all) — merge and are voided by the time-anchor conflict. What is NOT
-detected as equivalent is a series whose BODY content or CLIENT delta
-structure was edited de novo (every-other-sample subsampling, interleaving,
-edited client deltas, invented or removed samples) — the gate defends against
-copy-and-relabel and copy-and-edit of the clock columns, it is not forensics
-against de novo fabrication of observation content.
+Two streams join the same family under the first of four relations that holds
+(reported per member as `relation`, with `relatedTo` and `matchedCount`):
+
+| relation | holds when | catches |
+|---|---|---|
+| `identical` | the canonical series are byte-equal | whole-series copies |
+| `contained` | the shorter series is a contiguous slice of the longer | truncated copies |
+| `overlapping` | they share a contiguous block of ≥ 4 interior canonical entries containing ≥ 1 body change | staggered re-slicing of one capture |
+| `derived` | they reuse ≥ 3 observation **records**, matched jointly on `(clientStartMs, bodySha)` | subsampling, decimation, thinning, reordering |
+
+Family membership is closed **transitively** (union-find): if A relates to B
+and B to C, all three are one family even when A and C do not match directly —
+the case two differently-strided decimations of one capture hit.
+
+The canonical series (and so the fingerprint) is the observation CONTENT alone
+— the bodySha sequence plus the client-clock delta structure. Absolute times,
+the whole serverDate column (values and missing-pattern alike) and the client
+request END are deliberately NOT part of the merge key, so a copy whose clocks
+were translated (either column, jointly, by hours or by a single millisecond),
+whose serverDates were edited or deleted (one field or all), or whose
+`requestEndedUtc` alone was rewritten still merges into the genuine capture's
+family instead of minting a fresh fingerprint.
+
+Genuine duplicates of one capture carry the exact recorded fields, so family
+members must agree exactly on the absolute client start time, on every recorded
+serverDate, AND on every recorded client request end — value and presence — at
+their aligned samples. The request-end comparison is suppressed only when a
+stream records no request end at all (`clientEndObserved: false`, i.e. every
+SQLite stream, whose ingestion has no such column), which is what keeps honest
+cross-format duplicates clean. Any disagreement on **any** pair in the family —
+not merely the ones on the reported attachment tree; see `timeConflictPairs` —
+means someone edited the series, and no deterministic representative choice
+among disagreeing records is safe, so nobody in the family counts.
+
+In a clean (non-conflicted) family, only the **representative** stream (the
+longest member; streamId ascending on ties) is evidence-eligible: identical,
+contained, overlapping and derived members alike are excluded from all evidence
+and listed in `provenance.duplicateStreamIds`, so captured observation data
+counts exactly once no matter how it is relabeled, re-sliced, or thinned — a
+capture copied under other term/target ids, re-fed through the SQLite path, cut
+into overlapping windows, or decimated cannot inflate the comparison n,
+multiply whole-target leave-out folds, or widen campus coverage. A clean family
+covers its campus only when one of its OWN evidence-eligible streams (i.e. the
+representative) has a window with ≥ 5 informative brackets — qualification
+never travels through a shared targetId.
+
+Provenance boundary (documented on purpose): what A4-1 detects is **reuse of
+the same observation records**. Whole-series copies, truncations, overlapping
+re-slices, and regular or irregular subsampling/decimation/thinning of one
+capture all merge, as do copies that touch only the clocks — a translation of
+either column, an edited or deleted serverDate (one or all), an extended
+request end — which merge and are then voided by the record conflict.
+
+What is NOT detected: **de novo fabrication**. A series whose body content or
+whose time grid was invented from scratch is independent data as far as this
+tool can tell, and no cryptographic capture proof, signature, online
+collection, or trusted-hardware attestation is attempted. There is one further
+residual, stated rather than hidden: a partition of one capture into chunks
+that share no observation record and no `(bodySha, clientDelta)` block with
+each other reuses nothing — every observation is still counted exactly once,
+and the disjoint chunks cover disjoint wall-clock time — so the remaining fraud
+there is the campus label alone, which is the de-novo boundary above.
+
+The thresholds (4 interior entries with ≥ 1 body change; 3 reused records) are
+calibrated on the real capture data, not guessed: inside the 554-sample local
+capture the longest repeated `(bodySha, clientDelta)` block at any non-zero
+self-offset is 1, and the three genuinely independent local captures share
+**zero** observation records and zero body hashes with one another
+(re-measured by the local-data test on every run). Two rules deliberately NOT
+adopted: a bodySha-only match (a real capture holds one body for minutes at a
+time, and two honest captures of one target legitimately see the same bodies),
+and a timestamp-only match (honest campus captures overlap in wall-clock time
+by construction).
+
 Byte-identical streams under the SAME campus label and the SAME absolute
-times merge without conflict into one class whose representative alone stays
+times merge without conflict into one family whose representative alone stays
 evidence-eligible; they cannot widen campus coverage or add evidence.
+
+## A4-2: peak and off-peak are server-clock evidence
+
+Both sides of A4-2 are decided **per bracket on the comparison clock** — the
+same bounds the model comparison, the safe offset and A4-5 consume, which is
+the server clock whenever a production conclusion is reachable. A window
+qualifies on the peak side when ≥ 5 of its informative brackets have
+comparison-clock bounds intersecting 17:00–18:00 America/New_York with
+**positive measure** (a single-instant boundary touch is not peak evidence),
+and on the off-peak side when ≥ 5 of them do not; the two sides must come from
+two different windows. The server upper bound carries its usual +1 s `Date`
+widening before the test, which can only move a bracket toward the peak side —
+the conservative direction, since the widened upper really is the true upper
+bound on the change instant. A bracket without usable bounds on the comparison
+clock qualifies neither side (fail closed, never filled in from the client
+envelope) and is counted in the gate evidence.
+
+The `peak 17–18 ET? (label)` column in the Markdown report and
+`targets[].windows[].peakOverlap` in the JSON are the window's **client
+envelope** label. They are description only and are never gate evidence: a
+capture can extend `requestEndedUtc` to drag that label across 17:00 ET, or run
+its client clock an hour slow to drag it off, without touching a single body,
+request start, or `Date` header.
