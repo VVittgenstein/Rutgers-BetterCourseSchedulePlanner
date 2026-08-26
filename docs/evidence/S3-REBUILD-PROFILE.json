@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "toolVersion": "2.0.0",
+  "toolVersion": "2.1.0",
   "normalizedCommand": "rebuild-profile-analyzer --ndjson 20260820T033451393Z-a8a40f98/samples.ndjson --ndjson 20260820T033527487Z-d92a8a35/samples.ndjson --ndjson 20260820T033701043Z-5745bc4a/samples.ndjson --out-json S3-REBUILD-PROFILE.json --out-md S3-REBUILD-PROFILE.md",
   "inputs": [
     {
@@ -742,10 +742,12 @@
           }
         ]
       }
-    ]
+    ],
+    "excludedStreamIds": []
   },
   "bracketTotals": {
     "total": 67,
+    "excludedFromEvidence": 0,
     "informative30": 67,
     "informative60": 67,
     "nonInformative30": 0,
@@ -874,13 +876,13 @@
       "id": "A4-1",
       "requirement": "Multi-target evidence: at least NB, NK, CM independently evaluable from independent data provenance",
       "satisfied": false,
-      "evidence": "campuses: NB(pc-26764ef271fb) only; NK missing; CM missing"
+      "evidence": "campuses: NB(pc-2ff7575c4c21) only; NK missing; CM missing"
     },
     {
       "id": "A4-2",
-      "requirement": "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets",
+      "requirement": "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak evidence only from brackets overlapping the peak hour itself",
       "satisfied": false,
-      "evidence": "windows: 3 total; qualifying(informative>=5): 0 peak, 1 off-peak (raw: 0 peak, 3 off-peak)"
+      "evidence": "windows: 3 total; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative brackets): 1 (raw: 0 peak, 3 off-peak)"
     },
     {
       "id": "A4-3",
@@ -911,8 +913,8 @@
     "verdict": "NO_PRODUCTION_CHANGE",
     "qualifier": "DATA_REQUIRED",
     "reasons": [
-      "A4-1 unsatisfied: campuses: NB(pc-26764ef271fb) only; NK missing; CM missing",
-      "A4-2 unsatisfied: windows: 3 total; qualifying(informative>=5): 0 peak, 1 off-peak (raw: 0 peak, 3 off-peak)",
+      "A4-1 unsatisfied: campuses: NB(pc-2ff7575c4c21) only; NK missing; CM missing",
+      "A4-2 unsatisfied: windows: 3 total; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative brackets): 1 (raw: 0 peak, 3 off-peak)",
       "A4-3 unsatisfied: c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate",
       "A4-4 unsatisfied: not identifiable (not-distinguishable)",
       "A4-6 unsatisfied: not evaluable: no distinguishable winner"
