@@ -73,6 +73,22 @@
 // the v2.7.0 tree (commit bb7b434), which answered
 //   CE-17 backwards / CE-17 forwards: `verdict=GO qualifier=none brackets=57 distinguishable=true`
 // with all six gates satisfied.
+// CE-18 pins the MIRROR of CE-17, which CE-17's own fix opened: the
+// order-statistic seam is unforgeable in the SPLIT direction and forgeable in
+// the MERGE direction, because one Date placed low in the suffix collapses the
+// minimum and one placed high in the prefix inflates the maximum. Pooling two
+// genuinely server-separated sub-threshold sessions manufactures a QUALIFYING
+// one, so a merge is not the fail-closed direction. Verified the same way
+// against the v2.7.1 tree (commit 7dd7cf3), which answered
+//   CE-18 merge-backwards / merge-forwards: `verdict=GO qualifier=none brackets=84 distinguishable=true`
+// with all six gates satisfied, while v2.6.1 and v2.7.0 both refused the same
+// bytes. CE-18's third case is the same pooling reached by DELETING one Date
+// header rather than moving it — an undated sample used to inherit the running
+// session index, which is a vote for the earlier session — and it reached the
+// same all-six-gates GO on BOTH v2.7.0 and v2.7.1:
+//   CE-18 merge-delete: `verdict=GO qualifier=none brackets=84 distinguishable=true` CE-18's own honest twin (`buildPooledPeakChunks(dir, "honest")`) is a
+// legitimate NO-GO on all four trees and is asserted here beside it, so the
+// counterexample proves the forgery bought the evidence rather than the shape.
 // The same builder module also produces the honest control that must STAY GO
 // on both trees (`verdict=GO qualifier=none brackets=120 distinguishable=true`),
 // which is what keeps these fixes from being a gate wired permanently shut.
@@ -106,12 +122,16 @@ import {
   buildClientJumpSplitSession,
   buildHonestPausedSession,
   buildForgedServerSeam,
+  buildPooledPeakChunks,
+  pooledForgedRowIndex,
+  POOLED_CHUNK_GAP_MS,
+  POOLED_CHUNK_TICKS,
   CLIENT_JUMP_MS,
   SEAM_JUMP_FROM_ROW,
   SEAM_FORGERY_MS,
   TRANSLATED_SUBSAMPLE,
 } from "./r3-fixtures.mjs";
-import { WINDOW_GAP_MIN_MS } from "../lib/phase.mjs";
+import { WINDOW_GAP_MIN_MS, MIN_GROUP_BRACKETS } from "../lib/phase.mjs";
 
 // Jan 6 2026 is EST (UTC-5): the NY 17:00-18:00 peak is 22:00-23:00 UTC.
 const OFF_PEAK_BASE = Date.UTC(2026, 0, 6, 3, 0, 0); // 22:00 ET Jan 5 — off-peak
@@ -1501,6 +1521,9 @@ test("CE-16 (A4-2): a client-clock jump inside one server-contiguous session is 
     assert.equal(sess.pureOffPeak, false);
     assert.equal(sess.qualifiesPeak, true);
     assert.equal(sess.qualifiesOffPeak, false);
+    // The server timeline here is honest and 1-robust: what refuses this run
+    // is the MERGE plus the purity clause, not the ambiguity void.
+    assert.equal(sess.serverGroupingAmbiguous, false);
   }
 
   assert.deepEqual(
@@ -1608,6 +1631,11 @@ for (const direction of ["backwards", "forwards"]) {
       assert.equal(sess.pureOffPeak, false);
       assert.equal(sess.qualifiesPeak, true);
       assert.equal(sess.qualifiesOffPeak, false);
+      // Holding out the forged cell leaves the same merged grouping, so the
+      // leave-one-out check does NOT fire here: the order-statistic seam alone
+      // is what refuses CE-17, and CE-18 is what needs the void. The two
+      // mechanisms are pinned separately on purpose.
+      assert.equal(sess.serverGroupingAmbiguous, false);
     }
 
     const a2 = gateById(json, "A4-2");
@@ -1751,4 +1779,246 @@ test("CONTROL (R2): the honest three-campus fixture the R2 counterexamples are c
   assert.equal(json.evidenceSessions.filter((sess) => sess.qualifiesPeak).length, 3);
   assert.equal(json.evidenceSessions.filter((sess) => sess.qualifiesOffPeak).length, 3);
   assert.equal(json.evidenceSessions.filter((sess) => sess.pureOffPeak).length, 3);
+});
+
+test("CE-18 (A4-2) BASELINE: two honest sub-threshold peak chunks are a legitimate NO-GO", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The honest twin the two forgeries below are cut from, and the whole point
+  // of the counterexample: three genuinely independent campuses, an honest
+  // 20-tick off-peak session that DOES qualify the off-peak side, and two
+  // honest 4-tick peak chunks 25 minutes apart. Four brackets is one below
+  // MIN_GROUP_BRACKETS, so neither chunk qualifies the peak side and A4-2 is
+  // correctly unsatisfied. Nothing here is edited.
+  const runNames = buildPooledPeakChunks(dir, "honest");
+
+  const rowsByRun = runNames.map((name) =>
+    readFileSync(join(dir, name, "samples.ndjson"), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l)),
+  );
+  // The two peak chunks really are separated on BOTH clocks, by far more than
+  // the gap rule needs — so no seam rule of any shape may pool them.
+  for (const rs of rowsByRun) {
+    const gapsOf = (v) => v.slice(1).map((x, k) => x - v[k]);
+    const srvGaps = gapsOf(rs.map((r) => Date.parse(r.serverDate)));
+    const cliGaps = gapsOf(rs.map((r) => Date.parse(r.requestStartedUtc)));
+    // Two real separations per run: off-peak session -> chunk 1 -> chunk 2.
+    assert.equal(srvGaps.filter((g) => g > WINDOW_GAP_MIN_MS).length, 2);
+    assert.equal(cliGaps.filter((g) => g > WINDOW_GAP_MIN_MS).length, 2);
+    // Both separations clear the threshold with room to spare (the tighter one
+    // is chunk-to-chunk: 25 min base spacing less the 4-tick chunk span), and
+    // the honest timeline never runs backwards.
+    assert.ok(Math.min(...srvGaps) >= 0, `min server gap ${Math.min(...srvGaps)}`);
+    const separations = srvGaps.filter((g) => g > WINDOW_GAP_MIN_MS);
+    assert.ok(
+      separations.every((g) => g > 2 * WINDOW_GAP_MIN_MS),
+      `separations ${separations}`,
+    );
+    assert.ok(Math.min(...separations) < POOLED_CHUNK_GAP_MS, `${Math.min(...separations)}`);
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=84/);
+  const json = out.json;
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+  // Nine client windows, nine sessions: no pooling, nothing ambiguous.
+  assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 9);
+  assert.equal(json.evidenceSessions.length, 9);
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 1);
+    assert.equal(sess.serverGroupingAmbiguous, false);
+  }
+  // Off-peak side satisfied, peak side short by one bracket per chunk — the
+  // honest reason A4-2 fails.
+  const peakChunks = json.evidenceSessions.filter((s) => s.inPeakInformativeCount > 0);
+  assert.equal(peakChunks.length, 6);
+  for (const sess of peakChunks) {
+    assert.equal(sess.inPeakInformativeCount, POOLED_CHUNK_TICKS);
+    assert.ok(sess.inPeakInformativeCount < MIN_GROUP_BRACKETS);
+    assert.equal(sess.qualifiesPeak, false);
+  }
+  const a2 = gateById(json, "A4-2");
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+  assert.match(
+    a2.evidence,
+    /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 3/,
+  );
+  assert.doesNotMatch(a2.evidence, /supplied no evidence because holding out/);
+});
+
+for (const mode of ["merge-backwards", "merge-forwards"]) {
+  test(`CE-18 (A4-2): one forged Date cannot POOL two server-separated sessions into a qualifying one (${mode})`, (t) => {
+    const dir = makeTmpDir();
+    t.after(() => cleanup(dir));
+    // The mirror of CE-17. v2.7.1 measured the seam as `earliest Date at or
+    // after i` minus `latest Date before i`, which no single cell can RAISE —
+    // but which a single cell can COLLAPSE from either end:
+    //   merge-backwards: one Date in the later chunk dragged back into the
+    //     earlier chunk's range destroys the suffix minimum;
+    //   merge-forwards:  one Date in the earlier chunk dragged forward into
+    //     the later chunk's range destroys the prefix maximum.
+    // Either way the 25-minute server separation reads as no separation, the
+    // two client windows share a session index, and the two honest 4-bracket
+    // chunks pool into one 7-bracket session that clears MIN_GROUP_BRACKETS.
+    // v2.7.1 answered `verdict=GO qualifier=none brackets=84
+    // distinguishable=true` with all six gates satisfied on these exact bytes.
+    const runNames = buildPooledPeakChunks(dir, mode);
+
+    const honestDir = makeTmpDir();
+    t.after(() => cleanup(honestDir));
+    buildPooledPeakChunks(honestDir, "honest");
+
+    const rowsOf = (base, name) =>
+      readFileSync(join(base, name, "samples.ndjson"), "utf8")
+        .split("\n")
+        .filter((l) => l.length > 0)
+        .map((l) => JSON.parse(l));
+
+    // Nothing is fabricated: exactly ONE serverDate cell differs from the
+    // honest twin, at the expected row, and every other recorded field of
+    // every row — bodies, request columns, sequence, campus — is identical.
+    for (const name of runNames) {
+      const honest = rowsOf(honestDir, name);
+      const forged = rowsOf(dir, name);
+      assert.equal(forged.length, honest.length);
+      const edits = forged
+        .map((r, k) => (JSON.stringify(r) === JSON.stringify(honest[k]) ? -1 : k))
+        .filter((k) => k >= 0);
+      assert.deepEqual(edits, [pooledForgedRowIndex(mode)]);
+      const k = edits[0];
+      const changedFields = Object.keys(forged[k]).filter(
+        (f) => JSON.stringify(forged[k][f]) !== JSON.stringify(honest[k][f]),
+      );
+      assert.deepEqual(changedFields, ["serverDate"]);
+      assert.equal(
+        Date.parse(honest[k].serverDate) - Date.parse(forged[k].serverDate),
+        mode === "merge-backwards" ? POOLED_CHUNK_GAP_MS : -POOLED_CHUNK_GAP_MS,
+      );
+      // The CLIENT clock still shows both real separations: the forgery is
+      // purely a server-timeline claim, and the client windows stay split.
+      const cliStarts = forged.map((r) => Date.parse(r.requestStartedUtc));
+      const cliGaps = cliStarts.slice(1).map((x, i) => x - cliStarts[i]);
+      assert.equal(cliGaps.filter((g) => g > WINDOW_GAP_MIN_MS).length, 2);
+    }
+
+    const out = analyze(dir, runNames);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=84/);
+    const json = out.json;
+    assert.deepEqual(
+      json.decision.reasons.map((r) => r.split(" ")[0]),
+      ["A4-2"],
+    );
+    // The pooling DID happen — nine client windows collapse to six sessions,
+    // and the pooled session really does hold 7 in-peak brackets, over the
+    // threshold. It buys nothing, because the grouping that produced it rests
+    // on one Date cell and the session therefore supplies no evidence.
+    assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 9);
+    assert.equal(json.evidenceSessions.length, 6);
+    const pooled = json.evidenceSessions.filter((s) => s.windowIds.length === 2);
+    assert.equal(pooled.length, 3);
+    for (const sess of pooled) {
+      assert.equal(sess.bracketCount, 2 * POOLED_CHUNK_TICKS);
+      assert.equal(sess.inPeakInformativeCount, 7);
+      assert.ok(sess.inPeakInformativeCount >= MIN_GROUP_BRACKETS);
+      assert.equal(sess.qualifiesPeak, false);
+    }
+    for (const sess of json.evidenceSessions) {
+      assert.equal(sess.serverGroupingAmbiguous, true);
+      assert.equal(sess.qualifiesPeak, false);
+      assert.equal(sess.qualifiesOffPeak, false);
+    }
+    const a2 = gateById(json, "A4-2");
+    assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+    assert.match(
+      a2.evidence,
+      /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 0/,
+    );
+    assert.match(
+      a2.evidence,
+      /6 session\(s\) supplied no evidence because holding out ONE serverDate header regroups their stream's windows/,
+    );
+    // Every other gate is untouched by the void: A4-2 alone refuses.
+    for (const gate of json.goGate) {
+      assert.equal(gate.satisfied, gate.id !== "A4-2", `${gate.id}: ${gate.evidence}`);
+    }
+  });
+}
+
+test("CE-18 (A4-2): DELETING one Date header cannot pool two server-separated sessions either", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The third mirror, and the one no seam statistic sees at all. v2.7.1 gave an
+  // undated sample the RUNNING session index, so removing the first Date of the
+  // later chunk made that client window carry both indices — and windows are
+  // unioned when they share one. One deleted header pooled two genuinely
+  // server-separated sessions and v2.6.1's successor trees all answered
+  // `verdict=GO qualifier=none brackets=84 distinguishable=true` with all six
+  // gates satisfied on these bytes (v2.7.0 and v2.7.1 alike). An absent Date
+  // now imposes no grouping constraint at all, so there is no index to share.
+  const runNames = buildPooledPeakChunks(dir, "merge-delete");
+
+  const honestDir = makeTmpDir();
+  t.after(() => cleanup(honestDir));
+  buildPooledPeakChunks(honestDir, "honest");
+
+  const rowsOf = (base, name) =>
+    readFileSync(join(base, name, "samples.ndjson"), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l));
+
+  for (const name of runNames) {
+    const honest = rowsOf(honestDir, name);
+    const forged = rowsOf(dir, name);
+    assert.equal(forged.length, honest.length);
+    const edits = forged
+      .map((r, k) => (JSON.stringify(r) === JSON.stringify(honest[k]) ? -1 : k))
+      .filter((k) => k >= 0);
+    assert.deepEqual(edits, [pooledForgedRowIndex("merge-delete")]);
+    const k = edits[0];
+    const changedFields = Object.keys(forged[k]).filter(
+      (f) => JSON.stringify(forged[k][f]) !== JSON.stringify(honest[k][f]),
+    );
+    assert.deepEqual(changedFields, ["serverDate"]);
+    assert.equal(forged[k].serverDate, null);
+    assert.notEqual(honest[k].serverDate, null);
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=84/);
+  const json = out.json;
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+  // No pooling at all: nine windows, nine sessions, one window each.
+  assert.equal(json.targets.flatMap((tgt) => tgt.windows).length, 9);
+  assert.equal(json.evidenceSessions.length, 9);
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 1);
+    // Nothing is ambiguous here: holding out a Date IS deleting it, so the
+    // grouping the analyzer reports is already the held-out grouping. The
+    // deletion is a no-op on the grouping rather than something to flag.
+    assert.equal(sess.serverGroupingAmbiguous, false);
+    assert.ok(sess.inPeakInformativeCount < MIN_GROUP_BRACKETS);
+    assert.equal(sess.qualifiesPeak, false);
+  }
+  // The deleted header costs its own chunk one usable in-peak bracket; the
+  // other chunk is untouched. Neither reaches the threshold.
+  const chunkPeaks = json.evidenceSessions
+    .filter((s) => s.inPeakInformativeCount > 0)
+    .map((s) => s.inPeakInformativeCount)
+    .sort();
+  assert.deepEqual(chunkPeaks, [3, 3, 3, 4, 4, 4]);
+  const a2 = gateById(json, "A4-2");
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 0;/);
+  assert.doesNotMatch(a2.evidence, /merged into a session with another client window/);
 });

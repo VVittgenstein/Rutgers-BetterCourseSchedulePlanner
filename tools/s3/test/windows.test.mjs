@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   segmentWindows,
   assignServerSessions,
+  serverGroupingRobustness,
   nyLabel,
   overlapsNyPeak,
   overlapsNyPeakStrict,
@@ -79,25 +80,31 @@ test("assignServerSessions scales the gap threshold with 5x the interval", () =>
 });
 
 test("assignServerSessions fails closed on missing and non-monotonic serverDates", () => {
-  // A deleted Date header must never manufacture a session split: the sample
-  // inherits the current index, and the gap is measured between the nearest
-  // samples that DO carry a Date.
+  // An ABSENT Date header imposes no grouping constraint at all, wherever it
+  // sits: index null, joins no session. It used to INHERIT the running index
+  // so that a deleted header could not manufacture a split — but inheriting is
+  // a vote for the EARLIER session, i.e. a merge, and deleting the first Date
+  // of the later client window made that window carry both indices and pooled
+  // it with the earlier one (CE-18, delete direction). Contributing nothing
+  // cannot mint a split either: a boundary is only ever placed at a dated
+  // sample.
   const holed = [
     sv(T0, T0),
     sv(T0 + 13000, null),
     sv(T0 + 26000, null),
     sv(T0 + 39000, T0 + 39000),
   ];
-  assert.deepEqual(assignServerSessions(holed, 13), [0, 0, 0, 0]);
-  // A hole that spans a real server gap still splits at the next dated sample.
+  assert.deepEqual(assignServerSessions(holed, 13), [0, null, null, 0]);
+  // A hole that spans a real server gap still splits at the next dated sample,
+  // and the undated sample joins neither side.
   const holedAcrossGap = [
     sv(T0, T0),
     sv(T0 + 13000, null),
     sv(T0 + 26000, T0 + 700000),
   ];
-  assert.deepEqual(assignServerSessions(holedAcrossGap, 13), [0, 0, 1]);
-  // Samples BEFORE the first observed Date carry null: the server timeline
-  // says nothing there, so they impose no grouping constraint.
+  assert.deepEqual(assignServerSessions(holedAcrossGap, 13), [0, null, 1]);
+  // Samples before the first observed Date are the same case, and always were:
+  // the server timeline says nothing there.
   const lateFirstDate = [sv(T0, null), sv(T0 + 13000, null), sv(T0 + 26000, T0 + 26000)];
   assert.deepEqual(assignServerSessions(lateFirstDate, 13), [null, null, 0]);
   // No Date anywhere: every index is null and sessions collapse to the client
@@ -154,11 +161,14 @@ test("assignServerSessions measures the seam with order statistics, so ONE forge
   ];
   assert.deepEqual(assignServerSessions(genuineWithSpike, 13), [0, 0, 1, 1, 1]);
 
-  // INTENTIONAL COARSENING, stated rather than implied: a Date that falls back
-  // into the earlier range AFTER a real gap means the timeline no longer says
-  // "everything from here on is later than everything before". That reading is
-  // merged, which is the fail-closed direction — a session split is what buys
-  // an attacker a second independent evidence group, never a merge.
+  // COARSENING, stated rather than implied — AND NOT A SAFE DIRECTION. A Date
+  // that falls back into the earlier range AFTER a real gap collapses
+  // suffixMin, so this rule reads the two sides as one session. That is a
+  // MERGE, and a merge is emphatically not fail-closed: A4-2 counts brackets
+  // per session, so pooling two sub-threshold sessions manufactures a
+  // qualifying one. This function is deliberately NOT the defence against it
+  // — serverGroupingRobustness is, and the next test pins that. What is
+  // asserted here is only the reading itself.
   const genuineWithLateRegression = [
     sv(T0, T0),
     sv(T0 + 13000, T0 + 13000),
@@ -176,6 +186,84 @@ test("assignServerSessions measures the seam with order statistics, so ONE forge
     sv(T0 + 39000, T0 + 39000 + 700000),
   ];
   assert.deepEqual(assignServerSessions(monotone, 13), [0, 0, 1, 1]);
+});
+
+test("serverGroupingRobustness catches the MERGE a single Date cell would buy", () => {
+  // The mirror of the forged split above, and the one the order-statistic seam
+  // cannot see: two client windows separated by a genuine 700 s server gap,
+  // with ONE Date inside the LATER window dragged back into the earlier
+  // window's range. suffixMin collapses, the seam vanishes, both windows land
+  // in session 0 and A4-2 would count their brackets together.
+  const forgedMerge = [
+    sv(T0, T0),
+    sv(T0 + 13000, T0 + 13000),
+    sv(T0 + 26000, T0 + 700000),
+    sv(T0 + 39000, T0 + 26000),
+  ];
+  const twoWindows = [0, 0, 1, 1];
+  assert.deepEqual(assignServerSessions(forgedMerge, 13), [0, 0, 0, 0]);
+  const merged = serverGroupingRobustness(forgedMerge, 13, twoWindows, 2);
+  assert.equal(merged.robust, false);
+  // Holding out the one regressed cell restores the separation, which is
+  // exactly the statement "one Date header decided this grouping".
+  assert.equal(merged.decidedByIndex, 3);
+  assert.equal(merged.grouping, "0,0");
+  assert.equal(merged.heldOutGrouping, "0,1");
+
+  // Its HONEST twin — the same two windows, the same real gap, no regressed
+  // cell — is 1-robust: every single hold-out still leaves two sessions. This
+  // is the anti-lockout half: the check must not fire on honest separation.
+  const honestPair = [
+    sv(T0, T0),
+    sv(T0 + 13000, T0 + 13000),
+    sv(T0 + 26000, T0 + 700000),
+    sv(T0 + 39000, T0 + 713000),
+  ];
+  assert.deepEqual(assignServerSessions(honestPair, 13), [0, 0, 1, 1]);
+  const honest = serverGroupingRobustness(honestPair, 13, twoWindows, 2);
+  assert.equal(honest.robust, true);
+  assert.equal(honest.decidedByIndex, null);
+  assert.equal(honest.grouping, "0,1");
+
+  // Holding out the LAST Date of the first window or the FIRST Date of the
+  // second moves the boundary to the neighbouring sample, which lies in the
+  // same client window — so the grouping does not move. That is why an honest
+  // capture survives a check with a breakdown point of one.
+  assert.deepEqual(assignServerSessions(honestPair.filter((_, i) => i !== 1), 13), [0, 1, 1]);
+  assert.deepEqual(assignServerSessions(honestPair.filter((_, i) => i !== 2), 13), [0, 0, 1]);
+
+  // One continuous window: nothing to regroup, so the check cannot fire. This
+  // is the shape of every real capture in docs/evidence (one window per
+  // stream), which is why the rule is a provable no-op there.
+  const oneRun = [sv(T0, T0), sv(T0 + 13000, T0 + 13000), sv(T0 + 26000, T0 + 26000)];
+  assert.equal(serverGroupingRobustness(oneRun, 13, [0, 0, 0], 1).robust, true);
+  // A regression that does NOT move any boundary buys nothing and is not
+  // flagged: the check is about the grouping, not about monotonicity.
+  const skewedRun = [sv(T0, T0 + 5000), sv(T0 + 13000, T0), sv(T0 + 26000, T0 + 26000)];
+  assert.equal(serverGroupingRobustness(skewedRun, 13, [0, 0, 0], 1).robust, true);
+
+  // Undated samples make no claim, so they are never held out, and a stream
+  // with no Date anywhere imposes no grouping at all.
+  const undated = [sv(T0, null), sv(T0 + 13000, null)];
+  assert.equal(serverGroupingRobustness(undated, 13, [0, 1], 2).robust, true);
+  assert.equal(serverGroupingRobustness(undated, 13, [0, 1], 2).grouping, "0,1");
+  assert.equal(serverGroupingRobustness([], 13, [], 0).robust, true);
+
+  // HOLDING OUT A Date IS EXACTLY DELETING IT, now that an absent Date imposes
+  // no grouping constraint — which is what makes this one check cover the
+  // deletion vector as well as the edit vector. Deleting the FIRST Date of the
+  // later window is the deletion that used to pool the two windows; here the
+  // grouping is unchanged, so there is nothing to flag and nothing gained.
+  const deletedFirstOfSecondWindow = [
+    sv(T0, T0),
+    sv(T0 + 13000, T0 + 13000),
+    sv(T0 + 26000, null),
+    sv(T0 + 39000, T0 + 713000),
+  ];
+  assert.deepEqual(assignServerSessions(deletedFirstOfSecondWindow, 13), [0, 0, null, 1]);
+  const deleted = serverGroupingRobustness(deletedFirstOfSecondWindow, 13, twoWindows, 2);
+  assert.equal(deleted.robust, true);
+  assert.equal(deleted.grouping, honest.grouping);
 });
 
 test("nyLabel: overnight D1-shaped window crosses the NY calendar day", () => {
