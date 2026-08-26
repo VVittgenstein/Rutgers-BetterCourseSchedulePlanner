@@ -181,6 +181,19 @@ ADAPT_CHAIN_UNKNOWN_JSON="$TEST_TMP/adapt-chain-unknown.json"
 cat > "$ADAPT_CHAIN_UNKNOWN_JSON" <<'JSON'
 {"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"some_plugin_handler"},{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}],"terminal":true}]}}}}}
 JSON
+# The same shadowing in the shape Caddy really emits for it: adjacent
+# directives sharing a matcher are consolidated into ONE route, so the
+# respond and the proxy end up in one handle chain inside the site subroute.
+ADAPT_CHAIN_SHADOW_NESTED_JSON="$TEST_TMP/adapt-chain-shadow-nested.json"
+cat > "$ADAPT_CHAIN_SHADOW_NESTED_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"static_response","status_code":503,"body":"maintenance"},{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]}],"terminal":true}]}}}}}
+JSON
+# A proxy answers the request too, so a second proxy behind it in the same
+# chain is dead code -- including the one that carries the delay.
+ADAPT_CHAIN_TWO_PROXIES_JSON="$TEST_TMP/adapt-chain-two-proxies.json"
+cat > "$ADAPT_CHAIN_TWO_PROXIES_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:9090"}]},{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]}],"terminal":true}]}}}}}
+JSON
 # Two servers on the SAME origin port, on different listen addresses. The
 # protected proxy is on one interface; the public host is also served, by a
 # static response, on the other. Flattening the two and accepting "one of
@@ -235,6 +248,8 @@ make_stub caddy-adapt-errors-only "case \"\$1\" in adapt) cat '$ADAPT_ERRORS_ONL
 make_stub caddy-adapt-chain-shadow "case \"\$1\" in adapt) cat '$ADAPT_CHAIN_SHADOW_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-chain-middleware "case \"\$1\" in adapt) cat '$ADAPT_CHAIN_MIDDLEWARE_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-chain-unknown "case \"\$1\" in adapt) cat '$ADAPT_CHAIN_UNKNOWN_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-chain-shadow-nested "case \"\$1\" in adapt) cat '$ADAPT_CHAIN_SHADOW_NESTED_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-chain-two-proxies "case \"\$1\" in adapt) cat '$ADAPT_CHAIN_TWO_PROXIES_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-same-port-split "case \"\$1\" in adapt) cat '$ADAPT_SAME_PORT_SPLIT_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-same-port-both "case \"\$1\" in adapt) cat '$ADAPT_SAME_PORT_BOTH_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-opaque "case \"\$1\" in adapt) cat '$ADAPT_OPAQUE_JSON' ;; *) exit 0 ;; esac"
@@ -541,6 +556,10 @@ PF_CADDY="$STUB_DIR/caddy-adapt-chain-middleware" jq_expect_pass 'proxy behind o
   --caddyfile "$GOOD_CADDYFILE"
 PF_CADDY="$STUB_DIR/caddy-adapt-chain-unknown" jq_expect_fail 'unknown handler ahead of the proxy' \
   'next/terminal semantics this check cannot interpret' --caddyfile "$GOOD_CADDYFILE"
+PF_CADDY="$STUB_DIR/caddy-adapt-chain-shadow-nested" jq_expect_fail 'proxy shadowed in a consolidated chain' \
+  'no active route for planner.example.test reaches' --caddyfile "$GOOD_CADDYFILE"
+PF_CADDY="$STUB_DIR/caddy-adapt-chain-two-proxies" jq_expect_fail 'protected proxy behind another proxy' \
+  'no active route for planner.example.test reaches' --caddyfile "$GOOD_CADDYFILE"
 # ... and two servers on the same origin port are two interfaces, not one
 # pool: a protected proxy on one says nothing about the other.
 PF_CADDY="$STUB_DIR/caddy-adapt-same-port-split" jq_expect_fail 'protection on the other listen address' \

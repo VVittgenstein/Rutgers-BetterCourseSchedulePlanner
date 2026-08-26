@@ -592,6 +592,13 @@ def route_is_unconditional($public):
 #             afterwards depends on what happened in there
 #   unknown   refused -- guessing that an unrecognized handler continues is
 #             how an unreachable proxy gets counted as protection
+#
+# The lists hold only what is certain from the Caddy MiddlewareHandler
+# contract. `metrics` and `acme_server` are left out on purpose: both look
+# terminating and both may call next for a request outside their own prefix,
+# and a plausible guess is still a guess. Handlers AFTER a terminator are
+# never classified, so only an unrecognized handler AHEAD of the proxy costs
+# anything -- which is what makes refusing affordable.
 def handler_class:
   if . == "reverse_proxy" then "proxy"
   elif . == "subroute" then "subroute"
@@ -600,7 +607,7 @@ def handler_class:
     or . == "map" or . == "tracing" or . == "authentication"
   then "continue"
   elif . == "static_response" or . == "file_server" or . == "abort"
-    or . == "error" or . == "acme_server" or . == "metrics"
+    or . == "error"
   then "stop"
   else "unknown"
   end;
