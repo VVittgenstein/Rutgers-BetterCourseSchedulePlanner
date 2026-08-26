@@ -12,8 +12,8 @@
 use std::sync::{Arc, Mutex};
 
 use bcsp_application::{
-    OpenRuntimeSnapshotRegistry, SharedWatchSocket, WatchAdmissionSource, WebSocketExtension,
-    is_product_campus,
+    OpenRuntimeSnapshotRegistry, OutboundSender, SharedWatchSocket, WatchAdmissionSource,
+    WebSocketExtension, is_product_campus,
 };
 use bcsp_contracts::{
     SectionKey, TraceId, WatchClientCommandV1, WsClientEnvelope, decode_versioned_envelope_json,
@@ -23,7 +23,6 @@ use bcsp_local_user_state::PersonalStateStore;
 use bcsp_open::{OpenProjectionError, project_current_open_observation};
 use bcsp_watch::{WatchManagerError, WatchStartAdmission};
 use time::OffsetDateTime;
-use tokio::sync::mpsc;
 
 use crate::{
     DesiredWatchCoordinator, LocalConsole, LocalConsoleEvent, LocalPrimaryDatabase,
@@ -171,7 +170,7 @@ impl LocalWatchRoute {
 }
 
 impl WebSocketExtension for LocalWatchRoute {
-    fn connect(&self, connection_id: TraceId, outbound: mpsc::UnboundedSender<String>) -> bool {
+    fn connect(&self, connection_id: TraceId, outbound: OutboundSender) -> bool {
         if !self.watch.connect(connection_id, outbound) {
             return false;
         }

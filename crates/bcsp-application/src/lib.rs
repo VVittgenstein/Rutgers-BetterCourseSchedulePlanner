@@ -28,10 +28,11 @@ pub use discovery_runtime::{
 pub use host::{
     BoundedOutboundConfig, BoundedOutboundStats, ExtensionRequest, ExtensionResponse,
     ExtensionRoute, LoopbackServer, LoopbackServerError, MAX_WEBSOCKET_MESSAGE_BYTES,
-    OutboundByteBudget, RequestMethod, RouteExtension, SHARED_WATCH_SUBPROTOCOL,
-    SecondaryRoutePathRejection, SecondaryWebSocketRoute, SessionNonce, WebSocketExtension,
-    serve_websocket, serve_websocket_with_bounded_outbound, shared_websocket_upgrade,
-    spawn_loopback_server, spawn_loopback_server_with_socket, spawn_loopback_server_with_sockets,
+    OutboundByteBudget, OutboundSendError, OutboundSender, RequestMethod, RouteExtension,
+    SHARED_WATCH_SUBPROTOCOL, SecondaryRoutePathRejection, SecondaryWebSocketRoute, SessionNonce,
+    WebSocketExtension, serve_websocket, serve_websocket_with_bounded_outbound,
+    shared_websocket_upgrade, spawn_loopback_server, spawn_loopback_server_with_socket,
+    spawn_loopback_server_with_sockets,
 };
 pub use official_refresh_runtime::{
     DISCOVERY_RETRY_INTERVAL, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,

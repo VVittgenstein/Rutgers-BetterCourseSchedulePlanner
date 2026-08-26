@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use bcsp_contracts::{
-    ActiveWatchTargetV1, OpenObservationV1, SectionKey, SystemTraceIdSource, TraceId, TraceIdSource,
-    WatchClientCommandV1, WatchPolicyV1, WatchServerEventV1, WatchStartItemResultV1,
+    ActiveWatchTargetV1, OpenObservationV1, SectionKey, SystemTraceIdSource, TraceId,
+    TraceIdSource, WatchClientCommandV1, WatchPolicyV1, WatchServerEventV1, WatchStartItemResultV1,
     WatchStartItemsV1, WatchStopReason, WsClientEnvelope, WsServerEnvelope,
     decode_versioned_envelope_json,
 };
@@ -13,9 +13,8 @@ use bcsp_watch::{
     WatchStartAdmission,
 };
 use time::OffsetDateTime;
-use tokio::sync::mpsc;
 
-use crate::WebSocketExtension;
+use crate::{OutboundSender, WebSocketExtension};
 
 const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -110,7 +109,7 @@ impl WatchClock for SystemWatchClock {
 }
 
 struct ConnectionChannel {
-    sender: mpsc::UnboundedSender<String>,
+    sender: OutboundSender,
     last_ping_at: WatchInstant,
     ping_sequence: u64,
 }
@@ -205,14 +204,12 @@ where
     /// lie the watch surface exists to avoid.
     pub fn total_active_watch_count(&self) -> usize {
         self.lock_state().map_or(0, |state| {
-            state
-                .connections
-                .keys()
-                .copied()
-                .chain(state.owner)
-                .fold(0usize, |total, connection_id| {
+            state.connections.keys().copied().chain(state.owner).fold(
+                0usize,
+                |total, connection_id| {
                     total.saturating_add(state.manager.connection_watches(connection_id).len())
-                })
+                },
+            )
         })
     }
 
@@ -350,7 +347,7 @@ where
     /// last PING is at least [`WATCH_APP_PING_INTERVAL`] old. Sequences are
     /// per-connection starting at 1; envelope IDs are fresh per frame, so
     /// client-side envelope dedup never coalesces two heartbeats.
-    fn due_pings(state: &mut SocketState<C, I, E>) -> Vec<(mpsc::UnboundedSender<String>, String)>
+    fn due_pings(state: &mut SocketState<C, I, E>) -> Vec<(OutboundSender, String)>
     where
         E: TraceIdSource,
     {
@@ -474,12 +471,12 @@ where
                 .lock_state()
                 .ok_or(WatchManagerError::InvalidContractProjection)?;
             let message_id = state.envelope_ids.next_trace_id();
-            let outcome = state.manager.start_with_admission(
-                owner,
-                message_id,
-                items,
-                |section| self.admission.admission_for(section),
-            )?;
+            let outcome =
+                state
+                    .manager
+                    .start_with_admission(owner, message_id, items, |section| {
+                        self.admission.admission_for(section)
+                    })?;
             (message_id, outcome.dispatch, !outcome.replayed)
         };
         let results = start_item_results(&dispatch);
@@ -530,9 +527,7 @@ where
             WatchClientCommandV1::StartWatch { .. }
             | WatchClientCommandV1::StopWatch { .. }
             | WatchClientCommandV1::UpdatePolicy { .. }
-            | WatchClientCommandV1::HeartbeatAck { .. } => {
-                Err(WatchManagerError::TargetMismatch)
-            }
+            | WatchClientCommandV1::HeartbeatAck { .. } => Err(WatchManagerError::TargetMismatch),
             WatchClientCommandV1::AcknowledgeEpisode { episode } => {
                 self.owner_dispatch(|manager, owner| {
                     manager.acknowledge_episode(owner, episode.clone())
@@ -546,9 +541,8 @@ where
                     manager.resume_timed_out_episode(owner, episode.clone())
                 })
             }
-            WatchClientCommandV1::ResetAudibleCount { watch } => {
-                self.owner_dispatch(|manager, owner| manager.reset_audible_count(owner, watch.clone()))
-            }
+            WatchClientCommandV1::ResetAudibleCount { watch } => self
+                .owner_dispatch(|manager, owner| manager.reset_audible_count(owner, watch.clone())),
             WatchClientCommandV1::ReportCueOutcome { report } => self
                 .owner_dispatch(|manager, owner| manager.report_cue_outcome(owner, report.clone())),
             WatchClientCommandV1::DismissAlert { alert } => {
@@ -767,7 +761,7 @@ where
     I: TraceIdSource + Send + 'static,
     E: TraceIdSource + Send + 'static,
 {
-    fn connect(&self, connection_id: TraceId, outbound: mpsc::UnboundedSender<String>) -> bool {
+    fn connect(&self, connection_id: TraceId, outbound: OutboundSender) -> bool {
         let Some(mut state) = self.lock_state() else {
             return false;
         };
@@ -864,6 +858,7 @@ mod tests {
         WatchStartRejectionReason,
     };
     use bcsp_watch::{WatchActionKind, WatchCleanupReason};
+    use tokio::sync::mpsc;
 
     use super::*;
 
@@ -1061,12 +1056,14 @@ mod tests {
         );
         let first = trace(1);
         let second = trace(2);
-        let (first_outbound, mut first_frames) = mpsc::unbounded_channel();
-        let (second_outbound, mut second_frames) = mpsc::unbounded_channel();
+        let (first_outbound, mut first_frames) = OutboundSender::unbounded_pair();
+        let (second_outbound, mut second_frames) = OutboundSender::unbounded_pair();
         assert!(socket.connect(first, first_outbound));
         assert!(socket.connect(second, second_outbound));
 
-        let results = socket.owner_start(items([section(1)])).expect("owner start");
+        let results = socket
+            .owner_start(items([section(1)]))
+            .expect("owner start");
         assert!(results[0].is_active());
         assert_eq!(socket.owner_watched_sections(), vec![section(1)]);
         assert_eq!(socket.audience_connection_count(), 2);
@@ -1133,7 +1130,7 @@ mod tests {
             "asking twice must not open a second owner",
         );
 
-        let (outbound, _frames) = mpsc::unbounded_channel();
+        let (outbound, _frames) = OutboundSender::unbounded_pair();
         assert!(
             !socket.connect(owner, outbound),
             "a wire connection must not be able to become the owner",
@@ -1150,9 +1147,11 @@ mod tests {
             Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
             Arc::new(NoopWatchDispatchSink),
         );
-        let (outbound, _frames) = mpsc::unbounded_channel();
+        let (outbound, _frames) = OutboundSender::unbounded_pair();
         assert!(socket.connect(trace(1), outbound));
-        socket.owner_start(items([section(1)])).expect("owner start");
+        socket
+            .owner_start(items([section(1)]))
+            .expect("owner start");
         let owner = socket.owner_connection().expect("owner");
 
         // Well past the 60s heartbeat timeout, with the owner never having
@@ -1176,7 +1175,9 @@ mod tests {
             Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
             Arc::new(NoopWatchDispatchSink),
         );
-        socket.owner_start(items([section(1)])).expect("owner start");
+        socket
+            .owner_start(items([section(1)]))
+            .expect("owner start");
         let first = socket.owner_connection().expect("owner");
 
         socket.stop();
@@ -1203,9 +1204,11 @@ mod tests {
             Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
             Arc::new(NoopWatchDispatchSink),
         );
-        let (outbound, _frames) = mpsc::unbounded_channel();
+        let (outbound, _frames) = OutboundSender::unbounded_pair();
         assert!(socket.connect(trace(1), outbound));
-        socket.owner_start(items([section(1)])).expect("owner start");
+        socket
+            .owner_start(items([section(1)]))
+            .expect("owner start");
 
         assert_eq!(
             socket.owner_command(WatchClientCommandV1::StartWatch {
@@ -1236,7 +1239,9 @@ mod tests {
             Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
             Arc::new(NoopWatchDispatchSink),
         );
-        socket.owner_start(items([section(1)])).expect("owner start");
+        socket
+            .owner_start(items([section(1)]))
+            .expect("owner start");
         assert_eq!(socket.owner_watched_sections(), vec![section(1)]);
 
         // An ordinary stop: the owner is forgotten, and asking again opens a
@@ -1252,7 +1257,7 @@ mod tests {
                 .expect("owner start")[0]
                 .is_active(),
         );
-        let (outbound, _frames) = mpsc::unbounded_channel();
+        let (outbound, _frames) = OutboundSender::unbounded_pair();
         assert!(socket.connect(trace(1), outbound));
 
         socket.seal_and_stop();
@@ -1291,9 +1296,11 @@ mod tests {
             }),
             sink.clone(),
         );
-        let (outbound, mut frames) = mpsc::unbounded_channel();
+        let (outbound, mut frames) = OutboundSender::unbounded_pair();
         assert!(socket.connect(trace(1), outbound));
-        socket.owner_start(items([section(1)])).expect("owner start");
+        socket
+            .owner_start(items([section(1)]))
+            .expect("owner start");
         assert_eq!(socket.owner_watched_sections(), vec![section(1)]);
         while frames.try_recv().is_ok() {}
 
@@ -1310,12 +1317,17 @@ mod tests {
             .map(|frame| {
                 serde_json::from_str::<WsServerEnvelope<WatchServerEventV1>>(&frame).unwrap()
             })
-            .any(|envelope| matches!(
-                envelope.payload(),
-                WatchServerEventV1::WatchStopped { stopped }
-                    if stopped.reason == WatchStopReason::TermOutOfRange
-            ));
-        assert!(stopped, "the owner's forced stop is fanned out to every page");
+            .any(|envelope| {
+                matches!(
+                    envelope.payload(),
+                    WatchServerEventV1::WatchStopped { stopped }
+                        if stopped.reason == WatchStopReason::TermOutOfRange
+                )
+            });
+        assert!(
+            stopped,
+            "the owner's forced stop is fanned out to every page"
+        );
     }
 
     /// The identity of every owner-held watch, which is what tells "the watch
@@ -1327,7 +1339,9 @@ mod tests {
             Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
             Arc::new(NoopWatchDispatchSink),
         );
-        let results = socket.owner_start(items([section(1)])).expect("owner start");
+        let results = socket
+            .owner_start(items([section(1)]))
+            .expect("owner start");
         let WatchStartItemResultV1::Active {
             active_watch_id, ..
         } = results[0]
@@ -1339,9 +1353,7 @@ mod tests {
         assert_eq!(targets[0].section_key, section(1));
         assert_eq!(targets[0].active_watch_id, active_watch_id);
 
-        socket
-            .owner_stop(targets[0].clone())
-            .expect("owner stop");
+        socket.owner_stop(targets[0].clone()).expect("owner stop");
         assert!(socket.owner_watch_targets().is_empty());
     }
 
@@ -1362,7 +1374,7 @@ mod tests {
         );
         let connection_id = trace(1);
         let message_id = trace(2);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
 
         send(
@@ -1416,7 +1428,7 @@ mod tests {
         );
         let first_connection = trace(90);
         let second_connection = trace(91);
-        let (first_outbound, mut first_receiver) = mpsc::unbounded_channel();
+        let (first_outbound, mut first_receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(first_connection, first_outbound));
 
         socket.stop();
@@ -1426,7 +1438,7 @@ mod tests {
             first_receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Disconnected)
         ));
-        let (second_outbound, _second_receiver) = mpsc::unbounded_channel();
+        let (second_outbound, _second_receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(second_connection, second_outbound));
         assert_eq!(socket.connection_count(), 1);
 
@@ -1443,7 +1455,7 @@ mod tests {
         );
         let first_connection = trace(92);
         let second_connection = trace(93);
-        let (first_outbound, mut first_receiver) = mpsc::unbounded_channel();
+        let (first_outbound, mut first_receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(first_connection, first_outbound));
 
         socket.seal_and_stop();
@@ -1454,7 +1466,7 @@ mod tests {
             first_receiver.try_recv(),
             Err(mpsc::error::TryRecvError::Disconnected)
         ));
-        let (second_outbound, _second_receiver) = mpsc::unbounded_channel();
+        let (second_outbound, _second_receiver) = OutboundSender::unbounded_pair();
         assert!(!socket.connect(second_connection, second_outbound));
         assert_eq!(socket.connection_count(), 0);
     }
@@ -1467,7 +1479,7 @@ mod tests {
         );
         let connection_id = trace(12);
         let watched = section(12);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
 
         send(
@@ -1502,7 +1514,7 @@ mod tests {
         );
         let connection_id = trace(14);
         let watched = section(14);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
 
         send(
@@ -1536,8 +1548,8 @@ mod tests {
         );
         let first_connection = trace(1);
         let second_connection = trace(2);
-        let (first_outbound, mut first_receiver) = mpsc::unbounded_channel();
-        let (second_outbound, mut second_receiver) = mpsc::unbounded_channel();
+        let (first_outbound, mut first_receiver) = OutboundSender::unbounded_pair();
+        let (second_outbound, mut second_receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(first_connection, first_outbound));
         assert!(socket.connect(second_connection, second_outbound));
         send(
@@ -1580,7 +1592,7 @@ mod tests {
             sink.clone(),
         );
         let connection_id = trace(20);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
         let command = WatchClientCommandV1::StartWatch {
             items: items([section(20)]),
@@ -1614,7 +1626,7 @@ mod tests {
         let connection_id = trace(30);
         let message_id = trace(31);
         let watched = section(30);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
         let command = WatchClientCommandV1::StartWatch {
             items: items([watched.clone()]),
@@ -1639,7 +1651,7 @@ mod tests {
         );
         let connection_id = trace(40);
         let watched = section(40);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
         send(
             &socket,
@@ -1694,7 +1706,7 @@ mod tests {
         );
         let connection_id = trace(43);
         let watched = section(43);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
         send(
             &socket,
@@ -1738,7 +1750,7 @@ mod tests {
         );
         let connection_id = trace(45);
         let watched = section(45);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
         send(
             &socket,
@@ -1772,7 +1784,7 @@ mod tests {
         );
         let observation = open_observation();
         let connection_id = trace(50);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
         send(
             &socket,
@@ -1812,7 +1824,7 @@ mod tests {
             sink.clone(),
         );
         let connection_id = trace(60);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
         send(
             &socket,
@@ -1856,7 +1868,7 @@ mod tests {
         );
         let observation = open_observation();
         let connection_id = trace(70);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
         let policy = WatchPolicyV1::new(
             WatchNotificationMode::Continuous,
@@ -1910,7 +1922,7 @@ mod tests {
             sink.clone(),
         );
         let connection_id = trace(80);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
         send(
             &socket,
@@ -1994,7 +2006,7 @@ mod tests {
             sink.clone(),
         );
         let connection_id = trace(90);
-        let (outbound, mut receiver) = mpsc::unbounded_channel();
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
         assert!(socket.connect(connection_id, outbound));
 
         // 59s idle, then only a MALFORMED ack arrives (extra field under the

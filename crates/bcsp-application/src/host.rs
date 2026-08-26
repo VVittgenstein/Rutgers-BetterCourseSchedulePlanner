@@ -204,7 +204,7 @@ pub trait RouteExtension: Send + Sync + 'static {
 /// Shared text-frame transport seam used by the watch protocol on both targets.
 /// Implementations own typed frame decoding and connection-bound watch state.
 pub trait WebSocketExtension: Send + Sync + 'static {
-    fn connect(&self, connection_id: TraceId, outbound: mpsc::UnboundedSender<String>) -> bool;
+    fn connect(&self, connection_id: TraceId, outbound: OutboundSender) -> bool;
 
     fn transport_activity(&self, _connection_id: TraceId) {}
 
@@ -611,7 +611,7 @@ pub async fn serve_websocket(
     extension: Arc<dyn WebSocketExtension>,
     connection_id: TraceId,
 ) {
-    let (outbound, mut outbound_messages) = mpsc::unbounded_channel();
+    let (outbound, mut outbound_messages) = OutboundSender::unbounded_pair();
     let connect_extension = Arc::clone(&extension);
     let connected =
         tokio::task::spawn_blocking(move || connect_extension.connect(connection_id, outbound))
@@ -836,30 +836,160 @@ fn account_frame(
     })
 }
 
+/// The outbound half every [`WebSocketExtension`] holds (STAGE-3-R1).
+///
+/// Two shapes, one contract: `send` either RETAINS the payload for the
+/// transport pump or refuses it -- there is no state in which a payload
+/// sits queued without its budget.
+///
+/// - The local loopback transport uses the raw unbounded String channel it
+///   always had ([`OutboundSender::unbounded_pair`]); its behavior is
+///   unchanged.
+/// - The public transport's variant reserves the payload's bytes against
+///   the per-socket and process-wide budgets BEFORE the payload enters the
+///   channel. A payload the budgets refuse is dropped on the spot, the
+///   refusal is counted, and the connection is marked for teardown -- the
+///   frozen queued-payload contract holds at the only place a payload can
+///   become queued.
+#[derive(Clone)]
+pub struct OutboundSender {
+    inner: OutboundSenderInner,
+}
+
+#[derive(Clone)]
+enum OutboundSenderInner {
+    Raw(mpsc::UnboundedSender<String>),
+    Accounted(Arc<AccountedOutbound>),
+}
+
+/// The payload could not be handed to the transport: the connection is
+/// closed, closing, or (public only) over its outbound budget. Callers
+/// treat every case the same way the raw channel's send error was treated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OutboundSendError;
+
+struct AccountedOutbound {
+    channel: mpsc::UnboundedSender<AccountedItem>,
+    socket_budget: Arc<OutboundByteBudget>,
+    global_budget: Arc<OutboundByteBudget>,
+    stats: Arc<BoundedOutboundStats>,
+    /// Set once, by the send that overflowed a budget. Every later send is
+    /// refused without touching the budgets, and the pump tears the
+    /// connection down at its next turn.
+    killed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// What the accounted channel carries: payloads that already hold their
+/// budget, or the news that a budget refused one.
+enum AccountedItem {
+    Frame(AccountedFrame),
+    Overflow,
+}
+
+/// Receiver half of the accounted channel, with the kill flag the pump
+/// checks so a slow-consumer verdict tears the connection down promptly
+/// instead of draining first.
+struct AccountedReceiver {
+    items: mpsc::UnboundedReceiver<AccountedItem>,
+    killed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl OutboundSender {
+    /// The local loopback shape: the plain unbounded String channel, for
+    /// the shared pump and for tests that read frames straight off the
+    /// receiver.
+    pub fn unbounded_pair() -> (Self, mpsc::UnboundedReceiver<String>) {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        (
+            Self {
+                inner: OutboundSenderInner::Raw(sender),
+            },
+            receiver,
+        )
+    }
+
+    fn accounted_pair(
+        socket_budget: Arc<OutboundByteBudget>,
+        global_budget: Arc<OutboundByteBudget>,
+        stats: Arc<BoundedOutboundStats>,
+    ) -> (Self, AccountedReceiver) {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (
+            Self {
+                inner: OutboundSenderInner::Accounted(Arc::new(AccountedOutbound {
+                    channel: sender,
+                    socket_budget,
+                    global_budget,
+                    stats,
+                    killed: killed.clone(),
+                })),
+            },
+            AccountedReceiver {
+                items: receiver,
+                killed,
+            },
+        )
+    }
+
+    /// Hands one payload to the transport, or refuses it. For the public
+    /// shape the byte reservation happens HERE -- before the payload is
+    /// retained anywhere -- and an overflow marks the connection dead.
+    pub fn send(&self, frame: String) -> Result<(), OutboundSendError> {
+        match &self.inner {
+            OutboundSenderInner::Raw(sender) => sender.send(frame).map_err(|_| OutboundSendError),
+            OutboundSenderInner::Accounted(shared) => {
+                if shared.killed.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(OutboundSendError);
+                }
+                match account_frame(frame, &shared.socket_budget, &shared.global_budget) {
+                    Ok(frame) => shared
+                        .channel
+                        .send(AccountedItem::Frame(frame))
+                        .map_err(|_| OutboundSendError),
+                    Err(overflow) => {
+                        if !shared
+                            .killed
+                            .swap(true, std::sync::atomic::Ordering::SeqCst)
+                        {
+                            shared.stats.record_overflow(overflow);
+                            let _ = shared.channel.send(AccountedItem::Overflow);
+                        }
+                        Err(OutboundSendError)
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Runs the public target's variant of the transport pump: the same frame,
 /// heartbeat, and cleanup semantics as [`serve_websocket`], plus the P2/H4
-/// outbound contract -- every queued byte is reserved against a per-socket
-/// and a process-wide budget before it may wait for the wire, and every
-/// actual socket write (Text, Pong, Ping) runs under one write deadline.
+/// outbound contract -- and every actual socket write (Text, Pong, Ping)
+/// runs under one write deadline.
 ///
-/// A reservation that cannot be granted, or a write that outlives the
-/// deadline, ends exactly that connection: the queue is dropped, its
-/// reservations return by RAII, and no replacement queue -- control, close,
-/// or otherwise -- is allowed to grow in its place. The extension still
-/// holds a plain [`mpsc::UnboundedSender`], so [`WebSocketExtension`] and
-/// the local presence/watch routes are untouched; frames the extension
-/// enqueues while the pump is mid-await are accounted at the next drain.
-/// That unaccounted residency is transient, not a growth loop: the write
-/// half of the window is bounded by the write deadline, and the
-/// spawn_blocking extension-call half by extension-call latency -- after
-/// either, the drain runs before anything else is awaited.
+/// The byte budgets are NOT enforced here (STAGE-3-R1): they are enforced
+/// inside [`OutboundSender::send`], at the only point a payload can become
+/// queued, so nothing this pump reads from its channel is ever retained
+/// without a reservation. The pump's part of the contract is teardown and
+/// release: an overflow verdict from the sender (the kill flag or the
+/// overflow marker, whichever is seen first) ends exactly that connection,
+/// a write that outlives the deadline does the same, and dropping the
+/// channel returns every queued reservation by RAII. No replacement queue
+/// -- control, close, or otherwise -- grows in either case.
 pub async fn serve_websocket_with_bounded_outbound(
     mut socket: WebSocket,
     extension: Arc<dyn WebSocketExtension>,
     connection_id: TraceId,
     config: BoundedOutboundConfig,
 ) {
-    let (outbound, mut outbound_messages) = mpsc::unbounded_channel();
+    let socket_budget = OutboundByteBudget::new(config.per_socket_budget_bytes);
+    let (outbound, mut outbound_items) = OutboundSender::accounted_pair(
+        socket_budget,
+        config.global_budget.clone(),
+        config.stats.clone(),
+    );
+    let killed = outbound_items.killed.clone();
     let connect_extension = Arc::clone(&extension);
     let connected =
         tokio::task::spawn_blocking(move || connect_extension.connect(connection_id, outbound))
@@ -867,51 +997,15 @@ pub async fn serve_websocket_with_bounded_outbound(
     if !matches!(connected, Ok(true)) {
         return;
     }
-    let socket_budget = OutboundByteBudget::new(config.per_socket_budget_bytes);
-    let mut queue: std::collections::VecDeque<AccountedFrame> = std::collections::VecDeque::new();
     let mut heartbeat = tokio::time::interval(SOCKET_HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_seen = tokio::time::Instant::now();
-    'pump: loop {
-        // Account everything the extension queued since the last turn.
-        // try_recv never waits, so the extension-facing channel only holds
-        // frames between turns -- there is no second queue outside the
-        // budget, only this bounded one.
-        loop {
-            match outbound_messages.try_recv() {
-                Ok(text) => match account_frame(text, &socket_budget, &config.global_budget) {
-                    Ok(frame) => queue.push_back(frame),
-                    Err(overflow) => {
-                        config.stats.record_overflow(overflow);
-                        break 'pump;
-                    }
-                },
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => break 'pump,
-            }
-        }
-        // Owe the peer a frame? Write exactly one under the deadline, then
-        // account again before considering anything else.
-        if let Some(frame) = queue.pop_front() {
-            let AccountedFrame {
-                text,
-                socket_reservation,
-                global_reservation,
-            } = frame;
-            let written = tokio::time::timeout(
-                config.write_timeout,
-                socket.send(Message::Text(text.into())),
-            )
-            .await;
-            drop((socket_reservation, global_reservation));
-            match written {
-                Ok(Ok(())) => continue,
-                Ok(Err(_)) => break,
-                Err(_) => {
-                    config.stats.record_write_timeout();
-                    break;
-                }
-            }
+    loop {
+        // A slow-consumer verdict tears the connection down at the next
+        // turn -- queued-but-doomed frames are dropped (their reservations
+        // return with the channel), never drained onto a dead peer.
+        if killed.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
         }
         tokio::select! {
             incoming = socket.recv() => {
@@ -971,15 +1065,37 @@ pub async fn serve_websocket_with_bounded_outbound(
                     Some(Ok(Message::Binary(_))) => break,
                 }
             }
-            outbound = outbound_messages.recv() => {
-                let Some(text) = outbound else {
-                    break;
-                };
-                match account_frame(text, &socket_budget, &config.global_budget) {
-                    Ok(frame) => queue.push_back(frame),
-                    Err(overflow) => {
-                        config.stats.record_overflow(overflow);
-                        break;
+            item = outbound_items.items.recv() => {
+                match item {
+                    // The extension dropped its sender: the connection is
+                    // over from its side.
+                    None => break,
+                    // The budgets refused a payload; the refusal was
+                    // counted at the sender. Tear down without draining.
+                    Some(AccountedItem::Overflow) => break,
+                    Some(AccountedItem::Frame(frame)) => {
+                        if killed.load(std::sync::atomic::Ordering::SeqCst) {
+                            break;
+                        }
+                        let AccountedFrame {
+                            text,
+                            socket_reservation,
+                            global_reservation,
+                        } = frame;
+                        let written = tokio::time::timeout(
+                            config.write_timeout,
+                            socket.send(Message::Text(text.into())),
+                        )
+                        .await;
+                        drop((socket_reservation, global_reservation));
+                        match written {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => {
+                                config.stats.record_write_timeout();
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1003,9 +1119,10 @@ pub async fn serve_websocket_with_bounded_outbound(
             }
         }
     }
-    // The queue's reservations release here, before the extension learns the
-    // connection is gone -- budget can never outlive its socket.
-    drop(queue);
+    // Dropping the receiver releases every queued frame's reservations,
+    // before the extension learns the connection is gone -- budget can
+    // never outlive its socket.
+    drop(outbound_items);
     let _ = tokio::task::spawn_blocking(move || extension.disconnect(connection_id)).await;
 }
 
@@ -1185,11 +1302,7 @@ mod tests {
     }
 
     impl WebSocketExtension for BlockingConnectSocket {
-        fn connect(
-            &self,
-            _connection_id: TraceId,
-            _outbound: mpsc::UnboundedSender<String>,
-        ) -> bool {
+        fn connect(&self, _connection_id: TraceId, _outbound: OutboundSender) -> bool {
             if self.block_next.swap(false, Ordering::SeqCst) {
                 let mut state = self.state.lock().unwrap();
                 state.entered = true;
@@ -1212,11 +1325,7 @@ mod tests {
     }
 
     impl WebSocketExtension for CountingSocket {
-        fn connect(
-            &self,
-            _connection_id: TraceId,
-            _outbound: mpsc::UnboundedSender<String>,
-        ) -> bool {
+        fn connect(&self, _connection_id: TraceId, _outbound: OutboundSender) -> bool {
             false
         }
 
@@ -1239,15 +1348,11 @@ mod tests {
         // Held for the life of the connection on purpose: the pump ends as
         // soon as the outbound channel closes, so an extension that drops
         // its sender tears its own connection down before any frame lands.
-        outbound: Mutex<Vec<mpsc::UnboundedSender<String>>>,
+        outbound: Mutex<Vec<OutboundSender>>,
     }
 
     impl WebSocketExtension for RecordingSocket {
-        fn connect(
-            &self,
-            _connection_id: TraceId,
-            outbound: mpsc::UnboundedSender<String>,
-        ) -> bool {
+        fn connect(&self, _connection_id: TraceId, outbound: OutboundSender) -> bool {
             self.outbound.lock().unwrap().push(outbound);
             self.connects.fetch_add(1, Ordering::SeqCst);
             true
@@ -1643,41 +1748,49 @@ mod tests {
         let address = authority.parse::<SocketAddr>().unwrap();
         let nonce = server.nonce().as_str().to_owned();
 
-        let (secondary_ok, wrong_nonce_ok, watch_ok) =
-            tokio::task::spawn_blocking(move || {
-                (
-                    websocket_handshake(
-                        address,
-                        "/api/v1/second-socket",
-                        &authority,
-                        &origin,
-                        &nonce,
-                        Duration::from_secs(2),
-                    ),
-                    websocket_handshake(
-                        address,
-                        "/api/v1/second-socket",
-                        &authority,
-                        &origin,
-                        "00000000-0000-4000-8000-0000000000ff",
-                        Duration::from_secs(2),
-                    ),
-                    websocket_handshake(
-                        address,
-                        "/api/v1/watch",
-                        &authority,
-                        &origin,
-                        &nonce,
-                        Duration::from_secs(2),
-                    ),
-                )
-            })
-            .await
-            .unwrap();
+        let (secondary_ok, wrong_nonce_ok, watch_ok) = tokio::task::spawn_blocking(move || {
+            (
+                websocket_handshake(
+                    address,
+                    "/api/v1/second-socket",
+                    &authority,
+                    &origin,
+                    &nonce,
+                    Duration::from_secs(2),
+                ),
+                websocket_handshake(
+                    address,
+                    "/api/v1/second-socket",
+                    &authority,
+                    &origin,
+                    "00000000-0000-4000-8000-0000000000ff",
+                    Duration::from_secs(2),
+                ),
+                websocket_handshake(
+                    address,
+                    "/api/v1/watch",
+                    &authority,
+                    &origin,
+                    &nonce,
+                    Duration::from_secs(2),
+                ),
+            )
+        })
+        .await
+        .unwrap();
 
-        assert!(secondary_ok, "the injected route must upgrade with valid admission");
-        assert!(!wrong_nonce_ok, "the injected route shares the exact nonce admission");
-        assert!(watch_ok, "the built-in watch route is untouched by the injection");
+        assert!(
+            secondary_ok,
+            "the injected route must upgrade with valid admission"
+        );
+        assert!(
+            !wrong_nonce_ok,
+            "the injected route shares the exact nonce admission"
+        );
+        assert!(
+            watch_ok,
+            "the built-in watch route is untouched by the injection"
+        );
         assert_eq!(
             extension.calls.load(Ordering::SeqCst),
             0,
@@ -1714,7 +1827,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(!upgraded, "without injection the path must not exist as a WebSocket route");
+        assert!(
+            !upgraded,
+            "without injection the path must not exist as a WebSocket route"
+        );
         assert_eq!(
             extension.calls.load(Ordering::SeqCst),
             1,
@@ -2152,7 +2268,7 @@ mod tests {
     /// drive the bounded pump's outbound path byte by byte.
     #[derive(Default)]
     struct HoldingSocket {
-        connections: Mutex<Vec<(TraceId, mpsc::UnboundedSender<String>)>>,
+        connections: Mutex<Vec<(TraceId, OutboundSender)>>,
         disconnects: Mutex<Vec<TraceId>>,
     }
 
@@ -2177,7 +2293,7 @@ mod tests {
     }
 
     impl WebSocketExtension for HoldingSocket {
-        fn connect(&self, connection_id: TraceId, outbound: mpsc::UnboundedSender<String>) -> bool {
+        fn connect(&self, connection_id: TraceId, outbound: OutboundSender) -> bool {
             self.connections
                 .lock()
                 .unwrap()
@@ -2195,7 +2311,7 @@ mod tests {
     /// A real listener whose only route serves the bounded pump, so every
     /// bounded-outbound test runs the same transport a public socket gets.
     async fn spawn_bounded_pump_host(
-        extension: Arc<HoldingSocket>,
+        extension: Arc<dyn WebSocketExtension>,
         config: BoundedOutboundConfig,
     ) -> (SocketAddr, oneshot::Sender<()>) {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -2437,6 +2553,148 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(delivered.as_deref(), Some("alerts and pings still deliver"));
+    }
+
+    /// Injected-clock twin of the watch socket's own test clock, so a
+    /// host-level test can drive REAL application pings on demand.
+    #[derive(Clone, Default)]
+    struct PumpFakeClock {
+        milliseconds: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    impl PumpFakeClock {
+        fn advance(&self, duration: Duration) {
+            let milliseconds = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+            self.milliseconds.fetch_add(milliseconds, Ordering::SeqCst);
+        }
+    }
+
+    impl bcsp_watch::WatchClock for PumpFakeClock {
+        fn now(&mut self) -> bcsp_watch::WatchInstant {
+            bcsp_watch::WatchInstant::from_milliseconds(self.milliseconds.load(Ordering::SeqCst))
+        }
+
+        fn wall_now(&mut self) -> time::OffsetDateTime {
+            let milliseconds =
+                i64::try_from(self.milliseconds.load(Ordering::SeqCst)).unwrap_or(i64::MAX);
+            time::OffsetDateTime::UNIX_EPOCH + time::Duration::milliseconds(milliseconds)
+        }
+    }
+
+    struct PumpCounterIds(u64);
+
+    impl TraceIdSource for PumpCounterIds {
+        fn next_trace_id(&mut self) -> TraceId {
+            self.0 += 1;
+            format!("00000000-0000-4000-8000-{:012x}", self.0)
+                .parse()
+                .expect("counter trace id")
+        }
+    }
+
+    /// STAGE-3-R1 discriminator for the enqueue-time budget: the producer is
+    /// the REAL public `SharedWatchSocket` emitting real application pings,
+    /// the consumer is a held (never-reading) peer, and the judgment moment
+    /// is synchronous. Phase one wedges the transport: pings flow through
+    /// the real fan-out path until a write can no longer complete. Phase
+    /// two then bursts more pings WITHOUT yielding -- on the current-thread
+    /// runtime the pump cannot run between those sends, so when the burst
+    /// ends, the overflow verdict on the very next line can only have come
+    /// from the sender side. Under the pre-R1 pump (payloads retained in an
+    /// unbounded channel, accounted at drain) that same instant reads zero:
+    /// the only task that could have accounted anything is provably stuck
+    /// in the held write. The gauge is also sampled at every step: retained
+    /// payload never exceeds the budget before being refused.
+    #[tokio::test]
+    async fn the_real_watch_socket_cannot_out_enqueue_the_budget_while_a_write_is_held() {
+        use crate::watch_socket::{NoopWatchDispatchSink, WATCH_APP_PING_INTERVAL};
+
+        let admission: Arc<dyn crate::watch_socket::WatchAdmissionSource> =
+            Arc::new(|_: &bcsp_contracts::SectionKey| {
+                bcsp_watch::WatchStartAdmission::admitted(None)
+            });
+        let clock = PumpFakeClock::default();
+        let socket = Arc::new(
+            crate::watch_socket::SharedWatchSocket::try_new_with_parts(
+                clock.clone(),
+                PumpCounterIds(0x1000),
+                PumpCounterIds(0x9000),
+                // Far past anything this test's fake time can reach: the
+                // manager heartbeat must never expire the connection.
+                Duration::from_secs(1_000_000_000),
+                admission,
+                Arc::new(NoopWatchDispatchSink),
+            )
+            .expect("real watch socket"),
+        );
+        let per_socket_budget = 4 * 1024;
+        let global_budget = OutboundByteBudget::new(64 * 1024 * 1024);
+        let stats = Arc::new(BoundedOutboundStats::default());
+        let config = BoundedOutboundConfig {
+            per_socket_budget_bytes: per_socket_budget,
+            // Long on purpose: the verdict under test is the budget, and a
+            // write timeout firing first would mask a broken budget.
+            write_timeout: Duration::from_secs(30),
+            global_budget: global_budget.clone(),
+            stats: stats.clone(),
+        };
+        let (address, _shutdown) = spawn_bounded_pump_host(socket.clone(), config).await;
+        let held = bounded_client(address).await;
+        await_condition(|| socket.connection_count() == 1, "the connect").await;
+
+        // Phase one: real pings through the real producer until the held
+        // peer's transport is wedged -- reserved bytes that stay reserved
+        // across a yield mean a write is pending and not completing.
+        let mut blocked_streak = 0;
+        let mut iterations = 0_u32;
+        while blocked_streak < 5 {
+            iterations += 1;
+            assert!(iterations < 50_000, "the held transport never wedged");
+            for _ in 0..4 {
+                clock.advance(WATCH_APP_PING_INTERVAL);
+                socket.tick();
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            assert!(
+                global_budget.queued_bytes() <= per_socket_budget,
+                "retained payload must never exceed the budget",
+            );
+            if global_budget.queued_bytes() > 0 {
+                blocked_streak += 1;
+            } else {
+                blocked_streak = 0;
+            }
+        }
+        assert_eq!(stats.socket_budget_disconnects(), 0, "not yet over budget");
+
+        // Phase two: burst real pings with NO await in between. The pump
+        // cannot run here; only the sender can be doing the accounting.
+        for _ in 0..64 {
+            clock.advance(WATCH_APP_PING_INTERVAL);
+            socket.tick();
+            assert!(
+                global_budget.queued_bytes() <= per_socket_budget,
+                "the burst must be refused at the budget, not retained past it",
+            );
+            if stats.socket_budget_disconnects() == 1 {
+                break;
+            }
+        }
+        assert_eq!(
+            stats.socket_budget_disconnects(),
+            1,
+            "the overflow must be found at enqueue time, while the write is still held",
+        );
+
+        // Unstick the transport; the doomed connection tears down and every
+        // reservation comes home.
+        drop(held);
+        await_condition(|| socket.connection_count() == 0, "the teardown").await;
+        await_condition(
+            || global_budget.queued_bytes() == 0,
+            "the budget to recover",
+        )
+        .await;
     }
 
     #[tokio::test]

@@ -6,28 +6,27 @@ use std::time::{Duration, Instant};
 use bcsp_application::{
     ApplicationClock, CoordinatorClock, CoordinatorDispatchOutcome, CoordinatorStatusSink,
     CoordinatorStatusSnapshot, ExtensionRequest, FixedRefreshPolicyProvider, OpenDispatchTerminal,
-    OpenRuntimeSnapshotRegistry, PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH,
-    PRODUCT_COURSE_SEARCH_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
-    PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
-    ProductStorageAccess, ProductStorageLockError, RefreshFuture, RefreshPolicy, RefreshUpstream,
-    RequestMethod, RouteExtension, ScheduledRefreshTarget, SharedProductRoutes,
-    SharedRefreshCoordinator, SharedRuntimeContext, SharedWatchSocket, TargetWorkActivity,
-    WebSocketExtension, publish_discovery_for_refresh,
+    OpenRuntimeSnapshotRegistry, OutboundSender, PRODUCT_CATALOG_DISCOVERY_PATH,
+    PRODUCT_COURSE_DETAIL_PATH, PRODUCT_COURSE_SEARCH_PATH, PRODUCT_FILTER_SCHEMA_PATH,
+    PRODUCT_OPEN_SECTION_STATUS_PATH, PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH,
+    PRODUCT_SECTION_SEARCH_PATH, ProductStorageAccess, ProductStorageLockError, RefreshFuture,
+    RefreshPolicy, RefreshUpstream, RequestMethod, RouteExtension, ScheduledRefreshTarget,
+    SharedProductRoutes, SharedRefreshCoordinator, SharedRuntimeContext, SharedWatchSocket,
+    TargetWorkActivity, WebSocketExtension, publish_discovery_for_refresh,
 };
 use bcsp_contracts::{
     CatalogDiscoveryRequestV1, CatalogDiscoveryResponseV1, CourseDetailRequestV1,
     CourseDetailResponseV1, CourseQueryRequestV1, CourseQueryResponseV1, CourseSortV1,
     FilterRequestV1, FilterSchemaV1, FilterSearchTextV1, FilterValuesInputV1, HttpRequestEnvelope,
-    HttpSuccessEnvelope, LiveOpenStateV1, NormalizedFilterValuesV1, OpenBatchKey,
-    OpenFailureClass, OpenFreshnessState, OpenRefreshClassification, OpenRefreshStatusV1,
-    OpenSchedulerLane, OpenSectionStatusRequestV1,
-    OpenSectionStatusV1, OpenState, OpenStatusRequestV1, OpenUncertaintyReason, PageRequestV1,
-    SectionDetailRequestV1,
-    SectionDetailResponseV1, SectionIndex, SectionKey, SectionQueryRequestV1,
-    SectionQueryResponseV1, SectionSortV1, ServiceOperationPhaseV1, ServiceOperationStageV2,
-    ServiceOperationV1, ServiceWorkStateV2, TermCampusKey, TermId, TraceId, TraceIdSource,
-    WatchClientCommandV1, WatchPolicyV1, WatchServerEventV1, WatchStartItemResultV1,
-    WatchStartItemV1, WatchStartItemsV1, WsClientEnvelope, WsServerEnvelope,
+    HttpSuccessEnvelope, LiveOpenStateV1, NormalizedFilterValuesV1, OpenBatchKey, OpenFailureClass,
+    OpenFreshnessState, OpenRefreshClassification, OpenRefreshStatusV1, OpenSchedulerLane,
+    OpenSectionStatusRequestV1, OpenSectionStatusV1, OpenState, OpenStatusRequestV1,
+    OpenUncertaintyReason, PageRequestV1, SectionDetailRequestV1, SectionDetailResponseV1,
+    SectionIndex, SectionKey, SectionQueryRequestV1, SectionQueryResponseV1, SectionSortV1,
+    ServiceOperationPhaseV1, ServiceOperationStageV2, ServiceOperationV1, ServiceWorkStateV2,
+    TermCampusKey, TermId, TraceId, TraceIdSource, WatchClientCommandV1, WatchPolicyV1,
+    WatchServerEventV1, WatchStartItemResultV1, WatchStartItemV1, WatchStartItemsV1,
+    WsClientEnvelope, WsServerEnvelope,
 };
 use bcsp_open::{GeneralOpenInterval, MonotonicTime, OpenCounterAudience};
 use bcsp_operational_storage::{OperationalStorage, PublishOutcome};
@@ -408,7 +407,7 @@ fn create_socket() -> Arc<SharedWatchSocket> {
 }
 
 fn start_watch(socket: &SharedWatchSocket, section: SectionKey) -> mpsc::UnboundedReceiver<String> {
-    let (outbound, mut receiver) = mpsc::unbounded_channel();
+    let (outbound, mut receiver) = OutboundSender::unbounded_pair();
     let connection_id = trace(80);
     assert!(socket.connect(connection_id, outbound));
     let items = WatchStartItemsV1::try_from(vec![WatchStartItemV1::new(

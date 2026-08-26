@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bcsp_application::{
-    CoordinatorStatusSink, ExtensionRequest, NoopWatchDispatchSink, OpenRuntimeSnapshot,
+    CoordinatorStatusSink, ExtensionRequest, NoopWatchDispatchSink, OpenRuntimeSnapshot, OutboundSender,
     PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_SERVICE_STATUS_PATH,
     RequestMethod, RouteExtension, ServiceStatusRegistry, SharedWatchSocket, TargetRefreshDemand,
     TargetWorkActivity, WebSocketExtension,
@@ -2334,7 +2334,7 @@ fn confirmed_reset_stops_active_watches_before_attempting_the_personal_transacti
     let watch =
         Arc::new(SharedWatchSocket::try_new(admission, Arc::new(NoopWatchDispatchSink)).unwrap());
     let connection_id = trace(100);
-    let (outbound, mut responses) = mpsc::unbounded_channel();
+    let (outbound, mut responses) = OutboundSender::unbounded_pair();
     assert!(watch.connect(connection_id, outbound));
     let section = SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap();
     let items = WatchStartItemsV1::try_from(vec![WatchStartItemV1::new(
@@ -2408,7 +2408,7 @@ fn confirmed_reset_serializes_a_later_filter_mutation_until_reset_commits() {
     let watch =
         Arc::new(SharedWatchSocket::try_new(admission, Arc::new(NoopWatchDispatchSink)).unwrap());
     let connection_id = trace(110);
-    let (outbound, mut responses) = mpsc::unbounded_channel();
+    let (outbound, mut responses) = OutboundSender::unbounded_pair();
     assert!(watch.connect(connection_id, outbound));
     let items = WatchStartItemsV1::try_from(vec![WatchStartItemV1::new(
         SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap(),
@@ -2563,7 +2563,7 @@ fn a_full_reset_blocked_in_sqlite_leaves_no_orphan_watch() {
 
     // A page, and standing intent that really is materialized.
     let section = SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap();
-    let (first_outbound, mut first_frames) = mpsc::unbounded_channel();
+    let (first_outbound, mut first_frames) = OutboundSender::unbounded_pair();
     assert!(route.connect(trace(200), first_outbound));
     let generation = coordinator.read().unwrap().authority_generation;
     assert_eq!(
@@ -2642,7 +2642,7 @@ fn a_full_reset_blocked_in_sqlite_leaves_no_orphan_watch() {
 
     // The window. A page attaches -- which is what materializes stored intent
     // -- and a reconcile runs, both while the rows are still on disk.
-    let (second_outbound, _second_frames) = mpsc::unbounded_channel();
+    let (second_outbound, _second_frames) = OutboundSender::unbounded_pair();
     assert!(route.connect(trace(202), second_outbound));
     route.tick();
     coordinator.reconcile().unwrap();
@@ -2744,7 +2744,7 @@ fn a_full_reset_blocked_in_sqlite_leaves_no_orphan_watch() {
     );
 
     // The socket is still usable, because the user is still there.
-    let (third_outbound, _third_frames) = mpsc::unbounded_channel();
+    let (third_outbound, _third_frames) = OutboundSender::unbounded_pair();
     assert!(route.connect(trace(204), third_outbound));
 }
 
@@ -2779,7 +2779,7 @@ fn a_reset_that_cannot_commit_lowers_its_barrier_and_materializes_again() {
     .with_desired_watch(coordinator.clone());
 
     let section = SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap();
-    let (outbound, _frames) = mpsc::unbounded_channel();
+    let (outbound, _frames) = OutboundSender::unbounded_pair();
     assert!(route.connect(trace(300), outbound));
     let generation = coordinator.read().unwrap().authority_generation;
     assert_eq!(
@@ -2848,7 +2848,7 @@ fn a_reset_that_cannot_commit_lowers_its_barrier_and_materializes_again() {
         "and nothing is claimed to be running while nothing is",
     );
 
-    let (second_outbound, _second_frames) = mpsc::unbounded_channel();
+    let (second_outbound, _second_frames) = OutboundSender::unbounded_pair();
     assert!(route.connect(trace(302), second_outbound));
     assert_eq!(
         watch.total_active_watch_count(),
@@ -2892,7 +2892,7 @@ fn a_full_reset_that_cannot_stop_a_watch_reports_a_retryable_failure() {
     .with_desired_watch(coordinator.clone());
 
     let section = SectionKey::try_new("T2026F", "CAMPUS_A", "12345").unwrap();
-    let (outbound, _frames) = mpsc::unbounded_channel();
+    let (outbound, _frames) = OutboundSender::unbounded_pair();
     assert!(route.connect(trace(400), outbound));
     let generation = coordinator.read().unwrap().authority_generation;
     assert_eq!(
@@ -2968,7 +2968,7 @@ fn a_full_reset_that_cannot_stop_a_watch_reports_a_retryable_failure() {
 
     // The barrier is still up: a page that attaches now must not be given a
     // materialization on top of a reset that has not finished.
-    let (second_outbound, _second_frames) = mpsc::unbounded_channel();
+    let (second_outbound, _second_frames) = OutboundSender::unbounded_pair();
     assert!(route.connect(trace(402), second_outbound));
     assert_eq!(
         watch.total_active_watch_count(),

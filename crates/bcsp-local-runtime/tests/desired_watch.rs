@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bcsp_application::{
-    NoopWatchDispatchSink, SharedWatchSocket, WatchAdmissionSource, WebSocketExtension,
+    NoopWatchDispatchSink, OutboundSender, SharedWatchSocket, WatchAdmissionSource, WebSocketExtension,
 };
 use bcsp_contracts::{
     ActiveWatchId, ActiveWatchTargetV1, OpenObservationV1, SectionKey, TraceId,
@@ -181,7 +181,7 @@ impl Fixture {
     /// Attaches a page, returning its connection id and its outbound frames.
     fn attach(&self, id: u64) -> (TraceId, mpsc::UnboundedReceiver<String>) {
         let connection_id = trace(id);
-        let (outbound, inbound) = mpsc::unbounded_channel();
+        let (outbound, inbound) = OutboundSender::unbounded_pair();
         assert!(self.route.connect(connection_id, outbound));
         (connection_id, inbound)
     }

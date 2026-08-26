@@ -20,10 +20,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use bcsp_application::WebSocketExtension;
+use bcsp_application::{OutboundSender, WebSocketExtension};
 use bcsp_contracts::{TraceId, WsClientEnvelope, WsServerEnvelope, decode_versioned_envelope_json};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 /// How long the program stays alive after the last page leaves.
 ///
@@ -86,7 +85,7 @@ struct Connection {
     hello_deadline: Instant,
     /// The tab it claimed, once it has.
     tab: Option<TraceId>,
-    outbound: mpsc::UnboundedSender<String>,
+    outbound: OutboundSender,
 }
 
 struct Registry {
@@ -313,7 +312,7 @@ impl LocalPresenceRoute {
 }
 
 impl WebSocketExtension for LocalPresenceRoute {
-    fn connect(&self, connection_id: TraceId, outbound: mpsc::UnboundedSender<String>) -> bool {
+    fn connect(&self, connection_id: TraceId, outbound: OutboundSender) -> bool {
         let now = Instant::now();
         let mut registry = self.lock();
         if registry.sealed || registry.phase == LocalPresencePhase::Exiting {
@@ -522,6 +521,8 @@ impl LocalPresenceRoute {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc;
+
     use super::*;
 
     fn trace(value: u64) -> TraceId {
@@ -551,7 +552,7 @@ mod tests {
     }
 
     fn attach(route: &LocalPresenceRoute, id: u64) -> mpsc::UnboundedReceiver<String> {
-        let (outbound, inbound) = mpsc::unbounded_channel();
+        let (outbound, inbound) = OutboundSender::unbounded_pair();
         assert!(route.connect(trace(id), outbound));
         inbound
     }
@@ -617,7 +618,9 @@ mod tests {
     fn an_undecodable_frame_closes_the_connection() {
         let harness = harness(Duration::from_secs(30));
         let _inbound = attach(&harness.route, 1);
-        harness.route.receive_text(trace(1), "{\"protocolVersion\":1}");
+        harness
+            .route
+            .receive_text(trace(1), "{\"protocolVersion\":1}");
         assert_eq!(harness.route.state().pages, 0);
     }
 
@@ -673,7 +676,7 @@ mod tests {
 
         // The ordered shutdown is under way. Accepting a page now would count
         // it, answer REGISTERED, and take the runtime away a moment later.
-        let (outbound, _rejected) = mpsc::unbounded_channel();
+        let (outbound, _rejected) = OutboundSender::unbounded_pair();
         assert!(!harness.route.connect(trace(2), outbound));
         assert_eq!(harness.route.state().pages, 0);
     }
@@ -787,15 +790,13 @@ mod tests {
             .with_countdown(Duration::from_millis(2_500))
             .with_console(console);
 
-        let (outbound, _inbound) = mpsc::unbounded_channel();
+        let (outbound, _inbound) = OutboundSender::unbounded_pair();
         assert!(route.connect(trace(1), outbound));
         route.receive_text(
             trace(1),
             &serde_json::to_string(&WsClientEnvelope::new(
                 trace(9_001),
-                LocalPresenceCommandV1::Hello {
-                    tab_id: trace(100),
-                },
+                LocalPresenceCommandV1::Hello { tab_id: trace(100) },
             ))
             .expect("hello frame"),
         );
@@ -814,8 +815,14 @@ mod tests {
             .iter()
             .filter(|line| line.contains("Exiting in"))
             .count();
-        assert!(lines.iter().any(|line| line.contains("A page is open")), "{lines:?}");
-        assert!(lines.iter().any(|line| line.contains("A page closed")), "{lines:?}");
+        assert!(
+            lines.iter().any(|line| line.contains("A page is open")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("A page closed")),
+            "{lines:?}"
+        );
         assert!(
             (2..=4).contains(&countdowns),
             "expected one line per remaining second, saw {countdowns}: {lines:?}",
@@ -912,7 +919,7 @@ mod tests {
         hello(&harness.route, 1, 100);
         harness.route.seal();
 
-        let (outbound, _rejected) = mpsc::unbounded_channel();
+        let (outbound, _rejected) = OutboundSender::unbounded_pair();
         assert!(!harness.route.connect(trace(2), outbound));
         std::thread::sleep(Duration::from_millis(60));
         harness.route.tick();
