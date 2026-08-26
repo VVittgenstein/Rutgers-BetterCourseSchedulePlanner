@@ -17,6 +17,14 @@
 // tree and running its CLI on the same fixture bytes:
 //   CE-6 (A4-2 shifted byte-copy):     old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
 //   CE-6b (A4-2 longer shifted copy):  old stdout `verdict=GO qualifier=none brackets=121 distinguishable=true`
+// The CE-7 pair pins the fifth-round single-column translation defect, which
+// survived until v2.3.0 (commit 2fe55a8) — same protocol, verified by
+// extracting that tree and running its CLI on the same fixture bytes (v2.3.0
+// fingerprinted the RAW per-sample serverDelta, so shifting ONE clock column
+// changed every serverDelta by a constant, minted a fresh fingerprint, and
+// the copy escaped the class before the time-anchor check could run):
+//   CE-7 (A4-2 client-only shift):     old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
+//   CE-7b (A4-1 millisecond nudge):    old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
 // This file asserts the CURRENT analyzer answers NO_PRODUCTION_CHANGE with the
 // specific gate unsatisfied for the specific reason, while the go-gate test
 // keeps proving that a genuinely satisfying fixture still reaches GO.
@@ -699,4 +707,119 @@ test("CE-6b (A4-2): a LONGER shifted copy cannot win the representative slot by 
   assert.equal(a2.satisfied, false);
   assert.match(a2.evidence, /qualifying peak \(>=\d+ informative in-peak brackets\): 0/);
   assert.equal(gateById(json, "A4-1").satisfied, false);
+});
+
+// ---- CE-7 pair: single-column time translations (fifth round) --------------
+// v2.3.0's canonical series keyed on the RAW per-sample serverDelta
+// (serverDateMs - clientStartMs). Translating ONE clock column — client
+// timestamps only, or serverDates only, by hours or by 1 ms — changes every
+// serverDelta by a constant, so the copy got a fresh fingerprint, formed its
+// own "independent" clean class, and the time-anchor check never ran. The
+// canonical series is now invariant to per-column constant shifts (the
+// serverDelta column is re-based to its first recorded value), so such copies
+// merge into the genuine capture's class, where the time-anchor check —
+// client anchor AND server re-basing constant — voids the class.
+
+// Client-only translation: requestStartedUtc shifted, serverDate UNCHANGED.
+function ce7ShiftClientOnly(rows, shiftMs, startSeq = 1) {
+  return rows.map((row, i) => sampleRow({
+    seq: startSeq + i,
+    startMs: Date.parse(row.requestStartedUtc) + shiftMs,
+    elapsedMs: row.elapsedMilliseconds,
+    bodySha: row.decodedBodySha256,
+    serverDateMs: row.serverDate === null ? null : Date.parse(row.serverDate),
+  }));
+}
+
+test("CE-7 (A4-2): a CLIENT-ONLY shifted byte-copy cannot supply the only peak evidence", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // CE-6 geometry, but the copy's shift touches only the client column: the
+  // genuine NB capture is off-peak only, and the attack adds a copy whose
+  // client timestamps are translated into the 17:00-18:00 ET peak hour while
+  // the serverDates keep the original off-peak values. On v2.3.0 the copy's
+  // raw serverDeltas all differed by the shift constant, its fingerprint was
+  // fresh, and the fake class supplied both NB's A4-1 coverage and the ONLY
+  // qualifying A4-2 peak window.
+  const nbOff = makeTickSeries({ baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1, bodyPrefix: "NB-jv", ...CAMPUS_SHAPE.NB });
+  makeRunDir(join(dir, "runNB-t9"), { campus: "NB", term: "9", samples: nbOff });
+  makeRunDir(join(dir, "runNB-t1"), {
+    campus: "NB",
+    term: "1",
+    samples: ce7ShiftClientOnly(nbOff, PEAK_BASE - OFF_PEAK_BASE),
+  });
+  ce6MakeOffPeakOnly(dir);
+
+  const out = analyze(dir, ["runNB-t1", "runNB-t9", "runNK", "runCM"]);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE/);
+
+  const json = out.json;
+  // The two NB streams merge despite the changed serverDelta column (the
+  // canonical form is shift-invariant per column) and disagree about WHEN:
+  // time-anchor conflict, nobody counts.
+  const nbClass = json.provenance.classes.find((c) => c.members.length === 2);
+  assert.equal(nbClass.timeConflict, true);
+  assert.equal(nbClass.campusConflict, false);
+  assert.deepEqual(
+    json.provenance.excludedStreamIds,
+    nbClass.members.map((m) => m.streamId).sort(),
+  );
+  assert.deepEqual(json.provenance.duplicateStreamIds, []);
+  const a2 = gateById(json, "A4-2");
+  assert.equal(a2.satisfied, false);
+  assert.match(a2.evidence, /qualifying peak \(>=\d+ informative in-peak brackets\): 0/);
+  const a1 = gateById(json, "A4-1");
+  assert.equal(a1.satisfied, false);
+  assert.match(a1.evidence, /NB missing/);
+  assert.match(a1.evidence, /conflicting absolute time anchors \(time-translated duplicate observation series\)/);
+
+  // Honest run (no shifted copy): same A4-2 failure — the copy changed nothing.
+  const honest = analyze(dir, ["runNB-t9", "runNK", "runCM"]);
+  assert.equal(honest.code, 0, honest.stderr);
+  assert.match(honest.stdout, /verdict=NO_PRODUCTION_CHANGE/);
+  assert.equal(gateById(honest.json, "A4-2").satisfied, false);
+});
+
+test("CE-7b (A4-1): millisecond-nudged relabeled copies of one capture are one class, not three targets", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The adjudicated root cause 4 (CE-1: copy-and-relabel) resurrected with a
+  // 1 ms edit: ONE capture (off-peak + peak sessions) copied into three run
+  // dirs relabeled NB/NK/CM, with the copies' client timestamps nudged by
+  // +1 ms / +2 ms and serverDates untouched. On v2.3.0 the nudges minted
+  // three distinct fingerprints — three "independent" clean classes — and the
+  // run reached GO with all six gates.
+  const series = [
+    ...makeTickSeries({ baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1 }),
+    ...makeTickSeries({ baseMs: PEAK_BASE, periodMs: 30000, count: 20, startSeq: 100 }),
+  ];
+  makeRunDir(join(dir, "runNB"), { campus: "NB", samples: series });
+  makeRunDir(join(dir, "runNK"), { campus: "NK", samples: ce7ShiftClientOnly(series, 1) });
+  makeRunDir(join(dir, "runCM"), { campus: "CM", samples: ce7ShiftClientOnly(series, 2) });
+
+  const out = analyze(dir, ["runNB", "runNK", "runCM"]);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  // All three streams are ONE provenance class again — conflicted on BOTH
+  // axes: three campus labels on one series, and three disagreeing timelines.
+  assert.equal(json.provenance.classes.length, 1);
+  assert.equal(json.provenance.classes[0].campusConflict, true);
+  assert.equal(json.provenance.classes[0].timeConflict, true);
+  assert.equal(json.provenance.classes[0].campus, null);
+  assert.equal(json.provenance.excludedStreamIds.length, 3);
+  assert.deepEqual(json.provenance.duplicateStreamIds, []);
+  const a1 = gateById(json, "A4-1");
+  assert.equal(a1.satisfied, false);
+  assert.match(a1.evidence, /NB missing; NK missing; CM missing/);
+  // With every stream contested, nothing supports any gate.
+  assert.equal(json.bracketTotals.total, 120);
+  assert.equal(json.bracketTotals.excludedFromEvidence, 120);
+  assert.equal(json.comparison.commonInformativeCount, 0);
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-1", "A4-2", "A4-3", "A4-4", "A4-5", "A4-6"],
+  );
 });

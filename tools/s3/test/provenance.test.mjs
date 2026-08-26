@@ -97,6 +97,71 @@ test("a time-translated copy that is one tick LONGER (contained genuine) is a ti
   assert.equal(p.classes[0].timeConflict, true);
 });
 
+test("a CLIENT-ONLY constant shift (serverDate untouched) still merges — time-anchor conflict", () => {
+  // Fifth review round: shifting only the client column changes every raw
+  // serverDelta by the same constant. The canonical series re-bases the
+  // serverDelta column, so the copy still merges — and its client anchor
+  // disagrees, so the class is voided.
+  const genuine = mkSeries({ baseMs: 1_000_000 });
+  const shifted = genuine.map((s) => ({ ...s, clientStartMs: s.clientStartMs + 8_000_000 }));
+  const p = buildProvenance([
+    { inputId: "runA/samples.ndjson", samples: genuine },
+    { inputId: "runB/samples.ndjson", samples: shifted },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, true);
+  assert.equal(p.classes[0].campusConflict, false);
+});
+
+test("a SERVER-ONLY constant shift (client untouched) still merges — time-anchor conflict", () => {
+  // The mirror attack: client anchors agree, but the copy claims the server
+  // observed everything at different absolute times. The server anchor check
+  // catches the non-zero re-basing constant.
+  const genuine = mkSeries({ baseMs: 1_000_000 });
+  const shifted = genuine.map((s) => ({ ...s, serverDateMs: s.serverDateMs + 3_600_000 }));
+  const p = buildProvenance([
+    { inputId: "runA/samples.ndjson", samples: genuine },
+    { inputId: "runB/samples.ndjson", samples: shifted },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, true);
+});
+
+test("a 1 ms client nudge still merges — time-anchor conflict", () => {
+  // The copy-and-relabel resurrection: +1 ms on the client column must not
+  // mint a fresh fingerprint. Tolerance is 0 ms: genuine duplicates parse the
+  // same recorded timestamp strings and agree exactly.
+  const genuine = mkSeries({ baseMs: 1_000_000 });
+  const nudged = genuine.map((s) => ({ ...s, clientStartMs: s.clientStartMs + 1 }));
+  const p = buildProvenance([
+    { inputId: "runA/samples.ndjson", samples: genuine },
+    { inputId: "runB/samples.ndjson", samples: nudged },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].timeConflict, true);
+});
+
+test("a client-only-shifted copy that is one tick LONGER (contained genuine) is a time-anchor conflict", () => {
+  // CE-6b geometry with a single-column shift: the genuine capture is a
+  // contained slice of the longer shifted fake. Content matches at offset 0,
+  // but neither the client anchor nor the server re-basing constant agrees.
+  const genuine = mkSeries({ baseMs: 1_000_000, n: 6 });
+  const shiftMs = 8_000_000;
+  const shifted = genuine.map((s) => ({ ...s, clientStartMs: s.clientStartMs + shiftMs }));
+  const extra = {
+    ...mkSample({ t: 1_000_000 + shiftMs + 6 * 20000, bodySha: "a6y" }),
+    serverDateMs: 1_000_000 + 6 * 20000 - 600, // server column stays un-shifted
+  };
+  const p = buildProvenance([
+    { inputId: "runA/samples.ndjson", samples: genuine },
+    { inputId: "runZ/samples.ndjson", samples: [...shifted, extra] },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].members[0].streamId, "runZ/samples.ndjson::soc:2026:9:NB");
+  assert.equal(p.classes[0].members[1].relation, "contained");
+  assert.equal(p.classes[0].timeConflict, true);
+});
+
 test("prefix, suffix, and middle slices of a copy are 'contained' in the class", () => {
   const full = mkSeries({ n: 8 });
   const prefixSlice = full.slice(0, 4);

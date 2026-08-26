@@ -162,11 +162,15 @@ JSON) — contributes nothing to A4-1, and its member streams are **excluded
 from all evidence** (fits, comparison, server-clock evidence, safe offset,
 every gate); they stay listed in the descriptive tables, flagged by
 `provenance.excludedStreamIds` and `bracketTotals.excludedFromEvidence`.
-Genuine duplicates of one capture carry the exact recorded timestamps, so
-class members must agree exactly on the absolute client time at their aligned
-samples; any disagreement means someone translated the series, and no
-deterministic representative choice among disagreeing timelines is safe — so
-nobody in the class counts. In a clean (non-conflicted) class, only the
+The canonical series is invariant to a CONSTANT shift of either clock column
+— client timestamps, serverDates, or both jointly, by hours or by a single
+millisecond — so any such translated copy still merges into the genuine
+capture's class instead of minting a fresh fingerprint. Genuine duplicates of
+one capture carry the exact recorded timestamps, so class members must agree
+exactly on the absolute client time AND the absolute server time (when
+recorded) at their aligned samples; any disagreement on either clock means
+someone translated the series, and no deterministic representative choice
+among disagreeing timelines is safe — so nobody in the class counts. In a clean (non-conflicted) class, only the
 **representative** stream (the longest member; streamId ascending on ties) is
 evidence-eligible: identical or contained duplicates are excluded from all
 evidence the same way and listed in `provenance.duplicateStreamIds`, so
@@ -180,9 +184,11 @@ targetId.
 
 Provenance boundary (documented on purpose): A4-1 merges observation series
 that are identical or contiguous slices of one another after removing
-metadata; derived series (subsampling, interleaving, edited deltas) are NOT
-detected — the gate defends against copy-and-relabel and copy-and-translate,
-it is not forensics against de novo fabrication. Byte-identical streams under
-the SAME campus label and the SAME absolute times merge without conflict into
-one class whose representative alone stays evidence-eligible; they cannot
-widen campus coverage or add evidence.
+metadata and per-column constant clock shifts; derived series (subsampling,
+interleaving, edited deltas, a copy with its serverDates deleted — which A4-5
+then rejects for missing server evidence in its groups) are NOT detected as
+equivalent — the gate defends against copy-and-relabel and copy-and-translate
+(joint or single-column), it is not forensics against de novo fabrication.
+Byte-identical streams under the SAME campus label and the SAME absolute
+times merge without conflict into one class whose representative alone stays
+evidence-eligible; they cannot widen campus coverage or add evidence.
