@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 2,
-  "toolVersion": "2.5.0",
+  "schemaVersion": 3,
+  "toolVersion": "2.6.0",
   "normalizedCommand": "rebuild-profile-analyzer --ndjson 20260820T033451393Z-a8a40f98/samples.ndjson --ndjson 20260820T033527487Z-d92a8a35/samples.ndjson --ndjson 20260820T033701043Z-5745bc4a/samples.ndjson --out-json S3-REBUILD-PROFILE.json --out-md S3-REBUILD-PROFILE.md",
   "inputs": [
     {
@@ -691,6 +691,7 @@
         "targetId": "soc:2026:9:NB",
         "campus": "NB",
         "sampleCount": 1,
+        "clientEndObserved": true,
         "seriesFingerprint": "8984815e2256a5537846ac1c83a59a1309803eeb0f8e21660124ea5f5721f209"
       },
       {
@@ -698,6 +699,7 @@
         "targetId": "soc:2026:9:NB",
         "campus": "NB",
         "sampleCount": 3,
+        "clientEndObserved": true,
         "seriesFingerprint": "94129fc1896ced2a8235180481b4f1439e3cc111b0418862306a9b149540d0b2"
       },
       {
@@ -705,6 +707,7 @@
         "targetId": "soc:2026:9:NB",
         "campus": "NB",
         "sampleCount": 554,
+        "clientEndObserved": true,
         "seriesFingerprint": "2e9190844bde0459f5dbeb0c10d811c231d177d6b3bfd43704486b086b241ec4"
       }
     ],
@@ -714,10 +717,13 @@
         "campus": "NB",
         "campusConflict": false,
         "timeConflict": false,
+        "timeConflictPairs": [],
         "members": [
           {
             "streamId": "20260820T033701043Z-5745bc4a/samples.ndjson::soc:2026:9:NB",
-            "relation": "representative"
+            "relation": "representative",
+            "relatedTo": null,
+            "matchedCount": null
           }
         ]
       },
@@ -726,10 +732,13 @@
         "campus": "NB",
         "campusConflict": false,
         "timeConflict": false,
+        "timeConflictPairs": [],
         "members": [
           {
             "streamId": "20260820T033451393Z-a8a40f98/samples.ndjson::soc:2026:9:NB",
-            "relation": "representative"
+            "relation": "representative",
+            "relatedTo": null,
+            "matchedCount": null
           }
         ]
       },
@@ -738,10 +747,13 @@
         "campus": "NB",
         "campusConflict": false,
         "timeConflict": false,
+        "timeConflictPairs": [],
         "members": [
           {
             "streamId": "20260820T033527487Z-d92a8a35/samples.ndjson::soc:2026:9:NB",
-            "relation": "representative"
+            "relation": "representative",
+            "relatedTo": null,
+            "matchedCount": null
           }
         ]
       }
@@ -884,9 +896,9 @@
     },
     {
       "id": "A4-2",
-      "requirement": "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak evidence only from brackets overlapping the peak hour itself",
+      "requirement": "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime",
       "satisfied": false,
-      "evidence": "windows: 3 total; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative brackets): 1 (raw: 0 peak, 3 off-peak)"
+      "evidence": "windows: 3 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative off-peak brackets): 1 (window labels: 0 peak-overlapping, 3 off-peak)"
     },
     {
       "id": "A4-3",
@@ -918,7 +930,7 @@
     "qualifier": "DATA_REQUIRED",
     "reasons": [
       "A4-1 unsatisfied: campuses: NB(pc-2e9190844bde) only; NK missing; CM missing",
-      "A4-2 unsatisfied: windows: 3 total; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative brackets): 1 (raw: 0 peak, 3 off-peak)",
+      "A4-2 unsatisfied: windows: 3 total; peak/off-peak classified on the server clock; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative off-peak brackets): 1 (window labels: 0 peak-overlapping, 3 off-peak)",
       "A4-3 unsatisfied: c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate",
       "A4-4 unsatisfied: not identifiable (not-distinguishable)",
       "A4-6 unsatisfied: not evaluable: no distinguishable winner"
