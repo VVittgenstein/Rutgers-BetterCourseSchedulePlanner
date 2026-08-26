@@ -27,7 +27,7 @@ This offline analysis of locally captured openSections observation data (kept in
 ## Bracket statistics
 
 - Total change brackets: 67
-- Excluded from all evidence (campus-conflicted provenance, see `provenance.excludedStreamIds`): 0
+- Excluded from all evidence (campus-conflicted or duplicate provenance, see `provenance.excludedStreamIds` / `provenance.duplicateStreamIds`): 0
 - Informative (0 < width < period, server clock — the comparison clock): 30 s → 67, 60 s → 67; non-informative: 30 s → 0, 60 s → 0
 - Server brackets dropped for non-positive width (webfarm clock skew): 0; brackets rejected entirely for non-positive client/observed_at width (corrupt capture ordering): 0; change rows without a prior stable row: 0; bracket endpoints with `age > 0`: 0
 - Client-clock width (s): min 12.585 / p50 13.945 / max 22.016
