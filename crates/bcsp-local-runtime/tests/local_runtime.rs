@@ -46,7 +46,6 @@ use support::{FaultOwner, OwnerFaults, seed_ready_query_scope};
 use rusqlite::{Connection, TransactionBehavior};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use tokio::sync::mpsc;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CURRENT_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());

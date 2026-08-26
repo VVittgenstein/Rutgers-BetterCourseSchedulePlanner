@@ -112,6 +112,12 @@ struct ConnectionChannel {
     sender: OutboundSender,
     last_ping_at: WatchInstant,
     ping_sequence: u64,
+    /// The highest PING sequence this connection has already had accepted.
+    ///
+    /// An acknowledgement is evidence exactly once. Replaying sequence 7
+    /// says nothing new about the page that sent it, so the counter below
+    /// only moves forward.
+    acknowledged_sequence: u64,
 }
 
 struct SocketState<C, I, E> {
@@ -140,6 +146,15 @@ pub struct SharedWatchSocket<C = SystemWatchClock, I = SystemTraceIdSource, E = 
     state: Mutex<SocketState<C, I, E>>,
     admission: Arc<dyn WatchAdmissionSource>,
     sink: Arc<dyn WatchDispatchSink>,
+    /// How many client heartbeat acknowledgements this process has ACCEPTED.
+    ///
+    /// One aggregate number, no identity of any kind: not a session, not a
+    /// nonce, not a Section, not a connection id. It exists so a soak can
+    /// prove the server-side half of the heartbeat -- that a valid ACK was
+    /// received, decoded, matched to a sequence this server really issued,
+    /// and taken -- instead of inferring acceptance from the absence of a
+    /// rejection in a log.
+    accepted_heartbeat_acks: std::sync::atomic::AtomicU64,
 }
 
 impl SharedWatchSocket {
@@ -181,7 +196,19 @@ where
             }),
             admission,
             sink,
+            accepted_heartbeat_acks: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    /// How many heartbeat acknowledgements this socket has accepted since the
+    /// process started.
+    ///
+    /// Monotonic for the life of the process: a restart resets it to zero,
+    /// which is why an observer comparing two readings must also prove it is
+    /// still looking at the same service invocation.
+    pub fn accepted_heartbeat_acks(&self) -> u64 {
+        self.accepted_heartbeat_acks
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn connection_count(&self) -> usize {
@@ -665,10 +692,29 @@ where
             WatchClientCommandV1::DismissAlert { alert } => {
                 Ok((state.manager.dismiss_alert(connection_id, alert)?, true))
             }
-            WatchClientCommandV1::HeartbeatAck { sequence: _ } => {
-                // The pre-dispatch touch above is the entire effect: an ACK
-                // refreshes the manager heartbeat and must never create
+            WatchClientCommandV1::HeartbeatAck { sequence } => {
+                // The pre-dispatch touch above is the entire product effect:
+                // an ACK refreshes the manager heartbeat and must never create
                 // product events, history actions, or an outbound reply.
+                //
+                // It is also the one place an acknowledgement becomes
+                // evidence. Reaching here already means the frame decoded as a
+                // versioned envelope carrying a v1 command and named a
+                // connection the manager knows. Counting it additionally
+                // requires the sequence to be one this connection was really
+                // sent and has not already acknowledged. Arbitrary inbound
+                // text, a replay, and a sequence never issued all still
+                // refresh the heartbeat exactly as before -- they simply are
+                // not evidence that the heartbeat round trip works.
+                if let Some(channel) = state.connections.get_mut(&connection_id)
+                    && sequence >= 1
+                    && sequence <= channel.ping_sequence
+                    && sequence > channel.acknowledged_sequence
+                {
+                    channel.acknowledged_sequence = sequence;
+                    self.accepted_heartbeat_acks
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 let emitted_at = state.manager.clock_mut().wall_now();
                 Ok((
                     WatchDispatch {
@@ -786,6 +832,7 @@ where
                 sender: outbound,
                 last_ping_at: now,
                 ping_sequence: 0,
+                acknowledged_sequence: 0,
             },
         );
         true
@@ -2032,5 +2079,137 @@ mod tests {
         assert_eq!(socket.connection_count(), 0);
         assert!(receiver.try_recv().is_err(), "no frame ever went out");
         assert!(sink.dispatches.lock().unwrap().is_empty());
+    }
+
+    /// H9 (R2): the accepted-ACK counter is the server's OWN positive
+    /// evidence that the heartbeat round trip closed, so it may move only for
+    /// an acknowledgement this server can actually vouch for -- decoded as a
+    /// v1 command, on a known connection, naming a sequence this connection
+    /// was really sent and has not already acknowledged.
+    ///
+    /// Every refusal below is a way the counter could have been made to lie:
+    /// counting arbitrary inbound text (transport activity), counting an
+    /// invented sequence, counting a replay, or counting any command that
+    /// happens to arrive. The soak reads exactly this number.
+    #[test]
+    fn only_a_fresh_ack_for_an_issued_sequence_counts_as_accepted() {
+        let sink = Arc::new(RecordingSink::default());
+        let (socket, clock) = socket_with_clock(
+            Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None)),
+            sink.clone(),
+        );
+        let connection_id = trace(0xa0);
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
+        assert!(socket.connect(connection_id, outbound));
+        assert_eq!(socket.accepted_heartbeat_acks(), 0);
+
+        // Transport activity and undecodable text are not acknowledgements.
+        socket.transport_activity(connection_id);
+        socket.receive_text(connection_id, "{not a frame at all");
+        assert_eq!(
+            socket.accepted_heartbeat_acks(),
+            0,
+            "inbound bytes are not evidence that an ACK was accepted"
+        );
+
+        // No PING has been issued yet, so no sequence can be acknowledged.
+        send(
+            &socket,
+            connection_id,
+            trace(0xa001),
+            WatchClientCommandV1::HeartbeatAck { sequence: 1 },
+        );
+        assert_eq!(
+            socket.accepted_heartbeat_acks(),
+            0,
+            "an ACK for a sequence the server never sent is not evidence"
+        );
+
+        clock.advance(WATCH_APP_PING_INTERVAL);
+        socket.tick();
+        let WatchServerEventV1::Ping { sequence } = receive(&mut receiver).into_payload() else {
+            panic!("expected an application-level PING");
+        };
+        assert_eq!(sequence, 1);
+
+        for (label, invalid) in [("zero", 0u64), ("ahead of the issued sequence", 2u64)] {
+            send(
+                &socket,
+                connection_id,
+                trace(0xa002),
+                WatchClientCommandV1::HeartbeatAck { sequence: invalid },
+            );
+            assert_eq!(
+                socket.accepted_heartbeat_acks(),
+                0,
+                "a {label} sequence must not count as an accepted ACK"
+            );
+        }
+
+        send(
+            &socket,
+            connection_id,
+            trace(0xa003),
+            WatchClientCommandV1::HeartbeatAck { sequence },
+        );
+        assert_eq!(
+            socket.accepted_heartbeat_acks(),
+            1,
+            "the real acknowledgement of an issued sequence is the evidence"
+        );
+        send(
+            &socket,
+            connection_id,
+            trace(0xa004),
+            WatchClientCommandV1::HeartbeatAck { sequence },
+        );
+        assert_eq!(
+            socket.accepted_heartbeat_acks(),
+            1,
+            "replaying an acknowledged sequence says nothing new"
+        );
+
+        // An ordinary command refreshes the heartbeat like an ACK does; it is
+        // still not an ACK.
+        send(
+            &socket,
+            connection_id,
+            trace(0xa005),
+            WatchClientCommandV1::StartWatch {
+                items: items([section(160)]),
+            },
+        );
+        let _ = receive(&mut receiver);
+        assert_eq!(socket.accepted_heartbeat_acks(), 1);
+
+        clock.advance(WATCH_APP_PING_INTERVAL);
+        socket.tick();
+        let WatchServerEventV1::Ping { sequence: second } = receive(&mut receiver).into_payload()
+        else {
+            panic!("expected the second application-level PING");
+        };
+        assert_eq!(second, 2);
+        send(
+            &socket,
+            connection_id,
+            trace(0xa006),
+            WatchClientCommandV1::HeartbeatAck { sequence: second },
+        );
+        assert_eq!(socket.accepted_heartbeat_acks(), 2);
+        send(
+            &socket,
+            connection_id,
+            trace(0xa007),
+            WatchClientCommandV1::HeartbeatAck { sequence },
+        );
+        assert_eq!(
+            socket.accepted_heartbeat_acks(),
+            2,
+            "an ACK older than the last accepted one is stale, not evidence"
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "none of this produced an outbound frame"
+        );
     }
 }

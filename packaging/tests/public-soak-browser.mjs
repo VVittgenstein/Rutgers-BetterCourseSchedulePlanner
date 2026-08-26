@@ -12,12 +12,17 @@
 // Modes:
 //   (soak)                node public-soak-browser.mjs --base-url URL \
 //                           --playwright-root PATH --armed-marker FILE \
-//                           --reload-marker FILE [--done-marker FILE] \
+//                           --reload-marker FILE --ack-report FILE \
+//                           [--done-marker FILE] \
 //                           [--duration-seconds 600] [--expected-pings 50]
 //   --analyze-memory F    judge `epoch bytes` MemoryCurrent samples
 //   --analyze-connections F  judge `epoch count` connection-gauge samples
 //     (both require --window-start/--window-end epochs [--interval-seconds
 //      30] and refuse thin, holed, late, or truncated coverage)
+//   --analyze-acks        hold the SERVER's accepted-ACK counter delta
+//                           (--ack-baseline/--ack-final, read inside one
+//                           service invocation) against what the browser half
+//                           reported sending (--ack-report)
 //   --self-test           prove the pure judgments on fixed fixtures
 //
 // The soak needs Playwright (borrowed from --playwright-root); the analyze
@@ -37,6 +42,17 @@ export const DEFAULT_DURATION_SECONDS = 600;
 export const DEFAULT_EXPECTED_PINGS = 50;
 /** Scheduling slack allowed around the 30-second sampling cadence. */
 export const SAMPLE_JITTER_SECONDS = 15;
+/**
+ * How many acknowledgements the browser may have sent without the server
+ * having accepted them by the time the counter is read.
+ *
+ * The page counts an ACK the instant it hands the frame to the socket; the
+ * final counter reading happens after the driver exits. Exactly one frame can
+ * legitimately be in flight across that boundary. Two cannot, so the tolerance
+ * is one -- large enough for the tail, too small to hide a server that stopped
+ * accepting.
+ */
+export const ACK_DELIVERY_TOLERANCE = 1;
 
 /**
  * Parses `epoch value` sample lines. A failed read is recorded by the
@@ -132,6 +148,87 @@ export function analyzeMemorySamples(samples) {
     `memory grew ${Math.round(growth)} bytes between the first and last three samples; the budget is ${MEMORY_GROWTH_BUDGET_BYTES}`,
   );
   return { samples: samples.length, firstAverage, lastAverage, growth };
+}
+
+/**
+ * Parses one reading of a monotonic server counter.
+ *
+ * The shell writes a literal failure marker when it cannot read the metric,
+ * and an absent metric reads as an empty string. Both must refuse here: a
+ * gate that treats an unreadable counter as zero, or as "probably fine",
+ * proves nothing at all.
+ */
+export function parseCounterReading(text, label) {
+  assert.ok(
+    typeof text === 'string' && /^[0-9]+$/.test(text.trim()),
+    `${label} is not a counter reading (a failed read?): ${JSON.stringify(text)}`,
+  );
+  const value = Number.parseInt(text.trim(), 10);
+  assert.ok(Number.isSafeInteger(value) && value >= 0, `${label} is out of range: ${text}`);
+  return value;
+}
+
+/**
+ * The R2 acceptance judgment: the SERVER must say it accepted the
+ * acknowledgements this soak's browser sent.
+ *
+ * Before R2 the evidence was "the page called send()" plus "the journal shows
+ * no rejection" -- a service that silently dropped every valid ACK while
+ * still refreshing its heartbeat from arbitrary inbound text passed both.
+ * Here the delta of the server's own accepted-ACK counter, read inside one
+ * service invocation, has to match what the browser actually sent.
+ */
+export function assertAcceptedAckEvidence({ baseline, finalReading, browserAcks, expectedMinimum }) {
+  const before = parseCounterReading(baseline, 'the accepted-ACK baseline');
+  const after = parseCounterReading(finalReading, 'the accepted-ACK final reading');
+  assert.ok(
+    Number.isSafeInteger(browserAcks) && browserAcks > 0,
+    `the browser must report the acknowledgements it sent, got ${browserAcks}`,
+  );
+  assert.ok(
+    Number.isSafeInteger(expectedMinimum) && expectedMinimum > 0,
+    'the expected acknowledgement floor must be positive',
+  );
+  // A counter that went backwards is a restarted process or a reading from
+  // somewhere else; either way the two readings cannot be subtracted.
+  assert.ok(
+    after >= before,
+    `the accepted-ACK counter went backwards (${before} -> ${after}); the readings are not comparable`,
+  );
+  const accepted = after - before;
+  assert.ok(
+    accepted >= expectedMinimum,
+    `the server accepted ${accepted} heartbeat ACK(s) during the soak; the gate requires at least ${expectedMinimum}`,
+  );
+  assert.ok(
+    accepted <= browserAcks,
+    `the server accepted ${accepted} ACK(s) but the browser sent ${browserAcks}; the counter is not counting acknowledgements`,
+  );
+  assert.ok(
+    accepted >= browserAcks - ACK_DELIVERY_TOLERANCE,
+    `the browser sent ${browserAcks} ACK(s) but the server accepted ${accepted}; the acknowledgements did not land`,
+  );
+  return { accepted, browserAcks };
+}
+
+/** Reads the browser half's own report of what it sent. */
+export function parseAckReport(text) {
+  const report = JSON.parse(text);
+  assert.ok(report && typeof report === 'object', 'the ACK report must be an object');
+  assert.ok(
+    Number.isSafeInteger(report.pings) && report.pings > 0,
+    `the ACK report must carry the observed ping count, got ${report.pings}`,
+  );
+  assert.ok(
+    Number.isSafeInteger(report.acks) && report.acks > 0,
+    `the ACK report must carry the sent acknowledgement count, got ${report.acks}`,
+  );
+  assert.equal(
+    report.acks,
+    report.pings,
+    'the browser half must acknowledge every ping it observed',
+  );
+  return report;
 }
 
 /** Judges the connection-gauge samples: the held socket must stay visible. */
@@ -298,6 +395,70 @@ function selfTest() {
   );
   assert.throws(() => parseTimestampedSamples('419430400\n'), /epoch value/);
 
+  // Accepted-ACK evidence (R2): the SERVER's count is the evidence, and the
+  // browser's own tally is only what it is held against.
+  const ackCase = (overrides) =>
+    assertAcceptedAckEvidence({
+      baseline: '10',
+      finalReading: '65',
+      browserAcks: 55,
+      expectedMinimum: 50,
+      ...overrides,
+    });
+  assert.deepEqual(ackCase({}), { accepted: 55, browserAcks: 55 });
+  // One acknowledgement in flight when the counter is read is tolerated.
+  assert.deepEqual(ackCase({ finalReading: '64' }), { accepted: 54, browserAcks: 55 });
+  // THE discriminator: the page sent 55 ACKs and the server accepted none.
+  // Before R2 this soak passed -- the page had "sent" them and the journal
+  // held no rejection.
+  assert.throws(
+    () => ackCase({ finalReading: '10' }),
+    /requires at least/,
+    'a server that silently ignores every valid ACK must fail the soak',
+  );
+  assert.throws(
+    () => ackCase({ finalReading: '40', expectedMinimum: 20 }),
+    /did not land/,
+    'accepting far fewer ACKs than were sent must fail',
+  );
+  assert.throws(
+    () => ackCase({ baseline: '100', finalReading: '40' }),
+    /went backwards/,
+    'a restarted (or unrelated) counter cannot be subtracted',
+  );
+  assert.throws(
+    () => ackCase({ finalReading: '200' }),
+    /not counting acknowledgements/,
+    'a counter that outruns what the browser sent is not counting ACKs',
+  );
+  for (const unreadable of ['SAMPLE_READ_FAILURE', '', '  ', 'nan', null, undefined]) {
+    assert.throws(
+      () => ackCase({ baseline: unreadable }),
+      /not a counter reading/,
+      `an unreadable baseline (${JSON.stringify(unreadable)}) must refuse`,
+    );
+    assert.throws(
+      () => ackCase({ finalReading: unreadable }),
+      /not a counter reading/,
+      `an unreadable final reading (${JSON.stringify(unreadable)}) must refuse`,
+    );
+  }
+  assert.throws(
+    () => ackCase({ browserAcks: 0 }),
+    /acknowledgements it sent/,
+    'a browser half that reports nothing cannot be correlated',
+  );
+
+  // The browser half's report must be complete and self-consistent.
+  assert.deepEqual(parseAckReport('{"pings":55,"acks":55,"sequenceAtReload":27}'), {
+    pings: 55,
+    acks: 55,
+    sequenceAtReload: 27,
+  });
+  assert.throws(() => parseAckReport('{"pings":55}'), /sent acknowledgement count/);
+  assert.throws(() => parseAckReport('{"pings":55,"acks":54}'), /every ping it observed/);
+  assert.throws(() => parseAckReport('{"pings":"55","acks":55}'), /observed ping count/);
+
   process.stdout.write('public-soak-browser self-test: PASS\n');
 }
 
@@ -312,6 +473,10 @@ function parseArguments(argv) {
     expectedPings: DEFAULT_EXPECTED_PINGS,
     analyzeMemory: null,
     analyzeConnections: null,
+    ackReport: null,
+    analyzeAcks: false,
+    ackBaseline: null,
+    ackFinal: null,
     windowStart: null,
     windowEnd: null,
     intervalSeconds: 30,
@@ -352,6 +517,21 @@ function parseArguments(argv) {
       case '--analyze-connections':
         options.analyzeConnections = next();
         break;
+      case '--ack-report':
+        options.ackReport = next();
+        break;
+      case '--analyze-acks':
+        options.analyzeAcks = true;
+        break;
+      // Deliberately kept as raw text: the shell writes a failure marker
+      // when it cannot read the counter, and the judgment must see that
+      // rather than a silently coerced number.
+      case '--ack-baseline':
+        options.ackBaseline = next();
+        break;
+      case '--ack-final':
+        options.ackFinal = next();
+        break;
       case '--window-start':
         options.windowStart = Number.parseInt(next(), 10);
         break;
@@ -378,6 +558,9 @@ async function runSoak(options) {
   assert.ok(options.playwrightRoot, '--playwright-root is required');
   assert.ok(options.armedMarker, '--armed-marker is required');
   assert.ok(options.reloadMarker, '--reload-marker is required');
+  // Without the report there is nothing to correlate the server's accepted
+  // count against, so the soak could not prove acceptance even if it held.
+  assert.ok(options.ackReport, '--ack-report is required');
   assert.ok(
     Number.isSafeInteger(options.durationSeconds) && options.durationSeconds >= 60,
     '--duration-seconds must be at least 60',
@@ -519,6 +702,17 @@ async function runSoak(options) {
     assert.ok(reloadObserved, 'the harness never signalled its caddy reload');
     assertReloadCrossing(state.pings, sequenceAtReload);
 
+    // What this half actually sent, for the shell to hold against the
+    // server's own accepted-ACK counter.
+    writeFileSync(
+      options.ackReport,
+      `${JSON.stringify({
+        pings: state.pings.length,
+        acks: state.acks,
+        sequenceAtReload,
+      })}\n`,
+    );
+
     process.stdout.write(
       `P2_H9_SOAK_BROWSER_PASS duration=${options.durationSeconds} pings=${state.pings.length} acks=${state.acks} reload_at=${sequenceAtReload}\n`,
     );
@@ -558,6 +752,20 @@ async function main() {
       readCoveredSamples(options.analyzeConnections, options),
     );
     process.stdout.write(`public-soak connections: PASS samples=${verdict.samples}\n`);
+    return;
+  }
+  if (options.analyzeAcks) {
+    assert.ok(options.ackReport, '--analyze-acks needs the browser half\'s --ack-report');
+    const report = parseAckReport(readFileSync(options.ackReport, 'utf8'));
+    const verdict = assertAcceptedAckEvidence({
+      baseline: options.ackBaseline,
+      finalReading: options.ackFinal,
+      browserAcks: report.acks,
+      expectedMinimum: options.expectedPings,
+    });
+    process.stdout.write(
+      `public-soak acks: PASS server_accepted=${verdict.accepted} browser_sent=${verdict.browserAcks}\n`,
+    );
     return;
   }
   await runSoak(options);

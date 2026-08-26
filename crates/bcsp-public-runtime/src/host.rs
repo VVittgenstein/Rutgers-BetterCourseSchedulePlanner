@@ -556,7 +556,11 @@ async fn handle_metrics(State(state): State<PublicHostState>, request: Request) 
     text_response(
         StatusCode::OK,
         "text/plain; version=0.0.4; charset=utf-8",
-        render_metrics(&snapshot, &state.ws_resources),
+        render_metrics(
+            &snapshot,
+            &state.ws_resources,
+            state.watch.accepted_heartbeat_acks(),
+        ),
     )
 }
 
@@ -1105,7 +1109,11 @@ fn escape_inline_json(value: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
-fn render_metrics(snapshot: &PublicServiceSnapshot, ws_resources: &PublicWsResources) -> String {
+fn render_metrics(
+    snapshot: &PublicServiceSnapshot,
+    ws_resources: &PublicWsResources,
+    accepted_heartbeat_acks: u64,
+) -> String {
     let mut output = String::new();
     let ready = u8::from(snapshot.ready);
     let circuit = u8::from(snapshot.scheduler.origin_circuit_open);
@@ -1222,6 +1230,14 @@ fn render_metrics(snapshot: &PublicServiceSnapshot, ws_resources: &PublicWsResou
         output,
         "bcsp_websocket_write_timeout_disconnects {}",
         stats.write_timeout_disconnects()
+    );
+    // H9 evidence: heartbeat ACKs the watch socket ACCEPTED -- decoded,
+    // matched to a sequence this server issued to that connection, and not a
+    // replay. A monotonic process-lifetime count, so an observer reads it
+    // twice and judges the delta; it says nothing about who acknowledged.
+    let _ = writeln!(
+        output,
+        "bcsp_websocket_heartbeat_acks_accepted {accepted_heartbeat_acks}"
     );
     output
 }
@@ -2877,6 +2893,9 @@ mod tests {
             "bcsp_websocket_slow_consumer_disconnects 0",
             "bcsp_websocket_global_outbound_budget_disconnects 0",
             "bcsp_websocket_write_timeout_disconnects 0",
+            // H9 (R2): the server's own accepted-ACK evidence is on the
+            // surface the soak reads, and starts at zero.
+            "bcsp_websocket_heartbeat_acks_accepted 0",
         ] {
             assert!(metrics.contains(expected), "missing metric: {expected}");
         }
