@@ -243,6 +243,31 @@ export function buildFakeOffPeakByClientClock(dir) {
 }
 
 // ---------------------------------------------------------------------------
+// CE-14: ONE wall-clock session per campus, straddling 17:00 ET. Nothing here
+// is forged — every body, request start, request end and serverDate is honest,
+// and both regimes are real ON THE SERVER CLOCK. The point is that a single
+// 10-minute session is a single window: it must not satisfy the peak side and
+// the off-peak side of A4-2 by itself. v2.5.0 refused this shape because its
+// off-peak side demanded a window whose whole envelope lay outside the peak
+// hour; a per-bracket rule without the purity clause accepts it.
+// ---------------------------------------------------------------------------
+
+// 16:55 ET; 20 ticks of 30 s run the session to 17:04:38 ET, so the first ten
+// change brackets close before 17:00 ET and the last ten inside the peak hour.
+export const STRADDLE_BASE = Date.UTC(2026, 0, 6, 21, 55, 0);
+
+export function straddleSession(campus, startSeq = 1) {
+  return session(campus, STRADDLE_BASE, { startSeq });
+}
+
+export function buildStraddlingSingleSession(dir) {
+  for (const campus of CAMPUSES) {
+    makeRunDir(join(dir, `run${campus}`), { campus, samples: straddleSession(campus) });
+  }
+  return RUN_NAMES;
+}
+
+// ---------------------------------------------------------------------------
 // Honest controls. Both MUST keep reaching verdict=GO: they are the guard
 // against "fixing" the gates by wiring them permanently shut.
 // ---------------------------------------------------------------------------

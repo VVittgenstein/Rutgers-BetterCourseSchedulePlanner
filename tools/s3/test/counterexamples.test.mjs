@@ -44,6 +44,14 @@
 //   CE-11b (A4-2 minimal end edit):    old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
 //   CE-12 (A4-2 end-edited rep):       old stdout `verdict=GO qualifier=none brackets=80 distinguishable=true`
 //   CE-13 (A4-2 fake off-peak):        old stdout `verdict=GO qualifier=none brackets=120 distinguishable=true`
+// CE-14 pins a REGRESSION the per-bracket rule introduced rather than an older
+// defect: with peak AND off-peak both decided per bracket and nothing else, a
+// single honest session straddling 17:00 ET satisfied both sides of A4-2 by
+// itself. Same protocol, run against the tree that introduced it (commit
+// ffacfabec3c3; the regression survived to commit 65becaeada9d) and against
+// v2.5.0, which refused the same bytes:
+//   CE-14 (A4-2 straddling session):  intermediate stdout `verdict=GO qualifier=none brackets=60 distinguishable=true`,
+//                                     v2.5.0 stdout `verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=60 distinguishable=true`
 // The same builder module also produces the honest control that must STAY GO
 // on both trees (`verdict=GO qualifier=none brackets=120 distinguishable=true`),
 // which is what keeps these fixes from being a gate wired permanently shut.
@@ -63,6 +71,7 @@ import {
   buildSubtleFakePeakByRequestEnd,
   buildRepresentativeHijack,
   buildFakeOffPeakByClientClock,
+  buildStraddlingSingleSession,
   buildHonestControl,
   SLICE_LEN,
   SLICE_OFFSETS,
@@ -1251,6 +1260,53 @@ test("CE-13 (A4-2): a client clock running an hour slow cannot manufacture off-p
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+});
+
+test("CE-14 (A4-2): one session straddling 17:00 ET is not both a peak and an off-peak window", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // Three honest campuses with exactly ONE 10-minute session each, based at
+  // 16:54:59 ET and running to 17:04:38 ET. Nothing is forged: every server
+  // bound is real, the first ten brackets of each window really close before
+  // 17:00 ET and the last ten really fall inside the peak hour. That makes
+  // both sides of a purely per-bracket A4-2 rule true from a SINGLE session
+  // per target — which is exactly what "multiple independent time windows"
+  // must not accept, and what v2.5.0 refused by requiring an off-peak window
+  // whose whole envelope lay outside the peak hour.
+  const runNames = buildStraddlingSingleSession(dir);
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  // The bait: this run is honest in every other respect. A4-1 and A4-3..A4-6
+  // are all satisfied and the peak side of A4-2 genuinely qualifies — only the
+  // off-peak side is missing, because there is no second, off-peak session.
+  for (const gate of json.goGate) {
+    assert.equal(gate.satisfied, gate.id !== "A4-2", `${gate.id}: ${gate.evidence}`);
+  }
+  const a2 = gateById(json, "A4-2");
+  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 3;/);
+  assert.match(
+    a2.evidence,
+    /qualifying off-peak \(>=5 informative off-peak brackets, none in peak\): 0/,
+  );
+  assert.match(
+    a2.evidence,
+    /3 window\(s\) with >=5 off-peak brackets also hold peak-hour or unclassifiable brackets and cannot supply off-peak evidence/,
+  );
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+
+  // Measured, not assumed: one window per target, each holding both regimes.
+  const windows = json.targets.flatMap((target) => target.windows);
+  assert.equal(windows.length, 3);
+  for (const w of windows) {
+    assert.equal(w.brackets.length, 20);
+    assert.equal(w.peakOverlap, true);
+  }
 });
 
 test("CONTROL (R2): the honest three-campus fixture the R2 counterexamples are cut from still reaches GO", (t) => {
