@@ -261,14 +261,29 @@ same bounds the model comparison, the safe offset and A4-5 consume, which is
 the server clock whenever a production conclusion is reachable. A window
 qualifies on the peak side when ≥ 5 of its informative brackets have
 comparison-clock bounds intersecting 17:00–18:00 America/New_York with
-**positive measure** (a single-instant boundary touch is not peak evidence),
-and on the off-peak side when ≥ 5 of them do not; the two sides must come from
-two different windows. The server upper bound carries its usual +1 s `Date`
-widening before the test, which can only move a bracket toward the peak side —
-the conservative direction, since the widened upper really is the true upper
-bound on the change instant. A bracket without usable bounds on the comparison
-clock qualifies neither side (fail closed, never filled in from the client
-envelope) and is counted in the gate evidence.
+**positive measure** (a single-instant boundary touch is not peak evidence).
+It qualifies on the off-peak side when ≥ 5 of its informative brackets fall
+outside the peak hour **and every one of its brackets does** — informative or
+not. That purity clause is what keeps the per-bracket rule from being weaker
+than the window-label rule it replaced: without it a single session straddling
+17:00 ET would satisfy both sides on its own, its early brackets off-peak and
+its late ones in peak, and "multiple independent time windows" would reduce to
+one ten-minute capture. Purity is checked over *all* of a window's brackets so
+that a straddling session cannot buy it by making its peak-side brackets too
+wide to be informative, or by dropping their `Date` headers. The peak side
+needs no mirror clause — brackets whose own comparison-clock bounds lie in the
+peak hour are peak evidence wherever the rest of their window sits — and the
+two qualifying sets are therefore disjoint by construction: the peak and
+off-peak evidence always come from different windows. Any window with enough
+off-peak brackets that the purity clause refuses is reported in the gate
+evidence, so a reader never has to guess why it did not count.
+
+The server upper bound carries its usual +1 s `Date` widening before the test,
+which can only move a bracket toward the peak side — the conservative
+direction, since the widened upper really is the true upper bound on the change
+instant. A bracket without usable bounds on the comparison clock qualifies
+neither side (fail closed, never filled in from the client envelope), is
+counted in the gate evidence, and also costs its window off-peak purity.
 
 The `peak 17–18 ET? (label)` column in the Markdown report and
 `targets[].windows[].peakOverlap` in the JSON are the window's **client
