@@ -13,8 +13,8 @@ import { AnalyzerError, internalAssert } from "./errors.mjs";
 import { fmtRatio } from "./stable.mjs";
 
 // Shared constants (single source of truth; gate.mjs re-exports them).
-export const TOOL_VERSION = "2.6.1";
-export const SCHEMA_VERSION = 3;
+export const TOOL_VERSION = "2.7.0";
+export const SCHEMA_VERSION = 4;
 export const PERIODS_MS = [30000, 60000];
 export const SERVER_DATE_WIDEN_MS = 1000;
 export const CLIENT_TIME_REGRESSION_TOLERANCE_MS = 2000;
@@ -52,6 +52,32 @@ export const DERIVATION_MIN_BLOCK_CHANGES = 1;
 // them); a stream sharing fewer than 3 could not reach MIN_GROUP_BRACKETS
 // anyway, so 3 buys robustness without giving up any detection.
 export const DERIVATION_MIN_RECORDS = 3;
+// The same reuse counted at a NON-ZERO constant client-clock offset. The
+// absolute rule above tests exactly ONE offset; the shift-invariant rule
+// searches every offset that any same-body pair produces (7363 distinct
+// offsets inside the 554-sample local capture alone), so its threshold has to
+// be re-argued rather than inherited.
+//
+// Two independent grounds for 6:
+//   - Empirical ceiling. On the real local capture compared with itself — the
+//     only real body-repetition structure available, and the friendliest case
+//     for an accidental match — the largest non-zero-offset candidate bucket
+//     holds 3 pairs (offsets ±13405 ms, ±27127 ms, ±28068 ms); none reaches 6.
+//     Between the three independent local captures there is no bucket at all:
+//     they share zero decodedBodySha256 values pairwise. 6 is 2x the measured
+//     accidental ceiling.
+//   - Zero detection cost. A stream must supply MIN_GROUP_BRACKETS = 5
+//     informative brackets to qualify a window or a session, and 5 brackets
+//     need at least 6 samples (each bracket is an adjacent-pair body change).
+//     A reuse of <= 5 records can therefore qualify nothing, so the higher
+//     shifted threshold forfeits no detection whatsoever.
+//
+// What it deliberately does NOT catch is per-sample jitter: with a different
+// offset per sample the offsets do not coincide, every bucket collapses toward
+// size 1, and the streams stay independent families. That is the documented,
+// contract-deferred boundary — and the rule cannot drift into it, because the
+// offset match is an exact integer equality with no tolerance window.
+export const DERIVATION_MIN_RECORDS_SHIFTED = 6;
 export const NY_PEAK = { startHour: 17, endHour: 18, timeZone: "America/New_York" };
 
 export function bracketBounds(bracket, clockSource) {

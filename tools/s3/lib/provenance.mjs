@@ -37,9 +37,14 @@
 //                  interior canonical entries containing at least
 //                  DERIVATION_MIN_BLOCK_CHANGES body change(s) — staggered
 //                  re-slicing of one capture, even after a joint clock shift;
-//   - derived:     the two reuse >= DERIVATION_MIN_RECORDS observation RECORDS,
-//                  matched jointly on (clientStartMs, bodySha) — regular or
-//                  irregular subsampling, decimation, thinning, reordering.
+//   - derived:     the two reuse observation RECORDS, matched jointly on
+//                  (clientStartMs + offset, bodySha) for ONE constant offset
+//                  shared by every matched record — regular or irregular
+//                  subsampling, decimation, thinning, reordering, including a
+//                  copy whose whole client clock was translated once.
+//                  >= DERIVATION_MIN_RECORDS records at offset 0 (the older
+//                  absolute rule, unchanged), or
+//                  >= DERIVATION_MIN_RECORDS_SHIFTED at any non-zero offset.
 // A clean family contributes exactly ONE evidence-eligible stream (its
 // representative, the longest member with the lowest streamId); every other
 // member is a duplicate barred from all evidence. So derived slices and
@@ -47,12 +52,15 @@
 // n, or leave-one-out folds.
 //
 // Known boundary (by design, documented in the README): what is detected is
-// REUSE OF THE SAME OBSERVATION RECORDS. A partition of one capture into
-// chunks that share no record and no (body, delta) block reuses nothing —
-// every observation is still counted once — and de novo fabrication of body
-// content or of the time grid is not detected at all. This is a defence
-// against copy/slice/subsample-and-relabel, not forensics against invented
-// data, and not a cryptographic capture proof.
+// REUSE OF THE SAME OBSERVATION RECORDS, up to ONE constant translation of the
+// whole client clock. A partition of one capture into chunks that share no
+// record and no (body, delta) block reuses nothing — every observation is
+// still counted once — de novo fabrication of body content or of the time
+// grid is not detected at all, and neither is a PER-SAMPLE time edit: when
+// every sample carries its own offset, no single offset explains more than a
+// coincidence's worth of records and the streams stay independent families.
+// This is a defence against copy/slice/subsample/translate-and-relabel, not
+// forensics against invented data, and not a cryptographic capture proof.
 //
 // Time-anchor and record conflict (fail-closed): the canonical series carries
 // no absolute clock and no server or request-end column, so members of one
@@ -84,11 +92,12 @@ import {
   DERIVATION_MIN_BLOCK,
   DERIVATION_MIN_BLOCK_CHANGES,
   DERIVATION_MIN_RECORDS,
+  DERIVATION_MIN_RECORDS_SHIFTED,
 } from "./phase.mjs";
 import {
+  bestShiftedRecordAlignment,
   containmentAlignments,
   longestCommonBlocks,
-  sharedRecordAlignment,
 } from "./series-match.mjs";
 
 // First match wins; lower number = stronger evidence of the same data.
@@ -152,6 +161,9 @@ function relateStreams(a, b) {
   if (a.seriesFingerprint === b.seriesFingerprint) {
     return {
       relation: "identical",
+      // Content-anchored relations align at the recorded absolute times;
+      // the offset field exists so every edge reports one uniformly.
+      offsetMs: 0,
       matchedCount: b.sampleCount,
       // Identical fingerprints share the whole content series, so the pair is
       // time-aligned iff the first sample's absolute client time matches AND
@@ -166,6 +178,9 @@ function relateStreams(a, b) {
   if (alignments.length > 0) {
     return {
       relation: "contained",
+      // Content-anchored relations align at the recorded absolute times;
+      // the offset field exists so every edge reports one uniformly.
+      offsetMs: 0,
       matchedCount: b.sampleCount,
       // A genuine truncation agrees with the longer series' absolute client
       // clock and recorded columns at (at least) its true alignment offset.
@@ -190,6 +205,9 @@ function relateStreams(a, b) {
     for (const blk of blocks) if (blk.length > matchedCount) matchedCount = blk.length;
     return {
       relation: "overlapping",
+      // Content-anchored relations align at the recorded absolute times;
+      // the offset field exists so every edge reports one uniformly.
+      offsetMs: 0,
       matchedCount,
       // Equal deltas across the block make start equality at the block's first
       // aligned sample imply it at every aligned sample.
@@ -209,18 +227,33 @@ function relateStreams(a, b) {
   }
 
   // Subsampled / decimated / thinned re-export: the two reuse actual
-  // observation records. Absolute-time based, so it survives any re-cadencing
-  // that destroys the delta structure — the case `overlapping` cannot see.
-  const pairs = sharedRecordAlignment(a.recordKeys, b.recordKeys);
-  if (pairs.length >= DERIVATION_MIN_RECORDS) {
+  // observation records. Record-based, so it survives any re-cadencing that
+  // destroys the delta structure — the case `overlapping` cannot see — and
+  // shift-invariant, so it also survives one constant translation of the
+  // client clock, the case a purely ABSOLUTE record key could not see.
+  const match = bestShiftedRecordAlignment(
+    { times: a.recordTimes, bodies: a.recordBodies },
+    { times: b.recordTimes, bodies: b.recordBodies },
+    DERIVATION_MIN_RECORDS,
+    DERIVATION_MIN_RECORDS_SHIFTED,
+  );
+  if (match !== null) {
     return {
       relation: "derived",
-      matchedCount: pairs.length,
-      // Client starts and bodies agree by construction of the match key; the
-      // remaining recorded columns still have to.
-      timeAligned: pairs.every(([ia, ib]) =>
-        fieldsAgreeAt(a.entries[ia], b.entries[ib], endComparable),
-      ),
+      matchedCount: match.pairs.length,
+      offsetMs: match.offsetMs,
+      // Absolute agreement, 0 ms tolerance, UNCHANGED. Bodies agree by
+      // construction of the match key; the aligned samples' absolute client
+      // starts agree only when the offset is exactly 0, and then every other
+      // recorded column must agree too. A translated copy therefore joins the
+      // family and immediately fails here — which is the whole point: the
+      // relation had to become shift-invariant so that the agreement check
+      // could stay absolute, not so that it could be relaxed.
+      timeAligned:
+        match.offsetMs === 0 &&
+        match.pairs.every(([ia, ib]) =>
+          fieldsAgreeAt(a.entries[ia], b.entries[ib], endComparable),
+        ),
     };
   }
 
@@ -261,7 +294,8 @@ export function buildProvenance(streams) {
       // Absolute anchors (NOT part of the fingerprint): used only for the
       // record/time agreement checks and for the record-reuse match key.
       startTimes: stream.samples.map((s) => s.clientStartMs),
-      recordKeys: stream.samples.map((s) => `${s.clientStartMs}\t${s.bodySha}`),
+      recordTimes: stream.samples.map((s) => s.clientStartMs),
+      recordBodies: stream.samples.map((s) => s.bodySha),
       firstStartMs: first.clientStartMs,
       // SQLite ingestion carries no request end and sets clientEndMs ==
       // clientStartMs; such a stream records no end to compare.
@@ -357,6 +391,10 @@ export function buildProvenance(streams) {
           streamIdA: ordered[e.ra].streamId,
           streamIdB: ordered[e.rb].streamId,
           relation: e.relation,
+          // The constant client-clock offset at which the two members' shared
+          // records align (0 for the content-anchored relations, and for a
+          // derivation that reused records at their recorded instants).
+          offsetMs: e.offsetMs,
         }))
         .sort((x, y) => cmpStr(x.streamIdA, y.streamIdA) || cmpStr(x.streamIdB, y.streamIdB)),
       members: ranks

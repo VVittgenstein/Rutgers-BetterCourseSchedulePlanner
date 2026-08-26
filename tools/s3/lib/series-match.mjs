@@ -8,7 +8,11 @@
 //   containmentAlignments  — is A's whole content a contiguous slice of B's?
 //   longestCommonBlocks    — which contiguous stretches do A and B share?
 //   sharedRecordAlignment  — which individual observation RECORDS do A and B
-//                            reuse, in order?
+//                            reuse, in order, at the SAME absolute client
+//                            instants?
+//   bestShiftedRecordAlignment — same question, but allowing ONE constant
+//                            client-clock offset shared by every matched
+//                            record.
 //
 // The first two key on (bodySha, deltaMs), so they are invariant under any
 // translation of either clock: a slice whose timestamps were shifted still
@@ -22,6 +26,20 @@
 // capture can hold the same body for minutes on end, and two honest captures of
 // the same target legitimately see the same bodies); clientStartMs alone merges
 // honest captures that merely ran at the same wall-clock times.
+//
+// The fourth matcher generalizes the third by exactly one degree of freedom: a
+// single constant offset applied to the WHOLE stream. It keys on
+// (bodySha, clientStartMs + offset) for one offset shared by every matched
+// record, so a regular subsample whose client clock was translated once still
+// matches, while a per-sample jitter — where no single offset explains more
+// than a coincidence's worth of records — does not. The offset is an exact
+// integer equality, never a tolerance window: widening it is what would reach
+// into the deliberately-deferred jitter case.
+//
+// Complexity of the offset search: P = sum over bodies of n_body * m_body
+// candidate pairs, bounded by |a| * |b| and in practice far below it (measured
+// on the 554-sample local capture against itself: P = 8202 against n^2 =
+// 306916). No cap is applied — a cap could only lose real matches.
 
 // All alignment offsets at which series A's CONTENT (bodySha + client-delta
 // structure, first delta of the slice normalized to 0, matching A's own first
@@ -100,6 +118,31 @@ export function longestCommonBlocks(aInterior, bInterior, minLength) {
   return blocks;
 }
 
+// The greedy left-to-right walk shared by both record matchers. Consumes a
+// pair list ordered by (ib asc, ia asc) and returns the strictly-increasing
+// alignment it induces: for each ib in order, take the first still-available
+// ia, then advance the floor. Extracted verbatim from the walk
+// sharedRecordAlignment performed inline, so both matchers report the same
+// count for the same candidate set.
+function greedyIncreasingPairs(pairsByBAsc) {
+  const pairs = [];
+  let minA = 0;
+  let i = 0;
+  while (i < pairsByBAsc.length) {
+    const ib = pairsByBAsc[i][1];
+    let taken = false;
+    while (i < pairsByBAsc.length && pairsByBAsc[i][1] === ib) {
+      if (!taken && pairsByBAsc[i][0] >= minA) {
+        pairs.push([pairsByBAsc[i][0], ib]);
+        minA = pairsByBAsc[i][0] + 1;
+        taken = true;
+      }
+      i += 1;
+    }
+  }
+  return pairs;
+}
+
 // The in-order set of observation RECORDS that two streams reuse, as index
 // pairs [indexInA, indexInB], strictly increasing on both sides. Record keys
 // are opaque strings supplied by the caller (provenance.mjs builds them from
@@ -110,31 +153,82 @@ export function longestCommonBlocks(aInterior, bInterior, minLength) {
 // reports is a LOWER bound on reuse — the fail-closed direction for a threshold
 // that triggers exclusion.
 export function sharedRecordAlignment(aKeys, bKeys) {
-  const pairs = [];
-  if (aKeys.length === 0 || bKeys.length === 0) return pairs;
+  if (aKeys.length === 0 || bKeys.length === 0) return [];
   const index = new Map();
   for (let i = 0; i < aKeys.length; i += 1) {
-    const key = aKeys[i];
-    const bucket = index.get(key);
-    if (bucket === undefined) index.set(key, [i]);
+    const bucket = index.get(aKeys[i]);
+    if (bucket === undefined) index.set(aKeys[i], [i]);
     else bucket.push(i);
   }
-  let minA = 0;
+  const ordered = [];
   for (let j = 0; j < bKeys.length; j += 1) {
     const bucket = index.get(bKeys[j]);
     if (bucket === undefined) continue;
-    // Smallest index in the bucket that is >= minA (buckets are ascending).
-    let lo = 0;
-    let hi = bucket.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (bucket[mid] < minA) lo = mid + 1;
-      else hi = mid;
-    }
-    if (lo === bucket.length) continue;
-    const ia = bucket[lo];
-    pairs.push([ia, j]);
-    minA = ia + 1;
+    // Buckets are built in ascending ia, and j ascends, so the concatenation
+    // is already in (ib asc, ia asc) order — exactly what the walk wants.
+    for (const ia of bucket) ordered.push([ia, j]);
   }
-  return pairs;
+  return greedyIncreasingPairs(ordered);
+}
+
+// The best SHIFT-INVARIANT record alignment between two streams: the single
+// constant client-clock offset `offsetMs` at which the largest strictly
+// increasing set of same-body records lines up, or null when no offset clears
+// its threshold.
+//
+//   a, b: { times: number[], bodies: string[] } — parallel arrays in stream
+//   order (provenance.mjs passes clientStartMs and bodySha).
+//
+// Two thresholds, because the two cases are not equally cheap to hit by
+// accident. `minPairsAtZero` governs offset 0, where exactly ONE offset is
+// ever tested and the key is the joint (clientStartMs, bodySha) key the older
+// rule used — so this branch reproduces that rule exactly. `minPairsShifted`
+// governs every non-zero offset, where the search ranges over every offset any
+// same-body pair produces, and must therefore be re-argued against the
+// accidental ceiling (see phase.mjs).
+//
+// Selection is by an EXPLICIT comparator — (alignment length desc, |offset|
+// asc, offset asc) — never by Map iteration order, which is insertion order
+// and would leak the argument order into the result. The |offset| tie-break
+// makes offset 0 win every tie, which is what keeps every previously-detected
+// derivation bit-identical.
+export function bestShiftedRecordAlignment(a, b, minPairsAtZero, minPairsShifted) {
+  if (a.times.length === 0 || b.times.length === 0) return null;
+  const byBody = new Map();
+  for (let ia = 0; ia < a.times.length; ia += 1) {
+    const bucket = byBody.get(a.bodies[ia]);
+    if (bucket === undefined) byBody.set(a.bodies[ia], [ia]);
+    else bucket.push(ia);
+  }
+  // offset -> candidate pairs, accumulated in (ib asc, ia asc) order because
+  // ib ascends in the outer loop and each body bucket ascends in ia.
+  const byOffset = new Map();
+  for (let ib = 0; ib < b.times.length; ib += 1) {
+    const candidates = byBody.get(b.bodies[ib]);
+    if (candidates === undefined) continue;
+    for (const ia of candidates) {
+      const delta = b.times[ib] - a.times[ia];
+      const bucket = byOffset.get(delta);
+      if (bucket === undefined) byOffset.set(delta, [[ia, ib]]);
+      else bucket.push([ia, ib]);
+    }
+  }
+  const survivors = [];
+  for (const [delta, candidatePairs] of byOffset) {
+    const threshold = delta === 0 ? minPairsAtZero : minPairsShifted;
+    // Cheap pre-filter: the greedy alignment can only be shorter than the raw
+    // candidate list, so a bucket below the threshold can never survive it.
+    if (candidatePairs.length < threshold) continue;
+    const pairs = greedyIncreasingPairs(candidatePairs);
+    if (pairs.length < threshold) continue;
+    survivors.push({ delta, pairs });
+  }
+  if (survivors.length === 0) return null;
+  survivors.sort(
+    (x, y) =>
+      y.pairs.length - x.pairs.length ||
+      Math.abs(x.delta) - Math.abs(y.delta) ||
+      x.delta - y.delta,
+  );
+  return { offsetMs: survivors[0].delta, pairs: survivors[0].pairs };
 }

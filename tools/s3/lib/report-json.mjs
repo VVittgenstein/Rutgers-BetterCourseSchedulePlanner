@@ -245,6 +245,11 @@ export function buildJsonReport(ctx) {
           streamIdA: p.streamIdA,
           streamIdB: p.streamIdB,
           relation: p.relation,
+          // Constant client-clock offset at which the two members' shared
+          // records line up: 0 means they disagree on some OTHER recorded
+          // column (a serverDate, a request end), non-zero means the copy's
+          // whole client clock was translated by that many milliseconds.
+          offsetMs: p.offsetMs,
         })),
         // relation: how the member joined the family — "representative",
         // "identical", "contained", "overlapping" (a shared contiguous block of
