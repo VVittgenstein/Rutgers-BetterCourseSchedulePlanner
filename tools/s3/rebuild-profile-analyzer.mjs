@@ -13,6 +13,7 @@ import { parseArgs, buildNormalizedCommand, USAGE } from "./lib/cli.mjs";
 import { sha256File } from "./lib/stable.mjs";
 import { ingestNdjson } from "./lib/ingest-ndjson.mjs";
 import { ingestSqlite } from "./lib/ingest-sqlite.mjs";
+import { buildProvenance } from "./lib/provenance.mjs";
 import { segmentWindows, nyLabel, overlapsNyPeak } from "./lib/windows.mjs";
 import { buildBrackets } from "./lib/brackets.mjs";
 import { analyzeClock } from "./lib/clock.mjs";
@@ -108,6 +109,10 @@ function main() {
     }
   }
 
+  // 3b. Observation-data provenance (metadata-free series fingerprints; the
+  // A4-1 gate counts campus coverage per provenance class, not per label).
+  const provenance = buildProvenance(streams);
+
   // 4. Clock analysis over all included samples (per-stream adjacency).
   const clock = analyzeClock(streams.map((s) => s.samples));
 
@@ -142,6 +147,7 @@ function main() {
     safeOffset,
     clock,
     clockSource,
+    provenance,
   });
 
   // 8. Re-verify all input fingerprints (read-only guarantee) before writing.
@@ -172,6 +178,7 @@ function main() {
     normalizedCommand,
     inputs: ingests.map((i) => i.input),
     targets,
+    provenance,
     windowsAll,
     brackets: allBrackets,
     bracketTotals,

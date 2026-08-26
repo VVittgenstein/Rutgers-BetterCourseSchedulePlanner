@@ -13,12 +13,31 @@ import { makeTmpDir, cleanup, makeRunDir, makeTickSeries, runAnalyzer } from "./
 const OFF_PEAK_BASE = Date.UTC(2026, 0, 6, 3, 0, 0); // 22:00 ET Jan 5 — off-peak
 const PEAK_BASE = Date.UTC(2026, 0, 6, 22, 10, 0); // 17:10 ET Jan 6 — inside peak
 
+// Per-campus series shapes: each campus gets its own bodySha namespace and its
+// own pre/post/phase geometry so the three observation series are genuinely
+// independent under the provenance fingerprint (a relabeled copy would merge
+// into one class and fail A4-1). Phases stay within the arc overlap and every
+// stable sample still floors to the second below its tick, so per-group phase
+// intervals keep a common intersection (A4-4).
+const CAMPUS_SHAPE = {
+  NB: { phaseMs: 0, preMs: 400, postMs: 8600 },
+  NK: { phaseMs: 300, preMs: 500, postMs: 8400 },
+  CM: { phaseMs: 600, preMs: 800, postMs: 8200 },
+};
+
 function makeCampusRun(dir, campus) {
   // One input stream with two sessions ~19 h apart: gap-based segmentation
   // must split it into #w00 (off-peak) and #w01 (peak). Both sessions are a
   // true 30 s process (20 ticks each → 20 brackets per window).
-  const offPeak = makeTickSeries({ baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1 });
-  const peak = makeTickSeries({ baseMs: PEAK_BASE, periodMs: 30000, count: 20, startSeq: 100 });
+  const shape = CAMPUS_SHAPE[campus];
+  const offPeak = makeTickSeries({
+    baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1,
+    bodyPrefix: `${campus}-v`, ...shape,
+  });
+  const peak = makeTickSeries({
+    baseMs: PEAK_BASE, periodMs: 30000, count: 20, startSeq: 100,
+    bodyPrefix: `${campus}-v`, ...shape,
+  });
   makeRunDir(dir, { campus, samples: [...offPeak, ...peak] });
 }
 
@@ -47,11 +66,26 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   }
   assert.equal(json.goGate.length, 6);
 
-  // A4-1: all three campuses evaluable.
+  // A4-1: all three campuses evaluable from three independent provenance classes.
   const a1 = json.goGate.find((g) => g.id === "A4-1");
   for (const campus of ["NB", "NK", "CM"]) {
-    assert.match(a1.evidence, new RegExp(`soc:2026:9:${campus}`));
+    assert.match(a1.evidence, new RegExp(`${campus}\\(pc-[0-9a-f]{12}\\)`));
   }
+  assert.match(a1.evidence, /from 3 provenance classes/);
+  assert.equal(json.provenance.classes.length, 3);
+  const classCampuses = json.provenance.classes.map((c) => c.campus).sort();
+  assert.deepEqual(classCampuses, ["CM", "NB", "NK"]);
+  for (const cls of json.provenance.classes) {
+    assert.equal(cls.campusConflict, false);
+    assert.equal(cls.members.length, 1);
+    assert.equal(cls.members[0].relation, "representative");
+  }
+  assert.equal(json.provenance.streams.length, 3);
+  assert.equal(
+    new Set(json.provenance.streams.map((s) => s.seriesFingerprint)).size,
+    3,
+    "the three campus series must have distinct observation fingerprints",
+  );
 
   // Window segmentation: each of the 3 inputs split into #w00 + #w01.
   const windows = json.targets.flatMap((tgt) => tgt.windows);

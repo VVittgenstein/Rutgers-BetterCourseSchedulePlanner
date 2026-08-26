@@ -152,36 +152,59 @@ export function assessSafeOffset(comparison, clockStatus) {
 // ctx: {
 //   targets: [{ targetId, campus, windows: [{ windowId, peakOverlap, brackets }] }],
 //   windowsAll: [{ windowId, peakOverlap }],
-//   brackets, comparison, safeOffset, clock, clockSource
+//   brackets, comparison, safeOffset, clock, clockSource,
+//   provenance: buildProvenance() result, serverEvidence: assessServerClockEvidence() result
 // }
 export function evaluateGate(ctx) {
   const gate = [];
 
-  // A4-1: multi-target evidence.
-  const qualifyingByCampus = new Map();
+  // A4-1: multi-target evidence counted by independent observation-data
+  // provenance, not by campus labels. A provenance class contributes at most
+  // one campus; a class whose members carry conflicting campus labels (the
+  // copy-and-relabel attack) contributes nothing.
+  const targetQualifies = new Map();
   for (const target of ctx.targets) {
-    if (target.targetId.startsWith("unknown:")) continue;
-    const qualifies = target.windows.some(
-      (w) =>
-        w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource)).length >=
-        MIN_GROUP_BRACKETS,
+    targetQualifies.set(
+      target.targetId,
+      target.windows.some(
+        (w) =>
+          w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource)).length >=
+          MIN_GROUP_BRACKETS,
+      ),
     );
-    if (qualifies && target.campus !== null) {
-      if (!qualifyingByCampus.has(target.campus)) qualifyingByCampus.set(target.campus, []);
-      qualifyingByCampus.get(target.campus).push(target.targetId);
-    }
   }
-  const missingCampuses = REQUIRED_CAMPUSES.filter((c) => !qualifyingByCampus.has(c));
-  const qualifyingIds = [...qualifyingByCampus.values()].flat().sort();
+  const targetByStreamId = new Map(ctx.provenance.streams.map((s) => [s.streamId, s.targetId]));
+  const coveredBy = new Map(); // campus -> classId (first covering class, classId asc)
+  let conflictClassCount = 0;
+  for (const cls of ctx.provenance.classes) {
+    if (cls.campusConflict) {
+      conflictClassCount += 1;
+      continue;
+    }
+    if (cls.campus === null || !REQUIRED_CAMPUSES.includes(cls.campus)) continue;
+    const qualifies = cls.members.some(
+      (m) => targetQualifies.get(targetByStreamId.get(m.streamId)) === true,
+    );
+    if (qualifies && !coveredBy.has(cls.campus)) coveredBy.set(cls.campus, cls.classId);
+  }
+  const missingCampuses = REQUIRED_CAMPUSES.filter((c) => !coveredBy.has(c));
+  const coveredList = REQUIRED_CAMPUSES.filter((c) => coveredBy.has(c)).map(
+    (c) => `${c}(${coveredBy.get(c)})`,
+  );
+  const conflictSuffix =
+    conflictClassCount > 0
+      ? `; ${conflictClassCount} class(es) with conflicting campus labels ignored`
+      : "";
   const a1Satisfied = missingCampuses.length === 0;
   const a1Evidence = a1Satisfied
-    ? `targets: ${qualifyingIds.join(", ")}`
-    : `targets: ${qualifyingIds.length > 0 ? qualifyingIds.join(", ") + " only" : "none"}${missingCampuses
+    ? `campuses: ${coveredList.join(", ")} from ${ctx.provenance.classes.length} provenance classes${conflictSuffix}`
+    : `campuses: ${coveredList.length > 0 ? coveredList.join(", ") + " only" : "none"}${missingCampuses
         .map((c) => `; ${c} missing`)
-        .join("")}`;
+        .join("")}${conflictSuffix}`;
   gate.push({
     id: "A4-1",
-    requirement: "Multi-target evidence: at least NB, NK, CM independently evaluable",
+    requirement:
+      "Multi-target evidence: at least NB, NK, CM independently evaluable from independent data provenance",
     satisfied: a1Satisfied,
     evidence: a1Evidence,
   });

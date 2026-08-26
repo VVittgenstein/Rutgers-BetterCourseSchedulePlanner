@@ -108,8 +108,9 @@ function cyc(value, k) {
 }
 
 // Hand-crafted change series with exactly one change bracket per tick.
-// Tick T_k = baseMs + k*periodMs + phaseMs. Emits per k a stable sample at
-// T_k - pre (body v{k}) and a changed sample at T_k + post (body v{k+1});
+// Tick T_k = baseMs + k*periodMs + phaseMs (or ticks[k] when an explicit tick
+// array is given). Emits per k a stable sample at T_k - pre (body
+// {bodyPrefix}{k}) and a changed sample at T_k + post (body {bodyPrefix}{k+1});
 // serverDate = floor(sampleTime / 1000) s (1 s truncation) unless noServerDate.
 export function makeTickSeries({
   baseMs,
@@ -121,14 +122,17 @@ export function makeTickSeries({
   startSeq = 1,
   noServerDate = false,
   elapsedMs = 200,
+  bodyPrefix = "v",
+  ticks = null,
 }) {
   const rows = [];
   let seq = startSeq;
-  for (let k = 0; k < count; k += 1) {
-    const tick = baseMs + k * periodMs + phaseMs;
+  const n = ticks !== null ? ticks.length : count;
+  for (let k = 0; k < n; k += 1) {
+    const tick = ticks !== null ? ticks[k] : baseMs + k * periodMs + phaseMs;
     for (const [offset, body] of [
-      [-cyc(preMs, k), `v${k}`],
-      [cyc(postMs, k), `v${k + 1}`],
+      [-cyc(preMs, k), `${bodyPrefix}${k}`],
+      [cyc(postMs, k), `${bodyPrefix}${k + 1}`],
     ]) {
       const t = tick + offset;
       rows.push(

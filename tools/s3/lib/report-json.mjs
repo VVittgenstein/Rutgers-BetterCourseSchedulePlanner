@@ -30,6 +30,7 @@ export function buildJsonReport(ctx) {
     normalizedCommand,
     inputs,
     targets,
+    provenance,
     bracketTotals,
     fits,
     comparison,
@@ -167,6 +168,21 @@ export function buildJsonReport(ctx) {
     normalizedCommand,
     inputs: inputsJson,
     targets: targetsJson,
+    provenance: {
+      streams: provenance.streams.map((s) => ({
+        streamId: s.streamId,
+        targetId: s.targetId,
+        campus: s.campus,
+        sampleCount: s.sampleCount,
+        seriesFingerprint: s.seriesFingerprint,
+      })),
+      classes: provenance.classes.map((c) => ({
+        classId: c.classId,
+        campus: c.campus,
+        campusConflict: c.campusConflict,
+        members: c.members.map((m) => ({ streamId: m.streamId, relation: m.relation })),
+      })),
+    },
     bracketTotals: {
       total: bracketTotals.total,
       informative30: bracketTotals.informative30,

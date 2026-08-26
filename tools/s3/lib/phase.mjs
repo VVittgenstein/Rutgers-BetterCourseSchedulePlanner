@@ -13,8 +13,8 @@ import { AnalyzerError, internalAssert } from "./errors.mjs";
 import { fmtRatio } from "./stable.mjs";
 
 // Shared constants (single source of truth; gate.mjs re-exports them).
-export const TOOL_VERSION = "1.1.0";
-export const SCHEMA_VERSION = 1;
+export const TOOL_VERSION = "2.0.0";
+export const SCHEMA_VERSION = 2;
 export const PERIODS_MS = [30000, 60000];
 export const SERVER_DATE_WIDEN_MS = 1000;
 export const CLIENT_TIME_REGRESSION_TOLERANCE_MS = 2000;
