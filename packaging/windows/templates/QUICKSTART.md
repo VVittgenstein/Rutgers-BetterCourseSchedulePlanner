@@ -36,10 +36,14 @@ local instance. It does not create a second database.
 
 ## 3. Exit safely
 
-Closing the browser tab alone does not stop RBCSP. Return to the RBCSP console,
-press Ctrl+C, and wait for the process to stop. Exit before copying the
-database, upgrading the program, moving the folder, restoring a backup, or
-deleting the folder.
+Closing one tab does not stop RBCSP while another RBCSP page remains open.
+Closing the last page removes the physical watches, retains your stored watch
+choices, and starts the console's visible 60-second exit countdown. Reopening a
+page during that countdown cancels the exit and restores every still-watchable
+choice; otherwise RBCSP shuts down in order. You can press Ctrl+C in the
+console for an immediate manual exit. Wait for the process to stop before
+copying the database, upgrading the program, moving the folder, restoring a
+backup, or deleting the folder.
 
 ## Offline use
 
@@ -54,8 +58,8 @@ without course data; results appear only after a later successful refresh.
 1. Exit RBCSP completely.
 2. Copy the entire `data` folder to a backup location outside the RBCSP folder.
 3. Label the backup with the value from `VERSION` and the backup date.
-4. Keep the backup private: it can contain settings, selected Sections, Saved
-   views, history, and fetched Rutgers data.
+4. Keep the backup private: it can contain settings, selected Sections,
+   desired-watch choices, Saved views, history, and fetched Rutgers data.
 
 Do not back up only a live `-wal` or `-shm` sidecar, and do not copy the
 database while RBCSP is running. The complete stopped `data` folder is the
@@ -72,8 +76,10 @@ backup unit.
    replacing the old root files but leaving the existing `data` folder intact.
    Do not delete the whole existing folder first.
 6. Start the new `RBCSP.exe` and verify search, settings, Saved views, history,
-   freshness, and watch behavior. Active watches intentionally do not resume
-   automatically after a restart.
+   freshness, and watch behavior. Stored desired-watch choices survive the
+   restart. The first page to connect re-materializes every choice that is
+   still watchable, and the page reports a choice as watching only after the
+   current server evidence confirms it.
 
 Do not extract a new archive over a running process. Do not maintain two active
 copies that point at independently copied versions of the same database.
@@ -97,8 +103,9 @@ an older version, and do not attempt rollback by deleting individual tables.
 ## Reset or uninstall
 
 Use the Settings page when you want to reset only filters, only Saved views, or
-all local user data. The full local-user reset retains Catalog and open-Section
-operational data and retains `data\rbcsp.sqlite`.
+all local user data. The full local-user reset stops watches, clears stored
+desired-watch choices, retains Catalog and open-Section operational data, and
+retains `data\rbcsp.sqlite`.
 
 To uninstall everything:
 

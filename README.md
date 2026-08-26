@@ -6,18 +6,21 @@ section-status, and live-watch application for Rutgers University.
 The repository contains two supported products built from one Rust workspace and
 one shared React frontend:
 
-- **Windows local application** — runs on the user's computer and stores personal
-  watch data locally.
-- **Linux public service** — runs as a centrally operated web service without
-  personal watch or notification features.
+- **Windows local application** — runs on the user's computer, stores desired
+  watches and other personal state locally, and restores those choices after a
+  restart.
+- **Linux public service** — runs as a centrally operated web service with
+  session-scoped watches. It does not persist personal desired-watch state or
+  provide server-push, service-worker, or native notification infrastructure.
 
 ## Download
 
-Prebuilt version `0.1.0` packages are available from the
-[GitHub Release](https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.0):
+Published packages are available from
+[GitHub Releases](https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases).
+Version `0.1.1` uses these two assets:
 
-- `rbcsp-windows-x86_64-0.1.0.zip`
-- `rbcsp-linux-x86_64-0.1.0.tar.gz`
+- `rbcsp-windows-x86_64-0.1.1.zip`
+- `rbcsp-linux-x86_64-0.1.1.tar.gz`
 
 Windows users can extract the archive and run `Start-RBCSP.bat`. The Linux
 archive includes deployment configuration and an operator runbook.
@@ -27,7 +30,11 @@ archive includes deployment configuration and an operator runbook.
 - Search by course code, title, instructor, subject, campus, level, credits, and
   meeting time.
 - Inspect sections, meeting details, and open/closed status.
-- Build a local watch list and monitor seat availability.
+- Monitor seat availability with automatic connection recovery, honest
+  readiness status, audio self-healing, and an optional current-page browser
+  notification fallback.
+- Keep desired watches across Windows-local restarts; the first page to return
+  re-materializes every still-watchable section.
 - Run either as a local desktop-oriented service or as a public Linux service.
 - Serve the target-specific React application directly from the Rust binary.
 
@@ -122,8 +129,10 @@ next to each builder.
 
 ## Security and privacy
 
-- Personal watch data is limited to the local product.
-- The public product excludes personal watch and notification capabilities.
+- Persisted personal watch data is limited to the local product.
+- The public product excludes persisted personal watch state and server-push,
+  service-worker, and native notification surfaces. A currently open page may,
+  with the user's permission, use a page-level browser notification fallback.
 - Public deployment configuration uses loopback binding, a reverse proxy, and
   systemd sandboxing defaults.
 - Secrets and local runtime data must not be committed.

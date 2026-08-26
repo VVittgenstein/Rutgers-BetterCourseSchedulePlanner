@@ -11,4 +11,4 @@ name = "bcsp-local"
 path = "src/main.rs"
 
 [dependencies]
-bcsp-local-runtime = { version = "=0.1.0", path = "../../crates/bcsp-local-runtime" }
+bcsp-local-runtime = { version = "=0.1.1", path = "../../crates/bcsp-local-runtime" }

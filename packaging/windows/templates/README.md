@@ -25,10 +25,14 @@ browser. The browser talks only to that local process. Opening another copy
 while RBCSP is already running reuses the existing local instance instead of
 creating another database or Rutgers polling process.
 
-Keep the console window open while using RBCSP. Closing a browser tab does not
-stop the local process or its active watches. To exit, return to the console,
-press Ctrl+C, and wait for the process to stop before moving, backing up, or
-replacing files.
+Keep the console window open while using RBCSP. Closing one tab has no effect
+while another RBCSP page remains open. Closing the last page removes the
+physical watches while retaining the stored desired-watch choices, then starts
+a visible 60-second exit countdown. A page that returns during the countdown
+cancels the exit and re-materializes every still-watchable choice; otherwise
+the process shuts down in order. You can also press Ctrl+C in the console for
+an immediate manual exit. Wait for the process to stop before moving, backing
+up, or replacing files.
 
 ## Your data
 
@@ -41,10 +45,10 @@ RBCSP creates its schema and its single primary database at:
 ```
 
 Rutgers course and open-Section data appear only after this copy of RBCSP has
-successfully fetched them. Settings, selected Sections, Saved views, and local
-history are stored in the same package-relative database. SQLite may create
-temporary sidecar files while the application is running; do not copy the
-database until RBCSP has stopped.
+successfully fetched them. Settings, selected Sections, desired-watch choices,
+Saved views, and local history are stored in the same package-relative
+database. SQLite may create temporary sidecar files while the application is
+running; do not copy the database until RBCSP has stopped.
 
 The `data` folder deliberately travels with the extracted application folder.
 Moving the complete folder after RBCSP has stopped moves both the program and
@@ -57,10 +61,12 @@ session value. Do not share the private loopback URL shown by a running copy.
 
 The single local process makes the Rutgers Catalog and open-Sections requests;
 browser tabs do not contact Rutgers independently. RBCSP does not send Saved
-views, local history, settings, or the local database to Rutgers, and this
-package has no cloud sync, email, push-notification, or public-server service.
-Course and availability responses fetched from Rutgers are stored locally so
-that RBCSP can search them and report their freshness.
+views, local history, settings, desired-watch choices, or the local database to
+Rutgers. A currently open page may, with your permission, use a page-level
+browser notification when it cannot be heard; this is not cloud sync, email,
+server push, a service-worker notification, or a public-server service. Course
+and availability responses fetched from Rutgers are stored locally so that
+RBCSP can search them and report their freshness.
 
 ## Offline behavior
 
@@ -77,9 +83,10 @@ The Settings page exposes three deliberately different reset scopes:
 
 - Reset current filters clears only the current filter definition.
 - Delete Saved views clears only the Saved view library.
-- Reset all local user data stops watches and clears local settings, filters,
-  Saved views, selected Sections, and local history. It retains Catalog and
-  open-Section operational data and does not delete the database file.
+- Reset all local user data stops watches and clears desired-watch choices,
+  local settings, filters, Saved views, selected Sections, and local history.
+  It retains Catalog and open-Section operational data and does not delete the
+  database file.
 
 To remove everything, first exit RBCSP and then delete the complete extracted
 folder. Back up `data` before doing so if you may want the local state later.

@@ -83,6 +83,8 @@ Claude 负责：
 
 - 严格按照 Codex Prompt 修改代码、测试和文档；
 - 可以在一个里程碑内创建多个逻辑 commit；
+- 使用仓库已配置的维护者 author/committer 身份，不在 commit message 自动添加 Claude/Anthropic
+  `Co-Authored-By` trailer；
 - 不自行扩大范围；
 - 不自行重开已冻结的产品设计；
 - 不因发现非阻断技术债而顺手重构；
@@ -500,6 +502,21 @@ Stage 5 — STAGE-5
 
 ## 19. 变更日志
 
+### 2026-08-26 — 授权 v0.1.1 发布与 GitHub 归因收口
+
+- 用户批准把已经集成的四条 lane 作为 `v0.1.1` 同时发布 Windows local 与 Linux public 包；仍不连接或
+  部署 Vultr；
+- 当前新增的 175 个提交全部由 `VVittgenstein <158061732+VVittgenstein@users.noreply.github.com>`
+  author/commit，但 151 个带自动添加的 Claude `Co-Authored-By`；已公开 `main` 另有 10 个同类 trailer；
+- 用户明确授权以旧 `v0.1.0` tag 为不可变边界，先备份，再仅删除边界之后的 Claude/Anthropic
+  co-author trailer；每个提交的 tree、父拓扑、author/committer、真实日期和独立粒度必须保留，禁止
+  squash 或为贡献日历伪造日期；
+- 清理候选必须先跑 GitHub CI；通过后才允许 `force-with-lease` 替换远端 `main`。旧 `v0.1.0` tag、
+  Release 和资产保持原样；`v0.1.1` 的 Windows/Linux 包必须从清理后的同一个最终 `main` 提交重建并
+  联合验证；
+- 发布准备同时修正版本源、根 README、Windows 随包 README/QUICKSTART 和 Linux operator runbook。
+  归因改写不改变产品代码或用户行为。
+
 ### 2026-08-26 — Parallel Wave 1 收口与 Windows local 候选
 
 - Codex 按冻结顺序把 P2、S4、S3 evidence 集成到 `feat/s2-alert-delivery`，组合产品/发布源码提交为
@@ -650,7 +667,7 @@ S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT + PENDING_LINUX_EVIDENCE; Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: 用户本地试用该 Windows candidate；Vultr/Linux 部署、外部 H8/H9 证据与新的 S3 数据采样均需另行明确授权
+Next authorized action: IN_PROGRESS — v0.1.1 版本/文档收口 → Claude trailer message-only rewrite → GitHub CI → force-with-lease 更新 main → 同源 Windows/Linux 构建、CORE soak、联合验包与 GitHub Release；不部署 Vultr
 ```
 
 验收结论只允许使用：

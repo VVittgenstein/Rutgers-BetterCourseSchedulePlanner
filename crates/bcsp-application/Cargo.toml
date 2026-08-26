@@ -11,14 +11,14 @@ path = "src/lib.rs"
 
 [dependencies]
 axum.workspace = true
-bcsp-catalog = { version = "=0.1.0", path = "../bcsp-catalog" }
-bcsp-contracts = { version = "=0.1.0", path = "../bcsp-contracts" }
-bcsp-domain = { version = "=0.1.0", path = "../bcsp-domain" }
-bcsp-open = { version = "=0.1.0", path = "../bcsp-open" }
-bcsp-operational-storage = { version = "=0.1.0", path = "../bcsp-operational-storage" }
-bcsp-query = { version = "=0.1.0", path = "../bcsp-query" }
-bcsp-rutgers-client = { version = "=0.1.0", path = "../bcsp-rutgers-client" }
-bcsp-watch = { version = "=0.1.0", path = "../bcsp-watch" }
+bcsp-catalog = { version = "=0.1.1", path = "../bcsp-catalog" }
+bcsp-contracts = { version = "=0.1.1", path = "../bcsp-contracts" }
+bcsp-domain = { version = "=0.1.1", path = "../bcsp-domain" }
+bcsp-open = { version = "=0.1.1", path = "../bcsp-open" }
+bcsp-operational-storage = { version = "=0.1.1", path = "../bcsp-operational-storage" }
+bcsp-query = { version = "=0.1.1", path = "../bcsp-query" }
+bcsp-rutgers-client = { version = "=0.1.1", path = "../bcsp-rutgers-client" }
+bcsp-watch = { version = "=0.1.1", path = "../bcsp-watch" }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

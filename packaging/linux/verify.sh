@@ -9,8 +9,8 @@ export TZ=UTC
 
 readonly PACKAGE_ID='LINUX_PUBLIC_DEPLOYMENT_PACKAGE'
 readonly TARGET='x86_64-unknown-linux-gnu'
-readonly RELEASE_VERSION='0.1.0'
-readonly ARCHIVE_NAME='rbcsp-linux-x86_64-0.1.0.tar.gz'
+readonly RELEASE_VERSION='0.1.1'
+readonly ARCHIVE_NAME='rbcsp-linux-x86_64-0.1.1.tar.gz'
 
 usage() {
   printf 'usage: verify.sh --archive PATH --source-commit SHA --source-date-epoch EPOCH\n' >&2
@@ -81,7 +81,7 @@ const input = JSON.parse(fs.readFileSync(file, 'utf8'));
 const matches = input.packages?.filter((entry) => entry.id === packageId) ?? [];
 if (input.schemaVersion !== 1 || input.packageCount !== 2 || matches.length !== 1) process.exit(10);
 const packageConfig = matches[0];
-if (input.releaseVersion !== '0.1.0' || packageConfig.target !== target || packageConfig.archiveName !== archiveName) process.exit(11);
+if (input.releaseVersion !== '0.1.1' || packageConfig.target !== target || packageConfig.archiveName !== archiveName) process.exit(11);
 if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 22) process.exit(12);
 const files = [...packageConfig.allowlist].sort();
 if (new Set(files).size !== 22) process.exit(13);

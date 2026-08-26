@@ -5,7 +5,7 @@ param(
 
     [string]$SourceCommit,
 
-    [string]$OutputRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'release\0.1.0'),
+    [string]$OutputRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'release\0.1.1'),
 
     [string]$BuildRoot = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '.cache\product-build\windows')
 )
