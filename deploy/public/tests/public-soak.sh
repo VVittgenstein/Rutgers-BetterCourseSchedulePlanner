@@ -265,7 +265,7 @@ SERVICE_INVOCATION="$(systemctl show --property InvocationID --value bcsp.servic
 # it is nothing.
 read_accepted_ack_counter() {
   local value
-  value="$(curl --silent --header 'Host: planner.test' \
+  value="$(curl --silent --connect-timeout 2 --max-time 5 --header 'Host: planner.test' \
     http://127.0.0.1:8080/metrics 2>/dev/null |
     awk '$1 == "bcsp_websocket_heartbeat_acks_accepted" { print $2 }')" || value=""
   [[ -n "$value" ]] || value="COUNTER_READ_FAILURE"

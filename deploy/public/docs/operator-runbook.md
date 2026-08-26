@@ -108,7 +108,7 @@ manual host operation:
 
 ```bash
 sudo ./ops/preflight.sh \
-  --admin-source addr=203.0.113.9,host=admin.example.net,laddr=198.51.100.4,lport=22 \
+  --admin-source addr=<your-admin-source-ip>,host=<what-sshd-sees>,laddr=<this-host-ip>,lport=22 \
   --caddyfile /etc/caddy/Caddyfile
 ```
 
@@ -117,48 +117,74 @@ required and is repeatable — once per path you actually administer this
 host through (each admin network, each jump host, IPv4 and IPv6
 separately). Its value is sshd's own `-C` connection spec minus `user=`,
 which the script pins to `root`: `addr=` the source address you connect
-FROM, `host=` the name sshd resolves that source to (use the address
-itself when `UseDNS no`), `laddr=`/`lport=` the local address and port the
-connection arrives AT. The preflight hands each declaration to
-`sshd -T -C` so the `Match Address`, `Match Host`, and `Match LocalPort`
-blocks that really apply to your administrative login are evaluated —
-including one that reopens root password login for exactly the network
-you use. Substitutes are refused on purpose: documentation-range addresses
-(RFC 5737/3849), `.invalid` hostnames, a loopback `addr=` (a connection
-that never crosses the network says nothing about administrative access),
-a loopback `laddr=` under a remote `addr=` (that connection never occurs),
-and a declared port sshd does not listen on are all rejected; with no
-declaration at all the run fails rather than reporting on a connection
-nobody makes. The addresses above are documentation placeholders — replace
-them; do not copy them.
+FROM, `host=` the name sshd resolves that source to, `laddr=`/`lport=` the
+local address and port the connection arrives AT. The preflight hands each
+declaration to `sshd -T -C` so the `Match Address`, `Match Host`, and
+`Match LocalPort` blocks that really apply to your administrative login
+are evaluated — including one that reopens root password login for exactly
+the network you use.
+
+Fill the placeholders in from the host itself rather than guessing:
+`who am i` or `last -i` shows the source you arrive from, `ss -tnp state
+established '( sport = :ssh )'` shows the local address and port your
+session landed on, and `sshd -T | grep -E '^(port|listenaddress|usedns) '`
+shows the ports sshd listens on and whether it resolves clients at all.
+**When `usedns` is `no` — the OpenSSH default — sshd never resolves the
+client and `host=` must be the address**, byte for byte; the preflight
+refuses a name there rather than evaluate a `Match Host` block that will
+never fire. Ports are discovered from both `Port` and `ListenAddress`, so
+an admin listener declared only as `host:port` is accepted.
+
+Substitutes are refused on purpose: documentation-range addresses (RFC
+5737/3849) anywhere in the spec, `.invalid` hostnames, an IPv6 literal
+sshd could not parse (it would silently skip every `Match Address` block),
+a loopback `addr=` (a connection that never crosses the network says
+nothing about administrative access), a loopback `laddr=` under a remote
+`addr=` (that connection never occurs), and a declared port sshd does not
+listen on. With no declaration at all the run fails rather than reporting
+on a connection nobody makes.
+
+One probe is not a declaration and not evidence: after judging the
+declared paths, the preflight asks sshd about a documentation address as a
+**control**. Root password login reachable from an arbitrary internet
+source is a blocker no declaration can excuse — hardening your own path
+does not close that door — so the control can fail the run and can never
+pass it.
 
 Hard failures (non-zero exit): `BCSP_PUBLIC_ORIGIN` missing, duplicated,
-malformed, or still naming the `planner.invalid` placeholder; an
-out-of-range `BCSP_PUBLIC_WS_PER_CLIENT_LIMIT` (the service would refuse
-to start); a domain that does not resolve; `ufw` inactive or 80/443 not
-allowed by explicit port rules (the capture snapshot showed only 22 ever
-open); no declared administrative root connection, a declaration that
-cannot be parsed or does not name a port sshd listens on, a missing
-`sshd`, or a declared connection whose effective root policy is
-password-reachable or cannot be evaluated; a missing Caddy binary or `jq`;
-a supplied Caddy config that fails `caddy validate` or `caddy adapt`,
-whose ADAPTED route for the `BCSP_PUBLIC_ORIGIN` host does not itself
-reach `127.0.0.1:8080` with `stream_close_delay 4h` on every
-`reverse_proxy` to the service — comments and a protected proxy on another
-host do not count, and the `localhost:8080` / `[::1]:8080` / `:8080`
-spellings are the same upstream, so an unprotected one anywhere in the
-config fails the gate — or that still names the placeholder; an inactive
-or lifeless service. Advisories (reported, not fatal): failed units such as the known
-`fwupd` leftovers, an unchecked operator Caddy config, and the reminder to
-confirm the resolved addresses really are this host.
+malformed, not an ordinary DNS name, or still naming the
+`planner.invalid` placeholder; an out-of-range
+`BCSP_PUBLIC_WS_PER_CLIENT_LIMIT` (the service would refuse to start); a
+domain that does not resolve; `ufw` inactive or 80/443 not allowed by
+explicit port rules (the capture snapshot showed only 22 ever open); no
+declared administrative root connection, a declaration that cannot be
+parsed or does not name a port sshd listens on, a missing `sshd`, a
+declared connection whose effective root policy is password-reachable or
+cannot be evaluated, or root password login reachable from the control
+source; a missing Caddy binary or `jq`; a supplied Caddy config that fails
+`caddy validate` or `caddy adapt`, whose ADAPTED route for the
+`BCSP_PUBLIC_ORIGIN` host does not itself reach `127.0.0.1:8080` with
+`stream_close_delay 4h` on every `reverse_proxy` to the service, or that
+still names the placeholder; an inactive or lifeless service. Advisories
+(reported, not fatal): failed units such as the known `fwupd` leftovers,
+an unchecked operator Caddy config, a control probe that could not be
+evaluated, and the reminder to confirm the resolved addresses really are
+this host.
 
-Two limits worth knowing. The Caddy judgment reads route matchers, not
-route ORDER: a public host whose first route is a terminal `respond` and
-whose second is a protected proxy still satisfies the reach obligation
-(that failure mode is a dead service, which the liveness check catches).
-And a structure it cannot interpret — an unknown handler nesting routes, a
-host matcher containing a placeholder — is refused rather than guessed at,
-so an exotic config may need simplifying before it can be vouched for.
+What "reaches" means for the Caddy check, since a config can look right
+and serve something else. The judgment runs on `caddy adapt` output, for
+the host and port of `BCSP_PUBLIC_ORIGIN`, in Caddy's own route order: a
+protected proxy behind a matching terminal route, or behind an
+unconditional `respond`, is not protection and does not count. Neither is
+one on another host, on another listener, or inside `handle_errors` —
+those run on an error, not on live traffic. The `localhost:8080` /
+`[::1]:8080` / `:8080` spellings are the same upstream as `127.0.0.1:8080`,
+so an unprotected one anywhere in the config fails the gate. A structure
+the check cannot interpret — an unknown handler nesting routes, a negated
+or CEL host matcher, a host matcher holding a placeholder, a listen
+address with no readable port — is refused rather than guessed at, so an
+exotic config may need simplifying before it can be vouched for. The
+refusal names which of those it hit.
 
 The preflight does not replace the re-launch hard gates: the 600-second
 public soak (`tests/public-soak.sh`) and the assembled-composition browser

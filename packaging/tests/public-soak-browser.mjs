@@ -46,11 +46,13 @@ export const SAMPLE_JITTER_SECONDS = 15;
  * How many acknowledgements the browser may have sent without the server
  * having accepted them by the time the counter is read.
  *
- * The page counts an ACK the instant it hands the frame to the socket; the
- * final counter reading happens after the driver exits. Exactly one frame can
- * legitimately be in flight across that boundary. Two cannot, so the tolerance
- * is one -- large enough for the tail, too small to hide a server that stopped
- * accepting.
+ * The boundary is crossed in BOTH directions. The page counts an ACK the
+ * instant it hands the frame to the socket, so the server may not have taken
+ * the last one yet; and the page keeps answering pings until its browser
+ * closes, after the report was written, so the server may have taken one the
+ * report does not mention. One frame either way is the whole gap at a
+ * ten-second ping cadence -- large enough for the tail, too small to hide a
+ * server that stopped accepting.
  */
 export const ACK_DELIVERY_TOLERANCE = 1;
 
@@ -205,7 +207,7 @@ export function assertAcceptedAckEvidence({ baseline, finalReading, browserAcks,
   // selects a Section. If that ever changes, this is the assertion that will
   // say so.
   assert.ok(
-    accepted <= browserAcks,
+    accepted <= browserAcks + ACK_DELIVERY_TOLERANCE,
     `the server accepted ${accepted} ACK(s) but the browser sent ${browserAcks}; the counter is not counting acknowledgements`,
   );
   assert.ok(
@@ -410,8 +412,11 @@ function selfTest() {
       ...overrides,
     });
   assert.deepEqual(ackCase({}), { accepted: 55, browserAcks: 55 });
-  // One acknowledgement in flight when the counter is read is tolerated.
+  // One acknowledgement in flight when the counter is read is tolerated, in
+  // either direction: the page keeps answering pings until its browser closes,
+  // which happens after it wrote the report.
   assert.deepEqual(ackCase({ finalReading: '64' }), { accepted: 54, browserAcks: 55 });
+  assert.deepEqual(ackCase({ finalReading: '66' }), { accepted: 56, browserAcks: 55 });
   // THE discriminator: the page sent 55 ACKs and the server accepted none.
   // Before R2 this soak passed -- the page had "sent" them and the journal
   // held no rejection.
