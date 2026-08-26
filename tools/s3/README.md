@@ -328,44 +328,70 @@ identical — the real captures are non-decreasing, asserted in
 `local-data.test.mjs` — and in general the order-statistic seam is never larger
 than the adjacent difference, so the session partition is only ever coarser.
 
-**Coarser is not stricter, and a merge is not the fail-closed direction.** Both
-order statistics have breakdown point one in the MERGE direction: one `Date`
-placed low anywhere after the seam collapses the minimum, one placed high
-anywhere before it inflates the maximum, and either suppresses a genuine
-boundary. A4-2 counts informative brackets **per session** against
-`MIN_GROUP_BRACKETS`, so pooling two genuinely separated sub-threshold sessions
-manufactures a qualifying one — on the peak side directly, and on the off-peak
-side too, because the union of two pure off-peak sessions is still pure. A4-2 is
-therefore anti-monotone under coarsening on both sides, and no argument of the
-form "sessions can only get coarser, so nothing that failed can now pass" is
-valid here (CE-18, both directions, is exactly that failure).
+**Coarsening is safe only because of how A4-2 counts.** Both order statistics
+have breakdown point one in the MERGE direction: one `Date` placed low anywhere
+after the seam collapses the minimum, one placed high anywhere before it inflates
+the maximum, and either suppresses a genuine boundary. No hardening of the seam
+fixes that — every seam statistic is one number, and one cell can always push a
+single number one way. So if a session's evidence were the **sum** of its
+windows' brackets, pooling two genuinely separated sub-threshold sessions would
+manufacture a qualifying one: on the peak side directly, and on the off-peak side
+too, because the union of two pure off-peak sessions is still pure (CE-18, all
+three directions).
 
-So the merge direction is closed by a different kind of statement, one that no
-seam statistic can make: a **leave-one-out stability test on the grouping A4-2
-consumes**. Per stream the analyzer recomputes the window grouping once per
-dated sample, each time with that one sample's `Date` held out. If any hold-out
-regroups the windows, one header decides this stream's session structure, the
-server timeline has not established it, and every session of that stream is
-voided — counted on neither the peak nor the off-peak side, reported as
-`serverGroupingAmbiguous` in `evidenceSessions` and named in the A4-2 evidence
-string. Voiding only removes evidence, so it can never turn a NO-GO into a GO.
+A4-2 therefore takes each side's count from **one constituent client window**,
+never from the session total. A session qualifies the peak side when a single one
+of its client windows holds ≥ `MIN_GROUP_BRACKETS` informative in-peak brackets;
+it qualifies the off-peak side when the whole session is pure off-peak and a
+single one of its client windows holds ≥ `MIN_GROUP_BRACKETS` informative
+off-peak brackets. Both numbers are published per session as
+`bestWindowInPeakInformativeCount` / `bestWindowOffPeakInformativeCount`, and a
+session that clears a threshold only in total is named in the A4-2 evidence
+string ("reached 5 brackets on a side only by pooling several client windows").
 
-What that buys is stateable exactly. Let `G*` be the honest stream's grouping
-and `G_j` the honest stream's grouping with cell `j` held out, and suppose the
-honest capture is **1-robust**, i.e. `G_j = G*` for every `j`. An attacker who
-replaces cell `j` with any value produces some grouping `G`; holding cell `j`
-out of the forged stream leaves exactly the honest remaining cells, so the check
-computes `G_j = G*`. Hence either `G = G*` — the edit changed nothing A4-2 can
-see — or `G != G_j` and the check fires. **No single-cell `serverDate` edit can
-change the evidence grouping of a 1-robust capture without being flagged, in
-either direction.** Honest captures are 1-robust with enormous margin: their
-sessions are one continuous run, or runs separated by hours, and holding out the
-`Date` next to a real gap merely moves the boundary to the neighbouring sample
-inside the same client window. D1/D2/D3 produce one window per stream, where the
-grouping is the trivial singleton and the check cannot fire at all — which is
-why this costs zero drift on the committed evidence. It does **not** claim
-robustness against a bulk rewrite (deferred): an honest 11-minute pause moved on
-both clocks is such a rewrite and is required to stay GO.
+Two consequences, both exact:
+
+- **Never weaker than the frozen v2.6.1 baseline (commit `2c7b53a87471`).** If a
+  session qualifies the peak side, one of its windows holds the brackets on its
+  own. If a session qualifies the off-peak side, the whole session is pure — so
+  every window in it is — and one of its windows holds the brackets on its own.
+  Sessions partition the evidence windows, so two distinct qualifying sessions
+  name two distinct witness windows: exactly the pair `2c7b53a87471`'s per-window
+  rule demanded. A4-2 satisfied here implies A4-2 satisfied there, on every
+  input. `assertA42NoWeakerThanFrozenBaseline` in `test/fixtures.mjs` re-checks
+  this on every end-to-end fixture in the suite.
+- **Forged merges and forged splits are both bounded.** Merging can only lower a
+  session's per-window counts and can only break purity, so a pooling forgery —
+  one edited `Date`, two, or a whole rewritten column — buys nothing. Splitting is
+  bounded from the other side: sessions are unions of *whole* client windows, so
+  the finest grouping reachable is the client-window partition itself, which is
+  the baseline. A forged split can at most restore the baseline's leniency.
+
+A previous revision (v2.7.1/v2.7.2) summed brackets over the session and bolted a
+**leave-one-out grouping check** on top: recompute the grouping once per dated
+sample with that `Date` held out, and void every session of the stream if any
+hold-out regroups the windows. It was wrong in both directions and has been
+removed. It closed only `k = 1`: two `Date` cells placed low in the later chunk
+keep the suffix minimum collapsed under *every* single hold-out, so the grouping
+is stable, the check stays silent, and the pooled session qualifies (CE-19,
+measured on `d6ce282` as `verdict=GO` for k = 2, 3 and 8, while the frozen
+baseline refuses all of them). And it refused honest captures: a genuine pause
+whose server-measured seam lands within one polling gap of the threshold makes
+one hold-out regroup the stream, and the void was stream-wide, so it also
+destroyed evidence hours away from the seam (CONTROL (R3c), which `d6ce282`
+answered `NO_PRODUCTION_CHANGE` and both the frozen baseline and the current tree
+answer `GO`).
+
+The residual boundary, stated rather than implied: a **bulk rewrite** of one
+whole side of a seam can still move the grouping, and stays deferred per A3. In
+the split direction that means raising every low `Date` after the seam or
+lowering every high `Date` before it — the breakdown point is the number of dated
+samples on the smaller side of the seam, not one or two. In the merge direction a
+single cell suffices, and is harmless by the counting argument above. "Hold out
+one `Date`" and "delete one `Date`" are the same operation *per cell*, because an
+absent `Date` imposes no grouping constraint; that equivalence does **not** extend
+to k-cell rewrites, since deletions can only widen a measured seam while edits
+move it either way (`windows.test.mjs` pins both halves).
 
 A missing
 `Date` header imposes **no grouping constraint at all**, wherever it sits. It
@@ -373,23 +399,24 @@ used to inherit the running session index so that a deleted header could not
 manufacture a split — but inheriting is a vote for the earlier session, i.e. a
 merge, and deleting the first `Date` of the later client window made that window
 carry both indices and pooled it with the earlier one (CE-18, delete direction).
-Contributing nothing closes both directions: an index that does not exist cannot
-be shared, and a boundary is only ever placed at a dated sample. It also makes
-"hold out one `Date`" and "delete one `Date`" the same operation, which is why
-the leave-one-out check covers deletions as well as edits. A window left with no
-dated sample becomes its own group and gains nothing by it: with no server
-bounds its brackets are non-informative on the server clock, count on neither
-A4-2 side, and still break that group's off-peak purity. A stream with no `Date`
+Contributing nothing closes the merge direction outright: an index that does not
+exist cannot be shared. It leaves the split direction open — enough deletions on
+one side of a seam widen it past the threshold — but a split can never buy more
+than the client-window partition, which is the baseline, and it costs the
+attacker the deleted samples' server bounds. A window left with no dated sample
+becomes its own group and gains nothing by it: with no server bounds its brackets
+are non-informative on the server clock, count on neither A4-2 side, and still
+break that group's off-peak purity. A stream with no `Date`
 anywhere falls back to exactly its client windows and cannot reach GO regardless, because A4-5 fails closed on a
 client-clock fallback. The grouping is reported in `evidenceSessions` (JSON)
 and in the `### Evidence sessions (server timeline)` table (Markdown).
 
-A session qualifies on the peak side when ≥ 5 of its informative brackets have
-comparison-clock bounds intersecting 17:00–18:00 America/New_York with
-**positive measure** (a single-instant boundary touch is not peak evidence).
-It qualifies on the off-peak side when ≥ 5 of its informative brackets fall
-outside the peak hour **and every one of its brackets does** — informative or
-not. That purity clause is what keeps the per-bracket rule from being weaker
+A session qualifies on the peak side when ≥ 5 informative brackets **of one of
+its client windows** have comparison-clock bounds intersecting 17:00–18:00
+America/New_York with **positive measure** (a single-instant boundary touch is
+not peak evidence). It qualifies on the off-peak side when ≥ 5 informative
+brackets of one of its client windows fall outside the peak hour **and every one
+of the session's brackets does** — informative or not. That purity clause is what keeps the per-bracket rule from being weaker
 than the window-label rule it replaced: without it a single session straddling
 17:00 ET would satisfy both sides on its own, its early brackets off-peak and
 its late ones in peak, and "multiple independent time windows" would reduce to
