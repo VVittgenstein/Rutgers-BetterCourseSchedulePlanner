@@ -2179,14 +2179,6 @@ impl OperationalStorage {
             })
             .transpose()
     }
-
-    /// Test-only access to the single underlying SQLite connection, so
-    /// integration tests can install an authorizer prepare-count probe and
-    /// flush the prepared-statement cache. Never call this from product code.
-    #[doc(hidden)]
-    pub fn raw_connection_for_tests(&self) -> &Connection {
-        &self.connection
-    }
 }
 
 fn load_started_open_attempt(
@@ -3208,6 +3200,291 @@ fn invalid_stored(table: &'static str, field: &'static str) -> StorageError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bcsp_contracts::{CourseGroupKey, CourseVariantKey};
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use serde_json::json;
+
+    use crate::{
+        CatalogRefreshCommand, CatalogSnapshot, StoredCourseGroup, StoredCourseVariant,
+        StoredSection, catalog_content_sha256_v1,
+    };
+
+    const STARTED: &str = "2026-07-14T00:00:00Z";
+    const COMPLETED: &str = "2026-07-14T00:00:01Z";
+    const HASH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const HASH_C: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    fn target(term: &str, campus: &str) -> TermCampusKey {
+        TermCampusKey::try_new(term, campus).expect("synthetic target")
+    }
+
+    fn section(target: &TermCampusKey, index: &str) -> SectionKey {
+        SectionKey::try_new(target.term().as_str(), target.campus().as_str(), index)
+            .expect("synthetic section")
+    }
+
+    fn trace(label: &str) -> TraceId {
+        let digest = Sha256::digest(label.as_bytes());
+        let mut bytes = [0_u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0],
+            bytes[1],
+            bytes[2],
+            bytes[3],
+            bytes[4],
+            bytes[5],
+            bytes[6],
+            bytes[7],
+            bytes[8],
+            bytes[9],
+            bytes[10],
+            bytes[11],
+            bytes[12],
+            bytes[13],
+            bytes[14],
+            bytes[15],
+        )
+        .parse()
+        .expect("deterministic UUIDv4")
+    }
+
+    fn catalog_snapshot(
+        target: &TermCampusKey,
+        indices: &[&str],
+        canonical_sha256: &str,
+    ) -> CatalogSnapshot {
+        let group = CourseGroupKey::try_new(
+            target.term().as_str(),
+            target.campus().as_str(),
+            "SYN:OPEN:001",
+        )
+        .expect("group");
+        let variant =
+            CourseVariantKey::try_new(group.clone(), &format!("v1:{HASH_A}")).expect("variant");
+        CatalogSnapshot {
+            course_groups: vec![StoredCourseGroup {
+                key: group,
+                canonical_facts: json!({"fixture": "open-storage"}),
+            }],
+            course_variants: vec![StoredCourseVariant {
+                key: variant.clone(),
+                subject_code: Some("SYN".to_owned()),
+                course_number: Some("001".to_owned()),
+                title: Some("Synthetic Open Storage".to_owned()),
+                description: None,
+                credits_summary: None,
+                supplement: None,
+                search_document: "SYN:OPEN:001 synthetic open storage".to_owned(),
+                canonical_sha256: canonical_sha256.to_owned(),
+                raw_multiplicity: 1,
+                canonical_facts: json!({"fixture": "open-storage"}),
+            }],
+            sections: indices
+                .iter()
+                .map(|index| StoredSection {
+                    key: section(target, index),
+                    variant_key: variant.clone(),
+                    section_number: None,
+                    catalog_status: None,
+                    section_course_type: None,
+                    delivery_modality: "UNKNOWN".to_owned(),
+                    synchronicity: "UNKNOWN".to_owned(),
+                    canonical_facts: json!({"index": index}),
+                    canonical_sha256: HASH_C.to_owned(),
+                })
+                .collect(),
+            occurrences: Vec::new(),
+            provenance: Vec::new(),
+        }
+    }
+
+    fn publish_catalog(
+        storage: &mut OperationalStorage,
+        target: &TermCampusKey,
+        label: &str,
+        indices: &[&str],
+        canonical_sha256: &str,
+    ) -> u64 {
+        let snapshot = catalog_snapshot(target, indices, canonical_sha256);
+        let body = format!("synthetic-{label}");
+        let source_content_sha256 = format!("{:x}", Sha256::digest(body.as_bytes()));
+        let semantic_content_sha256 =
+            catalog_content_sha256_v1(target, &snapshot).expect("catalog hash");
+        let outcome = storage
+            .apply_catalog_refresh(
+                CatalogRefreshCommand {
+                    observation_id: trace(&format!("catalog-{label}")),
+                    target: target.clone(),
+                    started_at: STARTED.to_owned(),
+                    completed_at: COMPLETED.to_owned(),
+                    source_content_sha256,
+                    semantic_content_sha256,
+                    source_bytes: body.len() as u64,
+                    raw_payload: None,
+                    snapshot,
+                },
+                EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            )
+            .expect("publish catalog");
+        match outcome {
+            PublishOutcome::AppliedChanged {
+                content_version, ..
+            }
+            | PublishOutcome::AppliedUnchanged {
+                content_version, ..
+            } => content_version,
+            other => panic!("unexpected catalog outcome: {other:?}"),
+        }
+    }
+
+    fn begin(
+        storage: &mut OperationalStorage,
+        target: &TermCampusKey,
+        attempt: &str,
+        run: &str,
+        version: u64,
+        day: &str,
+    ) {
+        storage
+            .begin_open_pull_attempt(&BeginOpenPullAttemptCommand {
+                attempt_id: trace(attempt),
+                run_id: trace(run),
+                target: target.clone(),
+                captured_catalog_content_version: version,
+                rutgers_day: day.to_owned(),
+                started_at: STARTED.to_owned(),
+                lane: OpenRequestLane::General,
+                requested_interval_seconds: Some(30),
+                effective_interval_seconds: Some(45),
+                schedule_lag_ms: Some(12),
+            })
+            .expect("begin Open attempt");
+    }
+
+    fn success_http(decoded_bytes: u64) -> OpenHttpAuditMetadata {
+        OpenHttpAuditMetadata {
+            http_status: Some(200),
+            cache_status: Some(OpenCacheStatus::Miss),
+            decoded_bytes: Some(decoded_bytes),
+            decoded_body_sha256: Some(HASH_A.to_owned()),
+            content_type: Some("application/json; charset=utf-8".to_owned()),
+            etag: Some("\"synthetic-etag\"".to_owned()),
+            cache_control: Some("max-age=30".to_owned()),
+            date: Some("Tue, 14 Jul 2026 00:00:01 GMT".to_owned()),
+            age_seconds: Some(7),
+            last_modified: Some("Mon, 13 Jul 2026 23:59:00 GMT".to_owned()),
+            retry_after: None,
+            retry_after_seconds: None,
+        }
+    }
+
+    #[test]
+    fn open_mirror_rebuild_prepares_the_insert_once_and_reuses_it_across_commits() {
+        let scope = target("FALL_2026", "OPEN_PREPARE_COUNT");
+        let mut storage = OperationalStorage::open_in_memory().expect("storage");
+        let version = publish_catalog(
+            &mut storage,
+            &scope,
+            "prepare-count",
+            &["00001", "00002", "00003"],
+            HASH_A,
+        );
+
+        let insert_prepares = Arc::new(AtomicUsize::new(0));
+        let hook_counter = Arc::clone(&insert_prepares);
+        {
+            let connection = &storage.connection;
+            connection.flush_prepared_statement_cache();
+            connection
+                .authorizer(Some(move |context: AuthContext<'_>| {
+                    if matches!(
+                        context.action,
+                        AuthAction::Insert { table_name } if table_name == "open_section_current"
+                    ) {
+                        hook_counter.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Authorization::Allow
+                }))
+                .expect("install authorizer");
+        }
+
+        begin(
+            &mut storage,
+            &scope,
+            "prepare-count-1",
+            "prepare-count-run",
+            version,
+            "2026-07-14",
+        );
+        let first = storage
+            .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
+                attempt_id: trace("prepare-count-1"),
+                completed_at: COMPLETED.to_owned(),
+                open_sections: vec![section(&scope, "00001")],
+                source_value_count: 1,
+                watched_sections: Vec::new(),
+                http: success_http(9),
+            })
+            .expect("first applied commit");
+        assert_eq!(first.classification, OpenAttemptClassification::ValidApplied);
+        assert_eq!(
+            insert_prepares.load(Ordering::SeqCst),
+            1,
+            "the 3-row mirror rebuild must prepare its INSERT exactly once"
+        );
+
+        begin(
+            &mut storage,
+            &scope,
+            "prepare-count-2",
+            "prepare-count-run",
+            version,
+            "2026-07-14",
+        );
+        let second = storage
+            .finish_open_pull_success(FinishOpenPullSuccessCommand {
+                gate_hold: false,
+                gate_catalog_set_identity: None,
+                attempt_id: trace("prepare-count-2"),
+                completed_at: COMPLETED.to_owned(),
+                open_sections: vec![section(&scope, "00002")],
+                source_value_count: 1,
+                watched_sections: Vec::new(),
+                http: success_http(9),
+            })
+            .expect("second applied commit");
+        assert_eq!(
+            second.classification,
+            OpenAttemptClassification::ValidApplied
+        );
+        assert_eq!(
+            insert_prepares.load(Ordering::SeqCst),
+            1,
+            "the second commit must reuse the connection-cached statement"
+        );
+
+        let current = storage.open_section_current(&scope).expect("current");
+        assert_eq!(current.len(), 3);
+        assert!(
+            current
+                .iter()
+                .all(|row| row.attempt_id == trace("prepare-count-2"))
+        );
+        storage
+            .connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .expect("clear authorizer");
+    }
 
     #[test]
     fn open_hashes_match_the_locked_client_and_reconciler_goldens() {

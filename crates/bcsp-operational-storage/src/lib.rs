@@ -3,6 +3,31 @@
 //! This crate owns target-neutral write projections and crash-safe publication. It deliberately
 //! does not depend on `bcsp-catalog`: normalizers submit independent DTOs built from the shared
 //! identities in `bcsp-contracts`.
+//!
+//! # Write-path encapsulation
+//!
+//! The single writable SQLite connection inside [`OperationalStorage`] is sealed: every write
+//! goes through the typed command API, so a dependent crate can never run raw SQL or `PRAGMA`s
+//! that would bypass the storage write invariants. There is no accessor that hands out the raw
+//! connection:
+//!
+//! ```compile_fail,E0599
+//! use bcsp_operational_storage::OperationalStorage;
+//!
+//! fn hijack(storage: &OperationalStorage) -> &rusqlite::Connection {
+//!     storage.raw_connection_for_tests()
+//! }
+//! ```
+//!
+//! and the connection field itself is private outside the crate:
+//!
+//! ```compile_fail,E0616
+//! use bcsp_operational_storage::OperationalStorage;
+//!
+//! fn hijack(storage: &OperationalStorage) -> &rusqlite::Connection {
+//!     &storage.connection
+//! }
+//! ```
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]

@@ -7,10 +7,8 @@ use bcsp_operational_storage::{
     StoredCourseVariant, StoredSection, catalog_content_sha256_v1,
 };
 use rusqlite::Connection;
-use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use tempfile::TempDir;
 
@@ -1351,106 +1349,6 @@ fn open_commit_fault_rolls_back_and_failed_completion_keeps_lkg() {
             .lkg_attempt_id,
         Some(trace("open-rollback-1"))
     );
-}
-
-#[test]
-fn open_mirror_rebuild_prepares_the_insert_once_and_reuses_it_across_commits() {
-    let scope = target("FALL_2026", "OPEN_PREPARE_COUNT");
-    let mut storage = OperationalStorage::open_in_memory().expect("storage");
-    let version = publish_catalog(
-        &mut storage,
-        &scope,
-        "prepare-count",
-        &["00001", "00002", "00003"],
-        HASH_A,
-    );
-
-    let insert_prepares = Arc::new(AtomicUsize::new(0));
-    let hook_counter = Arc::clone(&insert_prepares);
-    {
-        let connection = storage.raw_connection_for_tests();
-        connection.flush_prepared_statement_cache();
-        connection
-            .authorizer(Some(move |context: AuthContext<'_>| {
-                if matches!(
-                    context.action,
-                    AuthAction::Insert { table_name } if table_name == "open_section_current"
-                ) {
-                    hook_counter.fetch_add(1, Ordering::SeqCst);
-                }
-                Authorization::Allow
-            }))
-            .expect("install authorizer");
-    }
-
-    begin(
-        &mut storage,
-        &scope,
-        "prepare-count-1",
-        "prepare-count-run",
-        version,
-        "2026-07-14",
-    );
-    let first = storage
-        .finish_open_pull_success(FinishOpenPullSuccessCommand {
-            gate_hold: false,
-            gate_catalog_set_identity: None,
-            attempt_id: trace("prepare-count-1"),
-            completed_at: COMPLETED.to_owned(),
-            open_sections: vec![section(&scope, "00001")],
-            source_value_count: 1,
-            watched_sections: Vec::new(),
-            http: success_http(9),
-        })
-        .expect("first applied commit");
-    assert_eq!(first.classification, OpenAttemptClassification::ValidApplied);
-    assert_eq!(
-        insert_prepares.load(Ordering::SeqCst),
-        1,
-        "the 3-row mirror rebuild must prepare its INSERT exactly once"
-    );
-
-    begin(
-        &mut storage,
-        &scope,
-        "prepare-count-2",
-        "prepare-count-run",
-        version,
-        "2026-07-14",
-    );
-    let second = storage
-        .finish_open_pull_success(FinishOpenPullSuccessCommand {
-            gate_hold: false,
-            gate_catalog_set_identity: None,
-            attempt_id: trace("prepare-count-2"),
-            completed_at: COMPLETED.to_owned(),
-            open_sections: vec![section(&scope, "00002")],
-            source_value_count: 1,
-            watched_sections: Vec::new(),
-            http: success_http(9),
-        })
-        .expect("second applied commit");
-    assert_eq!(
-        second.classification,
-        OpenAttemptClassification::ValidApplied
-    );
-    assert_eq!(
-        insert_prepares.load(Ordering::SeqCst),
-        1,
-        "the second commit must reuse the connection-cached statement"
-    );
-
-    let current = storage.open_section_current(&scope).expect("current");
-    assert_eq!(current.len(), 3);
-    assert!(
-        current
-            .iter()
-            .all(|row| row.attempt_id == trace("prepare-count-2"))
-    );
-    storage
-        .raw_connection_for_tests()
-        .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
-        .expect("clear authorizer");
 }
 
 #[test]
