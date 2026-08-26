@@ -184,7 +184,7 @@ Two streams join the same family under the first of four relations that holds
 | `identical` | the canonical series are byte-equal | whole-series copies |
 | `contained` | the shorter series is a contiguous slice of the longer | truncated copies |
 | `overlapping` | they share a contiguous block of ≥ 4 interior canonical entries containing ≥ 1 body change | staggered re-slicing of one capture |
-| `derived` | they reuse ≥ 3 observation **records**, matched jointly on `(clientStartMs, bodySha)` | subsampling, decimation, thinning, reordering |
+| `derived` | they reuse ≥ 3 observation **records** at the same client-clock instants, **or ≥ 6 records under one single constant client-clock offset**, matched jointly on `(clientStartMs + offset, bodySha)` | subsampling, decimation, thinning, reordering — including a copy whose whole client clock was translated |
 
 Family membership is closed **transitively** (union-find): if A relates to B
 and B to C, all three are one family even when A and C do not match directly —
@@ -223,28 +223,64 @@ representative) has a window with ≥ 5 informative brackets — qualification
 never travels through a shared targetId.
 
 Provenance boundary (documented on purpose): what A4-1 detects is **reuse of
-the same observation records**. Whole-series copies, truncations, overlapping
-re-slices, and regular or irregular subsampling/decimation/thinning of one
-capture all merge, as do copies that touch only the clocks — a translation of
-either column, an edited or deleted serverDate (one or all), an extended
-request end — which merge and are then voided by the record conflict.
+the same observation records, up to ONE constant translation of the whole
+client clock**. Whole-series copies, truncations, overlapping re-slices, and
+regular or irregular subsampling/decimation/thinning of one capture all merge,
+as do copies that touch only the clocks — a translation of either column, an
+edited or deleted serverDate (one or all), an extended request end — which
+merge and are then voided by the record conflict.
 
-What is NOT detected: **de novo fabrication**. A series whose body content or
-whose time grid was invented from scratch is independent data as far as this
-tool can tell, and no cryptographic capture proof, signature, online
-collection, or trusted-hardware attestation is attempted. There is one further
+Invariance boundary of the record match, stated exactly: derived-record
+detection is invariant under **one single constant translation of the client
+clock applied to the whole stream** (and, being body/time based, under any
+re-cadencing: stride, decimation, thinning, reordering). It is **not**
+invariant under per-sample jitter, per-segment offsets, or any non-constant
+time edit — the offsets then fail to coincide, no bucket reaches the
+threshold, and the streams stay independent families. Nothing about that is
+approximate: the offset match is an exact integer equality, never a tolerance
+window, so the rule cannot drift into the jitter case. Fully disjoint
+partitions and de-novo fabrication remain outside the model, exactly as before.
+Crucially, making the RELATION shift-invariant is what lets the record
+agreement check stay **absolute at 0 ms**: a translated copy now joins the
+family and is immediately flagged `timeConflict`, which bars every member from
+all evidence.
+
+What is NOT detected: **de novo fabrication** and **per-sample time edits**. A
+series whose body content or whose time grid was invented from scratch is
+independent data as far as this tool can tell, and neither is a copy whose
+timestamps were nudged sample by sample (or segment by segment) rather than by
+one constant offset: with a different offset per record no single offset
+explains more than a coincidence's worth of them. No cryptographic capture
+proof, signature, online collection, or trusted-hardware attestation is
+attempted. There is one further
 residual, stated rather than hidden: a partition of one capture into chunks
 that share no observation record and no `(bodySha, clientDelta)` block with
 each other reuses nothing — every observation is still counted exactly once,
 and the disjoint chunks cover disjoint wall-clock time — so the remaining fraud
 there is the campus label alone, which is the de-novo boundary above.
 
-The thresholds (4 interior entries with ≥ 1 body change; 3 reused records) are
-calibrated on the real capture data, not guessed: inside the 554-sample local
-capture the longest repeated `(bodySha, clientDelta)` block at any non-zero
-self-offset is 1, and the three genuinely independent local captures share
-**zero** observation records and zero body hashes with one another
-(re-measured by the local-data test on every run). Two rules deliberately NOT
+The thresholds (4 interior entries with ≥ 1 body change; 3 reused records at
+offset 0; 6 reused records at any non-zero offset) are calibrated on the real
+capture data, not guessed: inside the 554-sample local capture the longest
+repeated `(bodySha, clientDelta)` block at any non-zero self-offset is 1, and
+the three genuinely independent local captures share **zero** observation
+records and zero body hashes with one another (re-measured by the local-data
+test on every run).
+
+The **shifted** record threshold is higher than the offset-0 one for a reason,
+and it is argued twice over. The absolute rule tests exactly one offset; the
+shift-invariant rule ranges over every offset that any same-body pair produces
+— 7362 distinct non-zero offsets inside that one 554-sample capture, from 8202
+candidate pairs — so the accidental ceiling has to be re-measured rather than
+inherited. It was: the largest set of records a single **non-zero** constant
+offset can align inside that capture is **3** (at ±13405 ms, ±27127 ms and
+±28068 ms), and none reaches 6; between the three local captures there is no
+candidate offset at all, because they share no body hash. 6 is twice the
+measured ceiling, and the local-data test recomputes it on every run so a
+future data set cannot quietly invalidate it. The higher threshold also costs
+nothing: a window or a session needs ≥ 5 informative brackets to qualify, and 5
+brackets need ≥ 6 samples, so a reuse of ≤ 5 records could never have qualified
+anything anyway. Two rules deliberately NOT
 adopted: a bodySha-only match (a real capture holds one body for minutes at a
 time, and two honest captures of one target legitimately see the same bodies),
 and a timestamp-only match (honest campus captures overlap in wall-clock time
@@ -254,12 +290,38 @@ Byte-identical streams under the SAME campus label and the SAME absolute
 times merge without conflict into one family whose representative alone stays
 evidence-eligible; they cannot widen campus coverage or add evidence.
 
-## A4-2: peak and off-peak are server-clock evidence
+## A4-2: peak and off-peak are independent server-clock evidence
 
 Both sides of A4-2 are decided **per bracket on the comparison clock** — the
 same bounds the model comparison, the safe offset and A4-5 consume, which is
-the server clock whenever a production conclusion is reachable. A window
-qualifies on the peak side when ≥ 5 of its informative brackets have
+the server clock whenever a production conclusion is reachable — and the
+brackets are grouped into **evidence sessions**, not client windows.
+
+An evidence session is a maximal group of one stream's evidence windows that
+are contiguous on the client timeline **or** on the server timeline, under the
+same `max(10 min, 5 x intervalSeconds)` gap rule the client windowing uses.
+Independence must hold on **both** clocks. Client windows are cut on
+client-clock gaps alone, so jumping the client clock forward mid-session used
+to split ONE server-contiguous session into two "independent" windows — the
+first supplying the off-peak side, the second the peak side, every bound
+genuinely server-derived and the claim of independence the only forgery.
+Because a production GO already rests on the server clock, a claim of two
+independent sessions has to rest on it too. The mirror hole is closed by the
+same rule: an edited serverDate inside one client window still leaves one
+session, because the client window itself is the link.
+
+Sessions are unions of **whole** windows, so the session partition is always a
+coarsening of the window partition and A4-2 is uniformly at least as strict as
+the window rule it replaced — nothing that failed before can pass now. Missing
+`Date` headers resolve toward merging (fail-closed: a deleted header cannot
+manufacture a split, and samples before the first observed `Date` impose no
+grouping at all, while their brackets stay unplaceable and still void their
+session's purity). A stream with no `Date` anywhere falls back to exactly its
+client windows and cannot reach GO regardless, because A4-5 fails closed on a
+client-clock fallback. The grouping is reported in `evidenceSessions` (JSON)
+and in the `### Evidence sessions (server timeline)` table (Markdown).
+
+A session qualifies on the peak side when ≥ 5 of its informative brackets have
 comparison-clock bounds intersecting 17:00–18:00 America/New_York with
 **positive measure** (a single-instant boundary touch is not peak evidence).
 It qualifies on the off-peak side when ≥ 5 of its informative brackets fall
@@ -268,13 +330,15 @@ not. That purity clause is what keeps the per-bracket rule from being weaker
 than the window-label rule it replaced: without it a single session straddling
 17:00 ET would satisfy both sides on its own, its early brackets off-peak and
 its late ones in peak, and "multiple independent time windows" would reduce to
-one ten-minute capture. Purity is checked over *all* of a window's brackets so
-that a straddling session cannot buy it by making its peak-side brackets too
-wide to be informative, or by dropping their `Date` headers. The peak side
-needs no mirror clause — brackets whose own comparison-clock bounds lie in the
-peak hour are peak evidence wherever the rest of their window sits — and the
-two qualifying sets are therefore disjoint by construction: the peak and
-off-peak evidence always come from different windows. Any window with enough
+one ten-minute capture. Carried by the session rather than the window, the same
+clause is now what refuses the client-clock-jump shape too — the two are one
+theorem. Purity is checked over *all* of a session's brackets so that a
+straddling session cannot buy it by making its peak-side brackets too wide to
+be informative, or by dropping their `Date` headers. The peak side needs no
+mirror clause — brackets whose own comparison-clock bounds lie in the peak hour
+are peak evidence wherever the rest of their session sits — and the two
+qualifying sets are therefore disjoint by construction: the peak and off-peak
+evidence always come from **different sessions**. Any session with enough
 off-peak brackets that the purity clause refuses is reported in the gate
 evidence, so a reader never has to guess why it did not count.
 
@@ -283,11 +347,11 @@ which can only move a bracket toward the peak side — the conservative
 direction, since the widened upper really is the true upper bound on the change
 instant. A bracket without usable bounds on the comparison clock qualifies
 neither side (fail closed, never filled in from the client envelope), is
-counted in the gate evidence, and also costs its window off-peak purity.
+counted in the gate evidence, and also costs its session off-peak purity.
 
 The `peak 17–18 ET? (label)` column in the Markdown report and
 `targets[].windows[].peakOverlap` in the JSON are the window's **client
-envelope** label. They are description only and are never gate evidence: a
+envelope** label, and the `windowId` itself is a client-side display label. They are description only and are never gate evidence: a
 capture can extend `requestEndedUtc` to drag that label across 17:00 ET, or run
 its client clock an hour slow to drag it off, without touching a single body,
 request start, or `Date` header.

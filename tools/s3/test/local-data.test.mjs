@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { makeTmpDir, cleanup, runAnalyzer } from "./fixtures.mjs";
+import { DERIVATION_MIN_RECORDS_SHIFTED, WINDOW_GAP_MIN_MS } from "../lib/phase.mjs";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 
@@ -176,6 +177,29 @@ test("local data: verdict, gates, and independent recomputation", (t) => {
     /peak\/off-peak classified on the server clock/,
   );
 
+  // Real-data calibration for the A2-2 session grouping: every capture here is
+  // ONE server-contiguous session (its largest adjacent serverDate gap is two
+  // orders of magnitude below the gap rule), so grouping A4-2's evidence by
+  // server session must reproduce the client windows exactly — one session per
+  // input, no merges, no split.
+  const serverGapByRun = RUN_DIRS.map((d) => {
+    const times = includedRows(join(dataRoot, d, "samples.ndjson")).map((r) =>
+      Date.parse(r.serverDate),
+    );
+    // D3 holds a single row: no adjacent pair, hence no gap at all.
+    const gaps = times.slice(1).map((t, i) => t - times[i]);
+    return gaps.length === 0 ? 0 : Math.max(...gaps);
+  });
+  for (const gap of serverGapByRun) {
+    assert.ok(Number.isFinite(gap) && gap < WINDOW_GAP_MIN_MS / 10, `server gap ${gap} ms`);
+  }
+  assert.equal(json.evidenceSessions.length, json.provenance.streams.length);
+  for (const sess of json.evidenceSessions) assert.equal(sess.windowIds.length, 1);
+  assert.equal(
+    json.evidenceSessions.reduce((acc, sess) => acc + sess.bracketCount, 0),
+    json.bracketTotals.total,
+  );
+
   // Independent recount of D1 brackets: adjacent decodedBodySha256 diff over
   // included rows (minimal inline reader, no analyzer code).
   const rows = includedRows(join(dataRoot, D1, "samples.ndjson"));
@@ -188,6 +212,34 @@ test("local data: verdict, gates, and independent recomputation", (t) => {
     .filter((w) => w.windowId.startsWith(`${D1}/samples.ndjson#`));
   const d1BracketCount = d1Windows.reduce((acc, w) => acc + w.bracketCount, 0);
   assert.equal(d1BracketCount, recount, "analyzer D1 bracket count must equal the independent recount");
+
+  // Real-data calibration for DERIVATION_MIN_RECORDS_SHIFTED. The shifted
+  // record rule searches EVERY offset that any same-body pair produces, so its
+  // threshold has to clear the accidental ceiling of real data. D1 compared
+  // with ITSELF is the most self-similar comparison this data can offer — a
+  // strictly friendlier case for a coincidence than any two honest captures —
+  // and the largest set of records a single NON-ZERO constant offset can align
+  // is recomputed here straight from the NDJSON. If this ever reaches the
+  // threshold, the threshold is wrong; no special case may be added instead.
+  const d1Times = rows.map((r) => Date.parse(r.requestStartedUtc));
+  const d1Bodies = rows.map((r) => r.decodedBodySha256);
+  const offsetCounts = new Map();
+  for (let i = 0; i < rows.length; i += 1) {
+    for (let j = 0; j < rows.length; j += 1) {
+      if (d1Bodies[i] !== d1Bodies[j]) continue;
+      const delta = d1Times[j] - d1Times[i];
+      if (delta === 0) continue;
+      offsetCounts.set(delta, (offsetCounts.get(delta) ?? 0) + 1);
+    }
+  }
+  const largestNonZeroOffsetBucket = Math.max(...offsetCounts.values());
+  assert.ok(
+    largestNonZeroOffsetBucket < DERIVATION_MIN_RECORDS_SHIFTED,
+    `largest non-zero-offset same-body bucket in D1 is ${largestNonZeroOffsetBucket}, threshold ${DERIVATION_MIN_RECORDS_SHIFTED}`,
+  );
+  // …and there are many such offsets, which is exactly why the shifted
+  // threshold could not simply inherit the single-offset one.
+  assert.ok(offsetCounts.size > 1000, `distinct non-zero candidate offsets ${offsetCounts.size}`);
 
   // Independent re-derivation of max coverage on the common comparison set
   // (server clock, +1000 ms upper widening, half-open (l, u] → closed [l+1, u]).
