@@ -297,6 +297,12 @@ export function buildJsonReport(ctx) {
         // they are strictly smaller.
         bestWindowInPeakInformativeCount: sess.bestWindowInPeakInformativeCount,
         bestWindowOffPeakInformativeCount: sess.bestWindowOffPeakInformativeCount,
+        // Client-window seams this session swallowed because the server clock
+        // did not corroborate them: the two windows' median
+        // (serverDate - requestStart) differ across the seam by about the
+        // claimed gap, so the client clock stepped and no time passed. Zero on
+        // every honest capture.
+        uncorroboratedSeamCount: sess.uncorroboratedSeamCount,
         // Purity is judged over ALL of the session's brackets, informative or
         // not: an off-peak session may hold no peak-hour and no unplaceable
         // bracket at all.

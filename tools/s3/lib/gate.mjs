@@ -16,7 +16,7 @@ import {
   bracketWidthMs,
 } from "./phase.mjs";
 import { runHoldout, groupBrackets } from "./holdout.mjs";
-import { overlapsNyPeakStrict } from "./windows.mjs";
+import { overlapsNyPeakStrict, seamServerAdvanceMs } from "./windows.mjs";
 
 export {
   TOOL_VERSION,
@@ -382,8 +382,18 @@ function zeroPad2(n) {
 // are `${inputId}#wNN` and collide across the several targets of one SQLite
 // input.
 export function buildEvidenceSessions(evidenceWindows) {
+  // Within a stream this is CLIENT ORDER: utcStartMs is the window's first
+  // client start, strictly increasing across a stream's windows because
+  // segmentWindows only cuts on a positive gap. It leads the windowId compare
+  // so that adjacency — which the seam check below depends on — stays correct
+  // past the hundredth window, where the zero-padded-to-2 id `#w100` would sort
+  // between `#w10` and `#w11`. For fewer than a hundred windows the two orders
+  // are identical.
   const ordered = [...evidenceWindows].sort(
-    (a, b) => cmpStrGate(a.streamId, b.streamId) || cmpStrGate(a.windowId, b.windowId),
+    (a, b) =>
+      cmpStrGate(a.streamId, b.streamId) ||
+      (a.utcStartMs ?? 0) - (b.utcStartMs ?? 0) ||
+      cmpStrGate(a.windowId, b.windowId),
   );
   const parent = ordered.map((_, i) => i);
   const find = (x) => {
@@ -412,6 +422,51 @@ export function buildEvidenceSessions(evidenceWindows) {
       else union(prev, i);
     }
   }
+  // SEAM CORROBORATION. The unions above link windows the server timeline puts
+  // in one session; this pass links windows the server timeline does not put in
+  // TWO. A client-window seam only ever claims that a gap happened — the claim
+  // is made entirely of client timestamps — so before two ADJACENT client
+  // windows may stand as independent evidence groups the server clock has to
+  // agree that at least `sessionGapMs` of real time passed across that seam,
+  // measured as `seamServerAdvanceMs` = client start-to-start advance + (median
+  // offset shift): from the two windows' whole populations of Dates rather than
+  // from the Dates AT the seam. Deleting a band of Dates around the seam
+  // therefore buys nothing — it widens `suffixMin - prefixMax` inside
+  // assignServerSessions, but it leaves both medians where they were and they
+  // still say the client clock, not the world, is what moved.
+  //
+  // ADJACENT, and each side dated, are both load-bearing:
+  //   - Comparing across a window rather than across a seam would let two
+  //     jumps plus a deleted band in between manufacture a boundary: the two
+  //     outer windows' medians then honestly corroborate a gap that the
+  //     SAMPLES in the deleted band prove was never a pause in the polling.
+  //     A boundary is a claim about ONE seam, so it is checked at that seam.
+  //   - A window with no Date at all makes no claim about the timeline, so it
+  //     can corroborate nothing: both of its seams fail closed and it merges
+  //     with its neighbours. It brought no server bracket bounds to begin with;
+  //     what the merge costs is its neighbours' independence, and the purity of
+  //     an off-peak neighbour. That is the direction A2-2 asks us to fail in,
+  //     and honest captures do not go there — the local captures D1/D2/D3 carry
+  //     a Date on every one of their 558 samples.
+  // A stream with NO dated window anywhere is exempt: there is no server
+  // timeline to corroborate against, the comparison clock has already fallen
+  // back to the client, and A4-5 refuses a production GO outright.
+  const streamHasDatedWindow = new Set(
+    ordered.filter((w) => (w.clockOffsetMedianMs ?? null) !== null).map((w) => w.streamId),
+  );
+  const uncorroboratedSeams = [];
+  for (let i = 1; i < ordered.length; i += 1) {
+    const prev = ordered[i - 1];
+    const w = ordered[i];
+    if (w.streamId !== prev.streamId) continue;
+    if (!streamHasDatedWindow.has(w.streamId)) continue;
+    const advance = seamServerAdvanceMs(prev, w);
+    const threshold = Math.max(prev.sessionGapMs ?? 0, w.sessionGapMs ?? 0);
+    if (advance === null || advance <= threshold) {
+      uncorroboratedSeams.push([i - 1, i]);
+      union(i - 1, i);
+    }
+  }
   const components = new Map(); // root rank -> [rank, ...] ascending
   for (let i = 0; i < ordered.length; i += 1) {
     const root = find(i);
@@ -430,10 +485,18 @@ export function buildEvidenceSessions(evidenceWindows) {
     const streamId = streamIds[0];
     const n = perStreamCount.get(streamId) ?? 0;
     perStreamCount.set(streamId, n + 1);
+    const rankSet = new Set(ranks);
     sessions.push({
       sessionId: `${streamId}#s${zeroPad2(n)}`,
       streamId,
       windowIds: windows.map((w) => w.windowId),
+      // Client-window seams inside this session that the server clock refused
+      // to corroborate — a stepped client clock, not a pause. Zero on every
+      // honest capture; disclosed so a reader never has to guess why two
+      // client windows became one evidence session.
+      uncorroboratedSeamCount: uncorroboratedSeams.filter(
+        ([a, b]) => rankSet.has(a) && rankSet.has(b),
+      ).length,
       // The constituent client windows themselves, in windowId order. A4-2
       // qualifies a side from a SINGLE one of these, never from their sum.
       windows,
@@ -727,6 +790,7 @@ export function evaluateGate(ctx) {
     // qualification without re-deriving the window partition.
     bestWindowInPeakInformativeCount: bestWindowInPeak(sess),
     bestWindowOffPeakInformativeCount: bestWindowOffPeak(sess),
+    uncorroboratedSeamCount: sess.uncorroboratedSeamCount,
     pureOffPeak: isPureOffPeakSession(sess),
     qualifiesPeak: qualifyingPeakIds.has(sess.sessionId),
     qualifiesOffPeak: qualifyingOffPeakIds.has(sess.sessionId),
@@ -762,12 +826,20 @@ export function evaluateGate(ctx) {
     straddlingOffPeakSessions > 0
       ? `; ${straddlingOffPeakSessions} session(s) with >=${MIN_GROUP_BRACKETS} off-peak brackets also hold peak-hour or unclassifiable brackets and cannot supply off-peak evidence`
       : "";
+  const uncorroboratedSeamCount = sessions.reduce(
+    (acc, sess) => acc + sess.uncorroboratedSeamCount,
+    0,
+  );
+  const uncorroboratedNote =
+    uncorroboratedSeamCount > 0
+      ? `; ${uncorroboratedSeamCount} client-window seam(s) were merged because the server clock did not corroborate the gap — the window medians of (serverDate - requestStart) differ across the seam by about the gap itself, which is a stepped client clock, not a pause`
+      : "";
   gate.push({
     id: "A4-2",
     requirement:
-      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline, and each side must be carried by ONE constituent client window rather than by pooling several; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides",
+      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline, a client-window seam counts as a session boundary only when the two windows' median client-vs-server clock offsets corroborate that the gap really passed, and each side must be carried by ONE constituent client window rather than by pooling several; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides",
     satisfied: a2Satisfied,
-    evidence: `windows: ${totalWindows} total${excludedNote}; evidence sessions: ${sessions.length} from ${evidenceWindows.length} evidence window(s), grouped on the server timeline${mergedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak sessions (>=${MIN_GROUP_BRACKETS} informative in-peak brackets in one client window): ${qualifyingPeakSessions.length}; qualifying off-peak sessions (>=${MIN_GROUP_BRACKETS} informative off-peak brackets in one client window, none in peak): ${qualifyingOffPeakSessions.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${straddleNote}${pooledOnlyNote}`,
+    evidence: `windows: ${totalWindows} total${excludedNote}; evidence sessions: ${sessions.length} from ${evidenceWindows.length} evidence window(s), grouped on the server timeline${mergedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak sessions (>=${MIN_GROUP_BRACKETS} informative in-peak brackets in one client window): ${qualifyingPeakSessions.length}; qualifying off-peak sessions (>=${MIN_GROUP_BRACKETS} informative off-peak brackets in one client window, none in peak): ${qualifyingOffPeakSessions.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${straddleNote}${pooledOnlyNote}${uncorroboratedNote}`,
   });
 
   // A4-3: distinguishable winner under holdout.

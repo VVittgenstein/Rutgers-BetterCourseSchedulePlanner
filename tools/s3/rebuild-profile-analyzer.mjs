@@ -17,6 +17,8 @@ import { buildProvenance } from "./lib/provenance.mjs";
 import {
   segmentWindows,
   assignServerSessions,
+  sessionGapMs,
+  clockOffsetMedianMs,
   nyLabel,
   overlapsNyPeak,
 } from "./lib/windows.mjs";
@@ -122,6 +124,14 @@ function main() {
       win.serverSessionIndices = [...new Set(win.samples.map((sm) => sessionOfSample.get(sm)))]
         .filter((v) => v !== null && v !== undefined)
         .sort((x, y) => x - y);
+      // Seam corroboration inputs (windows.mjs): the window's robust
+      // client-vs-server clock offset, the last client start it holds (the
+      // quantity segmentWindows measured its gap from) and the stream's own
+      // session-gap threshold. A4-2 uses them to check that a client-window
+      // seam is a real pause and not a stepped client clock.
+      win.clockOffsetMedianMs = clockOffsetMedianMs(win.samples);
+      win.lastClientStartMs = win.samples[win.samples.length - 1].clientStartMs;
+      win.sessionGapMs = sessionGapMs(stream.intervalSeconds);
       win.nyLabel = nyLabel(win.utcStartMs, win.utcEndMs);
       win.peakOverlap = overlapsNyPeak(win.utcStartMs, win.utcEndMs);
       win.brackets = brackets;

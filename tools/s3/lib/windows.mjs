@@ -78,7 +78,12 @@ export function segmentWindows(samples, intervalSeconds, inputId) {
 // sample at or after i that sits below the target, or lower every dated sample
 // before i that sits above it — so the breakdown point in the split direction
 // is the number of dated samples on the smaller side of the seam, not one.
-// Below that it is a bulk rewrite, which stays deferred per A3.
+//
+// A DELETED Date is not covered by that count: it is not raised, it is removed
+// from both order statistics, and removing every dated sample in a band around
+// a seam widens the measured seam for free. That hole is closed one level up,
+// by `seamServerAdvanceMs` below, which corroborates a client-window seam from
+// the two windows' MEDIAN clock offsets instead of from the Dates at the seam.
 //
 // In the MERGE direction both statistics still have breakdown point ONE: a
 // single Date placed low anywhere at or after i collapses suffixMin(i), and a
@@ -116,15 +121,13 @@ export function segmentWindows(samples, intervalSeconds, inputId) {
 //     cannot be shared;
 //   - it CAN move a boundary, and enough deletions on one side of a seam can
 //     raise the measured seam past the threshold and so manufacture a SPLIT.
-//     That is bounded, not refuted: the finest partition this function can
-//     produce is one session per sample, and A4-2 groups only WHOLE client
-//     windows, so the most a split forgery can buy is the client-window
-//     partition — exactly what the frozen 2c7b53a87471 baseline already used.
-//     It costs the attacker the deleted samples' server bounds, which makes
-//     their brackets non-informative on the server clock and still breaks
-//     their group's off-peak purity;
-//   - a window with no dated sample left becomes its own group, for the same
-//     reason and with the same cost.
+//     Deletion is therefore NOT enough on its own to reach two independent
+//     evidence sessions: the seam a deletion widens still has to survive the
+//     SEAM CORROBORATION check below, which does not read the Dates at the
+//     seam at all;
+//   - a window with no dated sample left becomes its own group; it also loses
+//     every server bracket bound it had, so its brackets are non-informative on
+//     the server clock and it can qualify neither A4-2 side.
 // A negative or zero measured seam (webfarm skew) never splits.
 export function assignServerSessions(samples, intervalSeconds) {
   return sessionIndicesOf(
@@ -133,11 +136,85 @@ export function assignServerSessions(samples, intervalSeconds) {
   );
 }
 
-function sessionGapMs(intervalSeconds) {
+export function sessionGapMs(intervalSeconds) {
   return Math.max(
     WINDOW_GAP_MIN_MS,
     WINDOW_GAP_INTERVAL_FACTOR * (intervalSeconds ?? 60) * 1000,
   );
+}
+
+// The robust client-vs-server clock offset of one window: the LOWER median of
+// (serverDateMs - clientStartMs) over its dated samples, or null when it has
+// none. Integer ms in, integer ms out; the lower median keeps it deterministic
+// and byte-stable for even sample counts.
+//
+// A median rather than a mean or an extreme on purpose. On honest data the
+// spread of this quantity is response latency plus the Date header's 1 s
+// truncation — single-digit seconds (measured on the local captures D1/D2/D3:
+// min -6176 ms, p50 -752 ms, max +309 ms, i.e. a 6.5 s total spread across 558
+// samples). Any statistic would separate that from a ten-minute step, but only
+// a median makes moving the statistic cost the attacker more than half of the
+// window's Dates.
+export function clockOffsetMedianMs(samples) {
+  const offsets = [];
+  for (const s of samples) {
+    const server = s.serverDateMs ?? null;
+    if (server === null || s.clientStartMs === null || s.clientStartMs === undefined) continue;
+    offsets.push(server - s.clientStartMs);
+  }
+  if (offsets.length === 0) return null;
+  offsets.sort((a, b) => a - b);
+  return offsets[(offsets.length - 1) >> 1];
+}
+
+// SEAM CORROBORATION: how much time the SERVER timeline says passed across the
+// seam between two client windows of one stream, measured WITHOUT reading the
+// Dates at the seam.
+//
+// `segmentWindows` cuts on the client clock alone, so a client-window seam is
+// only ever a CLAIM that `clientAdvanceMs` of real time passed. Each window
+// carries its own robust offset m = median(serverDate - clientStart), so the
+// server time of a sample is (clientStart + m) and the server-side advance
+// across the seam is
+//
+//     serverAdvanceMs = clientAdvanceMs + (mNext - mPrev)
+//
+// with clientAdvanceMs measured start-to-start, exactly as segmentWindows
+// measures the client gap it split on. Two consequences, both exact:
+//
+//   - A GENUINE PAUSE moves both clocks together, so mNext === mPrev and
+//     serverAdvanceMs === clientAdvanceMs. Every honest control keeps its
+//     boundary: the ~19 h two-session control, the genuine 11-minute pause, and
+//     the near-threshold seam whose 4 s slow poll leaves the medians equal.
+//   - A CLIENT-ONLY JUMP of J ms inflates clientAdvanceMs by J and moves mNext
+//     by exactly -J, so serverAdvanceMs collapses back to the real advance and
+//     the boundary fails. There is no threshold slack to tune against: the two
+//     terms cancel identically, whatever J is.
+//
+// This is the check that closes the deletion+jump split. Deleting a band of
+// Dates around the seam widens `suffixMin - prefixMax` and so buys a session
+// boundary out of assignServerSessions — but it cannot touch the medians of the
+// surviving Dates on either side, and those still testify that the client clock,
+// not the world, is what moved. To keep such a split alive the attacker must
+// move more than HALF of one window's offsets, and those same Dates are the
+// bracket bounds its peak/off-peak evidence rests on: a window needs
+// MIN_GROUP_BRACKETS server-informative brackets to qualify a side, i.e. at
+// least ten dated samples, so the cheapest forgery is a coordinated rewrite of
+// six or more of the very Dates it is claiming as evidence. That is the
+// both-clocks bulk rewrite A3 defers — and it is observationally identical to a
+// genuine capture pause, which is legitimate evidence.
+//
+// Returns null when either window has no dated sample: an absent Date makes no
+// claim, so it can neither corroborate nor refute (such a window has no server
+// bracket bounds either, so it qualifies no A4-2 side).
+export function seamServerAdvanceMs(prevWindow, nextWindow) {
+  const mPrev = prevWindow.clockOffsetMedianMs ?? null;
+  const mNext = nextWindow.clockOffsetMedianMs ?? null;
+  if (mPrev === null || mNext === null) return null;
+  const from = prevWindow.lastClientStartMs;
+  const to = nextWindow.utcStartMs;
+  if (typeof from !== "number" || typeof to !== "number") return null;
+  return to - from + (mNext - mPrev);
 }
 
 // The rule itself, over a plain array of `number | null` server Dates in record
