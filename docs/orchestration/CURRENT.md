@@ -500,6 +500,21 @@ Stage 5 — STAGE-5
 
 ## 19. 变更日志
 
+### 2026-08-26 — Parallel Wave 1 收口与 Windows local 候选
+
+- Codex 按冻结顺序把 P2、S4、S3 evidence 集成到 `feat/s2-alert-delivery`，组合产品/发布源码提交为
+  `e2f9af31526095178b0e1df5106113261c7de74a`；
+- 组合 head 的 workspace、frontend、architecture、public-ops 静态门、release-set self-test 与 S3 analyzer
+  168 项测试全部通过；Stage 3/P2 以 `ACCEPTED_WITH_DEFERRED_DEBT + PENDING_LINUX_EVIDENCE`
+  收口，Stage 4/S4 接受，Stage 5/S3 evidence 以 `NO_PRODUCTION_CHANGE / DATA_REQUIRED` 收口；
+- 从该提交的 clean detached worktree、锁定且离线的工具链构建 Windows local 0.1.0 候选；归档恰好
+  12 个文件，SHA-256 为 `ac70b8d8efa4ab43f478fbf0559c71f76550e6229aee3273f0798b7973c75714`；
+- release verifier 在 Unicode 路径中通过桌面/移动真实浏览器验收，并完成 desired-watch 非空播种、两次重启、
+  同 section 重新物化和 Full Reset 闭环；结果为 `NON_EMPTY_MATERIALIZED`，section
+  `92026/NB/10001`；
+- 候选只保存在 `.cache/final-release-e2f9af3/release/rbcsp-windows-x86_64-0.1.0.zip`；没有连接
+  Vultr、没有部署、没有 tag、没有上传，也没有运行 Linux/systemd/Caddy 600 秒 soak 或真实 H8 主机操作。
+
 ### 2026-08-25 — Parallel Wave 1 首轮集中审查与三 lane 窄修
 
 - 四个 Claude 分别交付 R1、P2、S4、S3 evidence；分支/head/status 与回报一致；
@@ -625,16 +640,17 @@ Stage 5 — STAGE-5
 ```text
 Active wave: PARALLEL-WAVE-1 COMPLETE
 Accepted/integrated: Stage 2; STAGE-3-R3/P2; STAGE-4-R1/S4; STAGE-5-R3/S3 evidence
-Product combination head before this ledger commit: 882f230
+Product combination and Windows candidate source: e2f9af31526095178b0e1df5106113261c7de74a
 Integration order completed: P2 → S4 → S3 evidence
 Integration-only commits: 5efeaa5 (presence sender); 882f230 (architecture feature snapshot)
 Heavy gates: completed once on combined head; all applicable local gates PASS
+Windows local candidate: VERIFIED; 12 files; SHA256 ac70b8d8efa4ab43f478fbf0559c71f76550e6229aee3273f0798b7973c75714; NON_EMPTY_MATERIALIZED after two restarts
 External gates: P2 Linux/systemd/Caddy 600s core plus full composition; real H8 deployment separately authorized
 S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT + PENDING_LINUX_EVIDENCE; Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: 从包含本总账的 clean detached final head 构建并验证新的 Windows local candidate；不 tag/upload/deploy
+Next authorized action: 用户本地试用该 Windows candidate；Vultr/Linux 部署、外部 H8/H9 证据与新的 S3 数据采样均需另行明确授权
 ```
 
 验收结论只允许使用：
