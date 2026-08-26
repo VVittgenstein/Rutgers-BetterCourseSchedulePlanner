@@ -258,15 +258,17 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-  # P2 hardening H9: the 600-second real-stack soak gate. Manual, and only
-  # on explicit request: it builds the archive from the requested commit,
-  # installs it as the real systemd service behind a real Caddy, and holds
-  # one browser WebSocket across a mid-soak `caddy reload`. The composition
-  # tier (real Rutgers data) is NOT run here -- it stays a separately
-  # authorized manual invocation of tests/public-soak.sh.
+  # P2 hardening H9, CORE HALF ONLY: the 600-second real-stack soak.
+  # Manual, and only on explicit request: it builds the archive from the
+  # requested commit, installs it as the real systemd service behind a real
+  # Caddy, and holds one browser WebSocket across a mid-soak forced
+  # `caddy reload`. The composition tier (real Rutgers data) is NOT run
+  # here -- it stays a separately authorized manual invocation of
+  # tests/public-soak.sh, and only THAT run may claim the full
+  # P2_H9_PUBLIC_SOAK_PASS. This job accepts exactly the CORE_PASS marker.
   linux-public-soak:
     if: github.event_name == 'workflow_dispatch' && inputs.run_soak
-    name: Linux public 600s soak (P2/H9)
+    name: Linux public 600s CORE soak (P2/H9 core; composition pending)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -347,7 +349,7 @@ jobs:
             --build-root "$build_root"
           printf 'archive=%s\n' "$output_root/rbcsp-linux-x86_64-0.1.0.tar.gz" >> "$GITHUB_OUTPUT"
 
-      - name: Run the 600-second soak against the real stack
+      - name: Run the 600-second CORE soak against the real stack
         run: |
           candidate_root="$RUNNER_TEMP/rbcsp-candidate"
           mkdir -p -- "$candidate_root"
@@ -360,10 +362,17 @@ jobs:
             PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
             bash deploy/public/tests/public-soak.sh --candidate-root "$candidate_root" \
             | tee "$RUNNER_TEMP/soak-output.txt"
-          grep -q '^P2_H9_PUBLIC_SOAK_PASS ' "$RUNNER_TEMP/soak-output.txt"
+          # CORE_PASS exactly: this job never runs the composition tier, so
+          # the full-H9 marker appearing here would itself be a harness bug.
+          grep -q '^P2_H9_PUBLIC_SOAK_CORE_PASS ' "$RUNNER_TEMP/soak-output.txt"
+          if grep -q '^P2_H9_PUBLIC_SOAK_PASS ' "$RUNNER_TEMP/soak-output.txt"; then
+            printf '%s\n' 'the harness claimed a full H9 pass without the composition tier' >&2
+            exit 1
+          fi
           {
-            printf '### Linux public 600s soak (P2/H9)\n\n'
+            printf '### Linux public 600s CORE soak (P2/H9 core half)\n\n'
             printf -- '- Source commit: `%s`\n' "$REQUESTED_SOURCE_COMMIT"
             printf -- '- Result: `%s`\n' \
-              "$(grep '^P2_H9_PUBLIC_SOAK_PASS ' "$RUNNER_TEMP/soak-output.txt")"
+              "$(grep '^P2_H9_PUBLIC_SOAK_CORE_PASS ' "$RUNNER_TEMP/soak-output.txt")"
+            printf -- '- Composition tier: `PENDING_EXTERNAL_AUTHORIZATION` (not run in CI)\n'
           } >> "$GITHUB_STEP_SUMMARY"

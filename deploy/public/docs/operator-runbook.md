@@ -194,9 +194,16 @@ byte-identical config and a skipped reload proves nothing) that the same
 socket and the same service `MainPID` must survive, every 30-second
 `MemoryCurrent` sample under 700 MiB with last-three growth within
 32 MiB, and the connection gauge never dropping below the held socket.
+Samples are timestamped and judged against the WHOLE window (thin, holed,
+late, or truncated coverage fails), and the ACK-acceptance journal read is
+bound to this service invocation and fails closed if `journalctl` fails.
 The host needs Caddy 2.7 or newer (`stream_close_delay`) with no distro
 `caddy.service` active. `BCSP_SOAK_DURATION_SECONDS` below 600 exists for
 harness debugging only and prints a DEBUG line that is not H9 evidence.
-Setting `BCSP_SOAK_COMPOSITION_SCRIPT` (with `BCSP_SOAK_ALLOW_RUTGERS=YES`)
-additionally runs the assembled-composition browser gate against real
-upstream data after the soak.
+
+The naming is the contract: the soak alone prints
+`P2_H9_PUBLIC_SOAK_CORE_PASS ... composition=PENDING_EXTERNAL_AUTHORIZATION`
+— the H9 gate is NOT closed by it. Only a run with
+`BCSP_SOAK_COMPOSITION_SCRIPT` (and `BCSP_SOAK_ALLOW_RUTGERS=YES`), which
+additionally drives the assembled-composition browser gate against real
+upstream data after the soak, may print the full `P2_H9_PUBLIC_SOAK_PASS`.

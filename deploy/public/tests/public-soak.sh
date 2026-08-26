@@ -248,6 +248,13 @@ SERVICE_PID="$(systemctl show --property MainPID --value bcsp.service)"
   printf 'public-soak: bcsp.service has no stable MainPID\n' >&2
   exit 1
 }
+# The invocation id pins every later journal read to THIS service run:
+# old logs from a previous run can neither convict nor acquit this soak.
+SERVICE_INVOCATION="$(systemctl show --property InvocationID --value bcsp.service)"
+[[ "$SERVICE_INVOCATION" =~ ^[0-9a-f]{32}$ ]] || {
+  printf 'public-soak: bcsp.service has no InvocationID; cannot bind journal evidence\n' >&2
+  exit 1
+}
 
 MEMORY_SAMPLES="$TEST_TMP/memory.samples"
 CONNECTION_SAMPLES="$TEST_TMP/connections.samples"
@@ -282,16 +289,25 @@ done
   printf 'public-soak: the browser driver never armed\n' >&2
   exit 1
 }
+ARMED_EPOCH="$(date +%s)"
 
 # Sample MemoryCurrent and the connection gauge every 30 seconds while the
-# soak socket is held; the driver's analyzer judges the files afterwards.
-# The done marker stops sampling BEFORE the driver closes its browser, so
-# the teardown itself can never contribute a zero connection sample.
+# soak socket is held. Every line is `epoch value`; a failed or empty read
+# writes a SAMPLE_READ_FAILURE value the analyzer refuses -- a sampler that
+# cannot see the service must fail the soak, not thin the evidence. The
+# done marker stops sampling BEFORE the driver closes its browser, so the
+# teardown itself can never contribute a zero connection sample.
 (
   while [[ ! -f "$DONE_MARKER" ]]; do
-    systemctl show bcsp.service --property=MemoryCurrent --value >> "$MEMORY_SAMPLES" || true
-    curl --silent --header 'Host: planner.test' http://127.0.0.1:8080/metrics 2>/dev/null |
-      awk '$1 == "bcsp_websocket_connections" { print $2 }' >> "$CONNECTION_SAMPLES" || true
+    memory_value="$(systemctl show bcsp.service --property=MemoryCurrent --value 2>/dev/null)" \
+      || memory_value=""
+    [[ -n "$memory_value" ]] || memory_value="SAMPLE_READ_FAILURE"
+    printf '%s %s\n' "$(date +%s)" "$memory_value" >> "$MEMORY_SAMPLES"
+    connection_value="$(curl --silent --header 'Host: planner.test' \
+      http://127.0.0.1:8080/metrics 2>/dev/null |
+      awk '$1 == "bcsp_websocket_connections" { print $2 }')" || connection_value=""
+    [[ -n "$connection_value" ]] || connection_value="SAMPLE_READ_FAILURE"
+    printf '%s %s\n' "$(date +%s)" "$connection_value" >> "$CONNECTION_SAMPLES"
     for _ in {1..120}; do
       [[ -f "$DONE_MARKER" ]] && break
       sleep 0.25
@@ -313,6 +329,7 @@ printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RELOAD_MARKER"
 DRIVER_STATUS=0
 wait "$DRIVER_PID" || DRIVER_STATUS="$?"
 DRIVER_PID=""
+SOAK_END_EPOCH="$(date +%s)"
 kill "$SAMPLER_PID" 2>/dev/null || true
 wait "$SAMPLER_PID" 2>/dev/null || true
 SAMPLER_PID=""
@@ -325,18 +342,31 @@ SAMPLER_PID=""
   printf 'public-soak: MainPID changed across the soak\n' >&2
   exit 1
 }
+[[ "$(systemctl show --property InvocationID --value bcsp.service)" == "$SERVICE_INVOCATION" ]] || {
+  printf 'public-soak: the service invocation changed across the soak\n' >&2
+  exit 1
+}
 # The driver counts an ACK when it SENDS one; the server logs (and only
-# logs) a frame it rejects. Zero rejections is what upgrades "an ACK-shaped
-# frame was sent" into "the server accepted every ACK".
-if journalctl -u bcsp.service --no-pager 2>/dev/null |
-  grep -Eq 'rejected (malformed|invalid) watch WebSocket'; then
+# logs) a frame it rejects. Zero rejections in THIS invocation's journal is
+# what upgrades "an ACK-shaped frame was sent" into "the server accepted
+# every ACK" -- and a journal that cannot be read proves nothing, so a
+# failed read fails the soak instead of passing it.
+if ! SOAK_JOURNAL="$(journalctl _SYSTEMD_INVOCATION_ID="$SERVICE_INVOCATION" --no-pager 2>&1)"; then
+  printf 'public-soak: journalctl failed; ACK acceptance cannot be proven (fail closed)\n' >&2
+  printf '%s\n' "$SOAK_JOURNAL" >&2
+  exit 1
+fi
+if grep -Eq 'rejected (malformed|invalid) watch WebSocket' <<< "$SOAK_JOURNAL"; then
   printf 'public-soak: the service rejected watch frames during the soak; the ACKs did not land\n' >&2
   exit 1
 fi
-"$SOAK_NODE" "$SOAK_DRIVER" --analyze-memory "$MEMORY_SAMPLES"
-"$SOAK_NODE" "$SOAK_DRIVER" --analyze-connections "$CONNECTION_SAMPLES"
+"$SOAK_NODE" "$SOAK_DRIVER" --analyze-memory "$MEMORY_SAMPLES" \
+  --window-start "$ARMED_EPOCH" --window-end "$SOAK_END_EPOCH" --interval-seconds 30
+"$SOAK_NODE" "$SOAK_DRIVER" --analyze-connections "$CONNECTION_SAMPLES" \
+  --window-start "$ARMED_EPOCH" --window-end "$SOAK_END_EPOCH" --interval-seconds 30
 bash "$OPS_ROOT/verify.sh"
 
+COMPOSITION_RAN=0
 if [[ -n "${BCSP_SOAK_COMPOSITION_SCRIPT:-}" ]]; then
   # Separately authorized tier: real upstream, real data, the assembled
   # composition gate. The drop-in comes off, so this half must not be run
@@ -349,15 +379,22 @@ if [[ -n "${BCSP_SOAK_COMPOSITION_SCRIPT:-}" ]]; then
     --base-url https://planner.test \
     --metrics-url http://127.0.0.1:8080/metrics \
     --playwright-root "$BCSP_PLAYWRIGHT_ROOT"
-  COMPOSITION_RESULT="composition=1"
-else
-  COMPOSITION_RESULT="composition=SKIPPED"
+  COMPOSITION_RAN=1
 fi
 
+# Naming is the contract (R1): the full H9 marker exists ONLY when the
+# composition tier actually ran and passed. The core soak alone -- however
+# green -- reports CORE_PASS with the composition explicitly pending, and
+# a sub-600s debug run is never evidence of anything.
 if [[ "$SOAK_DURATION" -ge 600 && "$SOAK_EXPECTED_PINGS" -ge 50 ]]; then
-  printf 'P2_H9_PUBLIC_SOAK_PASS duration=%s expected_pings=%s reload=1 %s\n' \
-    "$SOAK_DURATION" "$SOAK_EXPECTED_PINGS" "$COMPOSITION_RESULT"
+  if [[ "$COMPOSITION_RAN" -eq 1 ]]; then
+    printf 'P2_H9_PUBLIC_SOAK_PASS duration=%s expected_pings=%s reload=1 composition=1\n' \
+      "$SOAK_DURATION" "$SOAK_EXPECTED_PINGS"
+  else
+    printf 'P2_H9_PUBLIC_SOAK_CORE_PASS duration=%s expected_pings=%s reload=1 composition=PENDING_EXTERNAL_AUTHORIZATION\n' \
+      "$SOAK_DURATION" "$SOAK_EXPECTED_PINGS"
+  fi
 else
-  printf 'P2_H9_PUBLIC_SOAK_DEBUG duration=%s expected_pings=%s reload=1 %s (below the frozen gate; NOT H9 evidence)\n' \
-    "$SOAK_DURATION" "$SOAK_EXPECTED_PINGS" "$COMPOSITION_RESULT"
+  printf 'P2_H9_PUBLIC_SOAK_DEBUG duration=%s expected_pings=%s reload=1 composition_ran=%s (below the frozen gate; NOT H9 evidence)\n' \
+    "$SOAK_DURATION" "$SOAK_EXPECTED_PINGS" "$COMPOSITION_RAN"
 fi

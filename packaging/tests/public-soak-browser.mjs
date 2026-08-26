@@ -14,8 +14,10 @@
 //                           --playwright-root PATH --armed-marker FILE \
 //                           --reload-marker FILE [--done-marker FILE] \
 //                           [--duration-seconds 600] [--expected-pings 50]
-//   --analyze-memory F    judge one-MemoryCurrent-bytes-per-line samples
-//   --analyze-connections F  judge one-connection-count-per-line samples
+//   --analyze-memory F    judge `epoch bytes` MemoryCurrent samples
+//   --analyze-connections F  judge `epoch count` connection-gauge samples
+//     (both require --window-start/--window-end epochs [--interval-seconds
+//      30] and refuse thin, holed, late, or truncated coverage)
 //   --self-test           prove the pure judgments on fixed fixtures
 //
 // The soak needs Playwright (borrowed from --playwright-root); the analyze
@@ -33,6 +35,71 @@ export const MEMORY_GROWTH_BUDGET_BYTES = 32 * 1024 * 1024;
 export const MEMORY_WINDOW = 3;
 export const DEFAULT_DURATION_SECONDS = 600;
 export const DEFAULT_EXPECTED_PINGS = 50;
+/** Scheduling slack allowed around the 30-second sampling cadence. */
+export const SAMPLE_JITTER_SECONDS = 15;
+
+/**
+ * Parses `epoch value` sample lines. A failed read is recorded by the
+ * sampler as a SAMPLE_READ_FAILURE value; it must refuse here -- evidence
+ * with holes punched by failing commands is not evidence.
+ */
+export function parseTimestampedSamples(text) {
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  return lines.map((line) => {
+    const fields = line.split(/\s+/);
+    assert.equal(fields.length, 2, `sample lines are "epoch value", got: ${line}`);
+    const epoch = Number.parseInt(fields[0], 10);
+    const value = Number.parseInt(fields[1], 10);
+    assert.ok(Number.isSafeInteger(epoch) && epoch > 0, `unparsable sample epoch: ${line}`);
+    assert.ok(Number.isSafeInteger(value), `unparsable sample value (a failed read?): ${line}`);
+    return { epoch, value };
+  });
+}
+
+/**
+ * The R1 coverage judgment: the samples must blanket the WHOLE soak
+ * window at the promised cadence. Too few samples, a late start, a hole
+ * in the middle, or a missing tail each fail -- one sample per soak, or
+ * six for a 600-second window, proves nothing about the minutes between.
+ */
+export function assertWindowCoverage(samples, { startEpoch, endEpoch, intervalSeconds }) {
+  assert.ok(
+    Number.isSafeInteger(startEpoch) && Number.isSafeInteger(endEpoch) && endEpoch > startEpoch,
+    'the coverage window must be a real epoch range',
+  );
+  assert.ok(
+    Number.isSafeInteger(intervalSeconds) && intervalSeconds > 0,
+    'the sampling interval must be positive',
+  );
+  const windowSeconds = endEpoch - startEpoch;
+  const required = Math.max(2, Math.floor(windowSeconds / intervalSeconds) - 1);
+  assert.ok(
+    samples.length >= required,
+    `only ${samples.length} samples for a ${windowSeconds}s window; the ${intervalSeconds}s cadence requires at least ${required}`,
+  );
+  const slack = intervalSeconds + SAMPLE_JITTER_SECONDS;
+  assert.ok(
+    samples[0].epoch <= startEpoch + slack,
+    `the first sample (${samples[0].epoch}) misses the start of the window (${startEpoch})`,
+  );
+  const last = samples[samples.length - 1];
+  assert.ok(
+    last.epoch >= endEpoch - slack,
+    `the last sample (${last.epoch}) misses the end of the window (${endEpoch})`,
+  );
+  for (let index = 1; index < samples.length; index += 1) {
+    const gap = samples[index].epoch - samples[index - 1].epoch;
+    assert.ok(gap >= 0, 'sample epochs must not go backwards');
+    assert.ok(
+      gap <= slack,
+      `a ${gap}s hole between samples ${index - 1} and ${index} breaks the ${intervalSeconds}s cadence`,
+    );
+  }
+  return { samples: samples.length, windowSeconds };
+}
 
 /** Judges the 30-second MemoryCurrent samples (bytes, one per line). */
 export function analyzeMemorySamples(samples) {
@@ -108,16 +175,18 @@ export function assertReloadCrossing(sequences, sequenceAtReload) {
   return { sequenceAtReload, afterReload: last - sequenceAtReload };
 }
 
-function readSampleFile(path) {
-  return readFileSync(path, 'utf8')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-    .map((line) => {
-      const value = Number.parseInt(line, 10);
-      assert.ok(Number.isSafeInteger(value), `unparsable sample line: ${line}`);
-      return value;
-    });
+function readCoveredSamples(path, options) {
+  assert.ok(
+    Number.isSafeInteger(options.windowStart) && Number.isSafeInteger(options.windowEnd),
+    'the analyze modes need --window-start and --window-end (fail closed without them)',
+  );
+  const samples = parseTimestampedSamples(readFileSync(path, 'utf8'));
+  assertWindowCoverage(samples, {
+    startEpoch: options.windowStart,
+    endEpoch: options.windowEnd,
+    intervalSeconds: options.intervalSeconds,
+  });
+  return samples.map((sample) => sample.value);
 }
 
 function selfTest() {
@@ -164,6 +233,65 @@ function selfTest() {
   assert.throws(() => assertReloadCrossing([1, 2, 3], 3), /keep flowing/);
   assert.throws(() => assertReloadCrossing([1, 2, 3], 0), /before the first ping/);
 
+  // Window coverage (R1): the samples must blanket the whole soak.
+  const cadence = (start, count, interval) =>
+    Array.from({ length: count }, (_, index) => ({ epoch: start + index * interval, value: 1 }));
+  const window = { startEpoch: 1_000, endEpoch: 1_600, intervalSeconds: 30 };
+  assertWindowCoverage(cadence(1_005, 20, 30), window);
+  // Real-world drift: samples sliding a few seconds late still pass.
+  assertWindowCoverage(cadence(1_010, 19, 31), window);
+  assert.throws(
+    () => assertWindowCoverage(cadence(1_005, 6, 30), window),
+    /requires at least/,
+    'six samples cannot vouch for a 600-second window',
+  );
+  assert.throws(
+    () => assertWindowCoverage([{ epoch: 1_005, value: 1 }], window),
+    /requires at least/,
+    'one sample proves nothing',
+  );
+  assert.throws(
+    () => {
+      // Enough samples to satisfy the count, but two missing in the middle
+      // leave a 90-second hole the cadence check must catch.
+      const holed = cadence(1_005, 21, 30).filter((_, index) => index !== 9 && index !== 10);
+      assertWindowCoverage(holed, window);
+    },
+    /hole between samples/,
+    'a missing middle must fail',
+  );
+  assert.throws(
+    () => assertWindowCoverage(cadence(1_005, 14, 30), window),
+    /requires at least|misses the end/,
+    'a missing tail must fail',
+  );
+  assert.throws(
+    () => assertWindowCoverage(cadence(1_100, 19, 30), window),
+    /misses the start/,
+    'a late-starting sampler must fail',
+  );
+  assert.throws(
+    () =>
+      assertWindowCoverage(
+        [{ epoch: 1_035, value: 1 }, { epoch: 1_005, value: 1 }, ...cadence(1_065, 19, 30)],
+        window,
+      ),
+    /not go backwards/,
+    'unsorted sample epochs must fail',
+  );
+
+  // Timestamped parsing: a failed read is a refusal, not a thin spot.
+  assert.deepEqual(parseTimestampedSamples('1000 419430400\n1030 419430401\n'), [
+    { epoch: 1000, value: 419430400 },
+    { epoch: 1030, value: 419430401 },
+  ]);
+  assert.throws(
+    () => parseTimestampedSamples('1000 419430400\n1030 SAMPLE_READ_FAILURE\n'),
+    /failed read/,
+    'a sampler failure line must refuse',
+  );
+  assert.throws(() => parseTimestampedSamples('419430400\n'), /epoch value/);
+
   process.stdout.write('public-soak-browser self-test: PASS\n');
 }
 
@@ -178,6 +306,9 @@ function parseArguments(argv) {
     expectedPings: DEFAULT_EXPECTED_PINGS,
     analyzeMemory: null,
     analyzeConnections: null,
+    windowStart: null,
+    windowEnd: null,
+    intervalSeconds: 30,
     selfTest: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -214,6 +345,15 @@ function parseArguments(argv) {
         break;
       case '--analyze-connections':
         options.analyzeConnections = next();
+        break;
+      case '--window-start':
+        options.windowStart = Number.parseInt(next(), 10);
+        break;
+      case '--window-end':
+        options.windowEnd = Number.parseInt(next(), 10);
+        break;
+      case '--interval-seconds':
+        options.intervalSeconds = Number.parseInt(next(), 10);
         break;
       case '--self-test':
         options.selfTest = true;
@@ -401,14 +541,16 @@ async function main() {
     return;
   }
   if (options.analyzeMemory) {
-    const verdict = analyzeMemorySamples(readSampleFile(options.analyzeMemory));
+    const verdict = analyzeMemorySamples(readCoveredSamples(options.analyzeMemory, options));
     process.stdout.write(
       `public-soak memory: PASS samples=${verdict.samples} growth_bytes=${Math.round(verdict.growth)}\n`,
     );
     return;
   }
   if (options.analyzeConnections) {
-    const verdict = analyzeConnectionSamples(readSampleFile(options.analyzeConnections));
+    const verdict = analyzeConnectionSamples(
+      readCoveredSamples(options.analyzeConnections, options),
+    );
     process.stdout.write(`public-soak connections: PASS samples=${verdict.samples}\n`);
     return;
   }
