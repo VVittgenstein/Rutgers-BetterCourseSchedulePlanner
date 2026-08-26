@@ -200,6 +200,10 @@ export function assertAcceptedAckEvidence({ baseline, finalReading, browserAcks,
     accepted >= expectedMinimum,
     `the server accepted ${accepted} heartbeat ACK(s) during the soak; the gate requires at least ${expectedMinimum}`,
   );
+  // Sound because the soak holds exactly ONE watch socket: the served page
+  // auto-connects only when it has standing watch intent, and this page never
+  // selects a Section. If that ever changes, this is the assertion that will
+  // say so.
   assert.ok(
     accepted <= browserAcks,
     `the server accepted ${accepted} ACK(s) but the browser sent ${browserAcks}; the counter is not counting acknowledgements`,
