@@ -1,7 +1,7 @@
 # Parallel Wave 1：四个隔离实现 lane 与串行集成合同
 
-状态：**FIRST DELIVERY REVIEWED — Stage 2 R1 accepted；Stage 3/4/5 集中窄修**
-日期：2026-08-25
+状态：**R1 REVIEWED — Stage 4 accepted；Stage 3/5 进入最后两条并行 R2**
+日期：2026-08-26
 Orchestrator：Codex
 实现者：四个相互隔离的 Claude 会话
 产品代码父基线：`553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`
@@ -136,3 +136,15 @@ Stage 5 的正常成功结果可以是 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`。
 
 三条 repair 继续使用原 worktree，可并行；不得另起 full gate。普通 finding 已按 deferred 政策过滤，repair
 只含资源合同、发布证据、数据库写入边界和 evidence GO 门的真实阻断。
+
+## 9. R1 Codex 裁定（2026-08-26）
+
+| Lane | R1 head | 裁定 | 下一步 |
+|---|---|---|---|
+| B / Stage 3 | `6c7c7cd` | `CHANGES_REQUIRED`；预算/采样/命名已关，实际 SSH、origin-bound Caddy、server ACK 正证仍可 false PASS | `tasks/STAGE-3-R2.md` |
+| C / Stage 4 | `69c7cb1` | `ACCEPTED`；raw connection API 已删除，优化/回滚/API 缺席证据成立 | 等待 B 后串行集成，不再启动 Claude |
+| D / Stage 5 | `b4e93f7` | `CHANGES_REQUIRED`；原四项主要门已关，重叠派生 provenance 与 client-end peak 仍可假 GO | `tasks/STAGE-5-R2.md` |
+
+Codex 独立复跑：Stage 3 Rust focused 116+52+44；Stage 4 operational-storage 61 非 doc + 2 doctest；
+Stage 5 analyzer 96/96、0 skip。两份 R2 只处理表中 blocker；Stage 4 的 minor/deferred 和三个 lane 已披露的
+普通技术债均不触发新修复。R2 可并行，集成顺序仍严格为 B → C → D，组合 head 只跑一次重门。
