@@ -111,6 +111,14 @@ ADAPT_WILDCARD_MISS_JSON="$TEST_TMP/adapt-wildcard-miss.json"
 cat > "$ADAPT_WILDCARD_MISS_JSON" <<'JSON'
 {"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"static_response","status_code":200}]}]}]},{"match":[{"host":["*.staging.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]}]}]}}}}}
 JSON
+# The public host is protected, but a SIBLING vhost proxies to the same
+# service under an alias spelling and is not. The severed sockets would be
+# the service's either way, so the whole-document obligation has to see the
+# aliases too.
+ADAPT_FOREIGN_ALIAS_JSON="$TEST_TMP/adapt-foreign-alias.json"
+cat > "$ADAPT_FOREIGN_ALIAS_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]}]},{"match":[{"host":["staging.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"localhost:8080"}]}]}]}]}]}}}}}
+JSON
 # Fail-closed on a structure this check does not model: an unknown handler
 # nesting the routes that carry the protected proxy.
 ADAPT_OPAQUE_JSON="$TEST_TMP/adapt-opaque.json"
@@ -138,6 +146,7 @@ make_stub caddy-adapt-foreign-host "case \"\$1\" in adapt) cat '$ADAPT_FOREIGN_H
 make_stub caddy-adapt-host-static "case \"\$1\" in adapt) cat '$ADAPT_HOST_STATIC_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-host-alias "case \"\$1\" in adapt) cat '$ADAPT_HOST_ALIAS_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-wildcard-miss "case \"\$1\" in adapt) cat '$ADAPT_WILDCARD_MISS_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-foreign-alias "case \"\$1\" in adapt) cat '$ADAPT_FOREIGN_ALIAS_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-opaque "case \"\$1\" in adapt) cat '$ADAPT_OPAQUE_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-wildcard-ok "case \"\$1\" in adapt) cat '$ADAPT_WILDCARD_OK_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-nested-ok "case \"\$1\" in adapt) cat '$ADAPT_NESTED_OK_JSON' ;; *) exit 0 ;; esac"
@@ -301,6 +310,11 @@ PF_ADMIN_SOURCES='addr=10.30.4.7,host=preflight-probe.invalid,laddr=10.30.9.2,lp
   expect_fail 'reserved probe hostname' 'is a reserved name'
 PF_ADMIN_SOURCES='addr=10.30.4.7,host=admin.example.test,laddr=127.0.0.1,lport=22' \
   expect_fail 'impossible loopback tuple' 'that connection never occurs'
+# A loopback SOURCE is the retired documentation address wearing the new
+# flag: coherent, non-documentation, and still a connection nobody
+# administers through.
+PF_ADMIN_SOURCES='addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=22' \
+  expect_fail 'loopback source declaration' 'declare the address administrative connections really come FROM'
 PF_ADMIN_SOURCES='addr=10.30.4.7,host=admin.example.test,laddr=10.30.9.2,lport=22,rdomain=x' \
   expect_fail 'unknown declaration key' 'unknown key rdomain'
 PF_ADMIN_SOURCES='addr=10.30.4.7,host=admin.example.test,laddr=10.30.9.2,lport=2222' \
@@ -369,6 +383,10 @@ PF_CADDY="$STUB_DIR/caddy-adapt-host-static" jq_expect_fail 'public host serves 
 PF_CADDY="$STUB_DIR/caddy-adapt-host-alias" jq_expect_fail 'unprotected alias proxy on the public host' \
   'comments and other sites do not count' --caddyfile "$GOOD_CADDYFILE"
 PF_CADDY="$STUB_DIR/caddy-adapt-wildcard-miss" jq_expect_fail 'wildcard that does not cover the host' \
+  'comments and other sites do not count' --caddyfile "$GOOD_CADDYFILE"
+# ... and the whole-document obligation must see the alias spellings, or an
+# unprotected sibling vhost severs the same service's sockets unnoticed.
+PF_CADDY="$STUB_DIR/caddy-adapt-foreign-alias" jq_expect_fail 'unprotected alias proxy on another host' \
   'comments and other sites do not count' --caddyfile "$GOOD_CADDYFILE"
 
 # A structure this check does not model is refused, not walked hopefully.

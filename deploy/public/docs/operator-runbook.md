@@ -124,11 +124,13 @@ connection arrives AT. The preflight hands each declaration to
 blocks that really apply to your administrative login are evaluated —
 including one that reopens root password login for exactly the network
 you use. Substitutes are refused on purpose: documentation-range addresses
-(RFC 5737/3849) and `.invalid` hostnames are rejected, a declared port
-sshd does not listen on is rejected, and with no declaration at all the
-run fails rather than reporting on a connection nobody makes. The
-addresses above are documentation placeholders — replace them; do not
-copy them.
+(RFC 5737/3849), `.invalid` hostnames, a loopback `addr=` (a connection
+that never crosses the network says nothing about administrative access),
+a loopback `laddr=` under a remote `addr=` (that connection never occurs),
+and a declared port sshd does not listen on are all rejected; with no
+declaration at all the run fails rather than reporting on a connection
+nobody makes. The addresses above are documentation placeholders — replace
+them; do not copy them.
 
 Hard failures (non-zero exit): `BCSP_PUBLIC_ORIGIN` missing, duplicated,
 malformed, or still naming the `planner.invalid` placeholder; an
@@ -142,10 +144,11 @@ password-reachable or cannot be evaluated; a missing Caddy binary or `jq`;
 a supplied Caddy config that fails `caddy validate` or `caddy adapt`,
 whose ADAPTED route for the `BCSP_PUBLIC_ORIGIN` host does not itself
 reach `127.0.0.1:8080` with `stream_close_delay 4h` on every
-`reverse_proxy` to the service — comments, other hosts, other sites, and
-the `localhost:8080` / `[::1]:8080` spellings of the same upstream do not
-count — or that still names the placeholder; an inactive or lifeless
-service. Advisories (reported, not fatal): failed units such as the known
+`reverse_proxy` to the service — comments and a protected proxy on another
+host do not count, and the `localhost:8080` / `[::1]:8080` / `:8080`
+spellings are the same upstream, so an unprotected one anywhere in the
+config fails the gate — or that still names the placeholder; an inactive
+or lifeless service. Advisories (reported, not fatal): failed units such as the known
 `fwupd` leftovers, an unchecked operator Caddy config, and the reminder to
 confirm the resolved addresses really are this host.
 

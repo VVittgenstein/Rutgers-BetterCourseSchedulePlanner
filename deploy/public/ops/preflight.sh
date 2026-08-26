@@ -243,9 +243,17 @@ preflight_parse_admin_source() {
   }
   preflight_valid_admin_address "$addr" "addr" || return 1
   preflight_valid_admin_address "$laddr" "laddr" || return 1
-  # A packet from a non-loopback source never arrives at 127.0.0.1: such a
-  # tuple is a declaration error, not an administrative path.
-  if preflight_is_loopback "$laddr" && ! preflight_is_loopback "$addr"; then
+  # A loopback SOURCE is the old false pass wearing the new flag: it is a
+  # connection that never crosses the network, and vouching for it says
+  # exactly as much about administrative access as a documentation address
+  # did. Declare the address you actually connect FROM.
+  if preflight_is_loopback "$addr"; then
+    printf 'addr=%s is loopback; declare the address administrative connections really come FROM\n' \
+      "$addr"
+    return 1
+  fi
+  # And a packet from a non-loopback source never arrives at 127.0.0.1.
+  if preflight_is_loopback "$laddr"; then
     printf 'laddr=%s is loopback but addr=%s is not; that connection never occurs\n' \
       "$laddr" "$addr"
     return 1
@@ -254,8 +262,8 @@ preflight_parse_admin_source() {
     printf 'host is not a hostname or address literal: %s\n' "$host"
     return 1
   }
-  case "$host" in
-    *.invalid|*.INVALID)
+  case "${host,,}" in
+    *.invalid)
       printf 'host %s is a reserved name and is not go-live evidence\n' "$host"
       return 1
       ;;
@@ -302,8 +310,11 @@ check_root_ssh() {
   fi
   # EVERY listening port, not just the first: a second listener is exactly
   # where a Match LocalPort carve-out hides, and a declared lport that sshd
-  # does not listen on is a declaration about some other host.
-  ports="$("$BCSP_SSHD" -T 2>/dev/null | awk '$1 == "port" { print $2 }')"
+  # does not listen on is a declaration about some other host. `|| true`
+  # because this is a bare assignment under `set -e` with inherit_errexit: an
+  # sshd that exits non-zero must land on the named failure below, not abort
+  # the run before it can print a RESULT line.
+  ports="$("$BCSP_SSHD" -T 2>/dev/null | awk '$1 == "port" { print $2 }' || true)"
   if [[ -z "$ports" ]]; then
     pf_fail "cannot discover the sshd port from sshd -T; the declared root connection cannot be evaluated (fail closed)"
     return 0
@@ -370,10 +381,12 @@ PREFLIGHT_STREAM_CLOSE_DELAY_NS=14400000000000
 # or served a static page and never touched the service at all.
 #
 # Four obligations, evaluated on the adapted JSON:
-#   A  at least one reverse_proxy literally dials 127.0.0.1:8080, and
-#   B  every such proxy carries the delay              (R1's rule, verbatim:
-#      a severed socket belongs to the service, not to a vhost, so an
-#      unprotected sibling site still fails)
+#   A  at least one reverse_proxy anywhere reaches the local service, and
+#   B  every such proxy carries the delay                    (R1's rule, kept
+#      because a severed socket belongs to the SERVICE, not to a vhost: an
+#      unprotected sibling site still fails. Widened from R1's literal
+#      127.0.0.1:8080 comparison to the same alias spellings clause D uses,
+#      so the rule and the reason behind it agree)
 #   C  a route that applies to the ORIGIN's host actually reaches the
 #      service, and
 #   D  every proxy on that host reaching the service carries the delay --
@@ -456,8 +469,9 @@ def dials:
         end
     end;
 
-# The same local service under any of the spellings Caddy accepts. A dial
-# this cannot classify (a unix socket, an SRV lookup) is a refusal.
+# The same local service under any of the spellings Caddy accepts. On the
+# public host a dial this cannot classify (a unix socket, an SRV lookup) is a
+# refusal: there we must vouch, so we may not shrug.
 def reaches_service:
   . as $dial
   | (sub("^.*:"; "")) as $port
@@ -469,6 +483,19 @@ def reaches_service:
             or startswith("127."))
     end;
 
+# The same question asked of ANY proxy in the document, where we are only
+# looking for violations and an uninterpretable dial elsewhere must not
+# refuse the whole config.
+def dial_touches_service:
+  if type != "string" then false
+  else (sub("^.*:"; "")) as $port
+    | if $port != "8080" then false
+      else (sub(":[0-9]+$"; "") | ascii_downcase
+            | . == "localhost" or . == "::1" or . == "[::1]" or . == ""
+              or startswith("127."))
+      end
+  end;
+
 ($host | ascii_downcase | sub("\\.$"; "")) as $public
 | [ (.apps.http.servers // die("adapted config has no apps.http.servers"))
     | if type != "object" then die("apps.http.servers is not an object") else .[] end
@@ -479,9 +506,9 @@ def reaches_service:
     | proxies_for_host($public) ] as $host_proxies
 | [ .. | objects
     | select(.handler? == "reverse_proxy")
-    | select(any((.upstreams // [])[]; .dial? == "127.0.0.1:8080")) ] as $literal_proxies
-| (($literal_proxies | length) >= 1)
-  and all($literal_proxies[]; .stream_close_delay? == $delay)
+    | select(any((.upstreams // [])[]; .dial? | dial_touches_service)) ] as $service_proxies
+| (($service_proxies | length) >= 1)
+  and all($service_proxies[]; .stream_close_delay? == $delay)
   and any($host_proxies[]; any(dials; reaches_service))
   and all($host_proxies[];
         if any(dials; reaches_service) then (.stream_close_delay? == $delay) else true end)
