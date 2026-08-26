@@ -333,16 +333,16 @@ PUT /api/v1/local/desired-watch
 记录日期：2026-08-25。
 
 ```text
-当前检出：feat/s2-alert-delivery@553371f
+当前检出：feat/s2-alert-delivery@6a35c74
 origin/main：ae65958
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
 L1/R4 accepted head：75cefb0
-Claude Stage 2 报告 head：553371f
-Codex Stage 2 审查范围：75cefb0..553371f（全里程碑 a4f8d22..553371f）
+Claude Stage 2 主交付 head：553371f；R1 lane head：5af49d9
+Codex Stage 2 最终集成 head：6a35c74
 S2 分支：尚未合并、尚未发布
 当前产品源码工作树：无未提交源码；两个 conversation 归档目录未跟踪
-Codex orchestration 文档：Stage 2 主交付已记录 CHANGES_REQUIRED；当前任务为 STAGE-2-R1
+Codex orchestration 文档：Stage 2 ACCEPTED；Stage 3/4/5 R1 窄修已签发
 现有 release/0.1.0：sourceCommit=7d5debef（2026-07-15，早于本轮工作）
 ```
 
@@ -353,13 +353,13 @@ Codex orchestration 文档：Stage 2 主交付已记录 CHANGES_REQUIRED；当�
 | 工作 | 状态 | 当前事实 |
 |---|---|---|
 | S1 | 代码完成并已合入 main；M0 窄修已写入 feature | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter；尚无新 release |
-| S2 | 主体已实现，仅 feature；Codex `CHANGES_REQUIRED` | 自动重连、25 秒 Readiness、公网 P1 client、页面 Notification 已接线；音频仍可假绿，需 R1 窄修 |
-| S3 | 未开始正式实现 | 没有 GridAnchor/RebuildProfile；仅有不足以冻结参数的单校区数据 |
-| S4 | 未开始 | 代码中没有 `prepare_cached` |
+| S2 | `ACCEPTED`，仅 feature | R1 四个 blocker 已关闭并集成；尚未 merge/release，公网仍被 P2 阻断 |
+| S3 | evidence lane `CHANGES_REQUIRED` | 当前 NO-GO 正确；四个 false-GO counterexample 进入 Stage 5 R1，仍零 production scheduler change |
+| S4 | 实现 lane `CHANGES_REQUIRED` | `prepare_cached` 与事务证明成立；须移除 production raw SQLite test API |
 | P1 | Stage 2 主体已实现，仅 feature | mutable in-memory ticket、validate-before-connect、single-flight renew 与页面内 reconnect plan 已通过审查；公网部署仍被 P2/H4 阻断 |
-| P2 | 大部分未开始 | H5 基本完成、H4 只有 per-session cap；其余重新上线门未完成 |
+| P2 | 首轮实现 `CHANGES_REQUIRED` | H1–H7 主体/H8-H9 harness 已写；queued-byte 与 H2/H8/H9 证据门须 R1，Linux evidence 仍外部 pending |
 | L1 | `ACCEPTED`，仅 feature | desired 持久化、GET/PUT、materializer、UI、并发反例与真实包装三生命周期 E2E 均通过；尚未合并/发布 |
-| L2 | 主体已实现，R1 待关闭一个退出竞态 | local-only presence、HELLO、60 秒 countdown 与 ordered shutdown 已接线；pre-admitted late HELLO 可在 Exiting 后错误注册 |
+| L2 | `ACCEPTED`，仅 feature | late HELLO 在 Exiting 后被同锁拒绝；presence/60 秒/ordered shutdown focused tests 通过 |
 | L3 | 主体已实现，仅 feature | 启动/页面/监控/开放/Gate/倒计时/退出日志已接线；本轮无阻断 |
 
 ## 14. 已发现但尚未处理的关键漂移
@@ -392,18 +392,16 @@ Codex orchestration 文档：Stage 2 主交付已记录 CHANGES_REQUIRED；当�
   validate-before-connect、页面内 reconnect plan、25 秒心跳、authority/connection stamp Readiness、
   AudioContext 自愈、页面 Notification、L2 presence 与 L3 控制台；
 - Codex 独立重门和 34/34 security diff inventory 已完成；传统可报告安全 finding 为 0；
-- Stage 2 仍有四个阻断：audio 已知 output failure 可被无输出重试擦掉，suspended held resume 期间不撤绿；
-  pre-admitted presence socket 可在 Exiting 后 HELLO/REGISTERED；生产 UI 无通知关闭入口；CI 未执行 frontend
-  Notification policy tests，release-set/CI-entry non-archive 判别门未闭合；
-- 上述四项集中进入 `STAGE-2-R1/v2-parallel`；不重写其余已经通过的 Stage 2 主体；
+- Stage 2 四个阻断已由 `STAGE-2-R1/v2-parallel` 关闭并经 Codex focused tests 验收；
+- R1 lane 五个提交已回收为主线 `48bef74..6a35c74`，Stage 2 结论为 ACCEPTED；
 - 公网 H4 全局容量和字节背压仍是 Stage 3/P2 部署阻断，不进入本次 R1。
 
 ### P2/L2/L3/S3/S4
 
-- P2 除 H5 与 per-session cap 外基本未开始；
-- L2/L3 主体已在 `553371f` 实现；L2 只剩 R1 的 Exiting/late-HELLO 竞态，L3 本轮无阻断；
-- S4 为 0%；
-- S3 不得在只有 NB 单时段证据时直接修改生产周期。
+- P2 首轮在 `37176d2` 交付，进入 `STAGE-3-R1`，且完整 Linux/H8/H9 evidence 仍未执行；
+- L2/L3 随 Stage 2 accepted；
+- S4 首轮在 `283a8fe` 交付，进入 `STAGE-4-R1`；
+- S3 evidence 首轮在 `9582728` 交付，进入 `STAGE-5-R1`；现有数据结论仍是不改生产。
 
 ## 15. 发布和迁移硬门
 
@@ -416,8 +414,8 @@ Codex orchestration 文档：Stage 2 主交付已记录 CHANGES_REQUIRED；当�
 
 ## 16. 当前 Parallel Wave
 
-状态：**`PARALLEL-WAVE-1` 已由用户批准。Codex 同时签发 Stage 2 R1、Stage 3/P2、Stage 4/S4 和
-Stage 5/S3 evidence 四个隔离 worktree 任务；实现并行，集成/重门/验收串行。**
+状态：**首轮四 lane 已全部交付并完成 Codex 集中审查。Stage 2 R1 已 `ACCEPTED` 并回收到
+`feat/s2-alert-delivery@6a35c74`；Stage 3/4/5 均为 `CHANGES_REQUIRED`，现同时签发三份窄修。**
 
 当前 Stage 2：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
 
@@ -433,25 +431,25 @@ Stage 2 主体已经实现的用户结果：
   仍可能在 Exiting 后错误注册；
 - 控制台显示关键生命周期事件且不泄漏 nonce/session/请求体。
 
-R1 只关闭：音频输出证据/held resume 撤绿、Exiting 后 late HELLO、真实通知开关、frontend CI 与
-release-set/CI-entry non-archive policy 证据。该 Claude 在独立 worktree 使用官方 dynamic workflow；不
-写主 checkout，不扩展 Stage。
+Stage 2 R1 已关闭：音频输出证据/held resume 撤绿、Exiting 后 late HELLO、真实通知开关、frontend CI
+与 release-set/CI-entry non-archive policy 证据。Codex 独立 focused tests 全绿，五个提交已串行回收。
 
 R1 明确不包含：
 
 - H4/完整 P2；
 - S3/S4。
 
-其余三个并行 lane：
+其余三个 lane 的首次交付保留在原 worktree，不回收：
 
-- Stage 3 完成 P2 仓内实现和 Linux/H9 harness，但当前机器缺 Linux/Caddy，只能诚实停在
-  `PENDING_LINUX_EVIDENCE`；
-- Stage 4 只做 operational storage 单一 INSERT 的 `prepare_cached`；
-- Stage 5 只做离线区间删失 analyzer/test/report。现有数据 30s/60s 近似同分，预期终态是
-  `NO_PRODUCTION_CHANGE / DATA_REQUIRED`，不访问 Rutgers、不改生产 scheduler。
+- Stage 3：出站预算仍在无界 sender 入队之后；H2/H8 preflight 可 false PASS；H9 样本/日志/composition
+  不完整仍能打印 PASS。进入 `STAGE-3-R1`；
+- Stage 4：`prepare_cached` 成立，但为 authorizer 测试新增了 production `pub` raw SQLite connection API，
+  进入 `STAGE-4-R1`；
+- Stage 5：当前 NO-GO 正确，但 A4 GO 门可被空 peak window、group 代替整 target、client-clock fallback、
+  重标 capture 副本绕过，进入 `STAGE-5-R1`。
 
-完整路径、branch、文件所有权、冲突和重门纪律见 `docs/orchestration/PARALLEL-WAVE-1.md`。四个 Claude
-完成后，Codex 必须按 R1 → P2 → S4 → S3 evidence 串行回收，组合 head 只跑一次重门和一次集中审查。
+三份窄修可继续在各自原 worktree 并行；Codex 收齐后仍按 P2 → S4 → S3 evidence 串行回收，组合 head
+只跑一次重门和一次集中审查。
 
 ## 17. 用户冻结的余下四阶段顺序
 
@@ -491,6 +489,19 @@ Stage 5 — STAGE-5
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-08-25 — Parallel Wave 1 首轮集中审查与三 lane 窄修
+
+- 四个 Claude 分别交付 R1、P2、S4、S3 evidence；分支/head/status 与回报一致；
+- Codex 独立复跑 R1 presence 16、frontend focused 81、policy 92、release self-test；结论 ACCEPTED，
+  cherry-pick 为 `48bef74..6a35c74`；
+- S4 operational-storage 61 项、S3 analyzer 58 项独立全绿，但源码审查发现关键测试/决策门假阳性；
+- P2 Codex Security diff scan `9391c9bd-32ce-483c-9fde-d454e11c2826` 覆盖 16/16 inventory，报告 2 项
+  high-confidence/low-severity H2/H8 preflight finding，并 deferred unaccounted outbound 的安全严重度；
+- 产品验收仍把 unaccounted outbound、H9 不完整 PASS 视为发布 blocker；manual arbitrary SHA/trusted
+  candidate、fairness 等低优先项明确不修；
+- Stage 4 只移除 production raw SQLite test seam；Stage 5 只收紧四个 false-GO 根因；不重开产品架构，
+  不运行 full gates/archive/soak。
 
 ### 2026-08-25 — Parallel Wave 1：隔离并行实现、串行集成
 
@@ -602,21 +613,19 @@ Stage 5 — STAGE-5
 作出验收结论或批准进入下一里程碑时都必须更新。
 
 ```text
-Active wave: PARALLEL-WAVE-1
-Lanes: STAGE-2-R1/v2-parallel; STAGE-3/v1-parallel; STAGE-4/v1-parallel; STAGE-5/v1-parallel-evidence
-Claude prompts prepared: YES — four self-contained prompts
-Expected product parent: feat/s2-alert-delivery@553371f
-Orchestration anchor: this committed document set
-Development: four isolated worktrees/branches, focused tests only
-Integration order: STAGE-2-R1 → STAGE-3/P2 → STAGE-4/S4 → STAGE-5/S3 evidence
-Heavy gates: one serial run on integrated head
-External gates: P2 Linux/systemd/Caddy 600s soak; real H8 deployment separately authorized
-Expected S3 outcome: NO_PRODUCTION_CHANGE / DATA_REQUIRED
-Codex current verdict: STAGE-2 CHANGES_REQUIRED; other lanes NOT_STARTED/PENDING IMPLEMENTATION
-Stage-2 blocker set: audio false READY; pre-admitted late HELLO after Exiting; no production notification-off control; frontend CI/release-set policy self-test closure missing
+Active wave: PARALLEL-WAVE-1 concentrated repair
+Accepted/integrated: STAGE-2-R1/v2-parallel at feat/s2-alert-delivery@6a35c74
+Repair lanes: STAGE-3-R1/v1; STAGE-4-R1/v1; STAGE-5-R1/v1
+Repair bases: 37176d2; 283a8fe; 9582728
+Development: same three isolated worktrees, focused tests only
+Integration order: STAGE-3-R1/P2 → STAGE-4-R1/S4 → STAGE-5-R1/S3 evidence
+Heavy gates: one serial run after all three repaired lanes are accepted and integrated
+External gates: P2 Linux/systemd/Caddy 600s core plus full composition; real H8 deployment separately authorized
+S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
+Codex current verdict: Stage 2 ACCEPTED; Stage 3/4/5 CHANGES_REQUIRED
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: 用户将四个 task 文件 B 部分分别原样转发给四个 Claude；Codex 等待全部回报后串行集成审查
+Next authorized action: 用户把 STAGE-3-R1、STAGE-4-R1、STAGE-5-R1 的 B 部分分别转发给原三个 Claude
 ```
 
 验收结论只允许使用：

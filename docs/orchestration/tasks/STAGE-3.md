@@ -1,6 +1,6 @@
 # Stage 3：P2 公网重新上线加固
 
-状态：**READY — PARALLEL-WAVE-1 独立 worktree**
+状态：**DELIVERED — CODEX `CHANGES_REQUIRED`；见 `STAGE-3-R1.md`**
 Prompt 版本：`STAGE-3/v1-parallel`
 Orchestrator：Codex
 实现者：Claude

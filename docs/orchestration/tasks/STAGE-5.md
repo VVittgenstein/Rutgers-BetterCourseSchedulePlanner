@@ -1,6 +1,6 @@
 # Stage 5：S3 离线证据与生产 GO/NO-GO
 
-状态：**READY — PARALLEL-WAVE-1 evidence-only worktree**
+状态：**DELIVERED — CODEX `CHANGES_REQUIRED`；见 `STAGE-5-R1.md`**
 Prompt 版本：`STAGE-5/v1-parallel-evidence`
 Orchestrator：Codex
 实现者：Claude

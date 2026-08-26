@@ -1,6 +1,6 @@
 # Parallel Wave 1：四个隔离实现 lane 与串行集成合同
 
-状态：**READY**
+状态：**FIRST DELIVERY REVIEWED — Stage 2 R1 accepted；Stage 3/4/5 集中窄修**
 日期：2026-08-25
 Orchestrator：Codex
 实现者：四个相互隔离的 Claude 会话
@@ -124,3 +124,15 @@ Stage 5 的正常成功结果可以是 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`。
 
 缺少 Linux/Caddy 环境、S3 数据不足、普通代码质量建议不是扩展范围的理由；分别按已定义的
 `PENDING_LINUX_EVIDENCE`、`NO_PRODUCTION_CHANGE` 和 deferred 处理。
+
+## 8. 首轮 Codex 裁定（2026-08-25）
+
+| Lane | Head | 裁定 | 下一步 |
+|---|---|---|---|
+| A / Stage 2 R1 | `5af49d9` | `ACCEPTED`；已回收为主线 `6a35c74` | 无 |
+| B / Stage 3 | `37176d2` | `CHANGES_REQUIRED` | `tasks/STAGE-3-R1.md` |
+| C / Stage 4 | `283a8fe` | `CHANGES_REQUIRED` | `tasks/STAGE-4-R1.md` |
+| D / Stage 5 | `9582728` | `CHANGES_REQUIRED` | `tasks/STAGE-5-R1.md` |
+
+三条 repair 继续使用原 worktree，可并行；不得另起 full gate。普通 finding 已按 deferred 政策过滤，repair
+只含资源合同、发布证据、数据库写入边界和 evidence GO 门的真实阻断。

@@ -1,6 +1,6 @@
 # Stage 2：S2（含 P1/L1/L2/L3）提醒生命周期完整收口
 
-状态：**DELIVERED — CODEX `CHANGES_REQUIRED`；`STAGE-2-R1/v2-parallel` 已签发**
+状态：**ACCEPTED — R1 已验收并集成到 `feat/s2-alert-delivery@6a35c74`**
 Prompt 版本：`STAGE-2/v1`
 Orchestrator：Codex
 实现者：Claude

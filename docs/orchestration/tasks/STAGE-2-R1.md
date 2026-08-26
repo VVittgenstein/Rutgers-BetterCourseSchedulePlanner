@@ -1,6 +1,6 @@
 # Stage 2 R1：音频真值、presence 退出竞态与通知控制闭环
 
-状态：**READY — PARALLEL-WAVE-1 独立 worktree**
+状态：**ACCEPTED — 已串行回收到 `feat/s2-alert-delivery@6a35c74`**
 Prompt 版本：`STAGE-2-R1/v2-parallel`
 Orchestrator：Codex
 实现者：Claude
@@ -211,3 +211,12 @@ self-tests；完整重门留给 Codex 集成。不要构建 archive，不联网�
 重复重型安全扫描。
 
 完成后按 A9 一次性回报，并明确 review ranges。Stage 2 是否 accepted 仍由 Codex 独立决定。
+
+## C. Codex 独立验收（2026-08-25）
+
+- 审查范围：`002f50d..5af49d9`；
+- 四项 blocker 的生产路径与判别测试均成立；
+- Codex 独立复跑：presence 16/16、四个前端 focused 文件 81/81、frontend policy 92/92、
+  release-set SelfTest PASS；
+- 普通 polish/deferred 项不触发修复；
+- 结论：`ACCEPTED`，五个提交按原顺序 cherry-pick 为 `48bef74..6a35c74`。

@@ -4,7 +4,7 @@
 Orchestrator：Codex
 实现者：Claude
 产品负责人：用户
-当前产品代码基线：`feat/s2-alert-delivery@553371f`（Stage 2 主交付；R1 窄修起点）
+当前集成基线：`feat/s2-alert-delivery@6a35c74`（Stage 2 accepted；等待 Stage 3/4/5 窄修）
 
 ## 1. 唯一任务线
 
@@ -163,7 +163,7 @@ analyzer/test/report，并以 `NO_PRODUCTION_CHANGE / DATA_REQUIRED` 正常结�
 | S1 | 已完成 |
 | L1 / reduced desired | `ACCEPTED` at `75cefb0`，只回归 |
 | 旧 `M2-001` | `SUPERSEDED BEFORE IMPLEMENTATION` |
-| 当前 Wave | `PARALLEL-WAVE-1`：Stage 2 R1、Stage 3/P2、Stage 4/S4、Stage 5/S3 evidence 四个隔离 lane |
-| 实现方式 | 同一 orchestration anchor 并行；只跑 focused tests |
-| 固定集成顺序 | `STAGE-2-R1` → `STAGE-3 (P2)` → `STAGE-4 (S4)` → `STAGE-5 (S3 evidence)` |
+| 当前 Wave | `PARALLEL-WAVE-1` 首轮已审；Stage 2 R1 accepted，Stage 3/4/5 同时窄修 |
+| 实现方式 | 原三个 worktree 继续 repair；只跑 focused tests |
+| 固定集成顺序 | `STAGE-3-R1 (P2)` → `STAGE-4-R1 (S4)` → `STAGE-5-R1 (S3 evidence)` |
 | 最终重门 | 仅在 Codex 串行组合 head 运行一次；P2 另保留 Linux/H9 外部门 |

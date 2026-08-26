@@ -1,6 +1,6 @@
 # Stage 4：S4 SQLite `prepare_cached` 微优化
 
-状态：**READY — PARALLEL-WAVE-1 独立 worktree**
+状态：**DELIVERED — CODEX `CHANGES_REQUIRED`；见 `STAGE-4-R1.md`**
 Prompt 版本：`STAGE-4/v1-parallel`
 Orchestrator：Codex
 实现者：Claude
