@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 6,
-  "toolVersion": "2.8.0",
+  "schemaVersion": 7,
+  "toolVersion": "2.9.0",
   "normalizedCommand": "rebuild-profile-analyzer --ndjson 20260820T033451393Z-a8a40f98/samples.ndjson --ndjson 20260820T033527487Z-d92a8a35/samples.ndjson --ndjson 20260820T033701043Z-5745bc4a/samples.ndjson --out-json S3-REBUILD-PROFILE.json --out-md S3-REBUILD-PROFILE.md",
   "inputs": [
     {
@@ -774,6 +774,7 @@
       "offPeakInformativeCount": 0,
       "bestWindowInPeakInformativeCount": 0,
       "bestWindowOffPeakInformativeCount": 0,
+      "uncorroboratedSeamCount": 0,
       "pureOffPeak": true,
       "qualifiesPeak": false,
       "qualifiesOffPeak": false
@@ -790,6 +791,7 @@
       "offPeakInformativeCount": 0,
       "bestWindowInPeakInformativeCount": 0,
       "bestWindowOffPeakInformativeCount": 0,
+      "uncorroboratedSeamCount": 0,
       "pureOffPeak": true,
       "qualifiesPeak": false,
       "qualifiesOffPeak": false
@@ -806,6 +808,7 @@
       "offPeakInformativeCount": 67,
       "bestWindowInPeakInformativeCount": 0,
       "bestWindowOffPeakInformativeCount": 67,
+      "uncorroboratedSeamCount": 0,
       "pureOffPeak": true,
       "qualifiesPeak": false,
       "qualifiesOffPeak": true
@@ -946,7 +949,7 @@
     },
     {
       "id": "A4-2",
-      "requirement": "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline, and each side must be carried by ONE constituent client window rather than by pooling several; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides",
+      "requirement": "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline, a client-window seam counts as a session boundary only when the two windows' median client-vs-server clock offsets corroborate that the gap really passed, and each side must be carried by ONE constituent client window rather than by pooling several; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides",
       "satisfied": false,
       "evidence": "windows: 3 total; evidence sessions: 3 from 3 evidence window(s), grouped on the server timeline; peak/off-peak classified on the server clock; qualifying peak sessions (>=5 informative in-peak brackets in one client window): 0; qualifying off-peak sessions (>=5 informative off-peak brackets in one client window, none in peak): 1 (window labels: 0 peak-overlapping, 3 off-peak)"
     },
