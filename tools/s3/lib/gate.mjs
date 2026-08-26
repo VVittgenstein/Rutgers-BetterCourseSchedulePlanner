@@ -361,14 +361,25 @@ function zeroPad2(n) {
 // session no longer mints two evidence groups (the shared server index links
 // the windows back together), and an edited serverDate inside one client
 // window never did (the window itself is the link). The third mirror — a
-// forged Date at the client-window SEAM, which is the one place a server split
-// would separate the two windows — is closed inside assignServerSessions.
+// forged Date at the client-window SEAM, which is the one place a server SPLIT
+// would separate the two windows — is closed inside assignServerSessions, and
+// its own mirror, a forged Date that SUPPRESSES a genuine boundary and pools
+// two server-separated sessions, is closed by serverGroupingRobustness(): the
+// analyzer marks every window of a stream whose grouping a single held-out
+// Date would change, and A4-2 below refuses those sessions as evidence.
 //
 // Sessions are unions of WHOLE windows, so the session partition is always a
-// COARSENING of the window partition: sessionCount <= evidenceWindowCount, and
-// A4-2 can only become stricter than the window rule it replaces. The one
-// anti-lockout risk is genuinely separated windows merging, which the ~19 h
-// two-session control disproves.
+// COARSENING of the window partition: sessionCount <= evidenceWindowCount.
+// COARSER IS NOT STRICTER. A4-2 counts informative brackets per session against
+// MIN_GROUP_BRACKETS, so merging two sub-threshold sessions manufactures a
+// qualifying one — the peak side directly, and the off-peak side too, since
+// the union of two pure off-peak sessions is still pure. A4-2 is therefore
+// anti-monotone under coarsening on both sides, and no argument of the form
+// "sessions can only get coarser, so nothing that failed can now pass" is
+// valid here. Both directions have to be defended explicitly: splits by the
+// order-statistic seam, merges by the leave-one-out grouping check.
+// The anti-lockout risk in the other direction — genuinely separated windows
+// merging — is disproved by the ~19 h two-session control.
 //
 // Scope is the STREAM (`${inputId}::${targetId}`), not the windowId: windowIds
 // are `${inputId}#wNN` and collide across the several targets of one SQLite
@@ -429,6 +440,11 @@ export function buildEvidenceSessions(evidenceWindows) {
       // Whole windows in windowId order; each window's brackets are already in
       // changedSeq order, so the concatenation is deterministic.
       brackets: windows.flatMap((w) => w.brackets),
+      // True when one held-out serverDate would have regrouped this stream's
+      // windows (serverGroupingRobustness, set per window by the analyzer):
+      // the session boundaries around this session are decided by a single
+      // Date header rather than by the server timeline.
+      serverGroupingAmbiguous: windows.some((w) => w.serverGroupingAmbiguous === true),
     });
   }
   internalAssert(
@@ -556,6 +572,19 @@ export function evaluateGate(ctx) {
   // under the same max(10 min, 5 x interval) rule. The client windowId
   // survives as the display label in the tables.
   //
+  // A SESSION WHOSE GROUPING RESTS ON ONE Date HEADER SUPPLIES NO EVIDENCE.
+  // The mirror of the manufactured split is the manufactured MERGE: pooling
+  // two genuinely server-separated sessions, each holding fewer than
+  // MIN_GROUP_BRACKETS brackets on its side, into one that clears the
+  // threshold. Purity does not stop it either — the union of two pure
+  // off-peak sessions is pure. Because every seam statistic is one number that
+  // one cell can push, the defence is the leave-one-out check the analyzer
+  // runs per stream (serverGroupingRobustness): if holding out any single
+  // dated sample's Date would regroup the stream's windows, the server
+  // timeline has not established the grouping, and neither the peak nor the
+  // off-peak side may count those sessions. Voiding only ever REMOVES
+  // evidence, so this can never turn a NO-GO into a GO.
+  //
   // BOTH sides are classified per BRACKET on the COMPARISON clock — the same
   // bounds the model comparison, the safe offset and A4-5 consume. Whenever a
   // production GO is reachable that clock is the server clock, so a peak or
@@ -615,12 +644,21 @@ export function evaluateGate(ctx) {
   // tables; it is reported for orientation and never used as evidence.
   const peakWindows = evidenceWindows.filter((w) => w.peakOverlap).length;
   const offPeakWindows = evidenceWindows.length - peakWindows;
+  const groupingEstablished = (sess) => sess.serverGroupingAmbiguous !== true;
   const qualifyingPeakSessions = sessions.filter(
-    (sess) => inPeakInformativeCount(sess) >= MIN_GROUP_BRACKETS,
+    (sess) => groupingEstablished(sess) && inPeakInformativeCount(sess) >= MIN_GROUP_BRACKETS,
   );
   const qualifyingOffPeakSessions = sessions.filter(
-    (sess) => isPureOffPeakSession(sess) && offPeakInformativeCount(sess) >= MIN_GROUP_BRACKETS,
+    (sess) =>
+      groupingEstablished(sess) &&
+      isPureOffPeakSession(sess) &&
+      offPeakInformativeCount(sess) >= MIN_GROUP_BRACKETS,
   );
+  // Sessions refused because one held-out Date header would have regrouped
+  // their stream's windows. Disclosed for the same reason the straddle count
+  // is: a reader must never have to guess why a session with enough brackets
+  // did not count.
+  const ambiguousGroupingSessions = sessions.filter((sess) => !groupingEstablished(sess)).length;
   // Sessions the purity clause refuses: enough off-peak brackets to qualify,
   // but they also observed the peak hour (or time the comparison clock cannot
   // place). Disclosed so a reader never has to guess why a session with plenty
@@ -648,6 +686,7 @@ export function evaluateGate(ctx) {
     pureOffPeak: isPureOffPeakSession(sess),
     qualifiesPeak: qualifyingPeakIds.has(sess.sessionId),
     qualifiesOffPeak: qualifyingOffPeakIds.has(sess.sessionId),
+    serverGroupingAmbiguous: sess.serverGroupingAmbiguous === true,
   }));
   // Honest accounting of what the server-clock requirement drops: brackets the
   // client clock would have called informative but that carry no usable server
@@ -672,6 +711,10 @@ export function evaluateGate(ctx) {
     noServerBoundsInformative > 0
       ? `; ${noServerBoundsInformative} client-informative bracket(s) had no usable server bounds and could not qualify peak or off-peak evidence`
       : "";
+  const ambiguousGroupingNote =
+    ambiguousGroupingSessions > 0
+      ? `; ${ambiguousGroupingSessions} session(s) supplied no evidence because holding out ONE serverDate header regroups their stream's windows — the server timeline does not establish those session boundaries`
+      : "";
   const straddleNote =
     straddlingOffPeakSessions > 0
       ? `; ${straddlingOffPeakSessions} session(s) with >=${MIN_GROUP_BRACKETS} off-peak brackets also hold peak-hour or unclassifiable brackets and cannot supply off-peak evidence`
@@ -679,9 +722,9 @@ export function evaluateGate(ctx) {
   gate.push({
     id: "A4-2",
     requirement:
-      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides",
+      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline, and a session counts only when no single held-out serverDate header would regroup its stream's windows; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides",
     satisfied: a2Satisfied,
-    evidence: `windows: ${totalWindows} total${excludedNote}; evidence sessions: ${sessions.length} from ${evidenceWindows.length} evidence window(s), grouped on the server timeline${mergedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak sessions (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeakSessions.length}; qualifying off-peak sessions (>=${MIN_GROUP_BRACKETS} informative off-peak brackets, none in peak): ${qualifyingOffPeakSessions.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${straddleNote}`,
+    evidence: `windows: ${totalWindows} total${excludedNote}; evidence sessions: ${sessions.length} from ${evidenceWindows.length} evidence window(s), grouped on the server timeline${mergedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak sessions (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeakSessions.length}; qualifying off-peak sessions (>=${MIN_GROUP_BRACKETS} informative off-peak brackets, none in peak): ${qualifyingOffPeakSessions.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${straddleNote}${ambiguousGroupingNote}`,
   });
 
   // A4-3: distinguishable winner under holdout.

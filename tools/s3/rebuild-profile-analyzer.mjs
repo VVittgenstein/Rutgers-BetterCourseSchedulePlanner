@@ -17,6 +17,7 @@ import { buildProvenance } from "./lib/provenance.mjs";
 import {
   segmentWindows,
   assignServerSessions,
+  serverGroupingRobustness,
   nyLabel,
   overlapsNyPeak,
 } from "./lib/windows.mjs";
@@ -116,12 +117,29 @@ function main() {
     for (let i = 0; i < stream.samples.length; i += 1) {
       sessionOfSample.set(stream.samples[i], serverSessionIdx[i]);
     }
+    // …and a leave-one-out check on that grouping. A session boundary is what
+    // buys a second independent evidence group, and every order statistic the
+    // seam could use is forgeable in ONE of the two directions by ONE Date
+    // cell. So the grouping is recomputed with each dated sample's Date held
+    // out in turn: if any hold-out regroups the windows, one header decides
+    // this stream's session structure and A4-2 refuses its evidence.
+    const windowOfSample = new Map();
+    windows.forEach((win, wi) => {
+      for (const sm of win.samples) windowOfSample.set(sm, wi);
+    });
+    const groupingRobustness = serverGroupingRobustness(
+      stream.samples,
+      stream.intervalSeconds,
+      stream.samples.map((sm) => windowOfSample.get(sm)),
+      windows.length,
+    );
     for (const win of windows) {
       const { brackets, counters: winCounters } = buildBrackets(win, stream.sourceKind);
       win.streamId = streamId;
       win.serverSessionIndices = [...new Set(win.samples.map((sm) => sessionOfSample.get(sm)))]
         .filter((v) => v !== null && v !== undefined)
         .sort((x, y) => x - y);
+      win.serverGroupingAmbiguous = groupingRobustness.robust !== true;
       win.nyLabel = nyLabel(win.utcStartMs, win.utcEndMs);
       win.peakOverlap = overlapsNyPeak(win.utcStartMs, win.utcEndMs);
       win.brackets = brackets;

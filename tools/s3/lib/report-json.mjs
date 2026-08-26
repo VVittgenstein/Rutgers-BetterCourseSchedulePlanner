@@ -296,6 +296,11 @@ export function buildJsonReport(ctx) {
         pureOffPeak: sess.pureOffPeak,
         qualifiesPeak: sess.qualifiesPeak,
         qualifiesOffPeak: sess.qualifiesOffPeak,
+        // True when holding out ONE serverDate header would regroup this
+        // stream's client windows: the session boundaries are decided by a
+        // single Date cell, not by the server timeline, so A4-2 counts the
+        // session on neither side.
+        serverGroupingAmbiguous: sess.serverGroupingAmbiguous,
       })),
     bracketTotals: {
       total: bracketTotals.total,
