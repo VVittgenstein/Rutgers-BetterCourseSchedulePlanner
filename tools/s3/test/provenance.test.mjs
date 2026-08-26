@@ -10,6 +10,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildProvenance } from "../lib/provenance.mjs";
+import {
+  DERIVATION_MIN_RECORDS,
+  DERIVATION_MIN_RECORDS_SHIFTED,
+} from "../lib/phase.mjs";
 
 function mkSample({ t, bodySha, serverDeltaMs = -600, endDeltaMs = 200, targetId = "soc:2026:9:NB", campus = "NB" }) {
   return {
@@ -223,6 +227,120 @@ test("an every-other-sample subsample merges as a DERIVED member of the source f
   // Genuine records, genuinely reused: no record disagreement.
   assert.equal(p.classes[0].timeConflict, false);
   assert.deepEqual(p.classes[0].timeConflictPairs, []);
+});
+
+test("a constant-shifted every-other subsample merges DERIVED and is a time conflict", () => {
+  // STAGE-5-R3 A2-1, at unit scale: the same regular subsample as the test
+  // above, with its WHOLE client clock moved +1 ms. Under the old absolute
+  // (clientStartMs, bodySha) record key every key changed and the copy posed
+  // as an independent capture. It must now merge on the constant offset and
+  // then FAIL the absolute anchor check, which is still exactly 0 ms.
+  const full = mkSeries({ n: 14 });
+  const shifted = full
+    .filter((_, i) => i % 2 === 0)
+    .map((s) => ({ ...s, clientStartMs: s.clientStartMs + 1, clientEndMs: s.clientEndMs + 1 }));
+  // The pre-fix rule provably finds nothing: no shared absolute record key.
+  const fullKeys = new Set(full.map((s) => `${s.clientStartMs}|${s.bodySha}`));
+  assert.equal(shifted.filter((s) => fullKeys.has(`${s.clientStartMs}|${s.bodySha}`)).length, 0);
+  // ...while every shifted record is one of the source's, offset by exactly 1.
+  assert.equal(
+    shifted.filter((s) => fullKeys.has(`${s.clientStartMs - 1}|${s.bodySha}`)).length,
+    shifted.length,
+  );
+  assert.ok(shifted.length >= DERIVATION_MIN_RECORDS_SHIFTED);
+
+  const p = buildProvenance([
+    { inputId: "src/samples.ndjson", samples: full },
+    { inputId: "shifted/samples.ndjson", samples: shifted.map((s) => ({ ...s, campus: "NK" })) },
+  ]);
+  assert.equal(p.classes.length, 1);
+  assert.equal(p.classes[0].members[1].relation, "derived");
+  assert.equal(p.classes[0].members[1].matchedCount, shifted.length);
+  assert.equal(p.classes[0].timeConflict, true);
+  assert.equal(p.classes[0].campusConflict, true);
+  assert.equal(p.classes[0].timeConflictPairs.length, 1);
+  assert.equal(p.classes[0].timeConflictPairs[0].relation, "derived");
+  assert.equal(p.classes[0].timeConflictPairs[0].offsetMs, 1);
+});
+
+test("ANTI-LOCKOUT: two honest captures sharing bodies but no single offset stay independent", () => {
+  // The false-positive risk the shifted threshold has to survive. Two honest
+  // captures of ONE origin, so they legitimately observe the SAME body
+  // sequence, polled at 13 s and 17 s from start instants 500 ms apart. They
+  // never share an absolute instant (every candidate offset is 500 mod 1000)
+  // and no single constant offset explains more than a handful of records.
+  const EPOCH = 1_000_000_000;
+  const bodyAt = (t) => `srv${Math.floor((t - EPOCH) / 30000)}`;
+  const capture = (stepMs, startOffsetMs, n) => {
+    const out = [];
+    for (let i = 0; i < n; i += 1) {
+      const t = EPOCH + startOffsetMs + i * stepMs;
+      out.push(mkSample({ t, bodySha: bodyAt(t) }));
+    }
+    return out;
+  };
+  const a = capture(13000, 0, 60);
+  const b = capture(17000, 500, 45);
+  // Heavy body sharing is the point: this is NOT a disjoint-namespace control.
+  const aBodies = new Set(a.map((s) => s.bodySha));
+  assert.ok([...new Set(b.map((s) => s.bodySha))].filter((x) => aBodies.has(x)).length >= 20);
+  // Recomputed inline: the largest same-body constant-offset bucket, which is
+  // an UPPER bound on any alignment the matcher could return.
+  const buckets = new Map();
+  for (const y of b) {
+    for (const x of a) {
+      if (x.bodySha !== y.bodySha) continue;
+      const d = y.clientStartMs - x.clientStartMs;
+      buckets.set(d, (buckets.get(d) ?? 0) + 1);
+    }
+  }
+  const largest = Math.max(...buckets.values());
+  assert.ok(largest < DERIVATION_MIN_RECORDS_SHIFTED, `largest offset bucket ${largest}`);
+  assert.equal(buckets.get(0), undefined, "no shared absolute instant at all");
+
+  const p = buildProvenance([
+    { inputId: "capA/samples.ndjson", samples: a },
+    { inputId: "capB/samples.ndjson", samples: b },
+  ]);
+  assert.equal(p.classes.length, 2);
+  for (const cls of p.classes) {
+    assert.equal(cls.members.length, 1);
+    assert.equal(cls.timeConflict, false);
+  }
+});
+
+test("DEFERRED BOUNDARY: per-sample jitter does NOT merge (invariance is to ONE offset)", () => {
+  // The documented edge of the model (STAGE-5-R3 A2-1/A3: per-sample irregular
+  // jitter stays deferred). Every subsampled record carries its OWN offset, so
+  // the offsets never coincide and no bucket reaches the shifted threshold.
+  // The matcher cannot drift into this case: the offset match is exact integer
+  // equality, never a tolerance window.
+  const full = mkSeries({ n: 30 });
+  const jittered = full
+    .filter((_, i) => i % 2 === 0)
+    .map((s, k) => {
+      const d = 1 + ((k * 3) % 7);
+      return { ...s, clientStartMs: s.clientStartMs + d, clientEndMs: s.clientEndMs + d };
+    });
+  const buckets = new Map();
+  for (const y of jittered) {
+    for (const x of full) {
+      if (x.bodySha !== y.bodySha) continue;
+      const d = y.clientStartMs - x.clientStartMs;
+      buckets.set(d, (buckets.get(d) ?? 0) + 1);
+    }
+  }
+  const largest = Math.max(...buckets.values());
+  // Deliberately recorded: the modal bucket DOES clear the offset-0 threshold.
+  // Reusing DERIVATION_MIN_RECORDS at non-zero offsets would have swept this
+  // deferred case in; DERIVATION_MIN_RECORDS_SHIFTED is what keeps it out.
+  assert.ok(largest >= DERIVATION_MIN_RECORDS, `largest offset bucket ${largest}`);
+  assert.ok(largest < DERIVATION_MIN_RECORDS_SHIFTED, `largest offset bucket ${largest}`);
+  const p = buildProvenance([
+    { inputId: "src/samples.ndjson", samples: full },
+    { inputId: "jit/samples.ndjson", samples: jittered.map((s) => ({ ...s, campus: "NK" })) },
+  ]);
+  assert.equal(p.classes.length, 2);
 });
 
 test("three staggered overlapping slices of one capture are ONE family", () => {

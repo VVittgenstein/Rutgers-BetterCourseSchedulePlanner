@@ -7,11 +7,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  bestShiftedRecordAlignment,
   containmentAlignments,
   longestCommonBlocks,
   sharedRecordAlignment,
 } from "../lib/series-match.mjs";
-import { DERIVATION_MIN_BLOCK } from "../lib/phase.mjs";
+import {
+  DERIVATION_MIN_BLOCK,
+  DERIVATION_MIN_RECORDS,
+  DERIVATION_MIN_RECORDS_SHIFTED,
+} from "../lib/phase.mjs";
 
 // Canonical entries carry more fields; the matchers only read these two.
 function ent(bodySha, deltaMs) {
@@ -127,4 +132,143 @@ test("sharedRecordAlignment tolerates one edited record instead of dissolving th
 
 test("sharedRecordAlignment finds nothing between disjoint key spaces", () => {
   assert.deepEqual(sharedRecordAlignment(["a", "b", "c"], ["x", "y", "z"]), []);
+});
+
+// --- bestShiftedRecordAlignment: the shift-invariant record matcher ---------
+// It generalizes sharedRecordAlignment by exactly one degree of freedom (a
+// single constant offset shared by every matched record) and must agree with
+// it wherever that offset is zero.
+
+function stream(times, bodies) {
+  return { times, bodies };
+}
+
+test("bestShiftedRecordAlignment reproduces sharedRecordAlignment at offset 0", () => {
+  const times = [1000, 2000, 3000, 4000, 5000, 6000];
+  const bodies = ["a", "b", "c", "d", "e", "f"];
+  const subTimes = [2000, 4000, 6000];
+  const subBodies = ["b", "d", "f"];
+  const joint = (ts, bs) => ts.map((t, i) => `${t}\t${bs[i]}`);
+  const expected = sharedRecordAlignment(joint(times, bodies), joint(subTimes, subBodies));
+  const match = bestShiftedRecordAlignment(
+    stream(times, bodies),
+    stream(subTimes, subBodies),
+    DERIVATION_MIN_RECORDS,
+    DERIVATION_MIN_RECORDS_SHIFTED,
+  );
+  assert.equal(match.offsetMs, 0);
+  assert.deepEqual(match.pairs, expected);
+  assert.deepEqual(match.pairs, [[1, 0], [3, 1], [5, 2]]);
+});
+
+test("bestShiftedRecordAlignment finds a stride-2 subsample translated by +1 ms", () => {
+  // The A2-1 shape in miniature: every other record, whole client clock +1 ms.
+  const times = [];
+  const bodies = [];
+  for (let i = 0; i < 20; i += 1) {
+    times.push(1000 + i * 3000);
+    bodies.push(`v${i}`);
+  }
+  const subTimes = times.filter((_, i) => i % 2 === 0).map((t) => t + 1);
+  const subBodies = bodies.filter((_, i) => i % 2 === 0);
+  const match = bestShiftedRecordAlignment(
+    stream(times, bodies),
+    stream(subTimes, subBodies),
+    DERIVATION_MIN_RECORDS,
+    DERIVATION_MIN_RECORDS_SHIFTED,
+  );
+  assert.equal(match.offsetMs, 1);
+  assert.equal(match.pairs.length, 10);
+  for (const [ia, ib] of match.pairs) {
+    assert.equal(bodies[ia], subBodies[ib]);
+    assert.equal(subTimes[ib] - times[ia], 1);
+  }
+  // Two-sided: the mirror comparison finds the negated offset, same count.
+  const mirrored = bestShiftedRecordAlignment(
+    stream(subTimes, subBodies),
+    stream(times, bodies),
+    DERIVATION_MIN_RECORDS,
+    DERIVATION_MIN_RECORDS_SHIFTED,
+  );
+  assert.equal(mirrored.offsetMs, -1);
+  assert.equal(mirrored.pairs.length, 10);
+});
+
+test("bestShiftedRecordAlignment holds a non-zero offset to the HIGHER threshold", () => {
+  // 5 shared records at a constant +7 ms offset: over DERIVATION_MIN_RECORDS,
+  // under DERIVATION_MIN_RECORDS_SHIFTED, so no relation is formed. This is
+  // the whole reason the shifted threshold exists as its own constant.
+  assert.ok(DERIVATION_MIN_RECORDS_SHIFTED > DERIVATION_MIN_RECORDS);
+  const times = [0, 1000, 2000, 3000, 4000];
+  const bodies = ["a", "b", "c", "d", "e"];
+  const shifted = stream(times.map((t) => t + 7), bodies);
+  assert.equal(times.length, 5);
+  assert.equal(
+    bestShiftedRecordAlignment(
+      stream(times, bodies),
+      shifted,
+      DERIVATION_MIN_RECORDS,
+      DERIVATION_MIN_RECORDS_SHIFTED,
+    ),
+    null,
+  );
+  // One more shared record and the same offset does clear it.
+  const times6 = [...times, 5000];
+  const bodies6 = [...bodies, "f"];
+  const match = bestShiftedRecordAlignment(
+    stream(times6, bodies6),
+    stream(times6.map((t) => t + 7), bodies6),
+    DERIVATION_MIN_RECORDS,
+    DERIVATION_MIN_RECORDS_SHIFTED,
+  );
+  assert.equal(match.offsetMs, 7);
+  assert.equal(match.pairs.length, DERIVATION_MIN_RECORDS_SHIFTED);
+});
+
+test("bestShiftedRecordAlignment prefers offset 0 on a length tie", () => {
+  // Bodies repeat on a fixed grid, so offset 0 and offset +2000 both align 3
+  // records. The comparator must pick 0 — that is what keeps every
+  // previously-detected derivation bit-identical under the new rule.
+  const times = [0, 1000, 2000, 3000];
+  const bodies = ["p", "p", "p", "q"];
+  const bTimes = [0, 1000, 2000];
+  const bBodies = ["p", "p", "p"];
+  const match = bestShiftedRecordAlignment(stream(times, bodies), stream(bTimes, bBodies), 3, 3);
+  assert.equal(match.offsetMs, 0);
+  assert.equal(match.pairs.length, 3);
+  assert.deepEqual(match.pairs, [[0, 0], [1, 1], [2, 2]]);
+});
+
+test("bestShiftedRecordAlignment is deterministic and independent of insertion order", () => {
+  // Same content, candidate offsets discovered in a different order: the
+  // explicit comparator, not Map insertion order, decides.
+  const bodies = ["a", "b", "c", "d", "e", "f", "g"];
+  const times = bodies.map((_, i) => i * 1000);
+  const shifted = times.map((t) => t + 5);
+  const forward = bestShiftedRecordAlignment(
+    stream(times, bodies),
+    stream(shifted, bodies),
+    DERIVATION_MIN_RECORDS,
+    DERIVATION_MIN_RECORDS_SHIFTED,
+  );
+  const reversedInput = bestShiftedRecordAlignment(
+    stream([...times].reverse(), [...bodies].reverse()),
+    stream([...shifted].reverse(), [...bodies].reverse()),
+    DERIVATION_MIN_RECORDS,
+    DERIVATION_MIN_RECORDS_SHIFTED,
+  );
+  assert.equal(forward.offsetMs, 5);
+  assert.equal(forward.pairs.length, 7);
+  // Reversing both streams keeps the offset and the count; only the index
+  // labelling flips, which is what "order-stable" means for this matcher.
+  assert.equal(reversedInput.offsetMs, 5);
+  assert.equal(reversedInput.pairs.length, 7);
+  assert.equal(
+    bestShiftedRecordAlignment(stream([], []), stream(times, bodies), 3, 6),
+    null,
+  );
+  assert.equal(
+    bestShiftedRecordAlignment(stream(times, bodies), stream([], []), 3, 6),
+    null,
+  );
 });

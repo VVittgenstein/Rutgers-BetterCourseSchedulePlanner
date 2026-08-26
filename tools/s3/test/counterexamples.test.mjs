@@ -52,6 +52,15 @@
 // v2.5.0, which refused the same bytes:
 //   CE-14 (A4-2 straddling session):  intermediate stdout `verdict=GO qualifier=none brackets=60 distinguishable=true`,
 //                                     v2.5.0 stdout `verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=60 distinguishable=true`
+// CE-15 pins the STAGE-5-R3 A2-1 defect, which survived until v2.7.0 — same
+// protocol, verified by extracting the v2.6.1 tree (commit 2c7b53a87471) and
+// running its CLI on the same fixture bytes (v2.6.1 keyed the `derived`
+// relation on an ABSOLUTE (clientStartMs, bodySha) record key, so translating
+// a regular subsample's whole client clock by 1 ms changed every key, the
+// relation found nothing, and the copy escaped the family before the absolute
+// anchor check could run; r3-fixtures.mjs builds the bytes, so both trees see
+// identical input):
+//   CE-15 (A4-1 shifted subsamples):  old stdout `verdict=GO qualifier=none brackets=180 distinguishable=true`
 // The same builder module also produces the honest control that must STAY GO
 // on both trees (`verdict=GO qualifier=none brackets=120 distinguishable=true`),
 // which is what keeps these fixes from being a gate wired permanently shut.
@@ -79,6 +88,10 @@ import {
   denseBaseCapture,
   SUBSAMPLE_STRIDES,
 } from "./r2-fixtures.mjs";
+import {
+  buildTranslatedSubsampleDerived,
+  TRANSLATED_SUBSAMPLE,
+} from "./r3-fixtures.mjs";
 
 // Jan 6 2026 is EST (UTC-5): the NY 17:00-18:00 peak is 22:00-23:00 UTC.
 const OFF_PEAK_BASE = Date.UTC(2026, 0, 6, 3, 0, 0); // 22:00 ET Jan 5 — off-peak
@@ -1307,6 +1320,91 @@ test("CE-14 (A4-2): one session straddling 17:00 ET is not both a peak and an of
     assert.equal(w.brackets.length, 20);
     assert.equal(w.peakOverlap, true);
   }
+});
+
+test("CE-15 (A4-1): constant-shifted regular subsamples of one capture are one family, not three targets", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // CE-10's shape with the escape hatch it left open. NB is the dense base
+  // capture; NK is its stride-2 subsample and CM its stride-3 subsample, each
+  // with EVERY client timestamp translated by one constant (+1 ms / +2 ms).
+  // Bodies, serverDates and row order are the base capture's own. v2.6.1 saw
+  // three clean single-member classes and said GO on 180 brackets of one
+  // capture counted three times.
+  const runNames = buildTranslatedSubsampleDerived(dir);
+
+  // Structural proof from the fixture bytes alone, before the analyzer runs:
+  // the OLD absolute record key provably finds nothing, while every copied
+  // record is a base record at exactly its own constant offset.
+  const rows = runNames.map((name) =>
+    readFileSync(join(dir, name, "samples.ndjson"), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l)),
+  );
+  const key = (startMs, body) => `${startMs}|${body}`;
+  const baseKeys = new Set(
+    rows[0].map((r) => key(Date.parse(r.requestStartedUtc), r.decodedBodySha256)),
+  );
+  for (const [i, campus] of [[1, "NK"], [2, "CM"]]) {
+    const shiftMs = TRANSLATED_SUBSAMPLE[campus].shiftMs;
+    const absolute = rows[i].filter((r) =>
+      baseKeys.has(key(Date.parse(r.requestStartedUtc), r.decodedBodySha256)),
+    ).length;
+    const shifted = rows[i].filter((r) =>
+      baseKeys.has(key(Date.parse(r.requestStartedUtc) - shiftMs, r.decodedBodySha256)),
+    ).length;
+    assert.equal(absolute, 0, `${campus}: absolute record keys must share nothing`);
+    assert.equal(shifted, rows[i].length, `${campus}: every record is a base record at ${shiftMs} ms`);
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  assert.equal(json.bracketTotals.total, 180);
+  assert.equal(json.bracketTotals.excludedFromEvidence, 180);
+
+  // One family: the base capture plus its two shifted derivations.
+  assert.equal(json.provenance.classes.length, 1);
+  const family = json.provenance.classes[0];
+  assert.deepEqual(
+    family.members.map((m) => m.relation),
+    ["representative", "derived", "derived"],
+  );
+  assert.deepEqual(
+    family.members.slice(1).map((m) => m.matchedCount).sort((a, b) => a - b),
+    [200, 300],
+  );
+  // What separates CE-15 from CE-10: the un-shifted twin merges CLEANLY
+  // (timeConflict false, the copies barred as duplicates); here the shared
+  // records disagree on the absolute client anchor, so the whole family is
+  // time-conflicted and every member is barred from all evidence.
+  assert.equal(family.campusConflict, true);
+  assert.equal(family.timeConflict, true);
+  assert.ok(family.timeConflictPairs.length >= 1);
+  for (const pair of family.timeConflictPairs) {
+    assert.equal(pair.relation, "derived");
+    assert.notEqual(pair.offsetMs, 0, "a shifted derivation must report its constant offset");
+  }
+  assert.deepEqual(json.provenance.duplicateStreamIds, []);
+  assert.equal(json.provenance.excludedStreamIds.length, 3);
+
+  const a1 = gateById(json, "A4-1");
+  assert.equal(a1.satisfied, false);
+  assert.match(a1.evidence, /campuses: none; NB missing; NK missing; CM missing/);
+  // The three campus labels sit on ONE body of captured data, so A4-1 reports
+  // the campus conflict; the time-anchor conflict is reported through the
+  // provenance family above (gate.mjs counts a class under exactly one of the
+  // two conflict headings, campus first).
+  assert.match(a1.evidence, /1 class\(es\) with conflicting campus labels ignored/);
+  assert.match(a1.evidence, /2 stream\(s\) merged into an existing provenance family/);
+
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-1", "A4-2", "A4-3", "A4-4", "A4-5", "A4-6"],
+  );
 });
 
 test("CONTROL (R2): the honest three-campus fixture the R2 counterexamples are cut from still reaches GO", (t) => {

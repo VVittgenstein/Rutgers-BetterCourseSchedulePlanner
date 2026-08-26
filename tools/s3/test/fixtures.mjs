@@ -190,6 +190,23 @@ export function rewriteRequestEnds(rows, endForRow) {
   });
 }
 
+// A copy of `rows` whose CLIENT clock columns are translated by a single
+// constant deltaMs: requestStartedUtc, requestEndedUtc and requestStartedLocal
+// move together, so elapsedMilliseconds is unchanged. decodedBodySha256,
+// rawBodySha256, canonicalSetSha256, serverDate, sequence and every other
+// recorded field keep their exact captured values. This is a pure client-clock
+// translation of a genuine capture — the A2-1 edit — and nothing else.
+export function shiftClientClock(rows, deltaMs) {
+  return rows.map((row) => {
+    const shifted = { ...row };
+    for (const key of ["requestStartedUtc", "requestEndedUtc", "requestStartedLocal"]) {
+      if (typeof row[key] !== "string") continue;
+      shifted[key] = new Date(Date.parse(row[key]) + deltaMs).toISOString();
+    }
+    return shifted;
+  });
+}
+
 // LCG-seeded generic change process (spec Section 17): body version counts
 // change instants (tick + jitter) at or before the server generation time.
 export function makeChangeProcess({
