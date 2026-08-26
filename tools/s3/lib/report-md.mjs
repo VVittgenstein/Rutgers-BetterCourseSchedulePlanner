@@ -64,7 +64,7 @@ export function buildMdReport(ctx) {
       ? ` Unsatisfied gates: ${decision.reasons.map((r) => r.split(" unsatisfied:")[0]).join(", ")}.`
       : "";
   push(
-    `This offline analysis of the committed openSections capture evidence reaches the verdict **${decision.verdict}**${
+    `This offline analysis of locally captured openSections observation data (kept in the gitignored \`data/\` root; only these evidence documents are committed) reaches the verdict **${decision.verdict}**${
       decision.qualifier ? ` with qualifier **${decision.qualifier}**` : ""
     } from the A4 gate evaluation below.${reasonsPart} All numbers are computed from interval-censored change brackets; no production behavior is changed by this lane.`,
   );

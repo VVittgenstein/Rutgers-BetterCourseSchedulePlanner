@@ -1,9 +1,9 @@
 # S3 Rebuild Cadence Evidence — Verdict: NO_PRODUCTION_CHANGE (DATA_REQUIRED)
 
-This offline analysis of the committed openSections capture evidence reaches the verdict **NO_PRODUCTION_CHANGE** with qualifier **DATA_REQUIRED** from the A4 gate evaluation below. Unsatisfied gates: A4-1, A4-2, A4-3, A4-4, A4-6. All numbers are computed from interval-censored change brackets; no production behavior is changed by this lane.
+This offline analysis of locally captured openSections observation data (kept in the gitignored `data/` root; only these evidence documents are committed) reaches the verdict **NO_PRODUCTION_CHANGE** with qualifier **DATA_REQUIRED** from the A4 gate evaluation below. Unsatisfied gates: A4-1, A4-2, A4-3, A4-4, A4-6. All numbers are computed from interval-censored change brackets; no production behavior is changed by this lane.
 
-- A4-1 unsatisfied: targets: soc:2026:9:NB only; NK missing; CM missing
-- A4-2 unsatisfied: windows: 3 total, 0 peak-overlapping, 3 off-peak
+- A4-1 unsatisfied: campuses: NB(pc-26764ef271fb) only; NK missing; CM missing
+- A4-2 unsatisfied: windows: 3 total; qualifying(informative>=5): 0 peak, 1 off-peak (raw: 0 peak, 3 off-peak)
 - A4-3 unsatisfied: c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate
 - A4-4 unsatisfied: not identifiable (not-distinguishable)
 - A4-6 unsatisfied: not evaluable: no distinguishable winner
@@ -47,22 +47,27 @@ Comparison on the 67 brackets informative for both periods (server clock): max c
 
 max-coverage(30) ≥ max-coverage(60) holds identically — the ticks of any 60 s grid at phase φ are a subset of the 30 s grid's ticks at phase φ mod 30 — so equality can never select a winner: it only shows the 30 s grid adds no explanatory power, which is *consistent with* a true 60 s period but proves neither model. Holdout mode: **degenerate** (degenerate single-group half-split; NOT multi-window validation). Result: distinguishable = **false**, winner = **none**, reason = `equal-coverage-30s-adds-no-explanatory-power`.
 
+### Stability (A4-6)
+
+Not evaluable: no distinguishable winner.
+
 ## A4 gate
 
 | id | requirement | satisfied | evidence |
 |---|---|---|---|
-| A4-1 | Multi-target evidence: at least NB, NK, CM independently evaluable | no | targets: soc:2026:9:NB only; NK missing; CM missing |
-| A4-2 | Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window | no | windows: 3 total, 0 peak-overlapping, 3 off-peak |
+| A4-1 | Multi-target evidence: at least NB, NK, CM independently evaluable from independent data provenance | no | campuses: NB(pc-26764ef271fb) only; NK missing; CM missing |
+| A4-2 | Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets | no | windows: 3 total; qualifying(informative>=5): 0 peak, 1 off-peak (raw: 0 peak, 3 off-peak) |
 | A4-3 | 30s vs 60s model distinguishable with consistent winner under per-(target,window) holdout | no | c30=67 c60=67 on 67 common brackets (server clock); reason=equal-coverage-30s-adds-no-explanatory-power; holdout=degenerate |
 | A4-4 | Unified safe offset covers phase and positive jitter across all targets/windows | no | not identifiable (not-distinguishable) |
-| A4-5 | Report honestly handles server Date precision, client clock, and request latency | yes | serverDate present on 558 samples; +1s quantization widening applied; client-vs-server offset p50=-752 ms |
-| A4-6 | Conclusions stable under leave-out of outliers / single target | no | not evaluable: no distinguishable winner |
+| A4-5 | Report honestly handles server Date precision, client clock, and request latency; production conclusions rest on server-clock evidence | yes | server clock used; serverDate on 558 samples; qualifying groups with server evidence 1/1; +1s quantization widening applied; client-vs-server offset p50=-752 ms |
+| A4-6 | Conclusions stable under whole-target leave-out, (target,window) group leave-out, and deterministic outlier removal | no | not evaluable: no distinguishable winner |
 
 ## Clock and caveats
 
 - **Server `Date` precision**: 1 s (truncated). Every server-clock bracket upper bound is widened by +1 s so the true change instant is conservatively contained; widths quoted above include this widening.
 - **Client vs server offset** (server second midpoint minus client request midpoint, 558 samples): min -6176 ms / p50 -752 ms / p95 -297 ms / max 309 ms. This mixes clock offset with request latency; it is reported, never used to correct timestamps.
 - **Server Date regressions** (adjacent samples, > 1 s backwards): 0; samples missing serverDate: 0. The webfarm rotates multiple backends (`X-Server-Name`), so small skew between backends is expected and is why non-positive-width server brackets are dropped (0 here).
+- **Server-clock evidence coverage**: sufficient = **true**; server-informative comparison brackets: 67; qualifying groups with server evidence: 1/1. Production GO and any safe offset require the comparison itself to run on the server clock with server brackets covering every qualifying group; a client-clock fallback fails these gates closed.
 - **Caching**: `cache-control: max-age=30` means an intermediary cache could quantize observations; bracket endpoints with `age > 0`: 0.
 - **etag is not a change signal**: the same body is served with multiple etags across backends; change detection uses `decodedBodySha256` only, and etag is never consulted.
 - **Timestamp semantics**: NDJSON rows carry client-side `requestStartedUtc`/`requestEndedUtc` (bracket = (stable requestStart, changed requestEnd]); SQLite rows carry a single `observed_at`, used for both bracket endpoints, so SQLite client-clock brackets are narrower than the true envelope by up to one request duration. Client/observed_at timestamps must be monotone per target within a 2 s tolerance (fail-closed beyond it); a change pair whose client width is still non-positive indicates corrupt capture ordering and is rejected entirely and counted (0 here), never treated as informative.
@@ -96,9 +101,9 @@ For NDJSON inputs the fingerprint is sha256 over `sha256(samples.ndjson) + "\n" 
 ## Missing evidence for a future GO
 
 - Independent capture runs for the missing campuses (NK and/or CM alongside NB), each with enough change brackets per window for holdout grouping.
-- At least one America/New_York 17:00–18:00 peak window and one independent off-peak window per target (the current evidence is a single overnight window).
+- At least one America/New_York 17:00–18:00 peak window and one independent off-peak window, each with ≥ 5 informative brackets of its own (an empty or single-sample window is metadata, not peak evidence).
 - Enough brackets across ≥ 2 (target, window) groups for non-degenerate holdout, and a strict, holdout-consistent coverage win before any winner can be declared.
 - A winning model whose per-group phase intervals intersect and whose positive jitter is bounded, so one safe offset can be frozen.
-- Stability of the winner under leave-out of any single (target, window) group.
+- Stability of the winner under all three checks: whole-target leave-out, (target, window) group leave-out, and deterministic top-k outlier removal.
 
 Future captures must follow the A6 sampling constraints as the capture plan. This lane holds **no online authorization** and performed **no network access**; it only re-analyzed previously captured, gitignored local data.

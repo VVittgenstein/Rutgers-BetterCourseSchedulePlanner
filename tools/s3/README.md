@@ -23,7 +23,9 @@ node tools/s3/rebuild-profile-analyzer.mjs \
   --out-md   docs/evidence/S3-REBUILD-PROFILE.md
 ```
 
-`<DATA_ROOT>` is `data/open-sections-repro` (gitignored). Exit codes: `0`
+`<DATA_ROOT>` is `data/open-sections-repro` under the repo root — local,
+gitignored, never committed (only the derived evidence documents under
+`docs/evidence/` are committed). Exit codes: `0`
 analysis completed (any verdict), `1` usage error, `2` fail-closed structural
 error (`E_INPUT_MISSING`, `E_NDJSON_PARSE`, `E_SCHEMA_VERSION`,
 `E_MISSING_FIELD`, `E_SEQUENCE_ORDER`, `E_TIME_PARSE`, `E_TIME_REGRESSION`,
@@ -123,7 +125,29 @@ node --test "tools/s3/test/*.test.mjs"
 ```
 
 The suite is offline and self-contained (fixtures under the OS temp dir). The
-committed-data test runs end-to-end against the real capture directories when
-they exist at `../../../data/open-sections-repro` relative to this worktree (or
-at `BCSP_OPEN_SECTIONS_REPRO_DIR`), independently recounting D1's brackets and
-brute-forcing the arc coverage; it skips cleanly when the data is absent.
+local-data test runs end-to-end against the real capture directories (local
+and gitignored — never committed), independently recounting D1's brackets and
+brute-forcing the arc coverage. It locates the data root in this order, first
+hit wins:
+
+1. `BCSP_OPEN_SECTIONS_REPRO_DIR` (used as-is when set; nothing else is
+   probed);
+2. `git rev-parse --show-toplevel` → `<top>/data/open-sections-repro` (plain
+   repo-root checkout);
+3. `git rev-parse --git-common-dir` → the shared main repo root's
+   `data/open-sections-repro` (worktree checkouts).
+
+When the data exists at any candidate the test always runs — a checkout
+layout is never a reason to skip. Only when no candidate holds the data
+(e.g. CI) does it skip, and the skip message lists exactly what was probed.
+
+The counterexamples test file pins the four STAGE-5-R1 false-GO fixtures
+(relabeled provenance, empty peak window, stray serverDate over a client-clock
+fallback, single-target winner) to NO_PRODUCTION_CHANGE with the specific gate
+unsatisfied, while the go-gate test keeps proving a genuinely satisfying
+fixture still reaches GO.
+
+Provenance boundary (documented on purpose): A4-1 merges observation series
+that are identical or contiguous slices of one another after removing
+metadata; derived series (subsampling, interleaving, edited deltas) are NOT
+detected — the gate defends against copy-and-relabel, it is not forensics.
