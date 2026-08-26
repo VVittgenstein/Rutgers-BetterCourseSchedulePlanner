@@ -17,7 +17,12 @@
 // order are the honest capture's own.
 
 import { join } from "node:path";
-import { makeRunDir, renumberRows, shiftClientClock } from "./fixtures.mjs";
+import {
+  makeRunDir,
+  renumberRows,
+  shiftClientClock,
+  shiftServerDate,
+} from "./fixtures.mjs";
 import { denseBaseCapture, straddleSession } from "./r2-fixtures.mjs";
 
 const CAMPUSES = ["NB", "NK", "CM"];
@@ -83,6 +88,34 @@ export function buildClientJumpSplitSession(dir) {
     const rows = straddleSession(campus);
     const head = rows.slice(0, CLIENT_JUMP_FROM_ROW);
     const tail = shiftClientClock(rows.slice(CLIENT_JUMP_FROM_ROW), CLIENT_JUMP_MS);
+    makeRunDir(join(dir, `run${campus}`), { campus, samples: [...head, ...tail] });
+  }
+  return RUN_NAMES;
+}
+
+// ---------------------------------------------------------------------------
+// HONEST CONTROL for CE-16, and the tightest one available: byte-for-byte the
+// CE-16 fixture EXCEPT that the second half's serverDate moves by the same
+// 11 minutes as its client columns. The capture really did pause; the two
+// halves really are two independent sessions, separated on BOTH clocks; the
+// first is genuinely off-peak and the second genuinely inside the peak hour.
+//
+// It must keep reaching GO. It differs from CE-16 in exactly one thing — that
+// the server clock agrees — so a "fix" keyed on "a client jump is present", on
+// "the session crosses 17:00 ET", or on rejecting short inter-session gaps
+// would wrongly kill it. 660000 ms is a whole multiple of the 30 s tick period,
+// so the change phase is preserved exactly and A4-4/A4-6 stay satisfied: what
+// this control tests is the gap rule, not a phase artifact.
+// ---------------------------------------------------------------------------
+
+export function buildHonestPausedSession(dir) {
+  for (const campus of CAMPUSES) {
+    const rows = straddleSession(campus);
+    const head = rows.slice(0, CLIENT_JUMP_FROM_ROW);
+    const tail = shiftServerDate(
+      shiftClientClock(rows.slice(CLIENT_JUMP_FROM_ROW), CLIENT_JUMP_MS),
+      CLIENT_JUMP_MS,
+    );
     makeRunDir(join(dir, `run${campus}`), { campus, samples: [...head, ...tail] });
   }
   return RUN_NAMES;

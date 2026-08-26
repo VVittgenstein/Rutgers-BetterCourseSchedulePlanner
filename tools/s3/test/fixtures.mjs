@@ -207,6 +207,17 @@ export function shiftClientClock(rows, deltaMs) {
   });
 }
 
+// A copy of `rows` whose recorded server `Date` header is translated by a
+// single constant deltaMs. Every client column, every body hash and the row
+// order keep their captured values. Composed with shiftClientClock this models
+// a GENUINE capture pause: both clocks really moved, together.
+export function shiftServerDate(rows, deltaMs) {
+  return rows.map((row) => {
+    if (typeof row.serverDate !== "string") return { ...row };
+    return { ...row, serverDate: new Date(Date.parse(row.serverDate) + deltaMs).toUTCString() };
+  });
+}
+
 // LCG-seeded generic change process (spec Section 17): body version counts
 // change instants (tick + jitter) at or before the server generation time.
 export function makeChangeProcess({

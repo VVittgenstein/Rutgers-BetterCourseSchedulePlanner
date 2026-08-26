@@ -98,6 +98,7 @@ import {
 import {
   buildTranslatedSubsampleDerived,
   buildClientJumpSplitSession,
+  buildHonestPausedSession,
   CLIENT_JUMP_MS,
   TRANSLATED_SUBSAMPLE,
 } from "./r3-fixtures.mjs";
@@ -1497,6 +1498,67 @@ test("CE-16 (A4-2): a client-clock jump inside one server-contiguous session is 
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],
   );
+});
+
+test("CONTROL (R3): a GENUINE 11-minute pause, moved on both clocks, still reaches GO", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The tightest anti-lockout control available for the A2-2 fix: byte-for-byte
+  // CE-16 except that the second half's serverDate moves by the same 11 minutes
+  // as its client columns. The capture really did pause, so the two halves
+  // really are independent sessions — separated on BOTH clocks — and the first
+  // is genuinely off-peak while the second is genuinely inside the peak hour.
+  //
+  // It differs from CE-16 in exactly one respect: the server clock agrees. A
+  // "fix" keyed on the presence of a client jump, on the session crossing
+  // 17:00 ET, or on refusing short inter-session gaps would wrongly kill this
+  // run. The pause is a whole multiple of the 30 s tick period, so the change
+  // phase is preserved and A4-4/A4-6 test the gap rule, not a phase artifact.
+  const runNames = buildHonestPausedSession(dir);
+
+  // Measured from the fixture bytes: BOTH clocks show the same separation, and
+  // it clears the same threshold the session grouping uses.
+  const rows = runNames.map((name) =>
+    readFileSync(join(dir, name, "samples.ndjson"), "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l)),
+  );
+  for (const rs of rows) {
+    const gapsOf = (values) => values.slice(1).map((v, i) => v - values[i]);
+    const clientGaps = gapsOf(rs.map((r) => Date.parse(r.requestStartedUtc)));
+    const serverGaps = gapsOf(rs.map((r) => Date.parse(r.serverDate)));
+    assert.equal(clientGaps.filter((g) => g > WINDOW_GAP_MIN_MS).length, 1);
+    assert.equal(serverGaps.filter((g) => g > WINDOW_GAP_MIN_MS).length, 1);
+    assert.ok(Math.max(...serverGaps) > CLIENT_JUMP_MS);
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=GO qualifier=none brackets=60 distinguishable=true/);
+  const json = out.json;
+  for (const gate of json.goGate) {
+    assert.equal(gate.satisfied, true, `${gate.id}: ${gate.evidence}`);
+  }
+  // Six windows, six sessions, no merge note — the server timeline confirms
+  // the split the client timeline claims.
+  assert.equal(json.evidenceSessions.length, 6);
+  const a2 = gateById(json, "A4-2");
+  assert.match(
+    a2.evidence,
+    /evidence sessions: 6 from 6 evidence window\(s\), grouped on the server timeline/,
+  );
+  assert.ok(!a2.evidence.includes("merged into a session"));
+  assert.match(a2.evidence, /qualifying peak sessions \(>=5 informative in-peak brackets\): 3;/);
+  assert.match(
+    a2.evidence,
+    /qualifying off-peak sessions \(>=5 informative off-peak brackets, none in peak\): 3/,
+  );
+  assert.equal(json.evidenceSessions.filter((sess) => sess.pureOffPeak).length, 3);
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 1);
+    assert.equal(sess.bracketCount, 10);
+  }
 });
 
 test("CONTROL (R2): the honest three-campus fixture the R2 counterexamples are cut from still reaches GO", (t) => {
