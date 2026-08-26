@@ -1044,7 +1044,12 @@ pub async fn serve_websocket_with_bounded_outbound(
                             Ok(Ok(())) => {}
                             Ok(Err(_)) => break,
                             Err(_) => {
-                                config.stats.record_write_timeout();
+                                // One verdict per teardown: a connection the
+                                // budgets already condemned keeps its
+                                // overflow attribution.
+                                if !killed.load(std::sync::atomic::Ordering::SeqCst) {
+                                    config.stats.record_write_timeout();
+                                }
                                 break;
                             }
                         }
@@ -1092,7 +1097,9 @@ pub async fn serve_websocket_with_bounded_outbound(
                             Ok(Ok(())) => {}
                             Ok(Err(_)) => break,
                             Err(_) => {
-                                config.stats.record_write_timeout();
+                                if !killed.load(std::sync::atomic::Ordering::SeqCst) {
+                                    config.stats.record_write_timeout();
+                                }
                                 break;
                             }
                         }
@@ -1112,16 +1119,22 @@ pub async fn serve_websocket_with_bounded_outbound(
                     Ok(Ok(())) => {}
                     Ok(Err(_)) => break,
                     Err(_) => {
-                        config.stats.record_write_timeout();
+                        if !killed.load(std::sync::atomic::Ordering::SeqCst) {
+                            config.stats.record_write_timeout();
+                        }
                         break;
                     }
                 }
             }
         }
     }
-    // Dropping the receiver releases every queued frame's reservations,
-    // before the extension learns the connection is gone -- budget can
-    // never outlive its socket.
+    // The connection is over, whatever the reason: mark it dead FIRST so a
+    // producer racing the teardown gets a plain refusal instead of running
+    // the budgets against a corpse -- no post-mortem overflow attribution,
+    // no gauge churn. Then dropping the receiver releases every queued
+    // frame's reservations, before the extension learns the connection is
+    // gone -- budget can never outlive its socket.
+    killed.store(true, std::sync::atomic::Ordering::SeqCst);
     drop(outbound_items);
     let _ = tokio::task::spawn_blocking(move || extension.disconnect(connection_id)).await;
 }
@@ -2632,9 +2645,11 @@ mod tests {
         let stats = Arc::new(BoundedOutboundStats::default());
         let config = BoundedOutboundConfig {
             per_socket_budget_bytes: per_socket_budget,
-            // Long on purpose: the verdict under test is the budget, and a
-            // write timeout firing first would mask a broken budget.
-            write_timeout: Duration::from_secs(30),
+            // Comfortably past the wedge-detection phases (tens of
+            // milliseconds), so the budget verdict always lands first --
+            // and short enough that the held write's own deadline then
+            // fires while this test watches, proving the one-verdict rule.
+            write_timeout: Duration::from_secs(2),
             global_budget: global_budget.clone(),
             stats: stats.clone(),
         };
@@ -2685,6 +2700,17 @@ mod tests {
             1,
             "the overflow must be found at enqueue time, while the write is still held",
         );
+
+        // One verdict per teardown: the held write is still pending and
+        // will now outlive its deadline, but a connection the budgets
+        // already condemned must not ALSO count as a write timeout.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert_eq!(
+            stats.write_timeout_disconnects(),
+            0,
+            "a budget-condemned connection keeps its one overflow verdict",
+        );
+        assert_eq!(stats.socket_budget_disconnects(), 1);
 
         // Unstick the transport; the doomed connection tears down and every
         // reservation comes home.

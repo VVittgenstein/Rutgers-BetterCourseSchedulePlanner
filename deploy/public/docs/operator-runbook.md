@@ -11,7 +11,8 @@ The assembled candidate root contains `bin/bcsp-server`, release metadata, and
 the `systemd`, `caddy`, `config`, `ops`, and `docs` directories. The public web
 UI is embedded in `bcsp-server`; no external web-assets directory is installed
 or served. The Linux host needs
-systemd, `curl`, and the `sqlite3` CLI. The fixed filesystem layout is:
+systemd, `curl`, and the `sqlite3` CLI; `ops/preflight.sh` additionally needs
+`jq` to judge the adapted Caddy configuration. The fixed filesystem layout is:
 
 | Path | Purpose |
 | --- | --- |
@@ -109,17 +110,22 @@ manual host operation:
 sudo ./ops/preflight.sh --caddyfile /etc/caddy/Caddyfile
 ```
 
-Hard failures (non-zero exit): `BCSP_PUBLIC_ORIGIN` still naming the
-`planner.invalid` placeholder; an out-of-range
-`BCSP_PUBLIC_WS_PER_CLIENT_LIMIT` (the service would refuse to start); a
-domain that does not resolve; `ufw` inactive or 80/443 not allowed (the
-capture snapshot showed only 22 ever open); root SSH password login still
-enabled; a missing Caddy binary; a supplied Caddy config that fails
-`caddy validate`, lacks `stream_close_delay 4h`, or still names the
-placeholder; an inactive or lifeless service. Advisories (reported, not
-fatal): failed units such as the known `fwupd` leftovers, an unchecked
-operator Caddy config, and the reminder to confirm the resolved addresses
-really are this host.
+Hard failures (non-zero exit): `BCSP_PUBLIC_ORIGIN` missing, duplicated,
+malformed, or still naming the `planner.invalid` placeholder; an
+out-of-range `BCSP_PUBLIC_WS_PER_CLIENT_LIMIT` (the service would refuse
+to start); a domain that does not resolve; `ufw` inactive or 80/443 not
+allowed by explicit port rules (the capture snapshot showed only 22 ever
+open); a root SSH policy that is password-reachable, differs across the
+probed connection tuples (source and local address dimensions, at sshd's
+real port), or cannot be evaluated for the root tuple at all; a missing
+Caddy binary or `jq`; a supplied Caddy config that fails `caddy validate`
+or `caddy adapt`, whose ADAPTED public proxy (every `reverse_proxy` to
+`127.0.0.1:8080`) does not carry `stream_close_delay 4h` — comments and
+other sites do not count — or that still names the placeholder; an
+inactive or lifeless service. Advisories (reported, not fatal): failed
+units such as the known `fwupd` leftovers, an unchecked operator Caddy
+config, and the reminder to confirm the resolved addresses really are
+this host.
 
 The preflight does not replace the re-launch hard gates: the 600-second
 public soak (`tests/public-soak.sh`) and the assembled-composition browser

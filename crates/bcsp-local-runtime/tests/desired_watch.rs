@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bcsp_application::{
-    NoopWatchDispatchSink, OutboundSender, SharedWatchSocket, WatchAdmissionSource, WebSocketExtension,
+    NoopWatchDispatchSink, OutboundSender, SharedWatchSocket, WatchAdmissionSource,
+    WebSocketExtension,
 };
 use bcsp_contracts::{
     ActiveWatchId, ActiveWatchTargetV1, OpenObservationV1, SectionKey, TraceId,

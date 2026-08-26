@@ -75,7 +75,13 @@ export function assertWindowCoverage(samples, { startEpoch, endEpoch, intervalSe
     'the sampling interval must be positive',
   );
   const windowSeconds = endEpoch - startEpoch;
-  const required = Math.max(2, Math.floor(windowSeconds / intervalSeconds) - 1);
+  // The count floor allows the full jitter on EVERY cycle (a loaded
+  // sampler drifts a few seconds per iteration); the gap rule below is
+  // what catches holes, and the first/last rules catch clipped ends.
+  const required = Math.max(
+    2,
+    Math.floor(windowSeconds / (intervalSeconds + SAMPLE_JITTER_SECONDS)),
+  );
   assert.ok(
     samples.length >= required,
     `only ${samples.length} samples for a ${windowSeconds}s window; the ${intervalSeconds}s cadence requires at least ${required}`,

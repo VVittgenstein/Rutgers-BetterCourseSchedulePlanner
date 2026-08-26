@@ -41,15 +41,21 @@ make_stub ufw-no-https 'printf "Status: active\n22/tcp                     ALLOW
 make_stub systemctl-ok 'case "$1" in --failed) exit 0 ;; is-active) exit 0 ;; *) exit 0 ;; esac'
 make_stub curl-ok 'printf "200"'
 
-# sshd stubs answer the ROOT CONNECTION TUPLE (-T -C user=root,...). The
-# address-conditional stub gives the first probe address a safe answer and
-# every other address an unsafe one -- the divergence itself must fail.
-make_stub sshd-ok 'printf "permitrootlogin prohibit-password\npasswordauthentication yes\nkbdinteractiveauthentication no\n"'
-make_stub sshd-root-password 'printf "permitrootlogin yes\npasswordauthentication yes\nkbdinteractiveauthentication no\n"'
-make_stub sshd-keys-only-root 'printf "permitrootlogin yes\npasswordauthentication no\nkbdinteractiveauthentication no\n"'
-make_stub sshd-no-tuple 'case "$*" in *" -C "*|*-C\ *) exit 1 ;; *) printf "permitrootlogin no\npasswordauthentication no\nkbdinteractiveauthentication no\n" ;; esac'
-make_stub sshd-address-conditional 'case "$*" in *addr=203.0.113.1*) printf "permitrootlogin prohibit-password\npasswordauthentication no\nkbdinteractiveauthentication no\n" ;; *) printf "permitrootlogin yes\npasswordauthentication yes\nkbdinteractiveauthentication yes\n" ;; esac'
-make_stub sshd-missing-keyword 'printf "permitrootlogin no\npasswordauthentication no\n"'
+# sshd stubs answer BOTH invocation shapes: a plain `-T` (port discovery,
+# answered with `port 22`) and the ROOT CONNECTION TUPLE
+# (`-T -C user=root,...,addr=A,laddr=L,lport=P`). The conditional stubs
+# give one tuple dimension a safe answer and the rest an unsafe one -- the
+# divergence itself must fail. The local-address stub keys on the address
+# the getent-ok stub resolves, exactly the laddr real public connections
+# arrive at.
+make_stub sshd-ok 'case "$*" in *" -C "*) printf "permitrootlogin prohibit-password\npasswordauthentication yes\nkbdinteractiveauthentication no\n" ;; *) printf "port 22\n" ;; esac'
+make_stub sshd-root-password 'case "$*" in *" -C "*) printf "permitrootlogin yes\npasswordauthentication yes\nkbdinteractiveauthentication no\n" ;; *) printf "port 22\n" ;; esac'
+make_stub sshd-keys-only-root 'case "$*" in *" -C "*) printf "permitrootlogin yes\npasswordauthentication no\nkbdinteractiveauthentication no\n" ;; *) printf "port 22\n" ;; esac'
+make_stub sshd-no-tuple 'case "$*" in *" -C "*) exit 1 ;; *) printf "port 22\npermitrootlogin no\npasswordauthentication no\nkbdinteractiveauthentication no\n" ;; esac'
+make_stub sshd-address-conditional 'case "$*" in *addr=203.0.113.1*) printf "permitrootlogin prohibit-password\npasswordauthentication no\nkbdinteractiveauthentication no\n" ;; *" -C "*) printf "permitrootlogin yes\npasswordauthentication yes\nkbdinteractiveauthentication yes\n" ;; *) printf "port 22\n" ;; esac'
+make_stub sshd-local-address-conditional 'case "$*" in *laddr=140.82.9.50*) printf "permitrootlogin yes\npasswordauthentication yes\nkbdinteractiveauthentication no\n" ;; *" -C "*) printf "permitrootlogin prohibit-password\npasswordauthentication no\nkbdinteractiveauthentication no\n" ;; *) printf "port 22\n" ;; esac'
+make_stub sshd-missing-keyword 'case "$*" in *" -C "*) printf "permitrootlogin no\npasswordauthentication no\n" ;; *) printf "port 22\n" ;; esac'
+make_stub sshd-no-port 'case "$*" in *" -C "*) printf "permitrootlogin no\npasswordauthentication no\nkbdinteractiveauthentication no\n" ;; *) printf "usepam yes\n" ;; esac'
 
 # Caddy stubs answer `adapt` with a fixed ADAPTED JSON; `validate` accepts.
 ADAPT_OK_JSON="$TEST_TMP/adapt-ok.json"
@@ -68,11 +74,18 @@ ADAPT_NO_PROXY_JSON="$TEST_TMP/adapt-no-proxy.json"
 cat > "$ADAPT_NO_PROXY_JSON" <<'JSON'
 {"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:9999"}],"stream_close_delay":14400000000000}]}]}}}}}
 JSON
+# The all() tripwire: TWO public proxies, only the first protected. A
+# regression from all() to any() passes every other fixture but not this.
+ADAPT_SECOND_8080_JSON="$TEST_TMP/adapt-second-8080.json"
+cat > "$ADAPT_SECOND_8080_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]},"srv1":{"listen":[":8443"],"routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}]}]}]}}}}}
+JSON
 make_stub caddy-adapt-ok "case \"\$1\" in adapt) cat '$ADAPT_OK_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-missing "case \"\$1\" in adapt) cat '$ADAPT_MISSING_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-elsewhere "case \"\$1\" in adapt) cat '$ADAPT_ELSEWHERE_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-no-proxy "case \"\$1\" in adapt) cat '$ADAPT_NO_PROXY_JSON' ;; *) exit 0 ;; esac"
 make_stub caddy-adapt-fails "case \"\$1\" in adapt) exit 1 ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-second-8080 "case \"\$1\" in adapt) cat '$ADAPT_SECOND_8080_JSON' ;; *) exit 0 ;; esac"
 
 ENV_DIR="$TEST_TMP/root/etc/bcsp"
 install -d -m 0755 "$TEST_TMP/root" "$TEST_TMP/root/etc" "$ENV_DIR"
@@ -182,8 +195,10 @@ PF_UFW="$STUB_DIR/ufw-no-https" expect_fail 'closed 443' 'does not allow 443/tcp
 #  - keys-only root (PermitRootLogin yes + no password-shaped method) passes.
 PF_SSHD="$STUB_DIR/sshd-root-password" expect_fail 'root password login' 'root SSH password login is reachable'
 PF_SSHD="$STUB_DIR/sshd-no-tuple" expect_fail 'tuple evaluation unavailable' 'cannot evaluate the effective root policy'
-PF_SSHD="$STUB_DIR/sshd-address-conditional" expect_fail 'address-conditional policy' 'differs by source address'
+PF_SSHD="$STUB_DIR/sshd-address-conditional" expect_fail 'address-conditional policy' 'differs across the probed connection tuples'
+PF_SSHD="$STUB_DIR/sshd-local-address-conditional" expect_fail 'local-address carve-out' 'differs across the probed connection tuples'
 PF_SSHD="$STUB_DIR/sshd-missing-keyword" expect_fail 'incomplete effective answer' 'cannot evaluate the effective root policy'
+PF_SSHD="$STUB_DIR/sshd-no-port" expect_fail 'undiscoverable sshd port' 'cannot discover the sshd port'
 PF_SSHD="$STUB_DIR/sshd-keys-only-root" expect_pass 'keys-only root tuple'
 
 # Without jq the adapted-config judgment must fail closed, never guess.
@@ -208,6 +223,11 @@ if command -v jq >/dev/null 2>&1; then
   PF_CADDY="$STUB_DIR/caddy-adapt-no-proxy" expect_fail 'no public proxy' \
     'comments and other sites do not count' --caddyfile "$GOOD_CADDYFILE"
 
+  # EVERY public proxy must carry the delay: a second unprotected 8080
+  # handler in another server fails, pinning the all()-not-any() core.
+  PF_CADDY="$STUB_DIR/caddy-adapt-second-8080" expect_fail 'second unprotected public proxy' \
+    'comments and other sites do not count' --caddyfile "$GOOD_CADDYFILE"
+
   # caddy adapt failing is fail-closed, not fail-open.
   PF_CADDY="$STUB_DIR/caddy-adapt-fails" expect_fail 'adapt failure' \
     'cannot evaluate the active proxy semantics' --caddyfile "$GOOD_CADDYFILE"
@@ -219,7 +239,7 @@ if command -v jq >/dev/null 2>&1; then
   expect_fail 'placeholder caddyfile' 'planner.invalid placeholder' \
     --caddyfile "$PLACEHOLDER_CADDYFILE"
 else
-  SKIP_COUNT=6
+  SKIP_COUNT=7
   printf 'preflight-check: SKIPPED %s adapted-Caddy cases (jq unavailable on this platform; CI runs them)\n' "$SKIP_COUNT" >&2
 fi
 

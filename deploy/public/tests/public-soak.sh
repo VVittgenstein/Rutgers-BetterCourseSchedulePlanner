@@ -329,7 +329,14 @@ printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RELOAD_MARKER"
 DRIVER_STATUS=0
 wait "$DRIVER_PID" || DRIVER_STATUS="$?"
 DRIVER_PID=""
-SOAK_END_EPOCH="$(date +%s)"
+# The judged window ends when the DRIVER's soak ended (the done marker),
+# not when its browser finished closing -- a slow teardown must not
+# stretch the window past what the sampler was told to cover.
+if [[ -f "$DONE_MARKER" ]]; then
+  SOAK_END_EPOCH="$(stat -c %Y "$DONE_MARKER")"
+else
+  SOAK_END_EPOCH="$(date +%s)"
+fi
 kill "$SAMPLER_PID" 2>/dev/null || true
 wait "$SAMPLER_PID" 2>/dev/null || true
 SAMPLER_PID=""
@@ -349,11 +356,18 @@ SAMPLER_PID=""
 # The driver counts an ACK when it SENDS one; the server logs (and only
 # logs) a frame it rejects. Zero rejections in THIS invocation's journal is
 # what upgrades "an ACK-shaped frame was sent" into "the server accepted
-# every ACK" -- and a journal that cannot be read proves nothing, so a
-# failed read fails the soak instead of passing it.
+# every ACK" -- and an unreadable OR unseeing journal proves nothing, so
+# both fail the soak: journalctl must exit cleanly AND the transcript must
+# carry the service's own startup anchor. An empty result (invocation-id
+# tagging broken in a container, rate-limit suppression, runtime-journal
+# rotation) is an acquittal from silence, and silence does not acquit.
 if ! SOAK_JOURNAL="$(journalctl _SYSTEMD_INVOCATION_ID="$SERVICE_INVOCATION" --no-pager 2>&1)"; then
   printf 'public-soak: journalctl failed; ACK acceptance cannot be proven (fail closed)\n' >&2
   printf '%s\n' "$SOAK_JOURNAL" >&2
+  exit 1
+fi
+if ! grep -q 'PUBLIC_RUNTIME_STARTED' <<< "$SOAK_JOURNAL"; then
+  printf 'public-soak: the invocation-bound journal does not contain the service startup anchor; the transcript cannot vouch for this run (fail closed)\n' >&2
   exit 1
 fi
 if grep -Eq 'rejected (malformed|invalid) watch WebSocket' <<< "$SOAK_JOURNAL"; then

@@ -99,6 +99,9 @@ check_dns() {
   if resolved="$("$BCSP_GETENT" hosts "$host" 2>/dev/null)" && [[ -n "$resolved" ]]; then
     pf_pass "DNS resolves $host: $(printf '%s' "$resolved" | awk '{print $1}' | paste -sd ',' -)"
     pf_warn "confirm those addresses are THIS host before opening traffic; this script does not compare interfaces"
+    # The first resolved address doubles as the local-address dimension of
+    # the SSH probe matrix: real public connections arrive AT it.
+    PREFLIGHT_RESOLVED_ADDR="$(printf '%s\n' "$resolved" | awk 'NR==1 {print $1}')"
   else
     pf_fail "DNS does not resolve $host; create the record (separately authorized) before go-live"
   fi
@@ -132,10 +135,10 @@ check_firewall() {
 # blocks for it. Prints "permitrootlogin passwordauthentication
 # kbdinteractiveauthentication" or fails.
 root_ssh_effective_triple() {
-  local address="$1" effective
+  local address="$1" local_address="$2" local_port="$3" effective
 
   effective="$("$BCSP_SSHD" -T \
-    -C "user=root,host=preflight-probe.invalid,addr=${address},laddr=127.0.0.1,lport=22" \
+    -C "user=root,host=preflight-probe.invalid,addr=${address},laddr=${local_address},lport=${local_port}" \
     2>/dev/null)" || return 1
   awk '
     $1 == "permitrootlogin" { root = $2 }
@@ -149,28 +152,45 @@ root_ssh_effective_triple() {
 }
 
 check_root_ssh() {
-  local first_triple second_triple root password keyboard
+  local ssh_port first_triple triple address local_address root password keyboard
+  local local_addresses=()
 
   if ! command -v "$BCSP_SSHD" >/dev/null 2>&1; then
     pf_warn "sshd is unavailable; skip only if this host is reached some other way"
     return 0
   fi
-  # H8 (R1): the judgment binds an explicit root connection tuple, so
-  # conditional Match blocks are evaluated instead of read past. Two probe
-  # addresses: if the effective root policy depends on the source address,
-  # this preflight cannot vouch for every address and fails closed.
-  if ! first_triple="$(root_ssh_effective_triple "${PREFLIGHT_SSH_PROBE_ADDRESSES[0]}")"; then
-    pf_fail "sshd -T -C for the root connection tuple failed; cannot evaluate the effective root policy (fail closed)"
+  # H8 (R1): the judgment binds explicit root connection tuples, so
+  # conditional Match blocks are evaluated instead of read past -- across
+  # BOTH the source dimension (two documentation addresses) and the local
+  # dimension (loopback plus the host's own resolved public address, at
+  # sshd's real port). A policy that differs anywhere in that matrix is an
+  # address-conditional carve-out this preflight cannot vouch for.
+  ssh_port="$("$BCSP_SSHD" -T 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
+  if ! [[ "$ssh_port" =~ ^[0-9]+$ ]]; then
+    pf_fail "cannot discover the sshd port from sshd -T; the root tuple cannot be evaluated (fail closed)"
     return 0
   fi
-  if ! second_triple="$(root_ssh_effective_triple "${PREFLIGHT_SSH_PROBE_ADDRESSES[1]}")"; then
-    pf_fail "sshd -T -C for the second probe address failed; cannot evaluate the effective root policy (fail closed)"
-    return 0
+  local_addresses=("127.0.0.1")
+  if [[ -n "$PREFLIGHT_RESOLVED_ADDR" ]]; then
+    local_addresses+=("$PREFLIGHT_RESOLVED_ADDR")
+  else
+    pf_warn "no resolved public address available; the SSH matrix covers only a loopback local address"
   fi
-  if [[ "$first_triple" != "$second_triple" ]]; then
-    pf_fail "the effective root/password policy differs by source address ($first_triple vs $second_triple); an address-conditional carve-out cannot be vouched for (fail closed)"
-    return 0
-  fi
+  first_triple=""
+  for address in "${PREFLIGHT_SSH_PROBE_ADDRESSES[@]}"; do
+    for local_address in "${local_addresses[@]}"; do
+      if ! triple="$(root_ssh_effective_triple "$address" "$local_address" "$ssh_port")"; then
+        pf_fail "sshd -T -C for tuple addr=$address laddr=$local_address lport=$ssh_port failed; cannot evaluate the effective root policy (fail closed)"
+        return 0
+      fi
+      if [[ -z "$first_triple" ]]; then
+        first_triple="$triple"
+      elif [[ "$triple" != "$first_triple" ]]; then
+        pf_fail "the effective root/password policy differs across the probed connection tuples ($first_triple vs $triple at addr=$address laddr=$local_address); a conditional carve-out cannot be vouched for (fail closed)"
+        return 0
+      fi
+    done
+  done
   read -r root password keyboard <<< "$first_triple"
   case "$root" in
     no|prohibit-password|without-password|forced-commands-only)
@@ -282,6 +302,7 @@ main() {
   bcsp_require_privilege
 
   PREFLIGHT_HOST=""
+  PREFLIGHT_RESOLVED_ADDR=""
   check_origin
   if [[ -n "$PREFLIGHT_HOST" ]]; then
     check_dns "$PREFLIGHT_HOST"
