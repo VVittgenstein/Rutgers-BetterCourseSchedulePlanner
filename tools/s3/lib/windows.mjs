@@ -195,14 +195,38 @@ export function clockOffsetMedianMs(samples) {
 // Dates around the seam widens `suffixMin - prefixMax` and so buys a session
 // boundary out of assignServerSessions — but it cannot touch the medians of the
 // surviving Dates on either side, and those still testify that the client clock,
-// not the world, is what moved. To keep such a split alive the attacker must
-// move more than HALF of one window's offsets, and those same Dates are the
-// bracket bounds its peak/off-peak evidence rests on: a window needs
-// MIN_GROUP_BRACKETS server-informative brackets to qualify a side, i.e. at
-// least ten dated samples, so the cheapest forgery is a coordinated rewrite of
-// six or more of the very Dates it is claiming as evidence. That is the
-// both-clocks bulk rewrite A3 defers — and it is observationally identical to a
-// genuine capture pause, which is legitimate evidence.
+// not the world, is what moved.
+//
+// THE RESIDUAL BOUNDARY, STATED AS IT ACTUALLY IS. An earlier revision of this
+// comment claimed that keeping a forged split alive costs "more than half of one
+// window's offsets, and those same Dates are the bracket bounds its own evidence
+// rests on". The second half of that was FALSE, and the first half was not a
+// lower bound: this function is asked about whichever window the CLIENT clock
+// put at the seam, and the attacker draws the client clock. A window with ONE
+// dated sample has a median with breakdown point ONE, carries no bracket and
+// claims nothing — and minting one is free (step the client clock twice, one
+// sample apart). Moving its single Date with its own client column then
+// corroborates the seam for the price of ONE cell while the two windows that
+// actually carry the peak and off-peak evidence keep every Date they have. That
+// is CE-21; CE-22 is the same trick at a second geometry for one moved plus one
+// deleted cell.
+//
+// What restores a real price is not a stronger seam statistic — every one of
+// them is a statistic OF A WINDOW, and the attacker chooses the windows — but
+// the consumer of this function in gate.mjs: one uncorroborated seam voids the
+// stream's whole client-window partition, so a surviving split needs EVERY seam
+// of the stream corroborated, decoys included. Because a client step of J
+// inflates the client advance by exactly J and drags the later medians by
+// exactly -J, corroborating a seam the step created means raising the later
+// window's median back by more than sessionGapMs, and an order statistic only
+// moves when more than half of its population does. So the price is
+// `floor(d / 2) + 1` forged Dates in a window that must ALSO still carry
+// MIN_GROUP_BRACKETS server-informative brackets — d >= MIN_GROUP_BRACKETS + 1
+// dated samples at the densest possible geometry (every poll a change), and
+// d = 2 * MIN_GROUP_BRACKETS in the one this suite's fixtures use. Done
+// completely that is the both-clocks rewrite A3 defers, and it is
+// observationally identical to a genuine capture pause, which is legitimate
+// evidence.
 //
 // Returns null when either window has no dated sample: an absent Date makes no
 // claim, so it can neither corroborate nor refute (such a window has no server

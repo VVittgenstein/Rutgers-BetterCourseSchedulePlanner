@@ -455,6 +455,7 @@ export function buildEvidenceSessions(evidenceWindows) {
     ordered.filter((w) => (w.clockOffsetMedianMs ?? null) !== null).map((w) => w.streamId),
   );
   const uncorroboratedSeams = [];
+  const steppedStreams = new Set();
   for (let i = 1; i < ordered.length; i += 1) {
     const prev = ordered[i - 1];
     const w = ordered[i];
@@ -465,6 +466,66 @@ export function buildEvidenceSessions(evidenceWindows) {
     if (advance === null || advance <= threshold) {
       uncorroboratedSeams.push([i - 1, i]);
       union(i - 1, i);
+      steppedStreams.add(w.streamId);
+    }
+  }
+  // ONE DEMONSTRATED CLIENT-CLOCK STEP VOIDS THE WHOLE STREAM'S CLIENT-WINDOW
+  // PARTITION. Merging only the two windows AT an uncorroborated seam leaves the
+  // corroboration of every OTHER seam of that stream resting on windows the
+  // attacker chose, and `clockOffsetMedianMs` has breakdown point ceil(n/2) in
+  // the number of DATED samples of the window it is asked about — so a window
+  // with ONE dated sample corroborates its seam for the price of ONE forged
+  // `Date`. Minting exactly such a decoy is free once the client clock may be
+  // stepped twice: step at the peak boundary, step again one sample later, and
+  // the single sample in between becomes a client window whose one `Date`,
+  // moved with its own client column, makes it look like an honest pause. The
+  // off-peak half then stands alone as an "independent" session while the peak
+  // half merges with the decoy, and one server-contiguous straddling capture
+  // reaches a six-gate GO for the price of one `Date` cell (CE-21, and CE-22 at
+  // a second geometry with one cell moved and one deleted).
+  //
+  // A population floor on the corroborating window does not fix this: it only
+  // moves the price to `floor(F/2) + 1` cells and it REFUSES honest data — an
+  // honest short window carries no evidence of its own, so making it unable to
+  // corroborate costs its neighbours their independence for nothing.
+  //
+  // The rule that does fix it reads the seam that FAILED rather than the window
+  // that passed. An uncorroborated seam is not an ambiguity: it is a proof. The
+  // client clock advanced across it by more than `sessionGapMs` MORE than the
+  // server clock did (that is exactly what `advance <= threshold` says while
+  // `segmentWindows` split on a client gap above the same threshold), so the
+  // stream's client clock is demonstrably stepped, and a stepped clock is not a
+  // trustworthy witness to ANY of that stream's window boundaries — including
+  // ones far from the step. So every evidence window of a stream holding an
+  // uncorroborated seam becomes ONE evidence session.
+  //
+  // That is the fixpoint of the local rule, not a bigger hammer bolted on: "a
+  // window touching an uncorroborated seam corroborates nothing" makes both of
+  // its seams fail, which makes its neighbours touch an uncorroborated seam, and
+  // the cascade reaches both ends of the stream. Stopping the cascade at one or
+  // two hops just buys the attacker one or two more decoy windows.
+  //
+  // WHAT IT COSTS HONEST DATA: nothing measurable. An uncorroborated seam
+  // requires the client clock to run more than ten minutes ahead of the server
+  // clock inside one capture; the local captures D1/D2/D3 have none (their whole
+  // client-vs-server offset spread is 6.5 s across 558 samples), and neither
+  // does any honest control in the suite — including the ~19 h two-session
+  // control, the genuine 11-minute pause, and the honest seam that lands 2 s
+  // over the threshold. A capture that really does hold such a step is a capture
+  // with a client/server clock discontinuity, which the A2-2 contract names as a
+  // fail-closed trigger in so many words.
+  //
+  // IT IS STILL ONLY EVER A MERGE, so the monotonicity argument below is
+  // untouched: A4-2 satisfied here implies A4-2 satisfied at the frozen A1
+  // baseline, for every input.
+  if (steppedStreams.size > 0) {
+    const firstOfStream = new Map();
+    for (let i = 0; i < ordered.length; i += 1) {
+      const sid = ordered[i].streamId;
+      if (!steppedStreams.has(sid)) continue;
+      const first = firstOfStream.get(sid);
+      if (first === undefined) firstOfStream.set(sid, i);
+      else union(first, i);
     }
   }
   const components = new Map(); // root rank -> [rank, ...] ascending
@@ -497,6 +558,10 @@ export function buildEvidenceSessions(evidenceWindows) {
       uncorroboratedSeamCount: uncorroboratedSeams.filter(
         ([a, b]) => rankSet.has(a) && rankSet.has(b),
       ).length,
+      // True when this stream held at least one uncorroborated seam ANYWHERE,
+      // which voids its whole client-window partition: every evidence window of
+      // the stream is in this one session, however far from the step it sits.
+      clientClockStepVoided: steppedStreams.has(streamId),
       // The constituent client windows themselves, in windowId order. A4-2
       // qualifies a side from a SINGLE one of these, never from their sum.
       windows,
@@ -791,6 +856,7 @@ export function evaluateGate(ctx) {
     bestWindowInPeakInformativeCount: bestWindowInPeak(sess),
     bestWindowOffPeakInformativeCount: bestWindowOffPeak(sess),
     uncorroboratedSeamCount: sess.uncorroboratedSeamCount,
+    clientClockStepVoided: sess.clientClockStepVoided,
     pureOffPeak: isPureOffPeakSession(sess),
     qualifiesPeak: qualifyingPeakIds.has(sess.sessionId),
     qualifiesOffPeak: qualifyingOffPeakIds.has(sess.sessionId),
@@ -834,12 +900,20 @@ export function evaluateGate(ctx) {
     uncorroboratedSeamCount > 0
       ? `; ${uncorroboratedSeamCount} client-window seam(s) were merged because the server clock did not corroborate the gap — the window medians of (serverDate - requestStart) differ across the seam by about the gap itself, which is a stepped client clock, not a pause`
       : "";
+  // Streams whose whole client-window partition the step above voided.
+  const voidedStreamCount = new Set(
+    evidenceSessions.filter((sess) => sess.clientClockStepVoided).map((sess) => sess.streamId),
+  ).size;
+  const voidedNote =
+    voidedStreamCount > 0
+      ? `; the client-window partition of ${voidedStreamCount} stream(s) was voided entirely — a demonstrated client-clock step discredits every window boundary of that stream, not only the seam it sits on`
+      : "";
   gate.push({
     id: "A4-2",
     requirement:
-      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline, a client-window seam counts as a session boundary only when the two windows' median client-vs-server clock offsets corroborate that the gap really passed, and each side must be carried by ONE constituent client window rather than by pooling several; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides",
+      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; evidence is grouped into sessions independent on BOTH the client and the server timeline, a client-window seam counts as a session boundary only when the two windows' median client-vs-server clock offsets corroborate that the gap really passed, one uncorroborated seam voids the whole stream's client-window partition, and each side must be carried by ONE constituent client window rather than by pooling several; peak and off-peak evidence only from brackets whose own comparison-clock bounds fall in that regime, and the off-peak session must hold no peak-hour bracket at all, so neither one straddling session nor a client-clock jump inside one server-contiguous session can supply both sides",
     satisfied: a2Satisfied,
-    evidence: `windows: ${totalWindows} total${excludedNote}; evidence sessions: ${sessions.length} from ${evidenceWindows.length} evidence window(s), grouped on the server timeline${mergedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak sessions (>=${MIN_GROUP_BRACKETS} informative in-peak brackets in one client window): ${qualifyingPeakSessions.length}; qualifying off-peak sessions (>=${MIN_GROUP_BRACKETS} informative off-peak brackets in one client window, none in peak): ${qualifyingOffPeakSessions.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${straddleNote}${pooledOnlyNote}${uncorroboratedNote}`,
+    evidence: `windows: ${totalWindows} total${excludedNote}; evidence sessions: ${sessions.length} from ${evidenceWindows.length} evidence window(s), grouped on the server timeline${mergedNote}; peak/off-peak classified on the ${ctx.clockSource} clock; qualifying peak sessions (>=${MIN_GROUP_BRACKETS} informative in-peak brackets in one client window): ${qualifyingPeakSessions.length}; qualifying off-peak sessions (>=${MIN_GROUP_BRACKETS} informative off-peak brackets in one client window, none in peak): ${qualifyingOffPeakSessions.length} (window labels: ${peakWindows} peak-overlapping, ${offPeakWindows} off-peak)${noServerBoundsNote}${straddleNote}${pooledOnlyNote}${uncorroboratedNote}${voidedNote}`,
   });
 
   // A4-3: distinguishable winner under holdout.

@@ -503,3 +503,233 @@ export function buildDeleteBandSplitSession(dir, mode) {
   }
   return RUN_NAMES;
 }
+
+// ---------------------------------------------------------------------------
+// CE-21: CE-20 again, plus the escape hatch v2.9.0's seam-corroboration check
+// left open — a DECOY client window.
+//
+// v2.9.0 corroborated a client-window seam from the two windows' median
+// (serverDate - requestStart). That reads a statistic OF A WINDOW, and the
+// windows are drawn by the CLIENT clock, which is the attacker's. A window with
+// ONE dated sample has a median with breakdown point ONE — and minting one is
+// free, because the client clock may be stepped as often as you like: step at
+// the peak boundary (CE-16's own primitive), step again ONE SAMPLE later, and
+// the sample in between becomes a client window of its own. Move that sample's
+// Date with its own client column and the decoy looks exactly like an honest
+// one-poll pause: it corroborates the seam behind it, so the pure off-peak half
+// stands alone as an "independent" session, while the seam in front of it stays
+// uncorroborated and merely merges the decoy into the peak half — which costs
+// the attacker nothing, since the peak half qualifies on its own window.
+//
+// Price: ONE Date cell out of 160. The 43 deleted Dates are free (CE-20 already
+// established that), no body, no row order and no other Date is touched, and
+// the two windows that actually carry the peak and off-peak evidence keep every
+// Date they have. Measured on the bytes this builder writes:
+//   frozen baseline 2c7b53a87471  verdict=GO qualifier=none brackets=237
+//   v2.9.0 (06edcf0)             verdict=GO qualifier=none brackets=237, six gates
+//
+// Modes:
+//   "honest"    no edits at all — one client window per campus;
+//   "attack"    the decoy's Date moved with its client column, band deleted;
+//   "no-forge"  byte-identical to "attack" except that the decoy's Date is NOT
+//               moved. That single cell is the whole price, and v2.9.0 already
+//               refused this one.
+// ---------------------------------------------------------------------------
+
+// The decoy is the first row of the peak half (tick 40, row 80): stepping the
+// client clock again at row 81 leaves it alone in its own client window.
+export const DECOY_ROW = LONG_JUMP_FROM_TICK * 2;
+// Rows 81..123 = ticks 40.5..61 — the same free band CE-20 uses, shifted one
+// row later so it starts after the decoy.
+export const DECOY_BAND_FROM_ROW = DECOY_ROW + 1;
+export const DECOY_BAND_TO_ROW = (DELETED_BAND_TO_TICK + 1) * 2 + 1;
+
+export function decoyWindowRows(campus, mode) {
+  let rows = longStraddleRows(campus).map((row) => ({ ...row }));
+  if (mode === "honest") return rows;
+  if (mode === "attack") {
+    rows[DECOY_ROW] = shiftServerDate([rows[DECOY_ROW]], CLIENT_JUMP_MS)[0];
+  } else if (mode !== "no-forge") {
+    throw new Error(`decoyWindowRows: unknown mode ${mode}`);
+  }
+  rows = rows.map((row, i) =>
+    i >= DECOY_BAND_FROM_ROW && i <= DECOY_BAND_TO_ROW ? { ...row, serverDate: null } : row,
+  );
+  return [
+    ...rows.slice(0, DECOY_ROW),
+    ...shiftClientClock(rows.slice(DECOY_ROW, DECOY_ROW + 1), CLIENT_JUMP_MS),
+    ...shiftClientClock(rows.slice(DECOY_ROW + 1), 2 * CLIENT_JUMP_MS),
+  ];
+}
+
+export function buildDecoyWindowSplitSession(dir, mode) {
+  for (const campus of CAMPUSES) {
+    makeRunDir(join(dir, `run${campus}`), { campus, samples: decoyWindowRows(campus, mode) });
+  }
+  return RUN_NAMES;
+}
+
+// ---------------------------------------------------------------------------
+// CE-22: the same decoy trick at a SECOND geometry, for two Date cells and no
+// deleted band at all — proof that CE-21 is a mechanism, not a knife edge.
+//
+// One honest 30 s polling capture per campus with two hiccups in it:
+//   A  40 ticks 16:40:00-16:59:30 ET
+//   X   1 tick  17:05:00 ET          (the decoy)
+//   B  18 ticks 17:11:00-17:19:30 ET
+// The largest adjacent serverDate gap of the HONEST capture is 351 s, well
+// under max(10 min, 5 x interval), so honestly this is ONE server-contiguous
+// session straddling 17:00 ET — CE-14's forbidden shape.
+//
+// The attack steps the client clock 5 minutes at X and 5 minutes again at B, so
+// X becomes a client window of its own; then it DELETES X's first Date and
+// MOVES X's second Date forward by the same 5 minutes as X's client column.
+// Two cells out of 59 per capture. Each half alone is refused, and so is the
+// unedited twin — the combination is the escape.
+//
+// Modes: "honest" (no edit), "attack", "delete-only", "forge-only".
+// ---------------------------------------------------------------------------
+
+export const DECOY2_JUMP_MS = 300000;
+const DECOY2_A_BASE = Date.UTC(2026, 0, 6, 21, 40, 0); // 16:40 ET
+const DECOY2_X_BASE = Date.UTC(2026, 0, 6, 22, 5, 0); // 17:05 ET
+const DECOY2_B_BASE = Date.UTC(2026, 0, 6, 22, 11, 0); // 17:11 ET
+export const DECOY2_A_TICKS = 40;
+export const DECOY2_B_TICKS = 18;
+
+export function twoCellDecoyRows(campus, mode) {
+  const shape = CAMPUS_SHAPE[campus];
+  const chunk = (baseMs, count, startSeq) =>
+    makeTickSeries({
+      baseMs,
+      periodMs: 30000,
+      count,
+      startSeq,
+      bodyPrefix: `${campus}-d2-`,
+      ...shape,
+    });
+  const a = chunk(DECOY2_A_BASE, DECOY2_A_TICKS, 1);
+  let x = chunk(DECOY2_X_BASE, 1, 200).map((row) => ({ ...row }));
+  const b = chunk(DECOY2_B_BASE, DECOY2_B_TICKS, 300);
+  if (mode === "honest") return [...a, ...x, ...b];
+  if (mode === "attack" || mode === "delete-only") {
+    x = x.map((row, i) => (i === 0 ? { ...row, serverDate: null } : row));
+  }
+  if (mode === "attack" || mode === "forge-only") {
+    x = x.map((row, i) => (i === 1 ? shiftServerDate([row], DECOY2_JUMP_MS)[0] : row));
+  }
+  if (!["attack", "delete-only", "forge-only"].includes(mode)) {
+    throw new Error(`twoCellDecoyRows: unknown mode ${mode}`);
+  }
+  return [
+    ...a,
+    ...shiftClientClock(x, DECOY2_JUMP_MS),
+    ...shiftClientClock(b, 2 * DECOY2_JUMP_MS),
+  ];
+}
+
+export function buildTwoCellDecoySplit(dir, mode) {
+  for (const campus of CAMPUSES) {
+    makeRunDir(join(dir, `run${campus}`), { campus, samples: twoCellDecoyRows(campus, mode) });
+  }
+  return RUN_NAMES;
+}
+
+// ---------------------------------------------------------------------------
+// BOUNDARY (A3b): the CHEAPEST forged split that still reaches GO, built so the
+// price can be counted instead of argued.
+//
+// One client jump at the peak boundary, and in the second window every Date is
+// dropped except the `keptTicks` ticks that carry its peak evidence. Of those,
+// `forgedTicks` move with the client column. Sweeping forgedTicks from 0 to
+// keptTicks measures the price directly, and it is not "more than half": the
+// server-session index is an ORDER STATISTIC (suffixMin - prefixMax), so a
+// single surviving honest Date after the seam collapses suffixMin and pulls the
+// two windows back into one server session, whatever the medians say. Every
+// Date the far window still carries has to move.
+//
+// Measured on these bytes, live tree, keptTicks = MIN_GROUP_BRACKETS = 5:
+//   forged 0, 2, 4, 6, 8 cells -> NO_PRODUCTION_CHANGE (A4-2 the sole refusal)
+//   forged 10 cells            -> GO, all six gates
+// and with fewer kept ticks the far window cannot reach MIN_GROUP_BRACKETS at
+// all: 2, 3, 4 kept ticks all fully forged -> NO-GO. So the minimum is
+// 2 * MIN_GROUP_BRACKETS = 10 Date cells per capture at this geometry (one
+// stable and one changed endpoint per bracket), and a geometry where every poll
+// sees a change could not go below MIN_GROUP_BRACKETS + 1 = 6.
+//
+// At 10 forged cells the result is a capture whose second window moved on BOTH
+// clocks — indistinguishable from a real 11-minute pause, which is legitimate
+// evidence. It reaches GO on the frozen baseline, on v2.9.0 and here, and stays
+// deferred per A3.
+// ---------------------------------------------------------------------------
+
+export const MINIMAL_SPLIT_KEPT_TICKS = 5;
+
+export function minimalForgedSplitRows(campus, forgedTicks, keptTicks = MINIMAL_SPLIT_KEPT_TICKS) {
+  const rows = longStraddleRows(campus).map((row, i) => {
+    if (i < DECOY_ROW) return { ...row };
+    const tickIndex = Math.floor(i / 2) - LONG_JUMP_FROM_TICK;
+    if (tickIndex >= keptTicks) return { ...row, serverDate: null };
+    return tickIndex < forgedTicks ? shiftServerDate([row], CLIENT_JUMP_MS)[0] : { ...row };
+  });
+  return [
+    ...rows.slice(0, DECOY_ROW),
+    ...shiftClientClock(rows.slice(DECOY_ROW), CLIENT_JUMP_MS),
+  ];
+}
+
+export function buildMinimalForgedSplit(dir, forgedTicks, keptTicks = MINIMAL_SPLIT_KEPT_TICKS) {
+  for (const campus of CAMPUSES) {
+    makeRunDir(join(dir, `run${campus}`), {
+      campus,
+      samples: minimalForgedSplitRows(campus, forgedTicks, keptTicks),
+    });
+  }
+  return RUN_NAMES;
+}
+
+// ---------------------------------------------------------------------------
+// CONTROL (R4): an honest capture with a SHORT window in the middle of it.
+//
+// The anti-lockout control for this round's rule, and the fixture that decides
+// between the two candidate fixes for CE-21. Per campus, three honest windows on
+// BOTH clocks, nothing edited anywhere:
+//   #w00  the 20-tick off-peak session   (22:00 ET the previous evening);
+//   #w01  ONE tick at 12:00 ET           — a stub: two rows, two Dates, one
+//         bracket, far too little to qualify any A4-2 side;
+//   #w02  the 20-tick peak session       (17:10 ET).
+// Every gap is real on both clocks, so every seam is corroborated and the three
+// windows stay three evidence sessions: the off-peak side comes from #w00 and
+// the peak side from #w02, exactly as in the honest control. GO.
+//
+// A POPULATION FLOOR on the corroborating window — "a window with fewer than F
+// dated samples cannot corroborate its seams, so they fail closed" — was the
+// obvious answer to CE-21 and it FAILS HERE for any F > 2: the stub then
+// corroborates neither of its seams, merges with BOTH neighbours, and the single
+// resulting session holds peak-hour brackets, so it is not pure and the off-peak
+// side dies. An honest capture would lose its evidence because one of its
+// windows was short. Voiding on a DEMONSTRATED clock step instead costs this
+// fixture nothing, because it has no step to demonstrate.
+// ---------------------------------------------------------------------------
+
+// 12:00 ET Jan 6 — between the off-peak session and the peak session on both
+// clocks, and comfortably outside the peak hour.
+export const SHORT_WINDOW_BASE = Date.UTC(2026, 0, 6, 17, 0, 0);
+
+export function buildHonestShortWindowControl(dir) {
+  for (const campus of CAMPUSES) {
+    const stub = makeTickSeries({
+      baseMs: SHORT_WINDOW_BASE,
+      periodMs: 30000,
+      count: 1,
+      startSeq: 50,
+      bodyPrefix: `${campus}-stub-`,
+      ...CAMPUS_SHAPE[campus],
+    });
+    makeRunDir(join(dir, `run${campus}`), {
+      campus,
+      samples: [...offPeakSession(campus), ...stub, ...honestPeakSession(campus)],
+    });
+  }
+  return RUN_NAMES;
+}

@@ -135,6 +135,15 @@ import {
   buildPooledPeakChunksMultiCell,
   buildHonestNearThresholdSeam,
   buildDeleteBandSplitSession,
+  buildDecoyWindowSplitSession,
+  buildTwoCellDecoySplit,
+  buildMinimalForgedSplit,
+  buildHonestShortWindowControl,
+  DECOY_ROW,
+  DECOY_BAND_FROM_ROW,
+  DECOY_BAND_TO_ROW,
+  DECOY2_JUMP_MS,
+  MINIMAL_SPLIT_KEPT_TICKS,
   deleteBandRows,
   DELETED_BAND_FROM_TICK,
   DELETED_BAND_TO_TICK,
@@ -2131,17 +2140,45 @@ for (const cellCount of [2, 3, POOLED_CHUNK_TICKS * 2]) {
     // The pooling DID happen and the pooled session DOES clear the threshold in
     // total. It buys nothing, because the peak side is taken from the best
     // SINGLE client window, which is still the honest 4.
-    assert.equal(json.evidenceSessions.length, 6);
-    const pooled = json.evidenceSessions.filter((sess) => sess.windowIds.length === 2);
+    //
+    // How far the refusal reaches depends on whether the forgery moved the
+    // later chunk's MEDIAN offset, which is a property of k alone: the chunk
+    // carries `POOLED_CHUNK_TICKS * 2` Dates and `clockOffsetMedianMs` takes the
+    // lower median, so k has to exceed its index before the median follows.
+    //   k below that  -> the medians still corroborate the seam, so only the
+    //                    server-session-index pass merges the two chunks and the
+    //                    honest off-peak session of the stream is untouched;
+    //   k at or above -> the later chunk's whole offset has moved by the gap, so
+    //                    the seam is UNCORROBORATED, which is the analyzer's
+    //                    proof that one of the two clocks stepped. That voids the
+    //                    stream's client-window partition entirely (v2.10.0), and
+    //                    the off-peak session goes with it. Refusing MORE of a
+    //                    fixture that moved every Date of a window is not a
+    //                    regression; what must never happen is an honest capture
+    //                    losing evidence this way, which is what CONTROL (R3c),
+    //                    CONTROL (R3) and the ~19 h control below pin.
+    const datedPerChunk = POOLED_CHUNK_TICKS * 2;
+    const movesMedian = cellCount > ((datedPerChunk - 1) >> 1);
+    assert.equal(json.evidenceSessions.length, movesMedian ? 3 : 6);
+    const pooled = json.evidenceSessions.filter(
+      (sess) => sess.windowIds.length === (movesMedian ? 3 : 2),
+    );
     assert.equal(pooled.length, 3);
     for (const sess of pooled) {
       assert.ok(sess.inPeakInformativeCount >= MIN_GROUP_BRACKETS);
       assert.ok(sess.bestWindowInPeakInformativeCount < MIN_GROUP_BRACKETS);
       assert.equal(sess.qualifiesPeak, false);
+      assert.equal(sess.clientClockStepVoided, movesMedian);
+      assert.equal(sess.uncorroboratedSeamCount, movesMedian ? 1 : 0);
     }
-    // The honest off-peak session of each stream is untouched and still counts:
-    // the refusal is local to the pooled session, not a stream-wide void.
-    assert.equal(json.evidenceSessions.filter((sess) => sess.qualifiesOffPeak).length, 3);
+    // Below the median's breakdown point the honest off-peak session of each
+    // stream is untouched and still counts — the refusal is local to the pooled
+    // session. At or above it the stream's own Dates say a clock stepped, and
+    // the whole partition goes.
+    assert.equal(
+      json.evidenceSessions.filter((sess) => sess.qualifiesOffPeak).length,
+      movesMedian ? 0 : 3,
+    );
     const a2 = gateById(json, "A4-2");
     assert.match(
       a2.evidence,
@@ -2433,5 +2470,321 @@ test("BOUNDARY (A3): rewriting the surviving Dates with the client clock is a ge
   for (const gate of json.goGate) assert.equal(gate.satisfied, true, `${gate.id}: ${gate.evidence}`);
   assert.equal(json.evidenceSessions.length, 6);
   for (const sess of json.evidenceSessions) assert.equal(sess.uncorroboratedSeamCount, 0);
+  assertA42NoWeakerThanFrozenBaseline(json);
+});
+
+// ---------------------------------------------------------------------------
+// CE-21 / CE-22 / BOUNDARY (A3b): the DECOY client window, and the real price
+// of a surviving split. See r3-fixtures.mjs for the shapes.
+//
+// Negative-proof protocol, same as every counterexample above: the bytes are
+// built once by the shared builder and driven through the frozen A1 baseline
+// 2c7b53a87471 (v2.6.1) and through v2.9.0 (06edcf0) as well as this tree.
+//   CE-21 attack:  baseline `verdict=GO qualifier=none brackets=237 distinguishable=true`
+//                  v2.9.0   `verdict=GO qualifier=none brackets=237 distinguishable=true`, six gates
+//   CE-22 attack:  baseline `verdict=GO qualifier=none brackets=177 distinguishable=true`
+//                  v2.9.0   `verdict=GO qualifier=none brackets=177 distinguishable=true`, six gates
+// Neither is a J1 violation — the frozen baseline answers GO too — but both are
+// the A2-2 objective going unmet, which is what this round closes.
+// ---------------------------------------------------------------------------
+
+function rowsOfRun(base, name) {
+  return readFileSync(join(base, name, "samples.ndjson"), "utf8")
+    .split("\n")
+    .filter((l) => l.length > 0)
+    .map((l) => JSON.parse(l));
+}
+
+// Counts, from the bytes alone, how a fixture differs from its honest twin.
+function dateAudit(forged, honest) {
+  assert.equal(forged.length, honest.length);
+  let deleted = 0;
+  let moved = 0;
+  let bodyChanged = 0;
+  let clientMoved = 0;
+  const movedBy = new Set();
+  for (let i = 0; i < forged.length; i += 1) {
+    const f = forged[i];
+    const h = honest[i];
+    if (h.serverDate !== null && f.serverDate === null) deleted += 1;
+    else if (f.serverDate !== h.serverDate) {
+      moved += 1;
+      movedBy.add(Date.parse(f.serverDate) - Date.parse(h.serverDate));
+    }
+    if (f.decodedBodySha256 !== h.decodedBodySha256) bodyChanged += 1;
+    if (f.requestStartedUtc !== h.requestStartedUtc) clientMoved += 1;
+  }
+  const dates = honest.map((r) => Date.parse(r.serverDate));
+  let honestMaxAdjacentServerGapMs = 0;
+  for (let i = 1; i < dates.length; i += 1) {
+    honestMaxAdjacentServerGapMs = Math.max(honestMaxAdjacentServerGapMs, dates[i] - dates[i - 1]);
+  }
+  const starts = forged.map((r) => Date.parse(r.requestStartedUtc));
+  const clientGapsOverThreshold = starts
+    .slice(1)
+    .map((x, i) => x - starts[i])
+    .filter((g) => g > WINDOW_GAP_MIN_MS).length;
+  return {
+    deleted,
+    moved,
+    movedBy: [...movedBy],
+    bodyChanged,
+    clientMoved,
+    honestMaxAdjacentServerGapMs,
+    clientGapsOverThreshold,
+  };
+}
+
+test("CE-21 (A4-2): a ONE-SAMPLE decoy client window cannot corroborate a seam", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  const honestDir = makeTmpDir();
+  t.after(() => cleanup(honestDir));
+  // v2.9.0 asked the two windows AT a seam whether their median clock offsets
+  // agreed that the gap passed. Both windows are drawn by the client clock, and
+  // the client clock is the attacker's: stepping it twice one sample apart mints
+  // a client window holding a single sample, whose median has breakdown point
+  // ONE. Moving that one Date with its own client column makes the decoy look
+  // like an honest one-poll pause, and the pure off-peak half of a single
+  // server-contiguous straddling capture stands alone as an independent session.
+  const runNames = buildDecoyWindowSplitSession(dir, "attack");
+  buildDecoyWindowSplitSession(honestDir, "honest");
+
+  for (const name of runNames) {
+    const audit = dateAudit(rowsOfRun(dir, name), rowsOfRun(honestDir, name));
+    // ONE Date cell is the whole price. The 43 dropped Dates are free (CE-20),
+    // no body and no row order changed, and both evidence-bearing windows keep
+    // every Date they have.
+    assert.equal(audit.moved, 1);
+    assert.deepEqual(audit.movedBy, [CLIENT_JUMP_MS]);
+    assert.equal(audit.deleted, DECOY_BAND_TO_ROW - DECOY_BAND_FROM_ROW + 1);
+    assert.equal(audit.deleted, 43);
+    assert.equal(audit.bodyChanged, 0);
+    // The honest twin is ONE server-contiguous session straddling 17:00 ET.
+    assert.ok(audit.honestMaxAdjacentServerGapMs <= WINDOW_GAP_MIN_MS);
+    assert.equal(audit.honestMaxAdjacentServerGapMs, 21000);
+    // Two client steps, so three client windows, the middle one holding one row.
+    assert.equal(audit.clientGapsOverThreshold, 2);
+    assert.equal(audit.clientMoved, LONG_STRADDLE_TICKS * 2 - DECOY_ROW);
+  }
+
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=237/);
+  const json = out.json;
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+  // The stream's own Dates prove one of its clocks stepped, so its whole
+  // client-window partition is void: three client windows, ONE evidence session.
+  assert.equal(json.evidenceSessions.length, 3);
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 3);
+    assert.equal(sess.clientClockStepVoided, true);
+    assert.equal(sess.uncorroboratedSeamCount, 1);
+    assert.equal(sess.pureOffPeak, false);
+    assert.equal(sess.qualifiesOffPeak, false);
+    assert.equal(sess.qualifiesPeak, true);
+  }
+  const a2 = gateById(json, "A4-2");
+  assert.match(a2.evidence, /qualifying off-peak sessions \(>=5 [^)]*\): 0/);
+  assert.match(a2.evidence, /client-window partition of 3 stream\(s\) was voided entirely/);
+  assertA42NoWeakerThanFrozenBaseline(json);
+  for (const gate of json.goGate) {
+    assert.equal(gate.satisfied, gate.id !== "A4-2", `${gate.id}: ${gate.evidence}`);
+  }
+});
+
+test("CONTROL (CE-21): the same bytes with the decoy's Date left alone were already refused", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // Byte-identical to CE-21 except for that one cell. It isolates the price:
+  // v2.9.0 refused this and accepted CE-21, so ONE Date was the whole gap.
+  const runNames = buildDecoyWindowSplitSession(dir, "no-forge");
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=237/);
+  const json = out.json;
+  assert.equal(json.evidenceSessions.length, 3);
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 3);
+    // Now BOTH seams fail on the medians, not one.
+    assert.equal(sess.uncorroboratedSeamCount, 2);
+    assert.equal(sess.qualifiesOffPeak, false);
+  }
+  assert.equal(gateById(json, "A4-2").satisfied, false);
+  assertA42NoWeakerThanFrozenBaseline(json);
+});
+
+test("CONTROL (CE-21): the unedited honest capture is one window and one session", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  const runNames = buildDecoyWindowSplitSession(dir, "honest");
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=240/);
+  const json = out.json;
+  assert.equal(json.evidenceSessions.length, 3);
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 1);
+    assert.equal(sess.uncorroboratedSeamCount, 0);
+    // Nothing was edited, so nothing is voided: the honest shape reaches the
+    // gate on its own merits and fails only because it straddles 17:00 ET.
+    assert.equal(sess.clientClockStepVoided, false);
+    assert.equal(sess.qualifiesOffPeak, false);
+  }
+  assert.equal(gateById(json, "A4-2").satisfied, false);
+  assertA42NoWeakerThanFrozenBaseline(json);
+});
+
+for (const mode of ["attack", "delete-only", "forge-only", "honest"]) {
+  test(`CE-22 (A4-2): the decoy trick at a second geometry, mode=${mode}`, (t) => {
+    const dir = makeTmpDir();
+    t.after(() => cleanup(dir));
+    const honestDir = makeTmpDir();
+    t.after(() => cleanup(honestDir));
+    // One honest 30 s capture per campus with two hiccups in it, running
+    // 16:40:00-17:19:30 ET. Its largest adjacent Date gap is 351 s, so honestly
+    // it is ONE server-contiguous session straddling 17:00 ET. The attack steps
+    // the client clock twice around the 17:05 poll, deletes that poll's first
+    // Date and moves its second forward by the same 5 minutes: TWO cells out of
+    // 59, no deleted band, no body and no row order touched. Each half alone is
+    // refused and so is the unedited twin — the combination was the escape.
+    const runNames = buildTwoCellDecoySplit(dir, mode);
+    buildTwoCellDecoySplit(honestDir, "honest");
+
+    for (const name of runNames) {
+      const audit = dateAudit(rowsOfRun(dir, name), rowsOfRun(honestDir, name));
+      assert.equal(audit.bodyChanged, 0);
+      assert.equal(audit.deleted, mode === "attack" || mode === "delete-only" ? 1 : 0);
+      assert.equal(audit.moved, mode === "attack" || mode === "forge-only" ? 1 : 0);
+      if (audit.moved > 0) assert.deepEqual(audit.movedBy, [DECOY2_JUMP_MS]);
+      assert.ok(audit.honestMaxAdjacentServerGapMs <= WINDOW_GAP_MIN_MS);
+      assert.equal(audit.honestMaxAdjacentServerGapMs, 351000);
+      assert.equal(audit.clientGapsOverThreshold, mode === "honest" ? 0 : 2);
+    }
+
+    const out = analyze(dir, runNames);
+    assert.equal(out.code, 0, out.stderr);
+    const json = out.json;
+    assert.match(
+      out.stdout,
+      mode === "honest"
+        ? /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=183/
+        : /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=177/,
+    );
+    assert.equal(gateById(json, "A4-2").satisfied, false);
+    assert.equal(json.evidenceSessions.length, 3);
+    for (const sess of json.evidenceSessions) {
+      assert.equal(sess.windowIds.length, mode === "honest" ? 1 : 3);
+      assert.equal(sess.qualifiesOffPeak, false);
+      assert.equal(sess.clientClockStepVoided, mode !== "honest");
+    }
+    assertA42NoWeakerThanFrozenBaseline(json);
+  });
+}
+
+for (const forgedTicks of [0, 1, 2, 3, 4, MINIMAL_SPLIT_KEPT_TICKS]) {
+  const cells = forgedTicks * 2;
+  test(`BOUNDARY (A3b): a forged split needs ALL ${MINIMAL_SPLIT_KEPT_TICKS * 2} of its far window's Dates — ${cells} moved`, (t) => {
+    const dir = makeTmpDir();
+    t.after(() => cleanup(dir));
+    const honestDir = makeTmpDir();
+    t.after(() => cleanup(honestDir));
+    // The residual boundary, MEASURED rather than argued. Earlier revisions of
+    // this suite claimed the price of keeping a forged split alive was "more
+    // than half of one window's offsets, i.e. six or more" — that was false in
+    // both halves (CE-21 bought a split for ONE cell against a window carrying
+    // no evidence at all). The real price is set by two independent
+    // requirements at once:
+    //   - the SERVER SESSION INDEX is an order statistic, suffixMin - prefixMax,
+    //     so ONE surviving honest Date after the seam collapses suffixMin and
+    //     pulls the two windows back into one server session. Every Date the far
+    //     window still carries has to move — not a majority of them;
+    //   - the far window still has to CARRY MIN_GROUP_BRACKETS server-informative
+    //     in-peak brackets, which at this geometry needs its stable and changed
+    //     endpoint for each, i.e. 2 x MIN_GROUP_BRACKETS = 10 dated samples.
+    // Fewer kept ticks cannot reach the threshold (2, 3 and 4 kept ticks fully
+    // forged are refused on all three trees, and lose A4-4/A4-5 as well), so 10
+    // moved cells per capture is the minimum here. A geometry where every poll
+    // saw a change could not go below MIN_GROUP_BRACKETS + 1 = 6.
+    const runNames = buildMinimalForgedSplit(dir, forgedTicks);
+    buildMinimalForgedSplit(honestDir, 0);
+
+    for (const name of runNames) {
+      const audit = dateAudit(rowsOfRun(dir, name), rowsOfRun(honestDir, name));
+      assert.equal(audit.moved, cells);
+      assert.equal(audit.bodyChanged, 0);
+      if (cells > 0) assert.deepEqual(audit.movedBy, [CLIENT_JUMP_MS]);
+    }
+
+    const out = analyze(dir, runNames);
+    assert.equal(out.code, 0, out.stderr);
+    const json = out.json;
+    const complete = forgedTicks === MINIMAL_SPLIT_KEPT_TICKS;
+    assert.equal(MINIMAL_SPLIT_KEPT_TICKS, MIN_GROUP_BRACKETS);
+    if (complete) {
+      // Both clocks moved together on every surviving record: this is what a
+      // real 11-minute pause produces, it is legitimate evidence, and it reaches
+      // GO on the frozen baseline, on v2.9.0 and here. Deferred per A3.
+      assert.match(out.stdout, /verdict=GO qualifier=none brackets=240 distinguishable=true/);
+      for (const gate of json.goGate) assert.equal(gate.satisfied, true, gate.id);
+      assert.equal(json.evidenceSessions.length, 6);
+      for (const sess of json.evidenceSessions) {
+        assert.equal(sess.windowIds.length, 1);
+        assert.equal(sess.uncorroboratedSeamCount, 0);
+        assert.equal(sess.clientClockStepVoided, false);
+      }
+    } else {
+      assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED brackets=240/);
+      assert.deepEqual(
+        json.decision.reasons.map((r) => r.split(" ")[0]),
+        ["A4-2"],
+      );
+      assert.equal(gateById(json, "A4-2").satisfied, false);
+      assert.equal(json.evidenceSessions.length, 3);
+    }
+    assertA42NoWeakerThanFrozenBaseline(json);
+  });
+}
+
+test("CONTROL (R4): an honest capture with a SHORT middle window still reaches GO", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // The anti-lockout control for this round, and the fixture that decided
+  // between the two candidate fixes for CE-21. Three honest windows per campus
+  // on BOTH clocks: the 20-tick off-peak session, ONE tick at 12:00 ET, and the
+  // 20-tick peak session. Nothing is edited, so every seam is corroborated and
+  // the three windows stay three evidence sessions.
+  //
+  // Measured counterfactual, on these exact bytes: a POPULATION FLOOR of six
+  // dated samples on the corroborating window (the obvious answer to CE-21 —
+  // implemented in a scratch copy of this tree with the stream void disabled)
+  // closes CE-21 and answers `verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED
+  // brackets=123` HERE: the stub corroborates neither of its seams, merges with
+  // both neighbours, and the single session it leaves behind holds peak-hour
+  // brackets, so it is not pure and the off-peak side dies. Refusing honest data
+  // is not an acceptable price for closing a forgery, so the shipped rule keys
+  // on a DEMONSTRATED clock step instead — which this fixture does not have.
+  const runNames = buildHonestShortWindowControl(dir);
+  const out = analyze(dir, runNames);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=GO qualifier=none brackets=123 distinguishable=true/);
+  const json = out.json;
+  for (const gate of json.goGate) assert.equal(gate.satisfied, true, `${gate.id}: ${gate.evidence}`);
+  assert.equal(json.evidenceSessions.length, 9);
+  for (const sess of json.evidenceSessions) {
+    assert.equal(sess.windowIds.length, 1);
+    assert.equal(sess.uncorroboratedSeamCount, 0);
+    assert.equal(sess.clientClockStepVoided, false);
+  }
+  // The stub qualifies nothing on its own; the two real sessions carry the gate.
+  assert.equal(json.evidenceSessions.filter((sess) => sess.qualifiesPeak).length, 3);
+  assert.equal(json.evidenceSessions.filter((sess) => sess.qualifiesOffPeak).length, 3);
+  assert.equal(
+    json.evidenceSessions.filter((sess) => !sess.qualifiesPeak && !sess.qualifiesOffPeak).length,
+    3,
+  );
   assertA42NoWeakerThanFrozenBaseline(json);
 });

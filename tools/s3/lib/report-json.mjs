@@ -303,6 +303,12 @@ export function buildJsonReport(ctx) {
         // claimed gap, so the client clock stepped and no time passed. Zero on
         // every honest capture.
         uncorroboratedSeamCount: sess.uncorroboratedSeamCount,
+        // True when this session holds EVERY evidence window of its stream
+        // because one uncorroborated seam voided the stream's whole
+        // client-window partition. A demonstrated client-clock step is not a
+        // local ambiguity: it discredits the clock that drew every one of that
+        // stream's window boundaries. False on every honest capture.
+        clientClockStepVoided: sess.clientClockStepVoided,
         // Purity is judged over ALL of the session's brackets, informative or
         // not: an off-peak session may hold no peak-hour and no unplaceable
         // bracket at all.
