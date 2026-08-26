@@ -99,7 +99,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-operational-storage',
     kind: 'lib',
     internal: ['bcsp-contracts', 'bcsp-domain'],
-    external: [['include_dir', NORMAL], ['rusqlite', NORMAL], ['serde', NORMAL], ['serde_json', NORMAL], ['sha2', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tracing', NORMAL]],
+    external: [['include_dir', NORMAL], ['rusqlite', NORMAL, ['bundled', 'cache']], ['rusqlite', DEV, ['bundled', 'hooks']], ['serde', NORMAL], ['serde_json', NORMAL], ['sha2', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['time', NORMAL], ['tracing', NORMAL]],
   },
   'bcsp-catalog': {
     dir: 'crates/bcsp-catalog',
@@ -322,7 +322,7 @@ function validateInternalDependency(packageName, dependency, expectedKind, repoR
   }
 }
 
-function validateExternalDependency(packageName, dependency, expectedKind, errors) {
+function validateExternalDependency(packageName, dependency, expectedKind, expectedFeatures, errors) {
   const expected = EXTERNAL_DEPENDENCY_SPEC[dependency.name];
   if (!expected) {
     errors.push(`${packageName} -> ${dependency.name} has no frozen external dependency contract`);
@@ -332,7 +332,7 @@ function validateExternalDependency(packageName, dependency, expectedKind, error
     packageName,
     dependency,
     expectedKind,
-    expected.features,
+    expectedFeatures ?? expected.features,
     expected.usesDefaultFeatures,
     errors,
   );
@@ -448,7 +448,10 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
       ...(spec.internalDev ?? []).map((name) => [name, DEV]),
     ]);
     const expectedInternal = new Set(expectedInternalKinds.keys());
-    const expectedExternal = new Map(spec.external);
+    const expectedExternal = new Map(spec.external.map(([name, kind, features]) => [
+      pairKey(name, kind),
+      { kind, features },
+    ]));
     for (const dependency of pkg.dependencies ?? []) {
       const kind = dependencyKind(dependency);
       if (kind === null) {
@@ -463,8 +466,10 @@ export function verifyGraph(metadata, { repoRoot } = {}) {
         }
       } else {
         actualExternal.push(pairKey(dependency.name, kind ?? `invalid(${dependency.kind})`));
-        const expectedKind = expectedExternal.get(dependency.name);
-        if (expectedKind) validateExternalDependency(pkg.name, dependency, expectedKind, errors);
+        const expected = expectedExternal.get(pairKey(dependency.name, kind));
+        if (expected) {
+          validateExternalDependency(pkg.name, dependency, expected.kind, expected.features, errors);
+        }
       }
     }
     if (new Set(actualInternal).size !== actualInternal.length) errors.push(`${pkg.name} contains duplicate internal dependency entries`);

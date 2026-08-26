@@ -36,7 +36,7 @@ function internalDependency(name, kind = 'normal') {
   };
 }
 
-function externalDependency(name, kind = 'normal') {
+function externalDependency(name, kind = 'normal', features) {
   const spec = EXTERNAL_DEPENDENCY_SPEC[name];
   return {
     name,
@@ -46,7 +46,7 @@ function externalDependency(name, kind = 'normal') {
     rename: null,
     optional: false,
     uses_default_features: spec.usesDefaultFeatures,
-    features: [...spec.features],
+    features: [...(features ?? spec.features)],
     target: null,
     registry: null,
   };
@@ -69,7 +69,7 @@ function fixture() {
       dependencies: [
         ...spec.internal.map(internalDependency),
         ...(spec.internalDev ?? []).map((name) => internalDependency(name, 'dev')),
-        ...spec.external.map(([dependencyName, kind]) => externalDependency(dependencyName, kind)),
+        ...spec.external.map(([dependencyName, kind, features]) => externalDependency(dependencyName, kind, features)),
       ],
       targets: [{
         name: spec.kind === 'bin' ? name : name.replaceAll('-', '_'),
@@ -138,7 +138,8 @@ assert.deepEqual(GRAPH_SPEC['bcsp-catalog'].external, [
 ]);
 assert.deepEqual(GRAPH_SPEC['bcsp-operational-storage'].external, [
   ['include_dir', 'normal'],
-  ['rusqlite', 'normal'],
+  ['rusqlite', 'normal', ['bundled', 'cache']],
+  ['rusqlite', 'dev', ['bundled', 'hooks']],
   ['serde', 'normal'],
   ['serde_json', 'normal'],
   ['sha2', 'normal'],
@@ -287,6 +288,16 @@ expectFailure((metadata) => {
 expectFailure((metadata) => {
   dependencyByName(metadata, 'bcsp-operational-storage', 'sha2').kind = 'dev';
 }, /dependency kind mismatch|external dependency owners mismatch/);
+
+expectFailure((metadata) => {
+  dependencyByName(metadata, 'bcsp-operational-storage', 'rusqlite').features = ['bundled'];
+}, /dependency features mismatch/);
+
+expectFailure((metadata) => {
+  packageByName(metadata, 'bcsp-operational-storage').dependencies
+    .find((dependency) => dependency.name === 'rusqlite' && dependency.kind === 'dev')
+    .features = ['bundled'];
+}, /dependency features mismatch/);
 
 expectFailure((metadata) => {
   packageByName(metadata, 'bcsp-catalog').dependencies.push(externalDependency('sha2'));
