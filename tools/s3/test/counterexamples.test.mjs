@@ -110,8 +110,96 @@ test("CE-2 (A4-2): an isolated zero-change peak-time sample is not peak evidence
   assert.equal(a2.satisfied, false);
   assert.equal(
     a2.evidence,
-    "windows: 6 total; qualifying(informative>=5): 0 peak, 3 off-peak (raw: 3 peak, 3 off-peak)",
+    "windows: 6 total; qualifying peak (>=5 informative in-peak brackets): 0; qualifying off-peak (>=5 informative brackets): 3 (raw: 3 peak, 3 off-peak)",
   );
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+});
+
+test("CE-2b (A4-2): a window ending exactly at 17:00:00.000 ET has zero peak evidence", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // Boundary graze (second R1 review round): each campus has a rich off-peak
+  // session plus a 20-bracket session whose LAST sample sits exactly at the
+  // 17:00:00.000 ET boundary instant. The window's closed-interval label says
+  // peakOverlap=true (measure-zero touch), but not one bracket overlaps the
+  // peak hour with positive measure. Analyzer v2.0.0 (7260da8) counted the
+  // window's own informative brackets and said verdict=GO qualifier=none.
+  const PRE_PEAK_END = Date.UTC(2026, 0, 6, 22, 0, 0); // == 17:00:00.000 ET
+  for (const campus of ["NB", "NK", "CM"]) {
+    const shape = CAMPUS_SHAPE[campus];
+    const offPeak = makeTickSeries({
+      baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1,
+      bodyPrefix: `${campus}-v`, ...shape,
+    });
+    const graze = makeTickSeries({
+      baseMs: PRE_PEAK_END - 20 * 30000 - 60000, periodMs: 30000, count: 20,
+      startSeq: 300, bodyPrefix: `${campus}-p`, ...shape,
+    });
+    graze.push(
+      sampleRow({ seq: 400, startMs: PRE_PEAK_END, elapsedMs: 0, bodySha: `${campus}-p20`, serverDateMs: PRE_PEAK_END }),
+    );
+    makeRunDir(join(dir, `run${campus}`), { campus, samples: [...offPeak, ...graze] });
+  }
+  const out = analyze(dir, ["runNB", "runNK", "runCM"]);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  // The bait: the grazing windows ARE labeled peak-overlapping (closed touch)…
+  const windows = json.targets.flatMap((tgt) => tgt.windows);
+  assert.equal(windows.filter((w) => w.peakOverlap).length, 3);
+  // …but the gate demands brackets inside the hour, and there are none.
+  const a2 = gateById(json, "A4-2");
+  assert.equal(a2.satisfied, false);
+  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
+  assert.deepEqual(
+    json.decision.reasons.map((r) => r.split(" ")[0]),
+    ["A4-2"],
+  );
+});
+
+test("CE-2c (A4-2): a peak-time loner merged into a pre-peak session is still not peak evidence", (t) => {
+  const dir = makeTmpDir();
+  t.after(() => cleanup(dir));
+  // Merged loner (second R1 review round): the adjudicated root-cause-#2
+  // shape — an isolated zero-change peak-time sample — placed ~5.5 min after
+  // a rich pre-peak session so the gap-based segmentation MERGES it into that
+  // window (gap < 10 min). The merged window genuinely overlaps the peak and
+  // has 20 informative brackets, yet none of them lies inside 17:00-18:00 ET.
+  // Analyzer v2.0.0 (7260da8) said verdict=GO qualifier=none on these bytes.
+  const PRE_PEAK_BASE = Date.UTC(2026, 0, 6, 21, 50, 0); // last tick 16:59:30 ET
+  const LONER_AT = Date.UTC(2026, 0, 6, 22, 5, 0); // 17:05:00 ET
+  for (const campus of ["NB", "NK", "CM"]) {
+    const shape = CAMPUS_SHAPE[campus];
+    const offPeak = makeTickSeries({
+      baseMs: OFF_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 1,
+      bodyPrefix: `${campus}-v`, ...shape,
+    });
+    const prePeak = makeTickSeries({
+      baseMs: PRE_PEAK_BASE, periodMs: 30000, count: 20, startSeq: 100,
+      bodyPrefix: `${campus}-p`, ...shape,
+    });
+    const loner = sampleRow({ seq: 300, startMs: LONER_AT, bodySha: `${campus}-p20`, serverDateMs: LONER_AT });
+    makeRunDir(join(dir, `run${campus}`), { campus, samples: [...offPeak, ...prePeak, loner] });
+  }
+  const out = analyze(dir, ["runNB", "runNK", "runCM"]);
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stdout, /verdict=NO_PRODUCTION_CHANGE qualifier=DATA_REQUIRED/);
+
+  const json = out.json;
+  // The loner really merged: 2 windows per input (not 3), and the merged one
+  // overlaps the peak with 20 brackets.
+  const windows = json.targets.flatMap((tgt) => tgt.windows);
+  assert.equal(windows.length, 6);
+  const mergedPeak = windows.filter((w) => w.peakOverlap);
+  assert.equal(mergedPeak.length, 3);
+  for (const win of mergedPeak) assert.equal(win.bracketCount, 20);
+  const a2 = gateById(json, "A4-2");
+  assert.equal(a2.satisfied, false);
+  assert.match(a2.evidence, /qualifying peak \(>=5 informative in-peak brackets\): 0;/);
   assert.deepEqual(
     json.decision.reasons.map((r) => r.split(" ")[0]),
     ["A4-2"],

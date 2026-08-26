@@ -15,6 +15,7 @@ import {
   bracketBounds,
 } from "./phase.mjs";
 import { runHoldout, groupBrackets } from "./holdout.mjs";
+import { overlapsNyPeakStrict } from "./windows.mjs";
 
 export {
   TOOL_VERSION,
@@ -389,25 +390,35 @@ export function evaluateGate(ctx) {
 
   // A4-2: multiple independent time windows incl. NY peak and off-peak — each
   // side must have at least one QUALIFYING window (>= MIN_GROUP_BRACKETS
-  // informative brackets of its own on the comparison clock). An empty or
-  // single-sample window is metadata, not peak evidence.
-  const isQualifyingWindow = (w) =>
-    w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource)).length >=
-    MIN_GROUP_BRACKETS;
+  // informative brackets of its own on the comparison clock). Peak evidence is
+  // counted at the BRACKET level: a peak-qualifying window needs >=
+  // MIN_GROUP_BRACKETS informative brackets whose own client-time interval
+  // overlaps 17:00-18:00 ET with positive measure. A window that merely
+  // touches the boundary instant, or that merged an isolated zero-change
+  // peak-time sample into a rich pre-peak session, carries zero in-peak
+  // brackets and cannot satisfy the peak side. (Client bounds are used for the
+  // wall-clock peak test: they always exist, and the client-vs-server offset
+  // is orders of magnitude below the one-hour peak span.)
+  const informativeBrackets = (w) => w.brackets.filter((b) => isInformative(b, 30000, ctx.clockSource));
+  const inPeakInformativeCount = (w) =>
+    informativeBrackets(w).filter((b) => overlapsNyPeakStrict(b.clientLowerMs, b.clientUpperMs))
+      .length;
   const totalWindows = ctx.windowsAll.length;
   const peakWindows = ctx.windowsAll.filter((w) => w.peakOverlap).length;
   const offPeakWindows = totalWindows - peakWindows;
-  const qualifyingPeak = ctx.windowsAll.filter((w) => w.peakOverlap && isQualifyingWindow(w)).length;
+  const qualifyingPeak = ctx.windowsAll.filter(
+    (w) => inPeakInformativeCount(w) >= MIN_GROUP_BRACKETS,
+  ).length;
   const qualifyingOffPeak = ctx.windowsAll.filter(
-    (w) => !w.peakOverlap && isQualifyingWindow(w),
+    (w) => !w.peakOverlap && informativeBrackets(w).length >= MIN_GROUP_BRACKETS,
   ).length;
   const a2Satisfied = qualifyingPeak >= 1 && qualifyingOffPeak >= 1;
   gate.push({
     id: "A4-2",
     requirement:
-      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets",
+      "Multiple independent time windows including America/New_York 17:00-18:00 peak and one off-peak window, each with qualifying informative brackets; peak evidence only from brackets overlapping the peak hour itself",
     satisfied: a2Satisfied,
-    evidence: `windows: ${totalWindows} total; qualifying(informative>=${MIN_GROUP_BRACKETS}): ${qualifyingPeak} peak, ${qualifyingOffPeak} off-peak (raw: ${peakWindows} peak, ${offPeakWindows} off-peak)`,
+    evidence: `windows: ${totalWindows} total; qualifying peak (>=${MIN_GROUP_BRACKETS} informative in-peak brackets): ${qualifyingPeak}; qualifying off-peak (>=${MIN_GROUP_BRACKETS} informative brackets): ${qualifyingOffPeak} (raw: ${peakWindows} peak, ${offPeakWindows} off-peak)`,
   });
 
   // A4-3: distinguishable winner under holdout.

@@ -103,7 +103,7 @@ test("all six A4 gates satisfiable → verdict GO (never hardcoded NO)", (t) => 
   const a2 = json.goGate.find((g) => g.id === "A4-2");
   assert.equal(
     a2.evidence,
-    "windows: 6 total; qualifying(informative>=5): 3 peak, 3 off-peak (raw: 3 peak, 3 off-peak)",
+    "windows: 6 total; qualifying peak (>=5 informative in-peak brackets): 3; qualifying off-peak (>=5 informative brackets): 3 (raw: 3 peak, 3 off-peak)",
   );
 
   // A4-3: strict win via a non-degenerate 6-group holdout.

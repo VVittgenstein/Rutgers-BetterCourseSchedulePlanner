@@ -96,9 +96,7 @@ function offsetForDayAfternoon(year, month, day) {
   return nyOffsetMsAt(guess);
 }
 
-// True iff [utcStartMs, utcEndMs] intersects any America/New_York
-// 17:00:00–18:00:00 local interval.
-export function overlapsNyPeak(utcStartMs, utcEndMs) {
+function nyPeakOverlapImpl(utcStartMs, utcEndMs, strict) {
   // Iterate each NY calendar day touched by the window (pad one day each side
   // to be safe around offset boundaries).
   const dayMs = 24 * 3600 * 1000;
@@ -114,9 +112,25 @@ export function overlapsNyPeak(utcStartMs, utcEndMs) {
     const offset = offsetForDayAfternoon(y, m, d);
     const peakStartUtc = Date.UTC(y, m - 1, d, NY_PEAK.startHour, 0, 0) + offset;
     const peakEndUtc = Date.UTC(y, m - 1, d, NY_PEAK.endHour, 0, 0) + offset;
-    if (peakStartUtc <= utcEndMs && peakEndUtc >= utcStartMs) {
-      return true;
-    }
+    const hit = strict
+      ? peakStartUtc < utcEndMs && peakEndUtc > utcStartMs
+      : peakStartUtc <= utcEndMs && peakEndUtc >= utcStartMs;
+    if (hit) return true;
   }
   return false;
+}
+
+// True iff [utcStartMs, utcEndMs] intersects any America/New_York
+// 17:00:00–18:00:00 local interval (closed: a boundary touch counts). Used for
+// window LABELING only — never as peak evidence.
+export function overlapsNyPeak(utcStartMs, utcEndMs) {
+  return nyPeakOverlapImpl(utcStartMs, utcEndMs, false);
+}
+
+// True iff the intersection has POSITIVE measure: an interval that merely
+// touches 17:00:00.000 or 18:00:00.000 ET at a single instant contains zero
+// peak observation time and is NOT peak evidence. This is the check the A4-2
+// gate applies to individual change brackets.
+export function overlapsNyPeakStrict(utcStartMs, utcEndMs) {
+  return nyPeakOverlapImpl(utcStartMs, utcEndMs, true);
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { segmentWindows, nyLabel, overlapsNyPeak } from "../lib/windows.mjs";
+import { segmentWindows, nyLabel, overlapsNyPeak, overlapsNyPeakStrict } from "../lib/windows.mjs";
 
 function mk(startMs, endMs = startMs + 200) {
   return { clientStartMs: startMs, clientEndMs: endMs };
@@ -74,6 +74,22 @@ test("overlapsNyPeak: DST boundary days use that day's afternoon offset", () => 
   // 2026-11-01: DST ends at 02:00 local, so the afternoon is EST.
   assert.equal(overlapsNyPeak(Date.UTC(2026, 10, 1, 22, 30, 0), Date.UTC(2026, 10, 1, 22, 45, 0)), true);
   assert.equal(overlapsNyPeak(Date.UTC(2026, 10, 1, 21, 30, 0), Date.UTC(2026, 10, 1, 21, 45, 0)), false);
+});
+
+test("overlapsNyPeakStrict: a measure-zero boundary touch is labeled peak but is not peak evidence", () => {
+  const peakStart = Date.UTC(2026, 0, 6, 22, 0, 0); // 17:00:00.000 EST
+  const peakEnd = Date.UTC(2026, 0, 6, 23, 0, 0); // 18:00:00.000 EST
+  // Ends exactly at 17:00:00.000: closed labeling says peak, strict says no.
+  assert.equal(overlapsNyPeak(peakStart - 600000, peakStart), true);
+  assert.equal(overlapsNyPeakStrict(peakStart - 600000, peakStart), false);
+  // Starts exactly at 18:00:00.000: same split.
+  assert.equal(overlapsNyPeak(peakEnd, peakEnd + 600000), true);
+  assert.equal(overlapsNyPeakStrict(peakEnd, peakEnd + 600000), false);
+  // One millisecond of true overlap flips strict to true.
+  assert.equal(overlapsNyPeakStrict(peakStart - 600000, peakStart + 1), true);
+  assert.equal(overlapsNyPeakStrict(peakEnd - 1, peakEnd + 600000), true);
+  // An interval fully inside the hour is peak evidence under both.
+  assert.equal(overlapsNyPeakStrict(peakStart + 60000, peakStart + 120000), true);
 });
 
 test("overlapsNyPeak: overnight and multi-day windows", () => {
