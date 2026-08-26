@@ -160,3 +160,31 @@ Stage 5 analyzer 96/96、0 skip。两份 R2 只处理表中 blocker；Stage 4 �
 Codex 独立复跑 Stage 3 Rust 117+52、无-jq preflight 7 pass/31 refusal、soak self-test/deploy contracts；
 Stage 5 analyzer 119/119、0 skip。R3 严格只关闭表中四条已复现假阳性：不重开 SSH、不连接 Vultr、不加入
 任意伪造/逐样本抖动/完全不重叠分割，不清理普通技术债。R3 仍可并行，集成顺序 B → C → D 不变。
+
+## 11. R3 最终裁定、串行集成与组合门（2026-08-26）
+
+| Lane | Final lane head | 最终裁定 |
+|---|---|---|
+| B / Stage 3 P2 | `c2e2d2e` | `ACCEPTED_WITH_DEFERRED_DEBT / PENDING_LINUX_EVIDENCE` |
+| C / Stage 4 S4 | `69c7cb1` | `ACCEPTED` |
+| D / Stage 5 S3 evidence | `1dc2219` | `ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE` |
+
+Codex 依次 cherry-pick B、C、D。`5efeaa5` 把主线 Stage 2 新增的两处 presence 测试机械适配为
+`OutboundSender::unbounded_pair()`，未改变锁内 Exiting/late-HELLO 行为；`882f230` 把 S4 批准的
+`rusqlite` normal `cache` / dev `hooks` 精确写入 architecture graph，并新增缺 feature 的负例。三 lane
+之间没有产品文件冲突，Stage 2 Notification policy CI 与 release-set 12 capability 均保留。
+
+组合门结果：
+
+- `cargo test --workspace`：PASS；一个既有 real-browser 测试 ignored；
+- Rust graph 与 public zero-surface：PASS；
+- frontend：guard 92、Vitest 340、typecheck、local/public builds PASS；
+- S3 analyzer：168/168、0 skip，当前数据仍 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`；
+- public deploy contracts、soak self-test、release-set SelfTest：PASS；
+- preflight：7 healthy + 31 hardened refusals PASS；27 adapted-Caddy cases 因本机无 jq 明确 SKIP；
+- `git diff --check`：PASS。
+
+接受时保留两类非阻断债务：P2 aggregate metric baselines 之间存在一个需要第二 socket 精确卡入数次 localhost
+读取的窄竞态；S3 保留任务包已明确延期的非重叠分割/逐样本抖动/任意伪造及文案辅助项。按用户“非重大
+问题不再修”的决定不再开 R4。真实 jq/Caddy/systemd/600 秒 soak、composition、真实 H8 tuple 仍是公网
+部署前外部门；未开启 Vultr，不能称 deployed/released。

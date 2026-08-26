@@ -1,6 +1,6 @@
 # Stage 4 R1：移除生产 raw SQLite 测试后门
 
-状态：**READY — 返回原 Stage 4 worktree 窄修**
+状态：**ACCEPTED — 已串行集成并通过组合门**
 Prompt 版本：`STAGE-4-R1/v1`
 基线：`codex/parallel-wave1-stage4-s4@283a8feeee734abf61af564457d28f1b08e7102f`
 

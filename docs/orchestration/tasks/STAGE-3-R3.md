@@ -1,6 +1,6 @@
 # Stage 3 R3：让 Caddy 与 ACK 证据只计算真实可达路径
 
-状态：**READY — 原 Stage 3 worktree 的最终精确反例修复**
+状态：**ACCEPTED_WITH_DEFERRED_DEBT — 已串行集成；PENDING_LINUX_EVIDENCE**
 
 Prompt 版本：`STAGE-3-R3/v1`
 

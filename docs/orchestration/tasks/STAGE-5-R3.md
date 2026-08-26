@@ -1,6 +1,6 @@
 # Stage 5 R3：让派生关系与独立窗口使用同一证据时钟
 
-状态：**READY — 原 Stage 5 worktree 的最终精确反例修复**
+状态：**ACCEPTED_WITH_DEFERRED_DEBT — 已串行集成；NO_PRODUCTION_CHANGE / DATA_REQUIRED**
 
 Prompt 版本：`STAGE-5-R3/v1`
 

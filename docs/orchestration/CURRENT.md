@@ -333,7 +333,7 @@ PUT /api/v1/local/desired-watch
 记录日期：2026-08-26。
 
 ```text
-当前检出：feat/s2-alert-delivery（产品集成 head 仍为 6a35c74；其后仅 orchestration 文档）
+当前检出：feat/s2-alert-delivery（P2 → S4 → S3 evidence 已集成；产品组合 head 882f230）
 origin/main：ae65958
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
@@ -342,7 +342,7 @@ Claude Stage 2 主交付 head：553371f；R1 lane head：5af49d9
 Codex Stage 2 最终集成 head：6a35c74
 S2 分支：尚未合并、尚未发布
 当前产品源码工作树：无未提交源码；两个 conversation 归档目录未跟踪
-Codex orchestration 文档：Stage 2 ACCEPTED；Stage 4 R1 ACCEPTED 待串行回收；Stage 3/5 进入 R3
+Codex orchestration 文档：Stage 2/3/4/5 均已裁定并完成串行集成；等待 final Windows candidate
 现有 release/0.1.0：sourceCommit=7d5debef（2026-07-15，早于本轮工作）
 ```
 
@@ -354,10 +354,10 @@ Codex orchestration 文档：Stage 2 ACCEPTED；Stage 4 R1 ACCEPTED 待串行回
 |---|---|---|
 | S1 | 代码完成并已合入 main；M0 窄修已写入 feature | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter；尚无新 release |
 | S2 | `ACCEPTED`，仅 feature | R1 四个 blocker 已关闭并集成；尚未 merge/release，公网仍被 P2 阻断 |
-| S3 | evidence lane `CHANGES_REQUIRED` | 当前 NO-GO 正确、119/119 focused tests 通过；常量平移 subsample 与 client-jump/server-contiguous window 仍可实测 GO，进入 Stage 5 R3；仍零 production scheduler change |
-| S4 | `ACCEPTED`，待按顺序集成 | production raw SQLite test API 已删除；`prepare_cached`、事务回滚、API 缺席证据与 61+2 focused tests 通过 |
+| S3 | `ACCEPTED_WITH_DEFERRED_DEBT`，已集成 | 离线 analyzer 168/168；CE-15/16 已关、honest GO 保留；当前数据仍 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`，零 production scheduler change |
+| S4 | `ACCEPTED`，已集成 | `prepare_cached`、整体回滚与 API 缺席证据成立；architecture 精确冻结 normal cache/dev hooks |
 | P1 | Stage 2 主体已实现，仅 feature | mutable in-memory ticket、validate-before-connect、single-flight renew 与页面内 reconnect plan 已通过审查；公网部署仍被 P2/H4 阻断 |
-| P2 | R2 后仍 `CHANGES_REQUIRED` | SSH actual tuple 与 fresh ACK 计数点已关闭；同-route Caddy handler/listener 归属及 aggregate ACK 的 soak-exclusive 归属进入 R3；Linux evidence 仍外部 pending |
+| P2 | `ACCEPTED_WITH_DEFERRED_DEBT`，已集成；`PENDING_LINUX_EVIDENCE` | H1–H9 仓内实现、资源边界、actual SSH tuple、Caddy/ACK harness 已收口；真实 jq/Caddy/systemd/600s soak 与部署仍未执行 |
 | L1 | `ACCEPTED`，仅 feature | desired 持久化、GET/PUT、materializer、UI、并发反例与真实包装三生命周期 E2E 均通过；尚未合并/发布 |
 | L2 | `ACCEPTED`，仅 feature | late HELLO 在 Exiting 后被同锁拒绝；presence/60 秒/ordered shutdown focused tests 通过 |
 | L3 | 主体已实现，仅 feature | 启动/页面/监控/开放/Gate/倒计时/退出日志已接线；本轮无阻断 |
@@ -398,17 +398,21 @@ Codex orchestration 文档：Stage 2 ACCEPTED；Stage 4 R1 ACCEPTED 待串行回
 
 ### P2/L2/L3/S3/S4
 
-- P2 R2 head `df79aa4` 已关闭实际 SSH tuple 与服务端 fresh ACK accepted counter；Codex 实测 117+52 Rust
-  与 focused ops/self-tests 通过，但同一 Caddy route 内的 terminal handler 之后仍会把不可达 proxy 算作
-  active、同 port 不同 listener 可互相冒充，aggregate ACK delta 也未证明只属于本次 soak socket，进入
-  `STAGE-3-R3`；完整 Linux/H8/H9 evidence 仍未执行；
-- L2/L3 随 Stage 2 accepted；
-- S4 R1 head `69c7cb1` 已删除 production raw SQLite accessor；Codex 静态审查与 61+2 focused tests
-  通过，结论 `ACCEPTED`，但依冻结顺序等待 P2 后再回收；
-- S3 evidence R2 head `2c7b53a` 已关闭 overlap、普通 subsample、server peak/client-end 与单-window purity，
-  119/119 通过；Codex 仍实测得到两条完整 GO：规则 subsample 只做常量 client-clock 平移可逃出 family，
-  server 连续的一次 session 可被 client clock jump 切成 peak/off-peak 两个 window，进入 `STAGE-5-R3`；
-  现有数据结论仍是不改生产。
+- P2 final lane `c2e2d2e`、S4 `69c7cb1`、S3 evidence `1dc2219` 已按 B → C → D 回收到
+  `feat/s2-alert-delivery`；`5efeaa5` 只把 Stage 2 的两处 late-HELLO 测试机械适配为 `OutboundSender`，锁内
+  Exiting guard 与 Notification CI 均保留；
+- P2 R3 的 Caddy handler/listener 与单-socket admissions 证据成立；SSH actual tuple 主合同成立。真实
+  production jq 的 27 个 adapted fixtures、Linux systemd/Caddy、600 秒 CORE soak、composition 与真实 H8
+  tuple 仍是外部门，未开启 Vultr、未部署；
+- P2 记录一项非阻断 deferred：三个 localhost metric baseline 顺序仍有极窄夹缝，第二 socket 必须在数次
+  读取之间进入、贡献匹配 ACK 并在首个 30 秒样本前退出才可能混入。它不改变产品行为；按用户的非重大问题
+  政策不再开 R4，真实 Linux H9 前复核；
+- S4 production raw SQLite accessor 已删除；statement cache 与整体事务回滚通过，新增依赖/feature 已由
+  architecture graph 精确冻结；
+- S3 analyzer 只留在 `tools/s3/**`，不会进入 runtime/package。168/168、五类 honest GO 与当前数据
+  byte-stability 通过；当前结论仍是不改生产参数。完全不重叠分割、逐样本不规则 jitter、从零伪造及若干
+  文案/测试辅助问题保留为明确 deferred；
+- L2/L3 随 Stage 2 accepted 并在组合 workspace/frontend 门中回归通过。
 
 ## 15. 发布和迁移硬门
 
@@ -421,8 +425,8 @@ Codex orchestration 文档：Stage 2 ACCEPTED；Stage 4 R1 ACCEPTED 待串行回
 
 ## 16. 当前 Parallel Wave
 
-状态：**Stage 2 已回收；Stage 4 R1 已 `ACCEPTED` 等待依序回收；Stage 3/5 R2 各仍有两条已复现的
-核心假阳性，现并行签发 `STAGE-3-R3` 与 `STAGE-5-R3` 两份精确反例修复。**
+状态：**Parallel Wave 1 已完成：Stage 2 → P2 → S4 → S3 evidence 均已串行回收；组合重门通过，等待从
+最终文档化 head 构建并验证 Windows local release candidate。公网 Linux/部署 evidence 继续 pending。**
 
 当前 Stage 2：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
 
@@ -446,16 +450,16 @@ R1 明确不包含：
 - H4/完整 P2；
 - S3/S4。
 
-当前三个 lane 的裁定：
+最终 lane 裁定：
 
-- Stage 3 R2：actual SSH 与 fresh accepted ACK 计数点已成立；Caddy handler/listener active-path 与
-  aggregate ACK 的 soak-exclusive 归属仍可 false PASS，进入 `STAGE-3-R3`；
-- Stage 4 R1：raw connection API 已封住，优化与回滚证据成立，`ACCEPTED`，无需再修；
-- Stage 5 R2：普通 overlap/subsample 与 server peak/purity 已修，但 translated subsample 与
-  server-contiguous/client-jump window 仍可实测 GO，进入 `STAGE-5-R3`。
+- Stage 3/P2 R3：`ACCEPTED_WITH_DEFERRED_DEBT / PENDING_LINUX_EVIDENCE`；
+- Stage 4/S4 R1：`ACCEPTED`；
+- Stage 5/S3 evidence R3：`ACCEPTED_WITH_DEFERRED_DEBT`，结论为
+  `NO_PRODUCTION_CHANGE / DATA_REQUIRED`。
 
-两份 R2 可在原 worktree 并行；Stage 4 不再启动 Claude。Codex 收齐后仍按 P2 → S4 → S3 evidence
-串行回收，组合 head 只跑一次重门和一次集中审查。
+组合 head 独立门：workspace 全绿（一个既有 real-browser ignored）；Rust architecture/source boundary 全绿；
+frontend guard 92、Vitest 340、typecheck/local/public builds 全绿；S3 168；ops/soak self-test、release-set
+12 capability 全绿；preflight 7 pass/31 refusal，全 27 个 jq cases 因本机无 jq 明确 SKIP 并留给 Linux。
 
 ## 17. 用户冻结的余下四阶段顺序
 
@@ -619,20 +623,18 @@ Stage 5 — STAGE-5
 作出验收结论或批准进入下一里程碑时都必须更新。
 
 ```text
-Active wave: PARALLEL-WAVE-1 final concentrated repair
-Accepted/integrated: STAGE-2-R1/v2-parallel at feat/s2-alert-delivery@6a35c74
-Accepted/waiting integration: STAGE-4-R1/v1 at 69c7cb1
-Repair lanes: STAGE-3-R3/v1; STAGE-5-R3/v1
-Repair bases: df79aa4; 2c7b53a
-Development: same two isolated worktrees, focused tests only
-Integration order: STAGE-3-R3/P2 → accepted STAGE-4-R1/S4 → STAGE-5-R3/S3 evidence
-Heavy gates: one serial run after all three repaired lanes are accepted and integrated
+Active wave: PARALLEL-WAVE-1 COMPLETE
+Accepted/integrated: Stage 2; STAGE-3-R3/P2; STAGE-4-R1/S4; STAGE-5-R3/S3 evidence
+Product combination head before this ledger commit: 882f230
+Integration order completed: P2 → S4 → S3 evidence
+Integration-only commits: 5efeaa5 (presence sender); 882f230 (architecture feature snapshot)
+Heavy gates: completed once on combined head; all applicable local gates PASS
 External gates: P2 Linux/systemd/Caddy 600s core plus full composition; real H8 deployment separately authorized
 S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
-Codex current verdict: Stage 2 ACCEPTED; Stage 3 CHANGES_REQUIRED; Stage 4 ACCEPTED; Stage 5 CHANGES_REQUIRED
+Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT + PENDING_LINUX_EVIDENCE; Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: 用户把 STAGE-3-R3 与 STAGE-5-R3 的 B 部分分别转发给原两个 Claude；Stage 4 不再启动
+Next authorized action: 从包含本总账的 clean detached final head 构建并验证新的 Windows local candidate；不 tag/upload/deploy
 ```
 
 验收结论只允许使用：
