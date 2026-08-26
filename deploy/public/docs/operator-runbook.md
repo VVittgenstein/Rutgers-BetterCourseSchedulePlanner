@@ -107,25 +107,55 @@ configuration, or Caddy. Every fix it demands is a separately authorized
 manual host operation:
 
 ```bash
-sudo ./ops/preflight.sh --caddyfile /etc/caddy/Caddyfile
+sudo ./ops/preflight.sh \
+  --admin-source addr=203.0.113.9,host=admin.example.net,laddr=198.51.100.4,lport=22 \
+  --caddyfile /etc/caddy/Caddyfile
 ```
+
+**Declare the real administrative connection.** `--admin-source` is
+required and is repeatable — once per path you actually administer this
+host through (each admin network, each jump host, IPv4 and IPv6
+separately). Its value is sshd's own `-C` connection spec minus `user=`,
+which the script pins to `root`: `addr=` the source address you connect
+FROM, `host=` the name sshd resolves that source to (use the address
+itself when `UseDNS no`), `laddr=`/`lport=` the local address and port the
+connection arrives AT. The preflight hands each declaration to
+`sshd -T -C` so the `Match Address`, `Match Host`, and `Match LocalPort`
+blocks that really apply to your administrative login are evaluated —
+including one that reopens root password login for exactly the network
+you use. Substitutes are refused on purpose: documentation-range addresses
+(RFC 5737/3849) and `.invalid` hostnames are rejected, a declared port
+sshd does not listen on is rejected, and with no declaration at all the
+run fails rather than reporting on a connection nobody makes. The
+addresses above are documentation placeholders — replace them; do not
+copy them.
 
 Hard failures (non-zero exit): `BCSP_PUBLIC_ORIGIN` missing, duplicated,
 malformed, or still naming the `planner.invalid` placeholder; an
 out-of-range `BCSP_PUBLIC_WS_PER_CLIENT_LIMIT` (the service would refuse
 to start); a domain that does not resolve; `ufw` inactive or 80/443 not
 allowed by explicit port rules (the capture snapshot showed only 22 ever
-open); a root SSH policy that is password-reachable, differs across the
-probed connection tuples (source and local address dimensions, at sshd's
-real port), or cannot be evaluated for the root tuple at all; a missing
-Caddy binary or `jq`; a supplied Caddy config that fails `caddy validate`
-or `caddy adapt`, whose ADAPTED public proxy (every `reverse_proxy` to
-`127.0.0.1:8080`) does not carry `stream_close_delay 4h` — comments and
-other sites do not count — or that still names the placeholder; an
-inactive or lifeless service. Advisories (reported, not fatal): failed
-units such as the known `fwupd` leftovers, an unchecked operator Caddy
-config, and the reminder to confirm the resolved addresses really are
-this host.
+open); no declared administrative root connection, a declaration that
+cannot be parsed or does not name a port sshd listens on, a missing
+`sshd`, or a declared connection whose effective root policy is
+password-reachable or cannot be evaluated; a missing Caddy binary or `jq`;
+a supplied Caddy config that fails `caddy validate` or `caddy adapt`,
+whose ADAPTED route for the `BCSP_PUBLIC_ORIGIN` host does not itself
+reach `127.0.0.1:8080` with `stream_close_delay 4h` on every
+`reverse_proxy` to the service — comments, other hosts, other sites, and
+the `localhost:8080` / `[::1]:8080` spellings of the same upstream do not
+count — or that still names the placeholder; an inactive or lifeless
+service. Advisories (reported, not fatal): failed units such as the known
+`fwupd` leftovers, an unchecked operator Caddy config, and the reminder to
+confirm the resolved addresses really are this host.
+
+Two limits worth knowing. The Caddy judgment reads route matchers, not
+route ORDER: a public host whose first route is a terminal `respond` and
+whose second is a protected proxy still satisfies the reach obligation
+(that failure mode is a dead service, which the liveness check catches).
+And a structure it cannot interpret — an unknown handler nesting routes, a
+host matcher containing a placeholder — is refused rather than guessed at,
+so an exotic config may need simplifying before it can be vouched for.
 
 The preflight does not replace the re-launch hard gates: the 600-second
 public soak (`tests/public-soak.sh`) and the assembled-composition browser
@@ -169,9 +199,14 @@ edge blocks `/metrics`): `bcsp_websocket_admitted_connections`,
 `bcsp_websocket_client_capacity_refusals` (each refusal is a 503 to a
 browser; sustained client-capacity refusals from a campus NAT are the
 signal to raise `BCSP_PUBLIC_WS_PER_CLIENT_LIMIT`), the queued-byte gauge
-`bcsp_websocket_outbound_queued_bytes`, and the three disconnect counters
+`bcsp_websocket_outbound_queued_bytes`, the three disconnect counters
 (`slow_consumer`, `global_outbound_budget`, `write_timeout`) that say why
-the service cut a connection loose.
+the service cut a connection loose, and
+`bcsp_websocket_heartbeat_acks_accepted` — heartbeat acknowledgements the
+service ACCEPTED (decoded, matched to a sequence it issued to that
+connection, not a replay). It is monotonic for the life of the process, so
+read it twice and judge the difference; a flat counter while pages are
+connected means the heartbeat round trip is not closing.
 
 ## Disposable-host test hooks
 
@@ -203,6 +238,13 @@ socket and the same service `MainPID` must survive, every 30-second
 Samples are timestamped and judged against the WHOLE window (thin, holed,
 late, or truncated coverage fails), and the ACK-acceptance journal read is
 bound to this service invocation and fails closed if `journalctl` fails.
+Acceptance is proven positively as well: the service's own
+`bcsp_websocket_heartbeat_acks_accepted` counter is read before and after,
+inside that one invocation, and its delta must match the acknowledgements
+the browser reports sending. A service that silently ignored every valid
+ACK — while still refreshing its heartbeat from arbitrary inbound text —
+would satisfy "the page called send()" and "the journal shows no
+rejection", and fails here.
 The host needs Caddy 2.7 or newer (`stream_close_delay`) with no distro
 `caddy.service` active. `BCSP_SOAK_DURATION_SECONDS` below 600 exists for
 harness debugging only and prints a DEBUG line that is not H9 evidence.
