@@ -173,17 +173,25 @@ this host.
 
 What "reaches" means for the Caddy check, since a config can look right
 and serve something else. The judgment runs on `caddy adapt` output, for
-the host and port of `BCSP_PUBLIC_ORIGIN`, in Caddy's own route order: a
-protected proxy behind a matching terminal route, or behind an
-unconditional `respond`, is not protection and does not count. Neither is
-one on another host, on another listener, or inside `handle_errors` —
-those run on an error, not on live traffic. The `localhost:8080` /
+the host and port of `BCSP_PUBLIC_ORIGIN`, in Caddy's own order at both
+levels: a protected proxy behind a matching terminal route, behind an
+unconditional `respond`, or behind a handler that answers the request
+EARLIER IN THE SAME ROUTE's handler chain, is not protection and does not
+count — Caddy stops at that handler and never calls the proxy. An ordinary
+middleware (`header`, `encode`, `rewrite`) does call the next handler, so a
+proxy behind one of those still counts. Neither counts a proxy on another
+host, inside `handle_errors` (those run on an error, not on live traffic),
+or on a different listen address: two servers on the origin port are two
+interfaces, and every server that could serve this host must satisfy the
+contract by itself rather than borrow a sibling's protection. The `localhost:8080` /
 `[::1]:8080` / `:8080` spellings are the same upstream as `127.0.0.1:8080`,
 so an unprotected one anywhere in the config fails the gate. A structure
-the check cannot interpret — an unknown handler nesting routes, a negated
-or CEL host matcher, a host matcher holding a placeholder, a listen
-address with no readable port — is refused rather than guessed at, so an
-exotic config may need simplifying before it can be vouched for. The
+the check cannot interpret — a handler whose next/terminal behaviour it
+does not model (a plugin, say), an unknown handler nesting routes, a
+subroute with handlers after it, a negated or CEL host matcher, a host
+matcher holding a placeholder, a listen address with no readable port — is
+refused rather than guessed at, so an exotic config may need simplifying
+before it can be vouched for. The
 refusal names which of those it hit.
 
 The preflight does not replace the re-launch hard gates: the 600-second
@@ -235,7 +243,11 @@ the service cut a connection loose, and
 service ACCEPTED (decoded, matched to a sequence it issued to that
 connection, not a replay). It is monotonic for the life of the process, so
 read it twice and judge the difference; a flat counter while pages are
-connected means the heartbeat round trip is not closing.
+connected means the heartbeat round trip is not closing. Beside it,
+`bcsp_websocket_admissions_granted` counts every WebSocket admission this
+process has ever granted -- unlike `bcsp_websocket_admitted_connections`,
+which is how many are open right now, its delta counts a socket that
+dropped and was replaced as two.
 
 ## Disposable-host test hooks
 
@@ -263,7 +275,7 @@ seconds: continuous acknowledged application pings, a mid-soak
 byte-identical config and a skipped reload proves nothing) that the same
 socket and the same service `MainPID` must survive, every 30-second
 `MemoryCurrent` sample under 700 MiB with last-three growth within
-32 MiB, and the connection gauge never dropping below the held socket.
+32 MiB, and exactly one public watch connection at every sample.
 Samples are timestamped and judged against the WHOLE window (thin, holed,
 late, or truncated coverage fails), and the ACK-acceptance journal read is
 bound to this service invocation and fails closed if `journalctl` fails.
@@ -274,6 +286,16 @@ the browser reports sending. A service that silently ignored every valid
 ACK — while still refreshing its heartbeat from arbitrary inbound text —
 would satisfy "the page called send()" and "the journal shows no
 rejection", and fails here.
+
+That counter is a whole-process aggregate, so the soak also proves the
+window belonged to one socket: no public watch connection open before the
+browser arms, exactly one admission granted across the run
+(`bcsp_websocket_admissions_granted`, monotonic, so a socket that dropped
+and was replaced counts as two), and exactly one connection at every
+30-second sample. Without that, a second socket acknowledging normally
+could supply the very acknowledgements the soak's own connection never had
+accepted.
+
 The host needs Caddy 2.7 or newer (`stream_close_delay`) with no distro
 `caddy.service` active. `BCSP_SOAK_DURATION_SECONDS` below 600 exists for
 harness debugging only and prints a DEBUG line that is not H9 evidence.
