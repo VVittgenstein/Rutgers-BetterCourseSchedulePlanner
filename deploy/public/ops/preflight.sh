@@ -21,6 +21,12 @@ BCSP_UFW="${BCSP_UFW:-ufw}"
 BCSP_SSHD="${BCSP_SSHD:-sshd}"
 BCSP_GETENT="${BCSP_GETENT:-getent}"
 BCSP_CADDY="${BCSP_CADDY:-caddy}"
+BCSP_JQ="${BCSP_JQ:-jq}"
+
+# The two documentation addresses (RFC 5737) used as root connection tuples
+# for sshd Match evaluation. Two distinct sources, so an address-conditional
+# root/password policy reveals itself as a divergence and fails closed.
+PREFLIGHT_SSH_PROBE_ADDRESSES=("203.0.113.1" "198.51.100.1")
 
 PREFLIGHT_FAILURES=0
 PREFLIGHT_ADVISORIES=0
@@ -122,24 +128,65 @@ check_firewall() {
   done
 }
 
+# One root connection tuple, fully specified so sshd can evaluate Match
+# blocks for it. Prints "permitrootlogin passwordauthentication
+# kbdinteractiveauthentication" or fails.
+root_ssh_effective_triple() {
+  local address="$1" effective
+
+  effective="$("$BCSP_SSHD" -T \
+    -C "user=root,host=preflight-probe.invalid,addr=${address},laddr=127.0.0.1,lport=22" \
+    2>/dev/null)" || return 1
+  awk '
+    $1 == "permitrootlogin" { root = $2 }
+    $1 == "passwordauthentication" { password = $2 }
+    $1 == "kbdinteractiveauthentication" { keyboard = $2 }
+    END {
+      if (root == "" || password == "" || keyboard == "") exit 1
+      print root, password, keyboard
+    }
+  ' <<< "$effective"
+}
+
 check_root_ssh() {
-  local effective value
+  local first_triple second_triple root password keyboard
 
   if ! command -v "$BCSP_SSHD" >/dev/null 2>&1; then
     pf_warn "sshd is unavailable; skip only if this host is reached some other way"
     return 0
   fi
-  if ! effective="$("$BCSP_SSHD" -T 2>/dev/null)"; then
-    pf_fail "sshd -T failed; cannot confirm root password login is disabled"
+  # H8 (R1): the judgment binds an explicit root connection tuple, so
+  # conditional Match blocks are evaluated instead of read past. Two probe
+  # addresses: if the effective root policy depends on the source address,
+  # this preflight cannot vouch for every address and fails closed.
+  if ! first_triple="$(root_ssh_effective_triple "${PREFLIGHT_SSH_PROBE_ADDRESSES[0]}")"; then
+    pf_fail "sshd -T -C for the root connection tuple failed; cannot evaluate the effective root policy (fail closed)"
     return 0
   fi
-  value="$(awk '$1 == "permitrootlogin" { print $2 }' <<< "$effective")"
-  case "$value" in
+  if ! second_triple="$(root_ssh_effective_triple "${PREFLIGHT_SSH_PROBE_ADDRESSES[1]}")"; then
+    pf_fail "sshd -T -C for the second probe address failed; cannot evaluate the effective root policy (fail closed)"
+    return 0
+  fi
+  if [[ "$first_triple" != "$second_triple" ]]; then
+    pf_fail "the effective root/password policy differs by source address ($first_triple vs $second_triple); an address-conditional carve-out cannot be vouched for (fail closed)"
+    return 0
+  fi
+  read -r root password keyboard <<< "$first_triple"
+  case "$root" in
     no|prohibit-password|without-password|forced-commands-only)
-      pf_pass "root SSH password login is disabled (PermitRootLogin $value)"
+      pf_pass "root SSH password login is disabled for the root tuple (PermitRootLogin $root)"
+      ;;
+    yes)
+      # Root login allowed: only safe when no password-shaped method is
+      # available to that tuple.
+      if [[ "$password" == "no" && "$keyboard" == "no" ]]; then
+        pf_pass "root SSH allows keys only for the root tuple (PermitRootLogin yes, PasswordAuthentication no, KbdInteractiveAuthentication no)"
+      else
+        pf_fail "root SSH password login is reachable for the root tuple (PermitRootLogin yes, PasswordAuthentication $password, KbdInteractiveAuthentication $keyboard); fix sshd_config (separately authorized)"
+      fi
       ;;
     *)
-      pf_fail "root SSH password login is not disabled (PermitRootLogin '$value'); fix sshd_config (separately authorized)"
+      pf_fail "unrecognized PermitRootLogin value '$root' for the root tuple (fail closed)"
       ;;
   esac
 }
@@ -155,8 +202,15 @@ check_failed_units() {
   fi
 }
 
+# H2 (R1): the judgment runs on the ADAPTED configuration -- what Caddy
+# will actually serve -- not on the raw text. A directive that lives only
+# in a comment, another site, or another block never reaches the adapted
+# public proxy and must fail. 4h == 14400000000000 nanoseconds in Caddy's
+# JSON form.
+PREFLIGHT_STREAM_CLOSE_DELAY_NS=14400000000000
+
 check_caddy() {
-  local caddyfile="$1"
+  local caddyfile="$1" adapted
 
   if ! command -v "$BCSP_CADDY" >/dev/null 2>&1; then
     pf_fail "caddy is unavailable on this host"
@@ -173,10 +227,23 @@ check_caddy() {
     return 0
   fi
   pf_pass "caddy validate accepts $caddyfile"
-  if grep -q 'stream_close_delay 4h' "$caddyfile"; then
-    pf_pass "stream_close_delay 4h is present (H2: reloads keep monitored sockets alive)"
+  if ! command -v "$BCSP_JQ" >/dev/null 2>&1; then
+    pf_fail "jq is unavailable; cannot evaluate the adapted Caddy config (fail closed)"
+    return 0
+  fi
+  if ! adapted="$("$BCSP_CADDY" adapt --config "$caddyfile" --adapter caddyfile 2>/dev/null)"; then
+    pf_fail "caddy adapt refused $caddyfile; cannot evaluate the active proxy semantics (fail closed)"
+    return 0
+  fi
+  if "$BCSP_JQ" -e --argjson delay "$PREFLIGHT_STREAM_CLOSE_DELAY_NS" '
+    [.. | objects
+      | select(.handler? == "reverse_proxy")
+      | select(any((.upstreams // [])[]; .dial == "127.0.0.1:8080"))]
+    | (length >= 1) and all(.stream_close_delay? == $delay)
+  ' >/dev/null 2>&1 <<< "$adapted"; then
+    pf_pass "every adapted reverse_proxy to 127.0.0.1:8080 carries stream_close_delay 4h (H2)"
   else
-    pf_fail "$caddyfile lacks 'stream_close_delay 4h'; a reload would sever every monitoring socket"
+    pf_fail "the adapted config has no reverse_proxy to 127.0.0.1:8080 with stream_close_delay 4h on it; a reload would sever every monitoring socket (comments and other sites do not count)"
   fi
   if grep -q 'planner\.invalid' "$caddyfile"; then
     pf_fail "$caddyfile still names the planner.invalid placeholder"

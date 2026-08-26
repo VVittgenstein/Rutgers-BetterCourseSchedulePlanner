@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 
-# Deterministic checks for ops/preflight.sh (H8). Every host fact the
-# preflight inspects -- DNS, firewall, sshd, failed units, Caddy, the
-# service -- comes from a recording stub, so the script's judgment can be
-# proven on any platform: one fully-healthy host must PASS, and each
-# hardened fact, broken alone, must FAIL. Root-free (BCSP_ROOT redirect),
-# symlink-free, network-free.
+# Deterministic checks for ops/preflight.sh (H8, tightened by STAGE-3-R1).
+# Every host fact the preflight inspects -- DNS, firewall, sshd (root
+# connection tuples), failed units, Caddy (adapted config), the service --
+# comes from a recording stub, so the script's judgment can be proven on
+# any platform: healthy hosts must PASS, and each hardened fact, broken
+# alone, must FAIL. Root-free (BCSP_ROOT redirect), symlink-free,
+# network-free. The Caddy structural cases evaluate the ADAPTED JSON and
+# therefore need a real jq; where jq is absent they SKIP loudly (CI's
+# Linux runner always has jq, so they run on every push).
 
 set -Eeuo pipefail
 
@@ -28,17 +31,48 @@ make_stub() {
   chmod 0755 "$STUB_DIR/$name"
 }
 
-# Healthy-host stubs. Negatives swap individual ones below.
+# --- healthy-host stubs; negatives swap individual ones below --------------
+
 make_stub getent-ok 'printf "140.82.9.50      planner.example.test\n"'
 make_stub getent-none 'exit 2'
 make_stub ufw-ok 'printf "Status: active\n\nTo                         Action      From\n--                         ------      ----\n22/tcp                     ALLOW       Anywhere\n80/tcp                     ALLOW       Anywhere\n443                        ALLOW       Anywhere\n"'
 make_stub ufw-inactive 'printf "Status: inactive\n"'
 make_stub ufw-no-https 'printf "Status: active\n22/tcp                     ALLOW       Anywhere\n80/tcp                     ALLOW       Anywhere\n"'
-make_stub sshd-ok 'printf "permitrootlogin prohibit-password\npasswordauthentication yes\n"'
-make_stub sshd-root-password 'printf "permitrootlogin yes\n"'
 make_stub systemctl-ok 'case "$1" in --failed) exit 0 ;; is-active) exit 0 ;; *) exit 0 ;; esac'
 make_stub curl-ok 'printf "200"'
-make_stub caddy-ok 'exit 0'
+
+# sshd stubs answer the ROOT CONNECTION TUPLE (-T -C user=root,...). The
+# address-conditional stub gives the first probe address a safe answer and
+# every other address an unsafe one -- the divergence itself must fail.
+make_stub sshd-ok 'printf "permitrootlogin prohibit-password\npasswordauthentication yes\nkbdinteractiveauthentication no\n"'
+make_stub sshd-root-password 'printf "permitrootlogin yes\npasswordauthentication yes\nkbdinteractiveauthentication no\n"'
+make_stub sshd-keys-only-root 'printf "permitrootlogin yes\npasswordauthentication no\nkbdinteractiveauthentication no\n"'
+make_stub sshd-no-tuple 'case "$*" in *" -C "*|*-C\ *) exit 1 ;; *) printf "permitrootlogin no\npasswordauthentication no\nkbdinteractiveauthentication no\n" ;; esac'
+make_stub sshd-address-conditional 'case "$*" in *addr=203.0.113.1*) printf "permitrootlogin prohibit-password\npasswordauthentication no\nkbdinteractiveauthentication no\n" ;; *) printf "permitrootlogin yes\npasswordauthentication yes\nkbdinteractiveauthentication yes\n" ;; esac'
+make_stub sshd-missing-keyword 'printf "permitrootlogin no\npasswordauthentication no\n"'
+
+# Caddy stubs answer `adapt` with a fixed ADAPTED JSON; `validate` accepts.
+ADAPT_OK_JSON="$TEST_TMP/adapt-ok.json"
+cat > "$ADAPT_OK_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}],"stream_close_delay":14400000000000}]}]}]}]}}}}}
+JSON
+ADAPT_MISSING_JSON="$TEST_TMP/adapt-missing.json"
+cat > "$ADAPT_MISSING_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"match":[{"host":["planner.example.test"]}],"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}]}]}]}]}]}}}}}
+JSON
+ADAPT_ELSEWHERE_JSON="$TEST_TMP/adapt-elsewhere.json"
+cat > "$ADAPT_ELSEWHERE_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:8080"}]}]},{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:9999"}],"stream_close_delay":14400000000000}]}]}}}}}
+JSON
+ADAPT_NO_PROXY_JSON="$TEST_TMP/adapt-no-proxy.json"
+cat > "$ADAPT_NO_PROXY_JSON" <<'JSON'
+{"apps":{"http":{"servers":{"srv0":{"listen":[":443"],"routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"127.0.0.1:9999"}],"stream_close_delay":14400000000000}]}]}}}}}
+JSON
+make_stub caddy-adapt-ok "case \"\$1\" in adapt) cat '$ADAPT_OK_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-missing "case \"\$1\" in adapt) cat '$ADAPT_MISSING_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-elsewhere "case \"\$1\" in adapt) cat '$ADAPT_ELSEWHERE_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-no-proxy "case \"\$1\" in adapt) cat '$ADAPT_NO_PROXY_JSON' ;; *) exit 0 ;; esac"
+make_stub caddy-adapt-fails "case \"\$1\" in adapt) exit 1 ;; *) exit 0 ;; esac"
 
 ENV_DIR="$TEST_TMP/root/etc/bcsp"
 install -d -m 0755 "$TEST_TMP/root" "$TEST_TMP/root/etc" "$ENV_DIR"
@@ -47,9 +81,20 @@ printf 'BCSP_PUBLIC_ORIGIN=https://planner.example.test\n' > "$ENV_DIR/bcsp.env"
 GOOD_CADDYFILE="$TEST_TMP/Caddyfile"
 sed 's/planner\.invalid/planner.example.test/' \
   "$DEPLOY_DIR/caddy/Caddyfile.example" > "$GOOD_CADDYFILE"
+# The directive appears ONLY inside a comment: the raw text greps green,
+# the adapted config does not carry it. This is exactly the raw-text
+# evasion R1 exists to close.
+COMMENTED_CADDYFILE="$TEST_TMP/Caddyfile-commented"
+{
+  grep -v 'stream_close_delay' "$GOOD_CADDYFILE"
+  printf '# stream_close_delay 4h\n'
+} > "$COMMENTED_CADDYFILE"
+
+PASS_COUNT=0
+FAIL_COUNT=0
+SKIP_COUNT=0
 
 run_preflight() {
-  # Callers override individual BCSP_* stubs in the environment.
   env \
     BCSP_ROOT="$TEST_TMP/root" \
     BCSP_GETENT="${PF_GETENT:-$STUB_DIR/getent-ok}" \
@@ -57,7 +102,8 @@ run_preflight() {
     BCSP_SSHD="${PF_SSHD:-$STUB_DIR/sshd-ok}" \
     BCSP_SYSTEMCTL="${PF_SYSTEMCTL:-$STUB_DIR/systemctl-ok}" \
     BCSP_CURL="${PF_CURL:-$STUB_DIR/curl-ok}" \
-    BCSP_CADDY="${PF_CADDY:-$STUB_DIR/caddy-ok}" \
+    BCSP_CADDY="${PF_CADDY:-$STUB_DIR/caddy-adapt-ok}" \
+    BCSP_JQ="${PF_JQ:-jq}" \
     BCSP_HEALTH_ATTEMPTS=2 \
     BCSP_HEALTH_DELAY_SECONDS=0 \
     bash "$OPS_DIR/preflight.sh" "$@"
@@ -76,6 +122,7 @@ expect_pass() {
     printf 'preflight-check: %s: missing RESULT PASS\n' "$label" >&2
     exit 1
   fi
+  PASS_COUNT=$((PASS_COUNT + 1))
 }
 
 expect_fail() {
@@ -91,10 +138,11 @@ expect_fail() {
     printf 'preflight-check: %s: missing message: %s\n' "$label" "$needle" >&2
     exit 1
   fi
+  FAIL_COUNT=$((FAIL_COUNT + 1))
 }
 
-# A healthy host passes, with and without the Caddy config supplied.
-expect_pass 'healthy host' --caddyfile "$GOOD_CADDYFILE"
+# --- cases that need no jq (run everywhere) --------------------------------
+
 expect_pass 'healthy host, no caddyfile'
 
 # The placeholder origin is refused.
@@ -115,7 +163,7 @@ printf '%s\n%s\n' 'BCSP_PUBLIC_ORIGIN=https://planner.example.test' \
 expect_fail 'per-client limit 0' 'must be an integer in 1..1024'
 printf '%s\n%s\n' 'BCSP_PUBLIC_ORIGIN=https://planner.example.test' \
   'BCSP_PUBLIC_WS_PER_CLIENT_LIMIT=64' > "$ENV_DIR/bcsp.env"
-expect_pass 'per-client limit 64' --caddyfile "$GOOD_CADDYFILE"
+expect_pass 'per-client limit 64'
 printf 'BCSP_PUBLIC_ORIGIN=https://planner.example.test\n' > "$ENV_DIR/bcsp.env"
 
 # Unresolvable DNS is a hard failure.
@@ -125,16 +173,59 @@ PF_GETENT="$STUB_DIR/getent-none" expect_fail 'unresolvable domain' 'DNS does no
 PF_UFW="$STUB_DIR/ufw-inactive" expect_fail 'inactive firewall' 'ufw is not active'
 PF_UFW="$STUB_DIR/ufw-no-https" expect_fail 'closed 443' 'does not allow 443/tcp'
 
-# Root SSH password login must be off.
-PF_SSHD="$STUB_DIR/sshd-root-password" expect_fail 'root password login' 'root SSH password login is not disabled'
+# SSH judgments bind the root connection tuple (R1):
+#  - a password-reachable root tuple is refused;
+#  - an sshd that cannot answer for the tuple (no -C support / failure) is
+#    refused -- the pre-R1 global `sshd -T` would have passed this host;
+#  - an address-conditional policy is refused as unvouchable;
+#  - an answer missing one of the three governing keywords is refused;
+#  - keys-only root (PermitRootLogin yes + no password-shaped method) passes.
+PF_SSHD="$STUB_DIR/sshd-root-password" expect_fail 'root password login' 'root SSH password login is reachable'
+PF_SSHD="$STUB_DIR/sshd-no-tuple" expect_fail 'tuple evaluation unavailable' 'cannot evaluate the effective root policy'
+PF_SSHD="$STUB_DIR/sshd-address-conditional" expect_fail 'address-conditional policy' 'differs by source address'
+PF_SSHD="$STUB_DIR/sshd-missing-keyword" expect_fail 'incomplete effective answer' 'cannot evaluate the effective root policy'
+PF_SSHD="$STUB_DIR/sshd-keys-only-root" expect_pass 'keys-only root tuple'
 
-# The operator Caddy config must carry the H2 drain directive.
-NO_DELAY_CADDYFILE="$TEST_TMP/Caddyfile-no-delay"
-grep -v 'stream_close_delay' "$GOOD_CADDYFILE" > "$NO_DELAY_CADDYFILE"
-expect_fail 'missing stream_close_delay' 'stream_close_delay' --caddyfile "$NO_DELAY_CADDYFILE"
+# Without jq the adapted-config judgment must fail closed, never guess.
+PF_JQ="$STUB_DIR/definitely-not-jq" expect_fail 'missing jq' 'jq is unavailable' \
+  --caddyfile "$GOOD_CADDYFILE"
 
-# A Caddy config still naming the placeholder is refused.
-expect_fail 'placeholder caddyfile' 'planner.invalid placeholder' \
-  --caddyfile "$DEPLOY_DIR/caddy/Caddyfile.example"
+# --- adapted-Caddy cases (need a real jq; SKIP loudly without one) ---------
 
-printf 'preflight-check: PASS (three healthy passes, nine hardened refusals)\n'
+if command -v jq >/dev/null 2>&1; then
+  expect_pass 'healthy host with caddyfile' --caddyfile "$GOOD_CADDYFILE"
+
+  # The old raw-text grep passed a commented-out directive; the adapted
+  # config must refuse it.
+  PF_CADDY="$STUB_DIR/caddy-adapt-missing" expect_fail 'comment-only directive' \
+    'comments and other sites do not count' --caddyfile "$COMMENTED_CADDYFILE"
+
+  # A delay on some OTHER proxy does not protect the public one.
+  PF_CADDY="$STUB_DIR/caddy-adapt-elsewhere" expect_fail 'delay on another proxy' \
+    'comments and other sites do not count' --caddyfile "$GOOD_CADDYFILE"
+
+  # No public proxy at all cannot pass H2.
+  PF_CADDY="$STUB_DIR/caddy-adapt-no-proxy" expect_fail 'no public proxy' \
+    'comments and other sites do not count' --caddyfile "$GOOD_CADDYFILE"
+
+  # caddy adapt failing is fail-closed, not fail-open.
+  PF_CADDY="$STUB_DIR/caddy-adapt-fails" expect_fail 'adapt failure' \
+    'cannot evaluate the active proxy semantics' --caddyfile "$GOOD_CADDYFILE"
+
+  # A Caddy config still naming the placeholder is refused even when the
+  # adapted proxy semantics are right.
+  PLACEHOLDER_CADDYFILE="$TEST_TMP/Caddyfile-placeholder"
+  cp -- "$DEPLOY_DIR/caddy/Caddyfile.example" "$PLACEHOLDER_CADDYFILE"
+  expect_fail 'placeholder caddyfile' 'planner.invalid placeholder' \
+    --caddyfile "$PLACEHOLDER_CADDYFILE"
+else
+  SKIP_COUNT=6
+  printf 'preflight-check: SKIPPED %s adapted-Caddy cases (jq unavailable on this platform; CI runs them)\n' "$SKIP_COUNT" >&2
+fi
+
+SKIP_NOTE=""
+if [[ "$SKIP_COUNT" -gt 0 ]]; then
+  SKIP_NOTE=", $SKIP_COUNT skipped without jq"
+fi
+printf 'preflight-check: PASS (%s healthy passes, %s hardened refusals%s)\n' \
+  "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_NOTE"
