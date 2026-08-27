@@ -328,24 +328,24 @@ PUT /api/v1/local/desired-watch
   Catalog/term/campus 写入准入、`REJECTED/UNAVAILABLE` 和永久失败自动 retirement；
 - 任何要求普通 GET `/api/v1/local/desired-watch` 永久返回 404 的旧测试描述。
 
-这些内容尚需由 Claude 在正式实现任务中同步修改，但其产品语义已经被用户的最终裁定覆盖。
+这些内容已在对应 Stage 的实现与设计文档中同步；恢复上下文时仍以这里记录的最终裁定为准。
 
 ## 12. 当前仓库检查点
 
 记录日期：2026-08-26。
 
 ```text
-当前检出：feat/s2-alert-delivery（P2 → S4 → S3 evidence 已集成；产品组合 head 882f230）
-origin/main：ae65958
+当前检出：main（v0.1.1 发布后的编排文档收口）
+v0.1.1 产品源码与轻量 tag：0988dadeeef2db16bbc2e64bc432125674c60325
+GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.1
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
 L1/R4 accepted head：75cefb0
 Claude Stage 2 主交付 head：553371f；R1 lane head：5af49d9
 Codex Stage 2 最终集成 head：6a35c74
-S2 分支：尚未合并、尚未发布
-当前产品源码工作树：无未提交源码；两个 conversation 归档目录未跟踪
-Codex orchestration 文档：Stage 2/3/4/5 均已裁定并完成串行集成；等待 final Windows candidate
-现有 release/0.1.0：sourceCommit=7d5debef（2026-07-15，早于本轮工作）
+Stage 2/3/4/5：均已裁定、串行集成并随 v0.1.1 发布
+当前产品源码工作树：无未提交源码；三个 conversation 归档目录保持未跟踪
+v0.1.0：tag/Release/资产保持不可变；v0.1.1 为当前 Latest
 ```
 
 恢复时必须重新核实这些值，不得永久假设它们仍然成立。
@@ -354,17 +354,17 @@ Codex orchestration 文档：Stage 2/3/4/5 均已裁定并完成串行集成；�
 
 | 工作 | 状态 | 当前事实 |
 |---|---|---|
-| S1 | 代码完成并已合入 main；M0 窄修已写入 feature | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter；尚无新 release |
-| S2 | `ACCEPTED`，仅 feature | R1 四个 blocker 已关闭并集成；尚未 merge/release，公网仍被 P2 阻断 |
-| S3 | `ACCEPTED_WITH_DEFERRED_DEBT`，已集成 | 离线 analyzer 168/168；CE-15/16 已关、honest GO 保留；当前数据仍 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`，零 production scheduler change |
-| S4 | `ACCEPTED`，已集成 | `prepare_cached`、整体回滚与 API 缺席证据成立；architecture 精确冻结 normal cache/dev hooks |
-| P1 | Stage 2 主体已实现，仅 feature | mutable in-memory ticket、validate-before-connect、single-flight renew 与页面内 reconnect plan 已通过审查；公网部署仍被 P2/H4 阻断 |
-| P2 | `ACCEPTED_WITH_DEFERRED_DEBT`，已集成；`PENDING_LINUX_EVIDENCE` | H1–H9 仓内实现、资源边界、actual SSH tuple、Caddy/ACK harness 已收口；真实 jq/Caddy/systemd/600s soak 与部署仍未执行 |
-| L1 | `ACCEPTED`，仅 feature | desired 持久化、GET/PUT、materializer、UI、并发反例与真实包装三生命周期 E2E 均通过；尚未合并/发布 |
-| L2 | `ACCEPTED`，仅 feature | late HELLO 在 Exiting 后被同锁拒绝；presence/60 秒/ordered shutdown focused tests 通过 |
-| L3 | 主体已实现，仅 feature | 启动/页面/监控/开放/Gate/倒计时/退出日志已接线；本轮无阻断 |
+| S1 | `ACCEPTED`，已合入并随 v0.1.1 发布 | Gate、三条生产路径、迁移、重启、投影、前端均已接线；`3f4ebb0` 删除 probe 正 jitter |
+| S2 | `ACCEPTED`，已合入并发布 | R1 四个 blocker 已关闭；reconnect、readiness、audio、notification、presence 与 console 生命周期进入 v0.1.1 |
+| S3 | `ACCEPTED_WITH_DEFERRED_DEBT`，已合入 | 离线 analyzer 168/168；CE-15/16 已关、honest GO 保留；当前数据仍 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`，零 production scheduler change |
+| S4 | `ACCEPTED`，已合入并发布 | `prepare_cached`、整体回滚与 API 缺席证据成立；architecture 精确冻结 normal cache/dev hooks |
+| P1 | 随 Stage 2 `ACCEPTED` 并发布 | mutable in-memory ticket、validate-before-connect、single-flight renew 与页面内 reconnect plan 已通过审查 |
+| P2 | `ACCEPTED_WITH_DEFERRED_DEBT`，已合入并发布；CORE evidence PASS | H1–H9 仓内实现、资源边界、Caddy/ACK harness 与真实 600 秒 CORE soak 已收口；生产部署、Rutgers composition 和真实 H8 仍需另行授权 |
+| L1 | `ACCEPTED`，已合入并发布 | desired 持久化、GET/PUT、materializer、UI、并发反例与真实包装三生命周期 E2E 均通过 |
+| L2 | `ACCEPTED`，已合入并发布 | late HELLO 在 Exiting 后被同锁拒绝；presence/60 秒/ordered shutdown focused tests 通过 |
+| L3 | `ACCEPTED`，已合入并发布 | 启动/页面/监控/开放/Gate/倒计时/退出日志已接线 |
 
-## 14. 已发现但尚未处理的关键漂移
+## 14. 重要漂移、收口与保留边界
 
 ### S1
 
@@ -381,12 +381,11 @@ Codex orchestration 文档：Stage 2/3/4/5 均已裁定并完成串行集成；�
   final-head 12 文件 Windows archive 完成非空物化、两次重启、Full Reset 与再次空重启；
 - rotation 现在按 owner live truth 保留 tombstone；STOP committed-before-reconcile + stop fault 时 row、
   pendingDisarm 与原 id 均可达；uncertainty 同步门与 read-only cutoff release 也有真实事件窗口反例；
-- `M0-M1-001`、reduced S2-D3 与 L1 已由 Codex 标为 `ACCEPTED`，本地迁移的纵向行为门关闭；这不等于
-  已合并/发布，也不等于完整 S2；
+- `M0-M1-001`、reduced S2-D3 与 L1 已由 Codex 标为 `ACCEPTED`，随后完整 Stage 2 验收、合入并随
+  v0.1.1 发布；
 - recovery GET 挂起时其他 section 仍使用旧 snapshot 暂为已披露非阻断限制：请求排在同一 queue 后，
   generation/revision CAS 会拒绝 rotation/stale 覆盖，且不会自动重放；
-- 下一阶段不再回修 desired；一次完成 `STAGE-2` 中的 transport reconnect、公网 nonce
-  客户端、Readiness、提醒恢复与本地生命周期收口。
+- transport reconnect、公网 nonce 客户端、Readiness、提醒恢复与本地生命周期已在 `STAGE-2` 收口。
 
 ### P1/S2
 
@@ -396,19 +395,18 @@ Codex orchestration 文档：Stage 2/3/4/5 均已裁定并完成串行集成；�
 - Codex 独立重门和 34/34 security diff inventory 已完成；传统可报告安全 finding 为 0；
 - Stage 2 四个阻断已由 `STAGE-2-R1/v2-parallel` 关闭并经 Codex focused tests 验收；
 - R1 lane 五个提交已回收为主线 `48bef74..6a35c74`，Stage 2 结论为 ACCEPTED；
-- 公网 H4 全局容量和字节背压仍是 Stage 3/P2 部署阻断，不进入本次 R1。
+- 公网 H4 全局容量和字节背压随后在 Stage 3/P2 完成并随 v0.1.1 发布。
 
 ### P2/L2/L3/S3/S4
 
 - P2 final lane `c2e2d2e`、S4 `69c7cb1`、S3 evidence `1dc2219` 已按 B → C → D 回收到
   `feat/s2-alert-delivery`；`5efeaa5` 只把 Stage 2 的两处 late-HELLO 测试机械适配为 `OutboundSender`，锁内
   Exiting guard 与 Notification CI 均保留；
-- P2 R3 的 Caddy handler/listener 与单-socket admissions 证据成立；SSH actual tuple 主合同成立。真实
-  production jq 的 27 个 adapted fixtures、Linux systemd/Caddy、600 秒 CORE soak、composition 与真实 H8
-  tuple 仍是外部门，未开启 Vultr、未部署；
-- P2 记录一项非阻断 deferred：三个 localhost metric baseline 顺序仍有极窄夹缝，第二 socket 必须在数次
-  读取之间进入、贡献匹配 ACK 并在首个 30 秒样本前退出才可能混入。它不改变产品行为；按用户的非重大问题
-  政策不再开 R4，真实 Linux H9 前复核；
+- P2 R3 的 Caddy handler/listener、SSH actual tuple 与单-socket admissions 主合同成立；production jq 的
+  27 个 adapted fixtures 已在 Ubuntu CI 真实执行；Linux systemd/Caddy/Chromium 600 秒 CORE soak 通过；
+  composition 与真实 H8 tuple 仍是部署期外部门，未开启 Vultr、未部署；
+- 原 metric baseline 夹缝在 release 前的 `0988dad` 窄修关闭：基线顺序固定为 admissions → admitted
+  permit gauge → ACK，全窗口采样同一 admitted permit gauge；
 - S4 production raw SQLite accessor 已删除；statement cache 与整体事务回滚通过，新增依赖/feature 已由
   architecture graph 精确冻结；
 - S3 analyzer 只留在 `tools/s3/**`，不会进入 runtime/package。168/168、五类 honest GO 与当前数据
@@ -427,10 +425,10 @@ Codex orchestration 文档：Stage 2/3/4/5 均已裁定并完成串行集成；�
 
 ## 16. 当前 Parallel Wave
 
-状态：**Parallel Wave 1 已完成：Stage 2 → P2 → S4 → S3 evidence 均已串行回收；组合重门通过，等待从
-最终文档化 head 构建并验证 Windows local release candidate。公网 Linux/部署 evidence 继续 pending。**
+状态：**Parallel Wave 1 与 v0.1.1 发布均已完成。Stage 2 → P2 → S4 → S3 evidence 已串行回收；
+Windows/Linux 同源归档、联合验证与 Linux 600 秒 CORE soak 全部通过。**
 
-当前 Stage 2：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
+Stage 2（已完成）：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
 
 Stage 2 主体已经实现的用户结果：
 
@@ -439,9 +437,9 @@ Stage 2 主体已经实现的用户结果：
 - 公网页面每次连接前 single-flight validate 当前 nonce，失效时原子换新并只用新票握手；
 - 公网页面按页面内 connection intent 重建监控，不从 selection 猜测，也不复活已 STOP 的 section；
 - 本地重连继续由服务端 desired coordinator 物化，页面不得发送 legacy START；
-- 五环 Readiness、AudioContext 自愈与当前页面级 Notification 已接线，但音频真值仍有假绿阻断；
-- 本地 presence 证明任何浏览 tab 存活；最后页面离开 60 秒后复验再退出，但 pre-admitted late HELLO
-  仍可能在 Exiting 后错误注册；
+- 五环 Readiness、AudioContext 自愈与当前页面级 Notification 已接线，音频真值的假绿阻断已关闭；
+- 本地 presence 证明任何浏览 tab 存活；最后页面离开 60 秒后复验再退出；pre-admitted late HELLO 在
+  Exiting 后由同一把锁拒绝；
 - 控制台显示关键生命周期事件且不泄漏 nonce/session/请求体。
 
 Stage 2 R1 已关闭：音频输出证据/held resume 撤绿、Exiting 后 late HELLO、真实通知开关、frontend CI
@@ -454,38 +452,39 @@ R1 明确不包含：
 
 最终 lane 裁定：
 
-- Stage 3/P2 R3：`ACCEPTED_WITH_DEFERRED_DEBT / PENDING_LINUX_EVIDENCE`；
+- Stage 3/P2 R3：`ACCEPTED_WITH_DEFERRED_DEBT`；Linux CORE evidence PASS，部署期 composition/H8 pending；
 - Stage 4/S4 R1：`ACCEPTED`；
 - Stage 5/S3 evidence R3：`ACCEPTED_WITH_DEFERRED_DEBT`，结论为
   `NO_PRODUCTION_CHANGE / DATA_REQUIRED`。
 
-组合 head 独立门：workspace 全绿（一个既有 real-browser ignored）；Rust architecture/source boundary 全绿；
+最终 source 独立门：workspace 全绿（一个既有 real-browser ignored）；Rust architecture/source boundary 全绿；
 frontend guard 92、Vitest 340、typecheck/local/public builds 全绿；S3 168；ops/soak self-test、release-set
-12 capability 全绿；preflight 7 pass/31 refusal，全 27 个 jq cases 因本机无 jq 明确 SKIP 并留给 Linux。
+12 capability 全绿；preflight 在 Linux CI 为 12 pass/53 refusal、零 skip；正式 600 秒 CORE
+soak 59/59 ACK、20 个样本、forced reload 后同一连接继续。
 
-## 17. 用户冻结的余下四阶段顺序
+## 17. 用户冻结并已完成的四阶段顺序
 
-Stage 1（S1）已完成；M0/M1 也已验收。余下产品工作只允许按以下四个完整 Stage 推进：
+Stage 1（S1）与 M0/M1 已完成；用户冻结的四个完整 Stage 也已按下列顺序验收并进入 v0.1.1：
 
 ```text
 Stage 1 — S1（已完成）
 
-Stage 2 — STAGE-2
+Stage 2 — STAGE-2（已完成）
   S2 + P1 + L1 回归 + L2/L3 + 通知政策修订；一次实现、一次验收
 
-Stage 3 — STAGE-3
+Stage 3 — STAGE-3（已完成；部署期外部门保留）
   只做 H1–H9/完整 P2 公网资源、配置、组装与部署边界；一次实现、一次验收
 
-Stage 4 — STAGE-4
+Stage 4 — STAGE-4（已完成）
   只做 prepare_cached 微优化；保持行为不变，不夹带存储重构
 
-Stage 5 — STAGE-5
+Stage 5 — STAGE-5（已完成；结论为零 production change）
   先取得跨 target/时段证据，再决定是否实现调度器；证据不足可零 production change 结束
 ```
 
-发布不是额外产品 Stage；余下四阶段完成后再由 Codex 准备一次候选/发布门，并另行取得外部动作授权。
-产品依赖顺序没有变化；当前授权的是四个隔离 lane 的并行**实现**，不是乱序验收或发布。完整阶段合同、
-分级政策与停止条件见 `docs/orchestration/STAGE-EXECUTION-PLAN.md`。
+发布不是额外产品 Stage；四阶段完成后 Codex 已完成一次 v0.1.1 候选/发布门。Vultr 生产部署、真实 H8
+主机操作与 Rutgers composition 从未被这次发布授权。完整阶段合同、分级政策与停止条件见
+`docs/orchestration/STAGE-EXECUTION-PLAN.md`。
 
 ## 18. 不得复活的旧工作模式
 
@@ -501,6 +500,30 @@ Stage 5 — STAGE-5
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-08-26 — v0.1.1 已发布，归因与双平台 release 收口
+
+- 以 `v0.1.0` 为不可变边界完成 message-only 历史改写：186 个映射提交中 161 个提交消息移除
+  Claude/Anthropic co-author trailer；父拓扑、tree、author/committer 与真实日期逐项一致，最终可达历史中
+  Claude/Anthropic attribution 为 0；远端 `main` 与清理候选随后安全前移，未 squash；
+- 首个 release-prep head 的 Linux CORE soak 暴露 Ubuntu 24.04 仓库只提供 Caddy 2.6.2，无法解析
+  `stream_close_delay`。最终 release source `0988dadeeef2db16bbc2e64bc432125674c60325` 窄修为官方
+  Caddy v2.11.4 固定资产 + SHA-256 校验，并把 H9 归属证据改为 admissions baseline → admitted permit
+  gauge → ACK baseline、全窗口采样 admitted permit gauge；独立复核无 blocker/major；
+- GitHub push contracts、tag contracts、Linux package run
+  `33024587187` 与 600 秒 CORE soak `33024588480` 全绿；soak 同一 socket 完成 59/59 ACK、一次
+  admission、20 个内存/连接样本，中点 forced reload 后继续，最终标记
+  `P2_H9_PUBLIC_SOAK_CORE_PASS`；
+- Windows `rbcsp-windows-x86_64-0.1.1.zip` 为 12 文件，SHA-256
+  `a3a23bafdcc42dc3f88d6ad90a0775b92bbdf951e0af712648927e5219daaa73`；release verifier 通过
+  桌面/移动真实浏览器、非空 desired-watch、两次重启与 Full Reset；
+- Linux `rbcsp-linux-x86_64-0.1.1.tar.gz` 为 22 文件，SHA-256
+  `77546e4615b148963d2de92f75a0628c3323ae679066b88edfd79ed756b7e2ac`；双平台联合 release-set
+  验证通过；正式 GitHub Release 为
+  `https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.1`；
+- Release 发布后从 GitHub 重新下载两份资产并复算同一哈希；旧 `v0.1.0` tag、Release 359451298、
+  正文、资产 ID/大小/时间/哈希全部未变；没有连接 Vultr，没有修改 DNS/UFW/SSH/Caddy/systemd
+  生产主机，没有运行需真实 Rutgers 授权的 composition 层或真实 H8 主机操作。
 
 ### 2026-08-26 — 授权 v0.1.1 发布与 GitHub 归因收口
 
@@ -657,17 +680,18 @@ Stage 5 — STAGE-5
 ```text
 Active wave: PARALLEL-WAVE-1 COMPLETE
 Accepted/integrated: Stage 2; STAGE-3-R3/P2; STAGE-4-R1/S4; STAGE-5-R3/S3 evidence
-Product combination and Windows candidate source: e2f9af31526095178b0e1df5106113261c7de74a
+Published v0.1.1 product source/tag: 0988dadeeef2db16bbc2e64bc432125674c60325
 Integration order completed: P2 → S4 → S3 evidence
 Integration-only commits: 5efeaa5 (presence sender); 882f230 (architecture feature snapshot)
-Heavy gates: completed once on combined head; all applicable local gates PASS
-Windows local candidate: VERIFIED; 12 files; SHA256 ac70b8d8efa4ab43f478fbf0559c71f76550e6229aee3273f0798b7973c75714; NON_EMPTY_MATERIALIZED after two restarts
-External gates: P2 Linux/systemd/Caddy 600s core plus full composition; real H8 deployment separately authorized
+Heavy gates: final source push/tag contracts, Windows verifier, Linux verifier, joint release-set and 600s CORE soak PASS
+Windows v0.1.1 release: 12 files; SHA256 a3a23bafdcc42dc3f88d6ad90a0775b92bbdf951e0af712648927e5219daaa73; NON_EMPTY_MATERIALIZED after two restarts
+Linux v0.1.1 release: 22 files; SHA256 77546e4615b148963d2de92f75a0628c3323ae679066b88edfd79ed756b7e2ac
+External gates: P2 Linux/systemd/Caddy 600s CORE PASS; full Rutgers composition and real H8 deployment remain separately authorized
 S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
-Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT + PENDING_LINUX_EVIDENCE; Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
+Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT (CORE evidence PASS; deployment-only evidence pending); Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: IN_PROGRESS — v0.1.1 版本/文档收口 → Claude trailer message-only rewrite → GitHub CI → force-with-lease 更新 main → 同源 Windows/Linux 构建、CORE soak、联合验包与 GitHub Release；不部署 Vultr
+Next authorized action: NONE — v0.1.1 PUBLISHED; production deployment or Rutgers composition requires new explicit authorization
 ```
 
 验收结论只允许使用：
