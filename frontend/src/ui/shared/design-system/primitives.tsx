@@ -7,7 +7,7 @@ import {
 export interface ActionButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   readonly busy?: boolean;
   readonly busyLabel?: string;
-  readonly tone?: 'default' | 'accent' | 'quiet';
+  readonly tone?: 'default' | 'accent' | 'quiet' | 'danger' | 'danger-outline';
 }
 
 export function ActionButton({
@@ -44,9 +44,10 @@ export interface StatePanelProps {
   readonly marker?: ReactNode;
 }
 
+/* Text glyphs inside the 40px marker circle (spec 4.13): loading ⟳, empty –, error ! */
 const defaultMarkers: Readonly<Record<StatePanelProps['kind'], string>> = {
-  loading: '///',
-  empty: 'Ø',
+  loading: '⟳',
+  empty: '–',
   error: '!',
 };
 

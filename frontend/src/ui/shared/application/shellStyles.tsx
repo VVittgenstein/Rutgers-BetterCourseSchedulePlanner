@@ -1,7 +1,23 @@
+/**
+ * Shell chrome (spec 5.1 / 5.2): one 56px sticky app bar, the workspace heading and the
+ * service-status card. Consumes only --bcsp-* tokens; the only runtime token it reads is
+ * --bcsp-navigation-height, which SharedApplication publishes from the measured nav.
+ *
+ * Layout note: masthead and navigation share the same 56px band. The shell is a flex column
+ * (sticky children of a flex container may travel the whole column; sticky grid items are
+ * clamped to their own grid area, so the spec's fixed-row grid cannot stick). The nav sits on
+ * top of the masthead through a negative top margin and lets pointer events fall through
+ * everywhere except on the links; below 48rem it becomes its own 44px row under the masthead.
+ */
 export const BCSP_SHELL_CSS = String.raw`
 .bcsp-shell {
+  --bcsp-brand-w: 10rem;
+  --bcsp-lang-w: 11rem;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   min-height: 100dvh;
+  color: var(--bcsp-ink);
   background: var(--bcsp-paper);
 }
 
@@ -9,15 +25,19 @@ export const BCSP_SHELL_CSS = String.raw`
   position: fixed;
   top: 0.75rem;
   left: 0.75rem;
-  z-index: 20;
+  z-index: var(--bcsp-z-skip);
   padding: 0.75rem 1rem;
+  border-radius: var(--bcsp-radius-2);
   color: var(--bcsp-accent-ink);
   background: var(--bcsp-accent);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  box-shadow: var(--bcsp-elev-2);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-body);
+  font-weight: 600;
+  line-height: 1.25rem;
+  letter-spacing: 0;
+  text-decoration: none;
+  text-transform: none;
   transform: translateY(-200%);
 }
 
@@ -25,292 +45,352 @@ export const BCSP_SHELL_CSS = String.raw`
   transform: translateY(0);
 }
 
+/* ---- App bar: masthead (brand + language) ---- */
 .bcsp-masthead {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(17rem, 0.72fr);
+  position: sticky;
+  top: 0;
+  z-index: var(--bcsp-z-nav);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bcsp-space-3);
+  height: var(--bcsp-nav-h);
+  padding: 0 var(--bcsp-gutter);
   border-bottom: 1px solid var(--bcsp-line);
+  background: color-mix(in srgb, var(--bcsp-paper-raised) 94%, transparent);
+  -webkit-backdrop-filter: saturate(1.2) blur(8px);
+  backdrop-filter: saturate(1.2) blur(8px);
 }
 
 .bcsp-masthead__identity {
+  display: flex;
+  align-items: center;
+  width: var(--bcsp-brand-w);
   min-width: 0;
-  padding: clamp(1rem, 3vw, 2.5rem);
-}
-
-.bcsp-masthead__eyebrow,
-.bcsp-section-label,
-.bcsp-utility-copy,
-.bcsp-ready-plane__eyebrow {
-  margin: 0;
-  font-family: var(--bcsp-font-data);
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.11em;
-  line-height: 1.3;
-  text-transform: uppercase;
+  flex: 0 0 var(--bcsp-brand-w);
+  height: 100%;
+  padding: 0;
 }
 
 .bcsp-masthead__title {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.7rem 1rem;
-  margin: 0.55rem 0 0;
+  align-items: baseline;
+  gap: var(--bcsp-space-1);
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-weight: 400;
+  line-height: 1.25rem;
 }
 
 .bcsp-masthead__mark {
-  font-size: clamp(3.25rem, 8vw, 8.5rem);
-  font-weight: 900;
-  letter-spacing: -0.075em;
-  line-height: 0.78;
-  text-transform: uppercase;
+  flex: none;
+  color: var(--bcsp-ink);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.25rem;
+  text-transform: none;
 }
 
 .bcsp-masthead__name {
-  width: min(24rem, 100%);
-  padding-bottom: 0.25rem;
-  font-size: clamp(0.82rem, 1.5vw, 1.15rem);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.05;
-  text-transform: uppercase;
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bcsp-ink-muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.125rem;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
 }
 
 .bcsp-masthead__utility {
-  display: grid;
-  grid-template-rows: 1fr auto;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
   min-width: 0;
-  border-left: 1px solid var(--bcsp-line);
-}
-
-.bcsp-utility-copy {
-  display: grid;
-  align-content: space-between;
-  gap: var(--bcsp-space-4);
-  min-height: 8rem;
-  padding: var(--bcsp-space-4);
-  color: var(--bcsp-ink-muted);
-}
-
-.bcsp-utility-copy strong {
-  color: var(--bcsp-ink);
-  font-size: 1.1rem;
+  flex: 0 0 auto;
+  height: 100%;
 }
 
 .bcsp-language {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  min-inline-size: 0;
   margin: 0;
-  padding: 0;
+  padding: 2px;
   border: 0;
-  border-top: 1px solid var(--bcsp-line);
+  border-radius: var(--bcsp-radius-pill);
+  background: var(--bcsp-surface-2);
 }
 
 .bcsp-language__button {
-  min-height: 2.75rem;
-  padding: 0.65rem 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+  min-height: var(--bcsp-control-h);
+  padding: 0 0.625rem;
   border: 0;
-  border-radius: 0;
-  color: var(--bcsp-ink);
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-ink-muted);
   background: transparent;
-  font-family: var(--bcsp-font-data);
-  font-size: 0.67rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  box-shadow: none;
+  font-family: var(--bcsp-font-sans);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
   cursor: pointer;
-  transition: transform 140ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
-}
-
-.bcsp-language__button + .bcsp-language__button {
-  border-left: 1px solid var(--bcsp-line);
+  transition:
+    background-color var(--bcsp-dur-1) var(--bcsp-ease-out),
+    color var(--bcsp-dur-1) var(--bcsp-ease-out),
+    box-shadow var(--bcsp-dur-1) var(--bcsp-ease-out);
 }
 
 .bcsp-language__button[aria-pressed='true'] {
-  color: var(--bcsp-accent-ink);
-  background: var(--bcsp-ink);
+  color: var(--bcsp-ink);
+  background: var(--bcsp-paper-raised);
+  box-shadow: var(--bcsp-elev-1);
 }
 
 .bcsp-language__button:active:not(:focus-visible) {
-  transform: scale(0.97);
+  transform: translateY(1px);
 }
 
+/* ---- App bar: navigation overlaid on the free middle of the masthead ---- */
 .bcsp-navigation {
   position: sticky;
   top: 0;
-  z-index: 10;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  min-height: 3.5rem;
-  border-bottom: 1px solid var(--bcsp-line);
-  background: var(--bcsp-paper);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.bcsp-navigation[data-extended='true'] {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
-.bcsp-navigation__link {
+  z-index: calc(var(--bcsp-z-nav) + 1);
+  /* The router scrolls this element into view after a route change. On phones the
+     nav is a second row that starts one masthead down, so without this margin the
+     browser lands the document 56px in and buries the page title under the bar. */
+  scroll-margin-top: var(--bcsp-nav-h);
   display: flex;
   align-items: center;
-  min-height: 2.75rem;
-  min-width: 0;
-  padding: 0.85rem 1rem;
+  height: var(--bcsp-nav-h);
+  margin-top: calc(-1 * var(--bcsp-nav-h));
+  padding: 0 calc(var(--bcsp-gutter) + var(--bcsp-lang-w)) 0 calc(var(--bcsp-gutter) + var(--bcsp-brand-w));
+  background: transparent;
+  pointer-events: none;
+  font-family: var(--bcsp-font-sans);
 }
 
 .bcsp-navigation__link {
-  gap: 0.7rem;
-  color: var(--bcsp-ink);
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: var(--bcsp-nav-h);
+  margin-right: var(--bcsp-space-4);
+  padding: 0 0.25rem;
+  border-bottom: 2px solid transparent;
+  color: var(--bcsp-ink-muted);
+  font-size: var(--bcsp-text-body);
+  font-weight: 600;
+  line-height: 1.25rem;
+  letter-spacing: 0;
   text-decoration: none;
-  border-left: 1px solid var(--bcsp-line);
-  transition: transform 140ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+  text-transform: none;
+  white-space: nowrap;
+  pointer-events: auto;
+  transition:
+    color var(--bcsp-dur-1) var(--bcsp-ease-out),
+    border-color var(--bcsp-dur-2) var(--bcsp-ease-out);
 }
 
-.bcsp-navigation__link:first-child {
-  border-left: 0;
+.bcsp-navigation__link:last-child {
+  margin-right: 0;
 }
 
 .bcsp-navigation__link span {
-  color: var(--bcsp-ink-muted);
+  display: none;
 }
 
 .bcsp-navigation__link[data-active='true'] {
-  color: var(--bcsp-paper-raised);
-  background: var(--bcsp-ink);
-}
-
-.bcsp-navigation__link[data-active='true'] span {
-  color: var(--bcsp-paper-raised);
+  color: var(--bcsp-ink);
+  border-bottom-color: var(--bcsp-accent-text);
 }
 
 .bcsp-navigation__link:active:not(:focus-visible) {
-  transform: scale(0.97);
+  transform: translateY(1px);
 }
 
+/* ---- Workspace ---- */
+/* #bcsp-workspace is the element the skip link and the router's post-navigation
+   focus actually scroll to, so it -- not only the section inside it -- has to
+   clear the sticky app bar, which is two rows tall on phones. Without this the
+   page title lands behind the navigation after every route change. */
 .bcsp-main {
   display: block;
+  flex: 1 0 auto;
   min-height: 32rem;
+  scroll-margin-top: var(--bcsp-navigation-height, 3.5rem);
 }
 
 .bcsp-workspace {
+  max-width: var(--bcsp-content-max);
   min-width: 0;
-  padding: clamp(1rem, 2.25vw, 2.5rem);
+  margin: 0 auto;
+  padding: var(--bcsp-space-4) var(--bcsp-gutter) var(--bcsp-space-6);
   scroll-margin-top: var(--bcsp-navigation-height, 3.5rem);
 }
 
 .bcsp-workspace__heading {
   display: grid;
-  grid-template-columns: minmax(18rem, 0.46fr) minmax(32rem, 1fr);
-  align-items: stretch;
-  gap: var(--bcsp-space-2) var(--bcsp-space-4);
-  padding-bottom: var(--bcsp-space-3);
-  border-bottom: 1px solid var(--bcsp-line);
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+  align-items: start;
+  gap: var(--bcsp-space-4);
+  padding-bottom: var(--bcsp-space-2);
 }
 
 .bcsp-workspace__identity {
   min-width: 0;
 }
 
-.bcsp-workspace__title-line {
-  display: flex;
-  align-items: baseline;
-  gap: clamp(0.75rem, 1.5vw, 1.5rem);
-}
-
-.bcsp-workspace__sequence {
-  flex: 0 0 auto;
-  color: var(--bcsp-accent);
-  font-family: var(--bcsp-font-data);
-  font-size: clamp(1.4rem, 2.6vw, 2.5rem);
-  font-weight: 900;
-  letter-spacing: -0.06em;
-}
-
 .bcsp-workspace__title {
-  max-width: 24ch;
-  margin: 0.3rem 0 0;
-  font-size: clamp(1.8rem, 3.4vw, 4rem);
-  font-weight: 850;
-  letter-spacing: -0.055em;
-  line-height: 0.9;
-  text-transform: uppercase;
+  margin: 0;
+  color: var(--bcsp-ink);
+  font-size: var(--bcsp-text-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: var(--bcsp-lh-display);
+  text-transform: none;
+  text-wrap: balance;
 }
 
 .bcsp-workspace__intro {
-  max-width: 72ch;
-  margin: 0.55rem 0 0;
+  max-width: 64ch;
+  margin: var(--bcsp-space-1) 0 0;
   color: var(--bcsp-ink-muted);
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
-.bcsp-workspace__protocol {
-  margin: 0;
-  font-family: var(--bcsp-font-data);
-  font-size: 0.68rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--bcsp-text-body-lg);
+  line-height: var(--bcsp-lh-body-lg);
 }
 
 .bcsp-workspace__status-slot {
   display: grid;
   min-width: 0;
-  align-content: space-between;
   gap: var(--bcsp-space-2);
-}
-
-.bcsp-workspace__status-slot .bcsp-workspace__protocol {
-  justify-self: end;
 }
 
 .bcsp-state-wrap {
   margin-top: var(--bcsp-space-5);
 }
 
+/* ---- Service status card (spec 5.2; DOM unchanged) ---- */
 .bcsp-service-status {
   display: grid;
-  grid-template-columns: minmax(12rem, 1fr) minmax(12rem, 1fr) minmax(9rem, auto);
-  align-items: stretch;
+  gap: var(--bcsp-space-0);
+  min-width: 0;
   margin: 0;
+  padding: 0.625rem 0.875rem;
   border: 1px solid var(--bcsp-line);
-  border-left: 0.4rem solid var(--bcsp-ink);
+  border-radius: var(--bcsp-radius-3);
   background: var(--bcsp-paper-raised);
+  box-shadow: var(--bcsp-elev-1);
+}
+
+/*
+ * Healthy and complete is the state this card is in almost always, and a five-row
+ * card beside a two-line page title leaves a band of nothing above the content.
+ * So the settled card folds into two content rows under the headline: activity
+ * beside the progress bar, counts beside the diagnostics disclosure. Nothing is
+ * hidden -- the card only stacks back out (data-expanded) while something is
+ * loading, retrying, degraded or interrupted, which is when the height is earned.
+ */
+.bcsp-service-status:not([data-expanded]) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--bcsp-space-2);
+}
+
+.bcsp-service-status:not([data-expanded]) .bcsp-service-status__lead {
+  grid-area: 1 / 1 / 2 / 3;
+}
+
+.bcsp-service-status:not([data-expanded]) .bcsp-service-status__operation {
+  grid-area: 2 / 1 / 3 / 2;
+}
+
+.bcsp-service-status:not([data-expanded]) .bcsp-service-status__progress {
+  grid-area: 2 / 2 / 3 / 3;
+  width: 7rem;
+  padding-left: 0;
+}
+
+.bcsp-service-status:not([data-expanded]) .bcsp-service-status__counts {
+  grid-area: 3 / 1 / 4 / 2;
+}
+
+.bcsp-service-status:not([data-expanded]) .bcsp-service-status__detail {
+  grid-area: 3 / 2 / 4 / 3;
+  margin: 0 -0.375rem;
+}
+
+.bcsp-service-status:not([data-expanded]) .bcsp-service-status__detail summary {
+  padding-left: 0.375rem;
+}
+
+/* Opened, the diagnostics need the whole card width, so they drop to their own row. */
+.bcsp-service-status:not([data-expanded]) .bcsp-service-status__detail[open] {
+  grid-area: 4 / 1 / 5 / 3;
 }
 
 .bcsp-service-status[data-level='degraded'],
 .bcsp-service-status[data-level='error'],
 .bcsp-service-status[data-connection='interrupted'] {
-  border-left-color: var(--bcsp-accent);
-}
-
-.bcsp-service-status__lead,
-.bcsp-service-status__operation,
-.bcsp-service-status__progress,
-.bcsp-service-status__counts,
-.bcsp-service-status__detail {
-  min-width: 0;
-  padding: 0.7rem 0.85rem;
+  border-color: var(--bcsp-danger-line);
+  background: var(--bcsp-danger-tint);
 }
 
 .bcsp-service-status__lead {
   display: flex;
-  align-items: center;
-  gap: 0.65rem;
+  align-items: flex-start;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.bcsp-service-status__lead > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--bcsp-space-1);
+  min-width: 0;
 }
 
 .bcsp-service-status__signal {
-  width: 0.72rem;
-  height: 0.72rem;
+  width: 0.625rem;
+  height: 0.625rem;
   flex: 0 0 auto;
-  border: 2px solid currentColor;
-  background: var(--bcsp-ink);
+  margin-top: 0.375rem;
+  border: 1px solid var(--bcsp-ok);
+  border-radius: var(--bcsp-radius-pill);
+  background: var(--bcsp-ok);
+}
+
+[data-level='initializing'] .bcsp-service-status__signal,
+[data-level='partially_ready'] .bcsp-service-status__signal {
+  border-color: var(--bcsp-warn);
+  background: var(--bcsp-warn);
+  animation: bcsp-pulse 2s ease-in-out infinite;
+}
+
+[data-level='degraded'] .bcsp-service-status__signal,
+[data-level='error'] .bcsp-service-status__signal,
+[data-connection='interrupted'] .bcsp-service-status__signal {
+  border-color: var(--bcsp-danger);
+  background: var(--bcsp-danger);
+  animation: none;
 }
 
 .bcsp-service-status__signal[data-loading='true'] {
+  border: 2px solid var(--bcsp-ink-muted);
   border-top-color: transparent;
   background: transparent;
   animation: bcsp-status-turn 900ms steps(8, end) infinite;
@@ -320,16 +400,9 @@ export const BCSP_SHELL_CSS = String.raw`
   to { transform: rotate(1turn); }
 }
 
-[data-level='initializing'] .bcsp-service-status__signal,
-[data-level='partially_ready'] .bcsp-service-status__signal {
-  background: transparent;
-}
-
-[data-level='degraded'] .bcsp-service-status__signal,
-[data-level='error'] .bcsp-service-status__signal,
-[data-connection='interrupted'] .bcsp-service-status__signal {
-  color: var(--bcsp-accent);
-  background: var(--bcsp-accent);
+@keyframes bcsp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 .bcsp-service-status__kicker,
@@ -339,29 +412,34 @@ export const BCSP_SHELL_CSS = String.raw`
 }
 
 .bcsp-service-status__kicker,
-.bcsp-service-status__label,
-.bcsp-service-status__counts dt {
+.bcsp-service-status__label {
   color: var(--bcsp-ink-muted);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.64rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  font-weight: 400;
+  line-height: var(--bcsp-lh-meta);
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .bcsp-service-status__headline {
-  margin-top: 0.15rem;
-  font-size: 0.86rem;
-  font-weight: 850;
-  line-height: 1.15;
-  text-transform: uppercase;
+  min-width: 0;
+  color: var(--bcsp-ink);
+  font-size: var(--bcsp-text-body);
+  font-weight: 600;
+  line-height: 1.25rem;
+  letter-spacing: 0;
+  text-transform: none;
+  overflow-wrap: anywhere;
 }
 
 .bcsp-service-status__operation {
-  display: grid;
-  align-content: center;
-  gap: 0.15rem;
-  border-left: 1px solid var(--bcsp-line);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--bcsp-space-1);
+  min-width: 0;
+  padding-left: 1.25rem;
 }
 
 .bcsp-service-status__operation strong,
@@ -370,481 +448,432 @@ export const BCSP_SHELL_CSS = String.raw`
 }
 
 .bcsp-service-status__operation strong {
-  font-size: 0.82rem;
+  color: var(--bcsp-ink-2);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.125rem;
 }
 
 .bcsp-service-status__operation samp {
   color: var(--bcsp-ink-muted);
-  font-size: 0.68rem;
-}
-
-.bcsp-service-status__counts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(5.5rem, 1fr));
-  margin: 0;
-  border-left: 1px solid var(--bcsp-line);
+  font-size: var(--bcsp-text-data);
 }
 
 .bcsp-service-status__progress {
   display: grid;
-  grid-column: 1 / 3;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--bcsp-space-2);
-  border-top: 1px solid var(--bcsp-line);
+  min-width: 0;
+  padding-left: 1.25rem;
 }
 
 .bcsp-service-status__progress progress {
+  display: block;
   width: 100%;
-  height: 0.6rem;
-  border: 1px solid var(--bcsp-line);
-  border-radius: 0;
-  background: var(--bcsp-paper);
+  height: 0.25rem;
+  border: 0;
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-ink-2);
+  background: var(--bcsp-line-soft);
+  accent-color: var(--bcsp-accent);
   appearance: none;
+  overflow: hidden;
 }
 
-.bcsp-service-status__progress progress::-webkit-progress-bar { background: var(--bcsp-paper); }
-.bcsp-service-status__progress progress::-webkit-progress-value { background: var(--bcsp-ink); }
-.bcsp-service-status__progress progress::-moz-progress-bar { background: var(--bcsp-ink); }
+.bcsp-service-status__progress progress::-webkit-progress-bar {
+  border-radius: var(--bcsp-radius-pill);
+  background: var(--bcsp-line-soft);
+}
+
+.bcsp-service-status__progress progress::-webkit-progress-value {
+  border-radius: var(--bcsp-radius-pill);
+  background: var(--bcsp-ink-2);
+}
+
+.bcsp-service-status__progress progress::-moz-progress-bar {
+  border-radius: var(--bcsp-radius-pill);
+  background: var(--bcsp-ink-2);
+}
+
+[data-level='ready'] .bcsp-service-status__progress progress { color: var(--bcsp-ok); }
+[data-level='ready'] .bcsp-service-status__progress progress::-webkit-progress-value { background: var(--bcsp-ok); }
+[data-level='ready'] .bcsp-service-status__progress progress::-moz-progress-bar { background: var(--bcsp-ok); }
+
+[data-level='degraded'] .bcsp-service-status__progress progress,
+[data-level='error'] .bcsp-service-status__progress progress,
+[data-connection='interrupted'] .bcsp-service-status__progress progress { color: var(--bcsp-danger); }
+[data-level='degraded'] .bcsp-service-status__progress progress::-webkit-progress-value,
+[data-level='error'] .bcsp-service-status__progress progress::-webkit-progress-value,
+[data-connection='interrupted'] .bcsp-service-status__progress progress::-webkit-progress-value { background: var(--bcsp-danger); }
+[data-level='degraded'] .bcsp-service-status__progress progress::-moz-progress-bar,
+[data-level='error'] .bcsp-service-status__progress progress::-moz-progress-bar,
+[data-connection='interrupted'] .bcsp-service-status__progress progress::-moz-progress-bar { background: var(--bcsp-danger); }
 
 .bcsp-service-status__progress span {
-  font-family: var(--bcsp-font-data);
-  font-size: 0.68rem;
-  font-weight: 800;
+  color: var(--bcsp-ink-muted);
+  font-family: var(--bcsp-font-mono);
+  font-size: var(--bcsp-text-micro);
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
+  line-height: var(--bcsp-lh-micro);
+  white-space: nowrap;
+}
+
+/*
+ * Counts read as one quiet line ("92026 3/3 - 02027 3/3", spec 5.2 row 4) rather than
+ * as tiles: a tile grid here both cost a row of height and risked the empty trailing
+ * cell of spec 11.1. With no cell chrome there is no track left to look empty.
+ */
+.bcsp-service-status__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--bcsp-space-2);
+  min-width: 0;
+  margin: 0;
+  padding-left: 1.25rem;
 }
 
 .bcsp-service-status__counts div {
-  display: grid;
-  align-content: center;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 0.375rem;
+  min-width: 0;
 }
 
-.bcsp-service-status__counts div + div {
-  padding-left: 0.85rem;
-  border-left: 1px solid var(--bcsp-line);
+.bcsp-service-status__counts dt {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bcsp-ink-muted);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  font-weight: 400;
+  line-height: var(--bcsp-lh-meta);
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.bcsp-service-status__counts dt samp {
+  color: inherit;
+  font-size: var(--bcsp-text-data);
 }
 
 .bcsp-service-status__counts dd {
-  margin: 0.12rem 0 0;
-  font-family: var(--bcsp-font-data);
-  font-size: 1rem;
-  font-weight: 850;
+  margin: 0;
+  color: var(--bcsp-ink);
+  font-family: var(--bcsp-font-mono);
+  font-feature-settings: "tnum" 1;
+  font-size: var(--bcsp-text-data);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  line-height: var(--bcsp-lh-data);
+  white-space: nowrap;
 }
 
 .bcsp-service-status__detail {
-  grid-column: 1 / -1;
-  padding: 0;
-  border-top: 1px solid var(--bcsp-line);
+  min-width: 0;
+  margin: 0 -0.375rem -0.25rem;
   color: var(--bcsp-ink-muted);
-  font-size: 0.75rem;
-  line-height: 1.45;
+  font-size: var(--bcsp-text-meta);
+  line-height: var(--bcsp-lh-meta);
 }
 
 .bcsp-service-status__detail summary {
-  padding: 0.55rem 0.85rem;
-  font-family: var(--bcsp-font-data);
-  font-size: 0.65rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bcsp-space-1);
+  min-height: 2rem;
+  padding: 0 0.375rem 0 calc(1.25rem + 0.375rem);
+  border-radius: var(--bcsp-radius-2);
+  color: var(--bcsp-ink-2);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  font-weight: 400;
+  line-height: var(--bcsp-lh-meta);
+  letter-spacing: 0;
+  text-decoration: underline;
+  text-decoration-color: var(--bcsp-line-strong);
+  text-underline-offset: 0.15em;
+  text-transform: none;
+  list-style: none;
   cursor: pointer;
+}
+
+/* The row is 32px so the card stays short; the pointer target is still 44px (spec 4.1). */
+.bcsp-service-status__detail summary::before {
+  content: '';
+  position: absolute;
+  inset: -0.375rem 0;
+}
+
+.bcsp-service-status__detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.bcsp-service-status__detail summary::after {
+  content: '';
+  flex: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  margin-right: 0.25rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--bcsp-dur-2) var(--bcsp-ease-out);
+}
+
+.bcsp-service-status__detail[open] summary::after {
+  transform: rotate(45deg);
 }
 
 .bcsp-service-status__diagnostics {
   display: grid;
-  gap: 0.35rem;
-  padding: 0 0.85rem 0.75rem;
+  gap: 0.375rem;
+  margin: 0.25rem 0.375rem 0.375rem;
+  padding: var(--bcsp-space-2);
+  border-radius: var(--bcsp-radius-2);
+  background: var(--bcsp-surface-2);
+  color: var(--bcsp-ink-muted);
+  font-size: var(--bcsp-text-meta);
+  line-height: var(--bcsp-lh-meta);
+}
+
+.bcsp-service-status[data-level='degraded'] .bcsp-service-status__diagnostics,
+.bcsp-service-status[data-level='error'] .bcsp-service-status__diagnostics,
+.bcsp-service-status[data-connection='interrupted'] .bcsp-service-status__diagnostics {
+  background: var(--bcsp-paper-raised);
+}
+
+.bcsp-service-status__diagnostics p {
+  color: var(--bcsp-ink-2);
 }
 
 .bcsp-service-status__diagnostics samp {
+  font-size: var(--bcsp-text-data);
+  line-height: var(--bcsp-lh-data);
   overflow-wrap: anywhere;
 }
 
 .bcsp-service-status__retry {
-  min-height: 2.5rem;
-  padding: 0.45rem 0.8rem;
-  border: 1px solid var(--bcsp-line);
-  border-radius: 0;
-  color: var(--bcsp-paper);
-  background: var(--bcsp-ink);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.67rem;
-  font-weight: 800;
-  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  gap: var(--bcsp-space-1);
+  min-height: var(--bcsp-control-h);
+  margin-top: var(--bcsp-space-1);
+  padding: 0 var(--bcsp-space-3);
+  border: 1px solid var(--bcsp-line-strong);
+  border-radius: var(--bcsp-radius-2);
+  color: var(--bcsp-ink);
+  background: var(--bcsp-paper-raised);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-body);
+  font-weight: 600;
+  line-height: 1.25rem;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
   cursor: pointer;
-  transition: transform 140ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+  transition:
+    background-color var(--bcsp-dur-1) var(--bcsp-ease-out),
+    border-color var(--bcsp-dur-1) var(--bcsp-ease-out),
+    color var(--bcsp-dur-1) var(--bcsp-ease-out);
 }
 
 .bcsp-service-status__retry:active:not(:focus-visible) {
-  transform: scale(0.97);
+  background: var(--bcsp-surface-3);
+  transform: translateY(1px);
 }
 
-.bcsp-catalog-grid {
-  display: grid;
-  grid-template-columns: minmax(14rem, 0.38fr) minmax(0, 1fr);
-  margin-top: var(--bcsp-space-5);
-  border-top: 1px solid var(--bcsp-line);
-  border-bottom: 1px solid var(--bcsp-line);
-}
-
-.bcsp-targets {
-  border-right: 1px solid var(--bcsp-line);
-}
-
-.bcsp-targets__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--bcsp-space-2);
-  min-height: 3.25rem;
-  padding: var(--bcsp-space-2) var(--bcsp-space-3);
-  border-bottom: 1px solid var(--bcsp-line);
-}
-
-.bcsp-targets__count {
-  font-family: var(--bcsp-font-data);
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.bcsp-targets__list {
-  display: grid;
-  max-height: 24rem;
-  margin: 0;
-  padding: 0;
-  overflow: auto;
-  list-style: none;
-}
-
-.bcsp-target-button {
-  display: grid;
-  width: 100%;
-  min-height: 4.25rem;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--bcsp-space-2);
-  padding: 0.85rem var(--bcsp-space-3);
-  border: 0;
-  border-bottom: 1px solid var(--bcsp-line-soft);
-  border-radius: 0;
-  color: var(--bcsp-ink);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: transform 140ms var(--bcsp-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
-}
-
-.bcsp-target-button[aria-pressed='true'] {
-  color: var(--bcsp-paper-raised);
-  background: var(--bcsp-ink);
-}
-
-.bcsp-target-button:active:not(:focus-visible) {
-  transform: scale(0.98);
-}
-
-.bcsp-target-button__label,
-.bcsp-target-button__code {
-  display: block;
-}
-
-.bcsp-target-button__label {
-  font-size: 0.88rem;
-  font-weight: 750;
-  line-height: 1.15;
-  text-transform: uppercase;
-}
-
-.bcsp-target-button__code,
-.bcsp-target-button__arrow {
-  margin-top: 0.35rem;
-  color: var(--bcsp-ink-muted);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.65rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.bcsp-target-button[aria-pressed='true'] .bcsp-target-button__code,
-.bcsp-target-button[aria-pressed='true'] .bcsp-target-button__arrow {
-  color: var(--bcsp-paper-raised);
-}
-
+/* ---- Footer ---- */
 .bcsp-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--bcsp-space-3);
   min-height: 2.75rem;
-  padding: var(--bcsp-space-3) clamp(1rem, 2.25vw, 2.5rem);
+  padding: var(--bcsp-space-4) var(--bcsp-gutter);
   border-top: 1px solid var(--bcsp-line);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.65rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.bcsp-footer__protocol {
   color: var(--bcsp-ink-muted);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  line-height: var(--bcsp-lh-meta);
+  letter-spacing: 0;
+  text-transform: none;
 }
 
+.bcsp-footer__copyright {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Hover (fine pointers only) ---- */
 @media (hover: hover) and (pointer: fine) {
   .bcsp-language__button:hover {
-    color: var(--bcsp-accent-ink);
-    background: var(--bcsp-accent);
+    color: var(--bcsp-ink);
   }
 
   .bcsp-navigation__link:hover {
-    color: var(--bcsp-paper-raised);
-    background: var(--bcsp-ink);
+    color: var(--bcsp-ink);
   }
 
-  .bcsp-navigation__link:hover span {
-    color: var(--bcsp-paper-raised);
+  .bcsp-service-status__detail summary:hover {
+    background: var(--bcsp-surface-2);
+    color: var(--bcsp-ink);
   }
 
-  .bcsp-target-button:hover {
-    color: var(--bcsp-paper-raised);
-    background: var(--bcsp-ink);
-  }
-
-  .bcsp-target-button:hover .bcsp-target-button__code,
-  .bcsp-target-button:hover .bcsp-target-button__arrow {
-    color: var(--bcsp-paper-raised);
+  .bcsp-service-status__retry:hover {
+    border-color: var(--bcsp-ink-muted);
+    background: var(--bcsp-surface-2);
   }
 }
 
-.bcsp-ready-plane {
-  display: grid;
-  min-height: 27rem;
-  align-content: space-between;
-  gap: var(--bcsp-space-6);
-  padding: clamp(1.5rem, 5vw, 4.5rem);
-  background: var(--bcsp-paper-raised);
+/* ---- Locale: zh-CN (spec 3) ---- */
+.bcsp-shell[data-bcsp-locale='zh-CN'] .bcsp-workspace__title {
+  letter-spacing: 0;
+  line-height: 2.125rem;
 }
 
-.bcsp-ready-plane__title {
-  max-width: 13ch;
-  margin: var(--bcsp-space-2) 0 0;
-  font-size: clamp(2.2rem, 6vw, 6.8rem);
-  font-weight: 900;
-  letter-spacing: -0.07em;
-  line-height: 0.82;
-  text-transform: uppercase;
+.bcsp-shell[data-bcsp-locale='zh-CN'] .bcsp-workspace__intro {
+  line-height: 1.625rem;
 }
 
-.bcsp-ready-plane__body {
-  max-width: 48ch;
-  margin: var(--bcsp-space-3) 0 0;
-  color: var(--bcsp-ink-muted);
-  font-size: 1rem;
-  line-height: 1.6;
+.bcsp-shell[data-bcsp-locale='zh-CN'] :is(
+  .bcsp-masthead__name,
+  .bcsp-service-status__kicker,
+  .bcsp-service-status__label,
+  .bcsp-service-status__counts dt,
+  .bcsp-service-status__detail,
+  .bcsp-service-status__detail summary,
+  .bcsp-service-status__diagnostics,
+  .bcsp-footer
+) {
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
 }
 
-.bcsp-ready-plane__target {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--bcsp-space-3);
-  align-items: end;
-  padding-top: var(--bcsp-space-3);
-  border-top: 1px solid var(--bcsp-line);
+.bcsp-shell[data-bcsp-locale='zh-CN'] .bcsp-service-status__operation strong {
+  font-size: var(--bcsp-text-body);
+  line-height: 1.375rem;
 }
 
-.bcsp-ready-plane__target strong,
-.bcsp-ready-plane__target code {
-  display: block;
+/* ---- Responsive ---- */
+@media (min-width: 75rem) {
+  .bcsp-shell {
+    --bcsp-brand-w: 22rem;
+  }
+
+  .bcsp-masthead__name {
+    display: block;
+  }
 }
 
-.bcsp-ready-plane__target strong {
-  font-size: clamp(1.25rem, 3vw, 2.5rem);
-  letter-spacing: -0.04em;
-  line-height: 1;
-  text-transform: uppercase;
-}
+@media (max-width: 63.999rem) {
+  .bcsp-shell {
+    --bcsp-brand-w: 6rem;
+  }
 
-.bcsp-ready-plane__target code {
-  margin-top: 0.4rem;
-  color: var(--bcsp-ink-muted);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-}
-
-.bcsp-ready-plane__registration {
-  color: var(--bcsp-accent);
-  font-family: var(--bcsp-font-data);
-  font-size: 2rem;
-  font-weight: 800;
+  .bcsp-navigation__link {
+    margin-right: var(--bcsp-space-3);
+  }
 }
 
 @media (max-width: 61.999rem) {
-  .bcsp-masthead {
-    grid-template-columns: minmax(0, 1fr) 16rem;
-  }
-
-  .bcsp-main {
-    display: block;
-  }
-
   .bcsp-workspace__heading {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .bcsp-workspace__status-slot .bcsp-workspace__protocol {
-    justify-self: start;
-  }
-
-  .bcsp-catalog-grid {
-    grid-template-columns: minmax(12rem, 0.42fr) minmax(0, 1fr);
   }
 }
 
 @media (max-width: 47.999rem) {
-  .bcsp-masthead,
-  .bcsp-catalog-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .bcsp-masthead__utility,
-  .bcsp-targets {
-    border-left: 0;
-    border-right: 0;
-    border-top: 1px solid var(--bcsp-line);
-  }
-
-  .bcsp-utility-copy {
-    min-height: 0;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-  }
-
+  /* The overlay is dropped: the nav becomes a 44px row under the 56px masthead and both stick. */
+  /* Spec 11.1: flex-wrap with growing links, so the last row fills and never
+     leaves an empty track (5 local links would orphan a column in a 3-up grid). */
   .bcsp-navigation {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    top: var(--bcsp-nav-h);
+    display: flex;
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--bcsp-control-h);
+    margin-top: 0;
+    padding: 0 var(--bcsp-gutter);
+    border-bottom: 1px solid var(--bcsp-line);
+    background: var(--bcsp-paper-raised);
+    pointer-events: auto;
   }
 
-  .bcsp-navigation[data-extended='true'] {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .bcsp-navigation__link:first-child {
-    border-left: 0;
-  }
-
-  .bcsp-navigation__link {
-    border-top: 1px solid var(--bcsp-line);
-  }
-
-  .bcsp-navigation__link:nth-child(3n + 1) {
-    border-left: 0;
-  }
-
-  .bcsp-service-status {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .bcsp-service-status__operation,
-  .bcsp-service-status__counts,
-  .bcsp-service-status__progress {
-    grid-column: 1;
-    border-top: 1px solid var(--bcsp-line);
-    border-left: 0;
-  }
-
-  .bcsp-targets__list {
-    max-height: 16rem;
-  }
-
-  .bcsp-ready-plane {
-    min-height: 22rem;
-  }
-
-  .bcsp-footer {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--bcsp-space-2) var(--bcsp-space-4);
-    align-items: center;
-    min-height: 2.75rem;
-    padding: var(--bcsp-space-3);
-    padding-bottom: max(var(--bcsp-space-3), env(safe-area-inset-bottom));
-    border-top: 1px solid var(--bcsp-line);
-    font-family: var(--bcsp-font-data);
-    font-size: 0.65rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  .bcsp-footer__protocol {
-    color: var(--bcsp-ink-muted);
-    text-align: right;
-  }
-
-  .bcsp-footer__copyright {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-}
-
-@media (max-width: 31.999rem) {
-  .bcsp-masthead__mark {
-    font-size: clamp(2.8rem, 18vw, 4.5rem);
-  }
-
-  .bcsp-utility-copy {
-    grid-template-columns: 1fr;
+  .bcsp-navigation__link,
+  .bcsp-navigation__link:last-child {
+    flex: 1 1 7rem;
+    justify-content: center;
+    height: var(--bcsp-control-h);
+    margin-right: 0;
+    padding: 0 0.5rem;
   }
 
   .bcsp-workspace {
-    padding: var(--bcsp-space-3);
+    padding: var(--bcsp-space-3) var(--bcsp-gutter) var(--bcsp-space-5);
   }
 
-  .bcsp-ready-plane__target {
-    grid-template-columns: minmax(0, 1fr);
+  .bcsp-workspace__heading {
+    gap: var(--bcsp-space-3);
+  }
+
+  .bcsp-footer {
+    flex-wrap: wrap;
+    padding: var(--bcsp-space-3) var(--bcsp-gutter);
+    padding-bottom: max(var(--bcsp-space-3), env(safe-area-inset-bottom));
   }
 }
 
 @media (max-width: 20.999rem) {
-  .bcsp-utility-copy {
-    display: none;
+  .bcsp-navigation__link,
+  .bcsp-navigation__link:last-child {
+    flex-basis: 6rem;
   }
 
-  .bcsp-navigation,
-  .bcsp-navigation[data-extended='true'] {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .bcsp-navigation__link:nth-child(3n + 1) {
-    border-left: 1px solid var(--bcsp-line);
-  }
-
-  .bcsp-navigation__link:nth-child(odd) {
-    border-left: 0;
-  }
-
-  .bcsp-footer {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .bcsp-footer__protocol {
-    text-align: left;
+  .bcsp-language__button {
+    padding: 0 0.5rem;
   }
 }
 
+/* ---- Forced colours ---- */
+@media (forced-colors: active) {
+  .bcsp-navigation__link[data-active='true'] {
+    border-bottom-color: Highlight;
+  }
+
+  .bcsp-language__button[aria-pressed='true'],
+  .bcsp-service-status__retry {
+    border: 1px solid ButtonText;
+  }
+
+  .bcsp-service-status__signal {
+    border-color: CanvasText;
+  }
+}
+
+/* ---- Reduced motion (spec 9): no transitions, no transforms, no spin / pulse ---- */
 @media (prefers-reduced-motion: reduce) {
   .bcsp-language__button,
   .bcsp-navigation__link,
-  .bcsp-target-button,
-  .bcsp-service-status__retry {
+  .bcsp-service-status__retry,
+  .bcsp-service-status__detail summary::after {
     transition: none;
   }
 
   .bcsp-language__button:active:not(:focus-visible),
   .bcsp-navigation__link:active:not(:focus-visible),
-  .bcsp-target-button:active:not(:focus-visible),
   .bcsp-service-status__retry:active:not(:focus-visible) {
     transform: none;
   }
 
+  .bcsp-service-status .bcsp-service-status__signal,
   .bcsp-service-status__signal[data-loading='true'] {
     animation: none;
   }

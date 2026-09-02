@@ -180,10 +180,6 @@ function ShellFrame({
   const watchWorkspace = pathname === '/watch';
   const directSection = sectionWorkspace && pathname !== '/sections';
   const courseWorkspace = sectionWorkspace || (!watchWorkspace && extension === undefined);
-  const extensionIndex = extension === undefined ? -1 : workspaceExtensions.indexOf(extension);
-  const sequence = extension === undefined
-    ? (watchWorkspace ? '02' : '01')
-    : String(extensionIndex + 3).padStart(2, '0');
   const workspaceTitle = extension?.title ?? (watchWorkspace
     ? i18n.t('app.nav_watch')
     : directSection
@@ -192,8 +188,6 @@ function ShellFrame({
   const workspaceIntro = extension?.intro ?? (watchWorkspace
     ? i18n.t('watch.desk_lede')
     : i18n.t('search.course_intro'));
-  const workspaceLabel = extension?.navigationLabel
-    ?? (watchWorkspace ? i18n.t('app.nav_watch') : i18n.t('app.nav_courses'));
 
   useEffect(() => {
     if (pathname === '/sections') navigate('/', { replace: true });
@@ -203,8 +197,12 @@ function ShellFrame({
     const navigation = navigationRef.current;
     const root = globalThis.document?.documentElement;
     if (navigation === null || root === undefined) return undefined;
+    // The nav is sticky at the top of the viewport (overlaying the masthead) at wide widths
+    // and a second sticky row under the 56px masthead on phones, so its bottom edge is the
+    // full height of the app bar in both layouts.
     const measure = () => {
-      root.style.setProperty('--bcsp-navigation-height', `${navigation.getBoundingClientRect().height}px`);
+      const bottom = Math.max(0, navigation.getBoundingClientRect().bottom);
+      root.style.setProperty('--bcsp-navigation-height', `${bottom}px`);
     };
     measure();
     globalThis.addEventListener('resize', measure);
@@ -226,17 +224,12 @@ function ShellFrame({
       </a>
       <header className="bcsp-masthead">
         <div className="bcsp-masthead__identity">
-          <p className="bcsp-masthead__eyebrow">[ {i18n.t('app.console')} ]</p>
           <h1 className="bcsp-masthead__title">
             <span className="bcsp-masthead__mark">{i18n.t('app.brand_short')}</span>
             <span className="bcsp-masthead__name">{i18n.t('app.title')}</span>
           </h1>
         </div>
         <div className="bcsp-masthead__utility">
-          <div className="bcsp-utility-copy">
-            <span>{i18n.t('app.interface_revision')}</span>
-            <strong>RU / SOC</strong>
-          </div>
           <LanguageControl i18n={i18n} onLocaleChange={onLocaleChange} />
         </div>
       </header>
@@ -278,20 +271,13 @@ function ShellFrame({
         <section className="bcsp-workspace" aria-labelledby="bcsp-workspace-title">
           <header className="bcsp-workspace__heading">
             <div className="bcsp-workspace__identity">
-              <p className="bcsp-section-label">[ {sequence} / {workspaceLabel} ]</p>
-              <div className="bcsp-workspace__title-line">
-                <span aria-hidden="true" className="bcsp-workspace__sequence">{sequence}</span>
-                <h2 className="bcsp-workspace__title" id="bcsp-workspace-title">
-                  {workspaceTitle}
-                </h2>
-              </div>
+              <h2 className="bcsp-workspace__title" id="bcsp-workspace-title">
+                {workspaceTitle}
+              </h2>
               <p className="bcsp-workspace__intro">{workspaceIntro}</p>
             </div>
             <div className="bcsp-workspace__status-slot">
               {statusResource === null ? null : <ServiceStatusBand resource={statusResource} />}
-              <p className="bcsp-workspace__protocol">
-                {i18n.t('app.protocol')} / BCSP.V{PRODUCT_PROTOCOL_VERSION}
-              </p>
             </div>
           </header>
           {children}
@@ -300,9 +286,6 @@ function ShellFrame({
       <footer className="bcsp-footer">
         <span className="bcsp-footer__copyright">
           Copyright (c) 2026 VVittgenstein
-        </span>
-        <span className="bcsp-footer__protocol">
-          {i18n.t('app.protocol')} / BCSP.V{PRODUCT_PROTOCOL_VERSION}
         </span>
       </footer>
     </ServiceStatusPublisherContext.Provider>

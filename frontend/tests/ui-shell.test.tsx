@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PublicCompositionRoot } from '../src/ui/public/PublicCompositionRoot';
 import { BCSP_SHELL_CSS } from '../src/ui/shared/application';
-import { BCSP_DESIGN_SYSTEM_CSS } from '../src/ui/shared/design-system';
+import { ActionButton, BCSP_DESIGN_SYSTEM_CSS } from '../src/ui/shared/design-system';
 import { FILTER_PANEL_CSS } from '../src/ui/shared/search/filters/FilterPanel';
 import { SEARCH_RESULTS_CSS } from '../src/ui/shared/search/results';
 import { WATCH_WORKSPACE_CSS } from '../src/ui/shared/watch';
@@ -366,22 +366,71 @@ describe('P7.2 responsive product shell', () => {
   });
 
   it('keeps the chosen ink, paper, accent, focus, and reduced-motion rules in the shared token layer', () => {
-    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('--bcsp-paper: #efeee8');
-    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('--bcsp-ink: #11110e');
-    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('--bcsp-accent: #d42b1e');
+    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('--bcsp-paper: #F6F6F4');
+    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('--bcsp-ink: #1A1A1A');
+    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('--bcsp-accent: #CC0033');
     expect(BCSP_DESIGN_SYSTEM_CSS).toContain(':focus-visible');
     expect(BCSP_DESIGN_SYSTEM_CSS).toContain('@media (prefers-reduced-motion: reduce)');
-    expect(
-      [...BCSP_DESIGN_SYSTEM_CSS.matchAll(/border-radius:\s*([^;]+);/gu)]
-        .map((match) => match[1]?.trim()),
-    ).toEqual(['0']);
+    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('@media (prefers-color-scheme: dark)');
+    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('color-scheme: dark');
+    const radii = [...BCSP_DESIGN_SYSTEM_CSS.matchAll(/border-radius:\s*([^;]+);/gu)]
+      .map((match) => match[1]?.trim());
+    expect(radii.length).toBeGreaterThan(0);
+    for (const radius of radii) {
+      expect(
+        ['0', 'var(--bcsp-radius-1)', 'var(--bcsp-radius-2)', 'var(--bcsp-radius-3)', 'var(--bcsp-radius-pill)'],
+        radius,
+      ).toContain(radius);
+    }
     expect(BCSP_DESIGN_SYSTEM_CSS).not.toMatch(/linear-gradient|box-shadow/u);
-    expect(contrast('11110e', 'efeee8')).toBeGreaterThan(7);
-    expect(contrast('5b5a53', 'efeee8')).toBeGreaterThan(4.5);
-    expect(contrast('ffffff', 'd42b1e')).toBeGreaterThan(4.5);
+    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('.bcsp-action--danger');
+    expect(BCSP_DESIGN_SYSTEM_CSS).toContain('.bcsp-action--danger-outline');
+    expect(contrast('1A1A1A', 'F6F6F4')).toBeGreaterThan(7);
+    expect(contrast('5C5C58', 'F6F6F4')).toBeGreaterThan(4.5);
+    expect(contrast('FFFFFF', 'CC0033')).toBeGreaterThan(4.5);
+    expect(contrast('ECECEA', '1B1C1F')).toBeGreaterThan(7);
+    expect(contrast('A8A8A5', '1B1C1F')).toBeGreaterThan(4.5);
+    expect(contrast('FFFFFF', 'E5153F')).toBeGreaterThan(4.5);
+    expect(contrast('FF5C7A', '1B1C1F')).toBeGreaterThan(4.5);
     expect(BCSP_SHELL_CSS).toMatch(/\.bcsp-navigation\s*\{[\s\S]*?position:\s*sticky;/u);
     expect(BCSP_SHELL_CSS).toMatch(/\.bcsp-navigation\s*\{[\s\S]*?top:\s*0;/u);
     expect(BCSP_SHELL_CSS).toContain('scroll-margin-top: var(--bcsp-navigation-height');
+  });
+
+  it('renders the destructive ActionButton tones as the design-system danger classes', () => {
+    // Spec section 7 #16: the tone prop is the only way a destructive control
+    // reaches the danger styling, so assert the rendered class, not the CSS text.
+    const { unmount } = render(<ActionButton tone="danger">Confirm delete</ActionButton>);
+    const danger = screen.getByRole('button', { name: 'Confirm delete' });
+    expect(danger.classList.contains('bcsp-action')).toBe(true);
+    expect(danger.classList.contains('bcsp-action--danger')).toBe(true);
+    expect(danger.classList.contains('bcsp-action--danger-outline')).toBe(false);
+    unmount();
+
+    render(<ActionButton tone="danger-outline">Stop</ActionButton>);
+    const outline = screen.getByRole('button', { name: 'Stop' });
+    expect(outline.classList.contains('bcsp-action--danger-outline')).toBe(true);
+    expect(outline.classList.contains('bcsp-action--danger')).toBe(false);
+  });
+
+  it('folds the settled status card into two rows so the heading leaves no empty band', () => {
+    // The card is the tall half of the heading grid. While nothing is loading,
+    // retrying or degraded it lays its five DOM rows out as headline + two rows,
+    // and it only stacks back out under [data-expanded], where the height is earned.
+    expect(BCSP_SHELL_CSS).toMatch(
+      /\.bcsp-service-status:not\(\[data-expanded\]\)\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/u,
+    );
+    for (const part of ['lead', 'operation', 'progress', 'counts', 'detail']) {
+      expect(BCSP_SHELL_CSS).toMatch(
+        new RegExp(
+          `\\.bcsp-service-status:not\\(\\[data-expanded\\]\\) \\.bcsp-service-status__${part}\\s*\\{[^}]*grid-area:`,
+          'u',
+        ),
+      );
+    }
+    expect(BCSP_SHELL_CSS).toMatch(
+      /\.bcsp-workspace__heading\s*\{[^}]*padding-bottom:\s*var\(--bcsp-space-2\)/u,
+    );
   });
 
   it('keeps current product transitions explicit and reduced-motion aware', () => {
