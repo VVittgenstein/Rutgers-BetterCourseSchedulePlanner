@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from 'react';
 
 import {
@@ -12,6 +13,7 @@ import {
   type SharedExperienceConfiguration,
   type SharedWorkspaceExtension,
 } from '../shared/SharedApplication';
+import { ActionButton } from '../shared/design-system';
 import { useBcspI18n } from '../shared/i18n/runtime';
 import {
   toFilterRequestV1,
@@ -23,7 +25,9 @@ import { currentSystemLanguages, resolveLocalLocale } from './i18n/localeBootstr
 import { useLocalI18n } from './i18n/runtime';
 import { LocalTermPullAction } from './LocalTermPullAction';
 import {
+  holdsInitialFiltersFor,
   LocalPersonalStyles,
+  localSyncMessageKey,
   useLocalPersonal,
   type LocalSettings,
   type PreparedUserDataReset,
@@ -31,6 +35,9 @@ import {
 } from './personal';
 
 const PERSIST_DELAY_MS = 300;
+/** How long the "back in sync" confirmation stays on screen before the pill
+ * goes quiet again. */
+const RECOVERED_VISIBLE_MS = 4000;
 
 const HistoryPage = lazy(async () => ({
   default: (await import('./pages/HistoryPage')).HistoryPage,
@@ -75,6 +82,10 @@ export function LocalApplication() {
   const local = useLocalI18n();
   const storedLocaleOverride = personal.state.settings.value.localeOverride;
   const filterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set once the user edits the search draft in this tab; cleared only by an
+  // explicit reload, so a peer tab's typing never rewrites this panel.
+  const filtersEdited = useRef(false);
+  const heldInitialFilters = useRef<FilterStateV1 | undefined>(undefined);
   const settingsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsDraft = useRef(personal.state.settings.value);
   const settingsVersion = useRef(0);
@@ -132,6 +143,7 @@ export function LocalApplication() {
   }, []);
 
   const persistFilters = useCallback((filters: FilterStateV1) => {
+    filtersEdited.current = true;
     let request;
     try {
       request = toFilterRequestV1(filters);
@@ -169,6 +181,7 @@ export function LocalApplication() {
   const commonPageState = {
     pending: personal.busy || personal.reloading,
     error: personal.error,
+    notice: personal.sync,
     onClearError: personal.clearError,
     onReload: personal.reload,
   } as const;
@@ -243,12 +256,27 @@ export function LocalApplication() {
     },
   ], [historyPage, local, savedPage, settingsPage]);
 
+  const storedCurrentFilters = personal.state.currentFilters.value;
+  const snapshotOrigin = personal.snapshotOrigin;
+  const selectedSections = personal.state.selectedSections;
+  const soundPolicy = personal.state.settings.value.soundPolicy;
+  const volumePercent = personal.state.settings.value.volumePercent;
+
+  const initialFilters = useMemo<FilterStateV1 | undefined>(() => {
+    if (snapshotOrigin === 'RELOAD') filtersEdited.current = false;
+    const editing = filtersEdited.current || filterTimer.current !== null;
+    if (holdsInitialFiltersFor(snapshotOrigin, editing)) return heldInitialFilters.current;
+    const next = storedFilterState(storedCurrentFilters);
+    heldInitialFilters.current = next;
+    return next;
+  }, [snapshotOrigin, storedCurrentFilters]);
+
   const experience = useMemo<SharedExperienceConfiguration>(() => ({
     ...(watchIntent === null ? {} : { watchIntent }),
-    initialFilters: storedFilterState(personal.state.currentFilters.value),
-    initialSelectedSections: personal.state.selectedSections,
-    initialVolume: personal.state.settings.value.volumePercent,
-    initialWatchPolicy: personal.state.settings.value.soundPolicy,
+    initialFilters,
+    initialSelectedSections: selectedSections,
+    initialVolume: volumePercent,
+    initialWatchPolicy: soundPolicy,
     onFiltersChange: persistFilters,
     onSelectedSectionsChange: persistSelection,
     onVolumeChange: persistVolume,
@@ -257,23 +285,45 @@ export function LocalApplication() {
       <LocalTermPullAction
         {...context}
         onPull={async (term) => {
-          await personal.pullTerm(term);
+          await personalRef.current.pullTerm(term);
         }}
       />
     ),
   }), [
-    local,
+    initialFilters,
     persistFilters,
-    personal,
     persistSelection,
     persistVolume,
     persistWatchPolicy,
-    personal.state.currentFilters.value,
-    personal.state.selectedSections,
-    personal.state.settings.value.soundPolicy,
-    personal.state.settings.value.volumePercent,
+    selectedSections,
+    soundPolicy,
+    volumePercent,
     watchIntent,
   ]);
+
+  const syncMessageKey = localSyncMessageKey(personal.sync);
+  const syncFailed = personal.sync.phase === 'FAILED';
+  const syncOffersReload = personal.sync.phase === 'STALE'
+    || (personal.sync.phase === 'FAILED' && personal.sync.reason === 'UNAVAILABLE');
+  const syncOffersPageReload = personal.sync.phase === 'FAILED' && personal.sync.reason === 'STATE_RESET';
+  // A routine save is not news: only the phases a student can act on are ever
+  // drawn, and the "recovered" confirmation retires itself.
+  const syncPhase = personal.sync.phase;
+  const syncReason = 'reason' in personal.sync ? personal.sync.reason : null;
+  const [recoveredVisible, setRecoveredVisible] = useState(false);
+  useEffect(() => {
+    if (syncPhase !== 'RECOVERED') {
+      setRecoveredVisible(false);
+      return undefined;
+    }
+    setRecoveredVisible(true);
+    const timer = setTimeout(() => setRecoveredVisible(false), RECOVERED_VISIBLE_MS);
+    return () => clearTimeout(timer);
+  }, [syncPhase, syncReason]);
+  const syncNeedsAttention = syncPhase === 'FAILED'
+    || syncPhase === 'STALE'
+    || syncPhase === 'RETRYING'
+    || (syncPhase === 'RECOVERED' && recoveredVisible);
 
   return (
     <>
@@ -286,14 +336,25 @@ export function LocalApplication() {
       <div
         aria-live="polite"
         className="local-personal-sync"
-        data-error={personal.error === null ? undefined : true}
-        role={personal.error === null ? 'status' : 'alert'}
+        data-attention={syncNeedsAttention ? true : undefined}
+        data-error={syncFailed ? true : undefined}
+        data-phase={personal.sync.phase}
+        role={syncFailed ? 'alert' : 'status'}
       >
-        {personal.error !== null
-          ? local.t('local.status.error')
-          : personal.busy || personal.reloading
-            ? local.t('local.status.busy')
-            : null}
+        {syncMessageKey === null || !syncNeedsAttention ? null : local.t(syncMessageKey)}
+        {syncOffersReload ? (
+          <ActionButton
+            onClick={() => void personal.reload().catch(() => undefined)}
+            tone="quiet"
+          >
+            {local.t('local.action.reload')}
+          </ActionButton>
+        ) : null}
+        {syncOffersPageReload ? (
+          <ActionButton onClick={() => globalThis.location?.reload()} tone="quiet">
+            {local.t('local.action.reload_page')}
+          </ActionButton>
+        ) : null}
       </div>
     </>
   );

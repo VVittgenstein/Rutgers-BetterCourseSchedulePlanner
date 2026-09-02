@@ -77,6 +77,7 @@ function stateTone(state: EpisodeHistorySummary['state']): string {
 export function HistoryPage({
   error,
   history,
+  notice,
   onClearError,
   onReload,
   pending = false,
@@ -97,21 +98,15 @@ export function HistoryPage({
     <LocalPageFrame
       {...(error === undefined ? {} : { error })}
       intro={local.t('local.history.intro')}
-      kicker={local.t('local.history.kicker')}
+      {...(notice === undefined ? {} : { notice })}
       {...(onClearError === undefined ? {} : { onClearError })}
       {...(onReload === undefined ? {} : { onReload })}
       pending={pending}
       title={local.t('local.history.title')}
     >
-      <section aria-labelledby="local-history-ledger-title" className="local-personal__section">
+      <section className="local-personal__section">
         <header className="local-personal__section-head">
-          <div>
-            <p className="local-personal__kicker">[ 01 / LEDGER ]</p>
-            <h3 className="local-personal__section-title" id="local-history-ledger-title">
-              {local.t('local.history.kicker')}
-            </h3>
-          </div>
-          <span className="local-personal__badge" data-state="READY">
+          <span className="local-personal__meta">
             {local.t('local.history.recent', {
               count: local.formatNumber(recent.length),
               total: local.formatNumber(history.total),
@@ -129,7 +124,7 @@ export function HistoryPage({
                   <div className="local-personal__identity">
                     <div>
                       <p className="local-personal__meta">
-                        {chinese ? '课节' : 'SECTION'} / {sectionKey.index}
+                        {chinese ? '课节' : 'Section'} <samp>{sectionKey.index}</samp>
                       </p>
                       <h4>{sectionKey.term} · {sectionKey.campus}</h4>
                     </div>
@@ -138,7 +133,7 @@ export function HistoryPage({
                     </span>
                   </div>
                   <div className="local-page__history-state">
-                    <span className="local-personal__badge" data-state="READY">
+                    <span className="local-personal__badge" data-state="MODE">
                       {shared.t(watchNotificationMessageKeys[episode.mode])}
                     </span>
                     <span className="local-personal__meta">
@@ -166,7 +161,7 @@ export function HistoryPage({
                       )}</dd>
                     </div>
                     <div>
-                      <dt>{chinese ? '活动计数' : 'ACTIVITY COUNTS'}</dt>
+                      <dt>{chinese ? '活动计数' : 'Activity counts'}</dt>
                       <dd>
                         {local.t('local.history.actions', {
                           count: local.formatNumber(episode.actionCount),

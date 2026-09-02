@@ -12,6 +12,7 @@ import type {
 import {
   LocalPageFrame,
   completeAction,
+  localFailureMessageKey,
   type LocalPageAsyncState,
   type MaybePromise,
 } from './PageFrame';
@@ -70,6 +71,7 @@ function sameSettings(left: LocalSettings, right: LocalSettings): boolean {
 
 export function SettingsPage({
   error,
+  notice,
   onClearError,
   onConfirmUserDataReset,
   onDeleteAllSavedViews,
@@ -219,19 +221,19 @@ export function SettingsPage({
   }
 
   const saveMessage = {
-    UNCHANGED: chinese ? '没有尚未保存的更改。' : 'NO UNSAVED CHANGES',
-    DIRTY: chinese ? '更改尚未保存，可以保存。' : 'UNSAVED CHANGES / READY TO SAVE',
-    INVALID: chinese ? '请修正超出范围的设置值。' : 'CORRECT OUT-OF-RANGE VALUES',
+    UNCHANGED: chinese ? '没有尚未保存的更改。' : 'No unsaved changes',
+    DIRTY: chinese ? '更改尚未保存，可以保存。' : 'Unsaved changes / ready to save',
+    INVALID: chinese ? '请修正超出范围的设置值。' : 'Correct out-of-range values',
     SAVING: local.t('local.status.busy'),
     SAVED: local.t('local.settings.saved'),
-    FAILED: local.t('local.status.error'),
+    FAILED: local.t(localFailureMessageKey(notice)),
   }[saveState];
 
   return (
     <LocalPageFrame
       {...(error === undefined ? {} : { error })}
       intro={local.t('local.settings.intro')}
-      kicker={local.t('local.settings.kicker')}
+      {...(notice === undefined ? {} : { notice })}
       {...(onClearError === undefined ? {} : { onClearError })}
       {...(onReload === undefined ? {} : { onReload })}
       pending={pending}
@@ -239,30 +241,29 @@ export function SettingsPage({
     >
       <section aria-labelledby="local-settings-preferences-title" className="local-personal__section">
         <header className="local-personal__section-head">
-          <div>
-            <p className="local-personal__kicker">[ 01 / CONTROL ]</p>
-            <h3 className="local-personal__section-title" id="local-settings-preferences-title">
-              {local.t('local.settings.preferences')}
-            </h3>
-          </div>
-          <span className="local-personal__badge" data-state="READY">
-            REV / {local.formatNumber(settings.revision)}
+          <h3 className="local-personal__section-title" id="local-settings-preferences-title">
+            {local.t('local.settings.preferences')}
+          </h3>
+          <span className="local-personal__badge" data-state="REVISION">
+            {local.t('local.saved.revision', { revision: local.formatNumber(settings.revision) })}
           </span>
         </header>
         <form onSubmit={save}>
           <div className="local-personal__settings">
             <div className="local-personal__field">
               <label htmlFor={localeId}>{local.t('local.settings.locale')}</label>
-              <select
-                disabled={locked}
-                id={localeId}
-                onChange={(event) => updateLocale(event.currentTarget.value as LocalLocaleOverride)}
-                value={draft.localeOverride}
-              >
-                <option value="system">{local.t('local.settings.locale_system')}</option>
-                <option value="en-US">{local.t('local.settings.locale_en')}</option>
-                <option value="zh-CN">{local.t('local.settings.locale_zh')}</option>
-              </select>
+              <span className="local-personal__select-control">
+                <select
+                  disabled={locked}
+                  id={localeId}
+                  onChange={(event) => updateLocale(event.currentTarget.value as LocalLocaleOverride)}
+                  value={draft.localeOverride}
+                >
+                  <option value="system">{local.t('local.settings.locale_system')}</option>
+                  <option value="en-US">{local.t('local.settings.locale_en')}</option>
+                  <option value="zh-CN">{local.t('local.settings.locale_zh')}</option>
+                </select>
+              </span>
             </div>
             <div className="local-personal__field">
               <label htmlFor={catalogId}>{local.t('local.settings.catalog_refresh')}</label>
@@ -355,21 +356,23 @@ export function SettingsPage({
             </div>
             <div className="local-personal__field">
               <label htmlFor={modeId}>{local.t('local.settings.mode')}</label>
-              <select
-                disabled={locked}
-                id={modeId}
-                onChange={(event) => {
-                  const notificationMode = event.currentTarget.value as LocalSettings['soundPolicy']['notificationMode'];
-                  updateDraft((current) => ({
-                    ...current,
-                    soundPolicy: { ...current.soundPolicy, notificationMode },
-                  }));
-                }}
-                value={draft.soundPolicy.notificationMode}
-              >
-                <option value="ONE_SHOT">{local.t('local.settings.mode_one_shot')}</option>
-                <option value="CONTINUOUS">{local.t('local.settings.mode_continuous')}</option>
-              </select>
+              <span className="local-personal__select-control">
+                <select
+                  disabled={locked}
+                  id={modeId}
+                  onChange={(event) => {
+                    const notificationMode = event.currentTarget.value as LocalSettings['soundPolicy']['notificationMode'];
+                    updateDraft((current) => ({
+                      ...current,
+                      soundPolicy: { ...current.soundPolicy, notificationMode },
+                    }));
+                  }}
+                  value={draft.soundPolicy.notificationMode}
+                >
+                  <option value="ONE_SHOT">{local.t('local.settings.mode_one_shot')}</option>
+                  <option value="CONTINUOUS">{local.t('local.settings.mode_continuous')}</option>
+                </select>
+              </span>
             </div>
             <div className="local-personal__field">
               <label htmlFor={maximumId}>{local.t('local.settings.max_audible')}</label>
@@ -394,24 +397,26 @@ export function SettingsPage({
             </div>
             <div className="local-personal__field">
               <label htmlFor={durationId}>{local.t('local.settings.duration')}</label>
-              <select
-                disabled={locked || draft.soundPolicy.notificationMode !== 'CONTINUOUS'}
-                id={durationId}
-                onChange={(event) => {
-                  const continuousDuration: LocalSettings['soundPolicy']['continuousDuration'] =
-                    event.currentTarget.value === 'UNLIMITED'
-                      ? { kind: 'UNLIMITED' }
-                      : { kind: 'FINITE', seconds: 600 };
-                  updateDraft((current) => ({
-                    ...current,
-                    soundPolicy: { ...current.soundPolicy, continuousDuration },
-                  }));
-                }}
-                value={draft.soundPolicy.continuousDuration.kind}
-              >
-                <option value="FINITE">{local.t('local.settings.duration_finite')}</option>
-                <option value="UNLIMITED">{local.t('local.settings.duration_unlimited')}</option>
-              </select>
+              <span className="local-personal__select-control">
+                <select
+                  disabled={locked || draft.soundPolicy.notificationMode !== 'CONTINUOUS'}
+                  id={durationId}
+                  onChange={(event) => {
+                    const continuousDuration: LocalSettings['soundPolicy']['continuousDuration'] =
+                      event.currentTarget.value === 'UNLIMITED'
+                        ? { kind: 'UNLIMITED' }
+                        : { kind: 'FINITE', seconds: 600 };
+                    updateDraft((current) => ({
+                      ...current,
+                      soundPolicy: { ...current.soundPolicy, continuousDuration },
+                    }));
+                  }}
+                  value={draft.soundPolicy.continuousDuration.kind}
+                >
+                  <option value="FINITE">{local.t('local.settings.duration_finite')}</option>
+                  <option value="UNLIMITED">{local.t('local.settings.duration_unlimited')}</option>
+                </select>
+              </span>
             </div>
           </div>
           <div className="local-page__settings-actions">
@@ -438,24 +443,20 @@ export function SettingsPage({
 
       <section aria-labelledby="local-settings-reset-title" className="local-personal__section">
         <header className="local-personal__section-head">
-          <div>
-            <p className="local-personal__kicker">[ 02 / RESET ]</p>
-            <h3 className="local-personal__section-title" id="local-settings-reset-title">
-              {local.t('local.reset.title')}
-            </h3>
-          </div>
+          <h3 className="local-personal__section-title" id="local-settings-reset-title">
+            {local.t('local.reset.title')}
+          </h3>
           <p>{local.t('local.reset.intro')}</p>
         </header>
         <div className="local-personal__reset-grid">
           <article className="local-personal__card local-page__reset-scope" data-scope="FILTERS">
-            <p className="local-personal__meta">01 / FILTERS ONLY</p>
             <h4 id="local-settings-filters-reset-title" tabIndex={-1}>
               {local.t('local.reset.filters_title')}
             </h4>
             <p>{local.t('local.reset.filters_body')}</p>
             {confirmScope === 'FILTERS' ? (
               <div className="local-page__inline-panel" role="group" aria-label={local.t('local.reset.filters_title')}>
-                <p><strong>{chinese ? '确认：' : 'CONFIRM:'}</strong> {local.t('local.reset.filters_body')}</p>
+                <p><strong>{chinese ? '确认：' : 'Confirm:'}</strong> {local.t('local.reset.filters_body')}</p>
                 <div className="local-page__inline-actions">
                   <ActionButton
                     busy={working === 'FILTERS'}
@@ -476,7 +477,6 @@ export function SettingsPage({
                 disabled={locked}
                 id={filtersResetTriggerId}
                 onClick={() => setConfirmScope('FILTERS')}
-                tone="quiet"
               >
                 {local.t('local.reset.filters_action')}
               </ActionButton>
@@ -485,22 +485,22 @@ export function SettingsPage({
 
           <article className="local-personal__card local-page__reset-scope" data-scope="VIEWS">
             <p className="local-personal__meta">
-              02 / {local.t('local.saved.count', { count: local.formatNumber(savedViewCount) })}
+              {local.t('local.saved.count', { count: local.formatNumber(savedViewCount) })}
             </p>
             <h4 id="local-settings-views-reset-title" tabIndex={-1}>
               {local.t('local.reset.views_title')}
             </h4>
             <p>{local.t('local.reset.views_body')}</p>
             {confirmScope === 'VIEWS' ? (
-              <div className="local-page__inline-panel" role="group" aria-label={local.t('local.reset.views_title')}>
-                <p><strong>{chinese ? '确认：' : 'CONFIRM:'}</strong> {local.t('local.reset.views_body')}</p>
+              <div className="local-page__inline-panel local-page__inline-panel--danger" role="group" aria-label={local.t('local.reset.views_title')}>
+                <p><strong>{chinese ? '确认：' : 'Confirm:'}</strong> {local.t('local.reset.views_body')}</p>
                 <div className="local-page__inline-actions">
                   <ActionButton
                     busy={working === 'VIEWS'}
                     busyLabel={local.t('local.status.busy')}
                     id={viewsResetConfirmId}
                     onClick={() => void confirmSmallReset('VIEWS')}
-                    tone="accent"
+                    tone="danger"
                   >
                     {local.t('local.reset.views_action')}
                   </ActionButton>
@@ -514,7 +514,6 @@ export function SettingsPage({
                 disabled={locked || savedViewCount === 0}
                 id={viewsResetTriggerId}
                 onClick={() => setConfirmScope('VIEWS')}
-                tone="quiet"
               >
                 {local.t('local.reset.views_action')}
               </ActionButton>
@@ -522,7 +521,6 @@ export function SettingsPage({
           </article>
 
           <article className="local-personal__card local-page__reset-scope" data-scope="ALL">
-            <p className="local-personal__meta">03 / ALL LOCAL USER DATA</p>
             <h4>{local.t('local.reset.user_title')}</h4>
             <p>{local.t('local.reset.user_body')}</p>
             {preparedReset === null ? (
@@ -532,12 +530,12 @@ export function SettingsPage({
                 disabled={locked}
                 id={fullResetTriggerId}
                 onClick={() => void prepareFullReset()}
-                tone="accent"
+                tone="danger-outline"
               >
                 {local.t('local.reset.prepare')}
               </ActionButton>
             ) : (
-              <div className="local-page__inline-panel" role="group" aria-label={local.t('local.reset.user_title')}>
+              <div className="local-page__inline-panel local-page__inline-panel--danger" role="group" aria-label={local.t('local.reset.user_title')}>
                 <p>{local.t('local.reset.prepared', {
                   seconds: local.formatNumber(preparedReset.expiresInSeconds),
                 })}</p>
@@ -547,7 +545,7 @@ export function SettingsPage({
                     busyLabel={local.t('local.status.busy')}
                     id={fullResetConfirmId}
                     onClick={() => void confirmFullReset()}
-                    tone="accent"
+                    tone="danger"
                   >
                     {local.t('local.reset.confirm')}
                   </ActionButton>

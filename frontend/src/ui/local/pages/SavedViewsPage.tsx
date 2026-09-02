@@ -51,7 +51,7 @@ function SavedViewReviewNotice({
   const local = useLocalI18n();
   const shared = useBcspI18n();
   return (
-    <div className="local-personal__notice" id={id} role="status">
+    <div className="local-personal__notice local-personal__notice--review" id={id} role="status">
       <p><strong>{local.t('local.saved.review.intro')}</strong></p>
       <ul>
         {reasons.map((reason, index) => {
@@ -200,7 +200,9 @@ function SavedViewCard({
     <li className="local-personal__card">
       <div className="local-personal__identity">
         <div>
-          <p className="local-personal__meta">REV / {local.formatNumber(definition.revision)}</p>
+          <p className="local-personal__meta">
+            {local.t('local.saved.revision', { revision: local.formatNumber(definition.revision) })}
+          </p>
           <h4>{definition.name}</h4>
         </div>
         <span className="local-personal__badge" data-state={matchState}>
@@ -229,7 +231,6 @@ function SavedViewCard({
           aria-label={`${local.t('local.saved.apply')}: ${definition.name}`}
           disabled={disabled || !compatible}
           onClick={() => void apply()}
-          tone="accent"
         >
           {local.t('local.saved.apply')}
         </ActionButton>
@@ -274,13 +275,13 @@ function SavedViewCard({
             { kind: 'DELETE', id: definition.id },
             deleteTriggerId,
           )}
-          tone="quiet"
+          tone="danger-outline"
         >
           {local.t('local.saved.delete')}
         </ActionButton>
       </div>
       {activeEditor?.kind === 'DELETE' ? (
-        <div className="local-page__inline-panel" role="group" aria-label={`${local.t('local.saved.confirm_delete')}: ${definition.name}`}>
+        <div className="local-page__inline-panel local-page__inline-panel--danger" role="group" aria-label={`${local.t('local.saved.confirm_delete')}: ${definition.name}`}>
           <p>{local.t('local.saved.confirm_delete')} — <strong>{definition.name}</strong></p>
           <div className="local-page__inline-actions">
             <ActionButton
@@ -288,7 +289,7 @@ function SavedViewCard({
               busyLabel={local.t('local.status.busy')}
               id={deleteConfirmId}
               onClick={() => void deleteView()}
-              tone="accent"
+              tone="danger"
             >
               {local.t('local.saved.confirm_delete')}
             </ActionButton>
@@ -341,6 +342,7 @@ function SavedViewCard({
 export function SavedViewsPage({
   error,
   library,
+  notice,
   onApply,
   onClearError,
   onCreate,
@@ -404,7 +406,7 @@ export function SavedViewsPage({
     <LocalPageFrame
       {...(error === undefined ? {} : { error })}
       intro={local.t('local.saved.intro')}
-      kicker={local.t('local.saved.kicker')}
+      {...(notice === undefined ? {} : { notice })}
       {...(onClearError === undefined ? {} : { onClearError })}
       {...(onReload === undefined ? {} : { onReload })}
       pending={pending}
@@ -412,12 +414,9 @@ export function SavedViewsPage({
     >
       <section aria-labelledby="local-current-filter-title" className="local-personal__section">
         <header className="local-personal__section-head">
-          <div>
-            <p className="local-personal__kicker">[ 01 / FILTER ]</p>
-            <h3 className="local-personal__section-title" id="local-current-filter-title">
-              {local.t('local.saved.current')}
-            </h3>
-          </div>
+          <h3 className="local-personal__section-title" id="local-current-filter-title">
+            {local.t('local.saved.current')}
+          </h3>
           <span className="local-personal__badge" data-state={currentFiltersReady ? 'READY' : 'DANGER'}>
             {currentFiltersReady
               ? local.t('local.saved.compatible')
@@ -459,12 +458,9 @@ export function SavedViewsPage({
 
       <section aria-labelledby="local-saved-library-title" className="local-personal__section">
         <header className="local-personal__section-head">
-          <div>
-            <p className="local-personal__kicker">[ 02 / LIBRARY ]</p>
-            <h3 className="local-personal__section-title" id="local-saved-library-title" tabIndex={-1}>
-              {local.t('local.saved.library')}
-            </h3>
-          </div>
+          <h3 className="local-personal__section-title" id="local-saved-library-title" tabIndex={-1}>
+            {local.t('local.saved.library')}
+          </h3>
           <div className="local-personal__actions">
             <span className="local-personal__badge" data-state="READY">
               {local.t('local.saved.count', { count: local.formatNumber(library.views.length) })}
@@ -491,7 +487,7 @@ export function SavedViewsPage({
                 busyLabel={local.t('local.status.busy')}
                 id={deleteAllConfirmId}
                 onClick={() => void deleteAll()}
-                tone="accent"
+                tone="danger"
               >
                 {local.t('local.saved.confirm_delete_all')}
               </ActionButton>
