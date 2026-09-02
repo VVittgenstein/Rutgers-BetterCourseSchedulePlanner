@@ -83,11 +83,35 @@ function response(field: FilterOptionsFieldV2): FilterOptionsResponseV2 {
 
 const loadOptions = async (field: FilterOptionsFieldV2) => response(field);
 
+/** The server dictionary publishes mixed-case Core codes (AHo, WCd, …) while the
+ * canonical request form stores them uppercased (AHO, WCD). */
+const CORE_DISCOVERY: CatalogDiscoveryResponseV1 = {
+  ...DISCOVERY,
+  coreCodeDictionaries: [{
+    target: { campus: 'NB', term: '72026' },
+    contentVersion: 7,
+    provenance: {
+      observationId: point.observationId,
+      source: 'RUTGERS_CATALOG',
+      target: { campus: 'NB', term: '72026' },
+      observedAt: point.observedAt,
+      payloadDigest: 'b'.repeat(64),
+    },
+    options: [
+      { code: 'AHo', description: known('Arts and Humanities (o)') },
+      { code: 'WCd', description: known('Writing and Communication (d)') },
+      { code: 'QQ', description: known('Quantitative Reasoning') },
+    ],
+  }],
+};
+
 function Harness({
+  discovery = DISCOVERY,
   initial = { ...createNeutralFilterState('72026'), campuses: ['NB'] },
   locale = 'en-US',
   onSubmit = vi.fn(),
 }: {
+  readonly discovery?: CatalogDiscoveryResponseV1;
   readonly initial?: FilterStateV1;
   readonly locale?: 'en-US' | 'zh-CN';
   readonly onSubmit?: () => void;
@@ -96,7 +120,7 @@ function Harness({
   return (
     <BcspI18nProvider initialLocale={locale}>
       <FilterPanel
-        discovery={DISCOVERY}
+        discovery={discovery}
         formId="course-filter-form"
         loadOptions={loadOptions}
         onChange={setValue}
@@ -117,9 +141,12 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     expect(FILTER_PANEL_CSS).toContain('.filter-panel__subject-list::-webkit-scrollbar');
     expect(FILTER_PANEL_CSS).toContain('.filter-panel__dictionary-options::-webkit-scrollbar');
     expect(FILTER_PANEL_CSS).toContain('overflow-y: auto');
-    expect(FILTER_PANEL_CSS).toContain('scrollbar-width: thin');
+    // Spec v2 section 11.2: scrollbars stay hidden until hover / focus-within and never reserve a gutter.
+    expect(FILTER_PANEL_CSS).toContain('scrollbar-width: none');
+    expect(FILTER_PANEL_CSS).toMatch(/\.filter-panel__subject-list:(?:hover|focus-within)[^{]*\{[^}]*scrollbar-width:\s*thin/u);
+    expect(FILTER_PANEL_CSS).toMatch(/\.filter-panel__dictionary-options:(?:hover|focus-within)[^{]*\{[^}]*scrollbar-width:\s*thin/u);
     expect(FILTER_PANEL_CSS).toContain('scrollbar-color:');
-    expect(FILTER_PANEL_CSS).toContain('scrollbar-gutter: stable');
+    expect(FILTER_PANEL_CSS).not.toContain('scrollbar-gutter: stable');
     expect(FILTER_PANEL_CSS).toContain('touch-action: pan-y');
     expect(FILTER_PANEL_CSS).not.toMatch(/\.filter-panel\s*\{[^}]*overflow/);
     expect(FILTER_PANEL_CSS).not.toContain('@keyframes');
@@ -137,6 +164,31 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     expect(view.container.querySelector('[data-filter-fields="03-18"]')).not.toBeNull();
     expect(screen.queryByText('Build a precise search')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Search' })).toBeNull();
+  });
+
+  it('shows the 16 rows as four titled groups that each hold at least one row', () => {
+    const view = render(<Harness />);
+    const groups = [...view.container.querySelectorAll('[data-filter-fields="03-18"] > [data-filter-group]')];
+    expect(groups.map((group) => group.getAttribute('data-filter-group'))).toEqual([
+      'course', 'requirements', 'sections', 'time-place',
+    ]);
+    expect(groups.map((group) => group.querySelector('.filter-panel__group-title')?.textContent)).toEqual([
+      'Course', 'Requirements', 'Sections', 'Time, place and other',
+    ]);
+    for (const group of groups) {
+      expect(group.getAttribute('role')).toBe('group');
+      expect(group.querySelectorAll('[data-filter-row]').length).toBeGreaterThan(0);
+    }
+    expect(groups.flatMap((group) => [...group.querySelectorAll('.filter-panel__ordinal')].map((ordinal) => ordinal.textContent)))
+      .toEqual(Array.from({ length: 16 }, (_, index) => String(index + 3).padStart(2, '0')));
+    expect(view.container.querySelector('.filter-panel__active')?.getAttribute('data-count')).toBe('0');
+    expect(view.container.querySelector('[data-filter-group="course"]')?.getAttribute('data-count')).toBe('0');
+    cleanup();
+
+    render(<Harness locale="zh-CN" />);
+    expect([...document.querySelectorAll('.filter-panel__group-title')].map((title) => title.textContent)).toEqual([
+      '课程', '要求', '课节', '时间、地点与其他',
+    ]);
   });
 
   it('uses the HumanTest labels and does not expose technical unknown categories', async () => {
@@ -164,6 +216,40 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     expect(screen.getByRole('checkbox', { name: 'Synchronous' })).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: 'Asynchronous' })).toBeTruthy();
     await waitFor(() => expect(screen.getByRole('checkbox', { name: '000-level' })).toBeTruthy());
+  });
+
+  it('explains the three meeting-timing options and their incomplete-data switch in English', () => {
+    const view = render(<Harness />);
+    const row = view.container.querySelector<HTMLElement>('[data-filter-row="FLT-S04b"]');
+    if (row === null) throw new Error('Expected the Meeting timing row.');
+    expect(within(row).getByText('Derived from the Rutgers meeting mode and the listed meeting times.')).toBeTruthy();
+    expect(within(row).getByText('Meets at fixed times (online or in person).')).toBeTruthy();
+    expect(within(row).getByText('Online with no fixed meeting time (Rutgers “hours by arrangement”).')).toBeTruthy();
+    expect(within(row).getByText('Some meetings at fixed times, some by arrangement.')).toBeTruthy();
+    expect(within(row).getByText('Also include sections whose meeting timing Rutgers has not published.')).toBeTruthy();
+    expect(within(row).queryByText('When this filter is active, also include records whose value cannot be determined.')).toBeNull();
+    expect(within(row).getByRole('checkbox', { name: 'Synchronous' })).toBeTruthy();
+    expect(within(row).getByRole('checkbox', { name: 'Asynchronous' })).toBeTruthy();
+    expect(within(row).getByRole('checkbox', { name: 'Mixed' })).toBeTruthy();
+    expect(within(row).getByRole('checkbox', { name: /Complete data display/u })).toBeTruthy();
+
+    const formatRow = view.container.querySelector<HTMLElement>('[data-filter-row="FLT-S04a"]');
+    if (formatRow === null) throw new Error('Expected the Class format row.');
+    expect(within(formatRow).getByText('When this filter is active, also include records whose value cannot be determined.')).toBeTruthy();
+    expect(within(formatRow).queryByText(/hours by arrangement/u)).toBeNull();
+  });
+
+  it('explains the three meeting-timing options in Chinese', () => {
+    const view = render(<Harness locale="zh-CN" />);
+    const row = view.container.querySelector<HTMLElement>('[data-filter-row="FLT-S04b"]');
+    if (row === null) throw new Error('Expected the Meeting timing row.');
+    expect(within(row).getByText('根据 Rutgers 的授课模式与列出的上课时间推断。')).toBeTruthy();
+    expect(within(row).getByText('有固定上课时间（线上或线下）。')).toBeTruthy();
+    expect(within(row).getByText('在线且没有固定上课时间（Rutgers 标注 hours by arrangement）。')).toBeTruthy();
+    expect(within(row).getByText('部分时段固定，部分自行安排。')).toBeTruthy();
+    expect(within(row).getByText('同时包含 Rutgers 未公布上课时间安排的课节。')).toBeTruthy();
+    expect(within(row).getByRole('checkbox', { name: '混合' })).toBeTruthy();
+    expect(within(row).getByRole('checkbox', { name: /完整数据显示/u })).toBeTruthy();
   });
 
   it('loads every actual course-number band and stores numeric sorted V3 values', async () => {
@@ -270,5 +356,75 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     if (!(form instanceof HTMLFormElement)) throw new Error('Expected native filter form.');
     fireEvent.submit(form);
     expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('FilterPanel Core codes are case-insensitive', () => {
+  const coreState = (codes: readonly string[]): FilterStateV1 => ({
+    ...createNeutralFilterState('72026'),
+    campuses: ['NB'],
+    core: { codes: [...codes], mode: 'ANY' },
+  });
+  const readCodes = () =>
+    (JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1).core.codes;
+  const AHO_LABEL = 'AHo · Arts and Humanities (o)';
+
+  it('renders a persisted uppercase code as checked, compatible, and labelled from the dictionary', () => {
+    render(<Harness discovery={CORE_DISCOVERY} initial={coreState(['AHO'])} />);
+    const group = screen.getByRole('group', { name: 'Published Core codes' });
+    const aho = within(group).getByRole('checkbox', { name: AHO_LABEL });
+    expect((aho as HTMLInputElement).checked).toBe(true);
+    expect((within(group).getByRole('checkbox', { name: /^WCd/u }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByText('Saved incompatible Core codes')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Remove incompatible Core code/u })).toBeNull();
+    const chip = document.querySelector('[data-filter-chip="FLT-C08"]')?.textContent ?? '';
+    expect(chip).toContain(AHO_LABEL);
+    expect(chip).not.toMatch(/AHO/u);
+    expect(readCodes()).toEqual(['AHO']);
+  });
+
+  it('toggling a checked dictionary code off removes the persisted uppercase value', () => {
+    render(<Harness discovery={CORE_DISCOVERY} initial={coreState(['AHO', 'WCD'])} />);
+    const group = screen.getByRole('group', { name: 'Published Core codes' });
+    fireEvent.click(within(group).getByRole('checkbox', { name: AHO_LABEL }));
+    expect(readCodes()).toEqual(['WCD']);
+    expect((within(group).getByRole('checkbox', { name: AHO_LABEL }) as HTMLInputElement).checked).toBe(false);
+    expect(document.querySelector('[data-filter-chip="FLT-C08"]')?.textContent).not.toContain('AHo');
+  });
+
+  it('toggling a dictionary code on stores exactly one canonical uppercase value', () => {
+    render(<Harness discovery={CORE_DISCOVERY} initial={coreState([])} />);
+    const group = screen.getByRole('group', { name: 'Published Core codes' });
+    fireEvent.click(within(group).getByRole('checkbox', { name: AHO_LABEL }));
+    expect(readCodes()).toEqual(['AHO']);
+    fireEvent.click(within(group).getByRole('checkbox', { name: /^WCd/u }));
+    expect(readCodes()).toEqual(['AHO', 'WCD']);
+    expect((within(group).getByRole('checkbox', { name: AHO_LABEL }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByText('Saved incompatible Core codes')).toBeNull();
+  });
+
+  it('collapses legacy mixed-case duplicates instead of storing AHo and AHO side by side', () => {
+    render(<Harness discovery={CORE_DISCOVERY} initial={coreState(['AHo', 'AHO', 'QQ'])} />);
+    const group = screen.getByRole('group', { name: 'Published Core codes' });
+    const aho = within(group).getByRole('checkbox', { name: AHO_LABEL });
+    expect((aho as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByText('Saved incompatible Core codes')).toBeNull();
+    const chip = document.querySelector('[data-filter-chip="FLT-C08"]')?.textContent ?? '';
+    expect(chip.match(/Arts and Humanities/gu)).toHaveLength(1);
+    fireEvent.click(aho);
+    expect(readCodes()).toEqual(['QQ']);
+    fireEvent.click(within(group).getByRole('checkbox', { name: AHO_LABEL }));
+    expect(readCodes()).toEqual(['QQ', 'AHO']);
+  });
+
+  it('detects incompatible codes by canonical form and removes every case variant at once', () => {
+    render(<Harness discovery={CORE_DISCOVERY} initial={coreState(['AHO', 'zzq', 'ZZQ'])} />);
+    expect(screen.getByText('Saved incompatible Core codes')).toBeTruthy();
+    const removeButtons = screen.getAllByRole('button', { name: /Remove incompatible Core code/u });
+    expect(removeButtons).toHaveLength(1);
+    expect(removeButtons[0]?.getAttribute('aria-label')).toBe('Remove incompatible Core code zzq');
+    fireEvent.click(removeButtons[0] as HTMLElement);
+    expect(readCodes()).toEqual(['AHO']);
+    expect(screen.queryByText('Saved incompatible Core codes')).toBeNull();
   });
 });

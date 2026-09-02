@@ -28,6 +28,8 @@ interface SearchSessionState {
   readonly lastSubmittedRequest: CourseQueryRequestV1 | null;
   readonly lastSuccessfulRequest: CourseQueryRequestV1 | null;
   readonly lastSuccessfulResponse: CourseQueryResponseV1 | null;
+  /** True once the user changed or applied the scope; blocks a later stored-scope adoption. */
+  readonly scopeTouched: boolean;
 }
 
 type SearchSessionAction =
@@ -75,6 +77,7 @@ const INITIAL_SEARCH_SESSION: SearchSessionState = {
   lastSubmittedRequest: null,
   lastSuccessfulRequest: null,
   lastSuccessfulResponse: null,
+  scopeTouched: false,
 };
 
 function requestMatchesScope(
@@ -100,9 +103,31 @@ function reduceSearchSession(
         && state.candidateScope?.term === null
         && action.candidate.term !== null
       ) {
+        // Existing upgrade path: the term window arrived after the first
+        // initialisation. It may now also carry a stored applied scope, but
+        // never over a scope the user already touched.
+        const applied = state.scopeTouched ? null : action.applied;
         return {
           ...state,
-          candidateScope: action.candidate,
+          appliedScope: applied,
+          candidateScope: applied ?? action.candidate,
+          draftFilters: action.filters,
+        };
+      }
+      if (
+        state.appliedScope === null
+        && action.applied !== null
+        && !state.draftWasEdited
+        && !state.scopeTouched
+        && state.lastSubmittedRequest === null
+      ) {
+        // Stored scope became ready later (its targets finished loading) while
+        // the user has not touched the scope or the draft. Unlike APPLY_SCOPE
+        // this never clears result state: nothing has been submitted yet.
+        return {
+          ...state,
+          appliedScope: action.applied,
+          candidateScope: action.applied,
           draftFilters: action.filters,
         };
       }
@@ -116,7 +141,7 @@ function reduceSearchSession(
     };
   }
   if (action.type === 'SET_CANDIDATE_SCOPE') {
-    return { ...state, candidateScope: action.scope };
+    return { ...state, candidateScope: action.scope, scopeTouched: true };
   }
   if (action.type === 'APPLY_SCOPE') {
     return {
@@ -129,6 +154,7 @@ function reduceSearchSession(
       lastSubmittedRequest: null,
       lastSuccessfulRequest: null,
       lastSuccessfulResponse: null,
+      scopeTouched: true,
     };
   }
   if (action.type === 'SET_DRAFT') {

@@ -46,7 +46,7 @@ function variant(
   return {
     key: { fingerprint, group: GROUP_KEY },
     title: known(title),
-    expandedTitle: known(`${title} — expanded`),
+    expandedTitle: known(title),
     description: known(`${title} catalog description`),
     notes: known('Department note'),
     subjectGroupNotes: known('Group note'),
@@ -220,11 +220,71 @@ describe('typed search result and detail views', () => {
       />,
     );
 
-    const variantFacts = screen.getAllByLabelText('Variant-defining fields');
-    expect(within(variantFacts[0]!).getByText('3')).toBeTruthy();
-    expect(within(variantFacts[1]!).getByText('1.5')).toBeTruthy();
+    const variantFacts = screen.getAllByLabelText('Offering-defining fields');
+    expect(within(variantFacts[0]!).getByText('3 credits')).toBeTruthy();
+    expect(within(variantFacts[1]!).getByText('1.5 credits')).toBeTruthy();
     expect(screen.queryByText('3_0')).toBeNull();
     expect(screen.queryByText('1_5')).toBeNull();
+  });
+
+  it('leads with the course name, keeps the code as quiet meta, and never prints a fingerprint', () => {
+    const view = render(
+      <CourseResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={{
+          ...COURSE_RESPONSE,
+          items: [{
+            ...COURSE_RESPONSE.items[0]!,
+            group: { key: GROUP_KEY, variantKeys: [FIRST_VARIANT.key] },
+            variants: [{
+              ...COURSE_RESPONSE.items[0]!.variants[0]!,
+              variant: {
+                ...FIRST_VARIANT,
+                expandedTitle: known('Introduction to Data Structures'),
+                supplementCode: known(''),
+              },
+            }],
+          }],
+        }}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+    );
+
+    // The expanded title is the more informative name, so it becomes the headline.
+    const heading = screen.getByRole('heading', { name: 'Introduction to Data Structures' });
+    expect(heading.tagName).toBe('H2');
+    expect(heading.classList.contains('search-results__group-title')).toBe(true);
+    const identity = heading.parentElement!.querySelector('.search-results__identity')!;
+    expect(identity.textContent).toContain('01:198:211');
+    expect(identity.textContent).toContain('4.0 credits');
+    expect(identity.textContent).toContain('Computer Science');
+    expect(identity.textContent).toContain('Undergraduate');
+    expect(identity.textContent).toContain('Core QQ');
+    // An empty supplement code never renders a label with nothing after it.
+    expect(identity.textContent).not.toContain('Supplement');
+    // A single offering is not disclosed as a variant set, and no hash reaches the DOM.
+    expect(view.container.querySelector('.search-results__variant')).toBeNull();
+    expect(view.container.innerHTML).not.toContain('lecture');
+    expect(screen.queryByText(/MATCH/u)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Course detail' })).toBeTruthy();
+  });
+
+  it('discloses several genuine offerings by count and label instead of by fingerprint', () => {
+    render(
+      <CourseResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={COURSE_RESPONSE}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+    );
+
+    expect(screen.getByText('2 offerings')).toBeTruthy();
+    // Offering 1 carries the card's own name, so it shows its label rather than repeating it.
+    expect(screen.getByRole('heading', { name: 'Offering 1' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Data Structures Honors' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: 'Data Structures' }).length).toBe(1);
   });
 
   it('defensively removes NO_MATCH variants and Sections from search responses', () => {
@@ -323,10 +383,16 @@ describe('typed search result and detail views', () => {
     fireEvent(details, new Event('toggle'));
 
     expect(screen.getByText('Hide 1 Sections')).toBeTruthy();
-    expect(view.container.querySelector('[data-section-index="12345"]')).not.toBeNull();
-    expect(screen.getByText('Live OPEN')).toBeTruthy();
+    const row = view.container.querySelector<HTMLElement>('[data-section-index="12345"]')!;
+    expect(row).not.toBeNull();
+    expect(row.querySelector('.search-results__section-title')?.textContent).toBe('12345');
+    expect(within(row).getByText('Open').classList.contains('search-results__badge--open')).toBe(true);
     expect(screen.getByRole('link', { name: 'Open section' }).getAttribute('href')).toBe('/sections/12345');
-    expect(screen.getByText('Occurrences · 1')).toBeTruthy();
+    expect(within(row).getByText('Mon Wed · 10:20–11:40 · HLL 116')).toBeTruthy();
+    expect(within(row).getByText('Section 01')).toBeTruthy();
+    // A plain match prints no badge at all.
+    expect(row.querySelector('.search-results__badge--match')).toBeNull();
+    expect(row.querySelector('.search-results__note')).toBeNull();
   });
 
   it('accepts a session-controlled Section disclosure after the result view remounts', () => {
@@ -370,8 +436,8 @@ describe('typed search result and detail views', () => {
     expect(view.container.querySelector('[data-section-index="12345"]')).not.toBeNull();
   });
 
-  it('keeps course variants explicit and exposes section evidence, live freshness, and uncertainty', () => {
-    render(
+  it('keeps course offerings explicit and reports uncertainty as one quiet warn line', () => {
+    const view = render(
       <CourseResultsView
         onCourseDetail={() => undefined}
         onPageChange={() => undefined}
@@ -380,27 +446,88 @@ describe('typed search result and detail views', () => {
       />,
     );
 
-    expect(screen.getByRole('heading', { name: '01:198:211' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Data Structures' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Data Structures Honors' })).toBeTruthy();
-    const variantFacts = screen.getAllByLabelText('Variant-defining fields');
-    expect(within(variantFacts[0]!).getByText('4.0')).toBeTruthy();
-    expect(within(variantFacts[0]!).getByText('A')).toBeTruthy();
-    expect(within(variantFacts[1]!).getByText('3.0')).toBeTruthy();
-    expect(within(variantFacts[1]!).getByText('H')).toBeTruthy();
-    expect(screen.getAllByText('MATCH').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('UNCERTAIN').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Live OPEN')).toBeNull();
+    const variantFacts = screen.getAllByLabelText('Offering-defining fields');
+    expect(within(variantFacts[0]!).getByText('4.0 credits')).toBeTruthy();
+    expect(within(variantFacts[0]!).getByText('Supplement A')).toBeTruthy();
+    expect(within(variantFacts[1]!).getByText('3.0 credits')).toBeTruthy();
+    expect(within(variantFacts[1]!).getByText('Supplement H')).toBeTruthy();
+    // Only doubt earns a badge; a plain match earns none.
+    expect(screen.queryByText('MATCH')).toBeNull();
+    expect(screen.getAllByText('Incomplete data').length).toBeGreaterThan(0);
+    expect(view.container.querySelector('.search-results__badge--match')).toBeNull();
     expandCourseSections();
-    expect(screen.getByText('Live OPEN')).toBeTruthy();
-    const freshUntil = new Intl.DateTimeFormat('en-US', {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    }).format(Date.parse('2026-07-15T03:10:00.000Z'));
-    expect(screen.getAllByText(`Fresh until ${freshUntil}`).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/MONDAY, WEDNESDAY · 10:20–11:40 · HLL 116/u).length).toBe(2);
-    expect(screen.getByText('FLT-S06 · MATCH')).toBeTruthy();
-    expect(screen.getByText('instructors: UNKNOWN_VALUE')).toBeTruthy();
+    expect(screen.getAllByText(/Mon Wed · 10:20–11:40 · HLL 116/u).length).toBe(2);
+
+    const uncertainRow = view.container.querySelector<HTMLElement>('[data-section-index="54321"]')!;
+    expect(uncertainRow.getAttribute('data-match-outcome')).toBe('UNCERTAIN');
+    const note = uncertainRow.querySelector('.search-results__note--warn')!;
+    expect(note.tagName).toBe('P');
+    expect(note.textContent).toBe('The value is unknown.');
+    expect(within(uncertainRow).getByText('Unknown')).toBeTruthy();
+  });
+
+  it('states a doubt every Section shares once above the list instead of on every row', () => {
+    // Stale live seat evidence is a target-wide condition: the first seconds
+    // after launch, or a failed Open fetch. Repeating it per row buries the list.
+    const stale = (key: typeof SECTION_KEY): SectionQueryItemV1 => {
+      const item = sectionItem('UNCERTAIN', key);
+      return {
+        ...item,
+        open: { ...item.open, state: 'OPEN', uncertainty: 'SOURCE_UNAVAILABLE' },
+        explanation: {
+          outcome: 'UNCERTAIN',
+          reasons: [{ code: 'SOURCE_UNAVAILABLE', field: 'FLT-S03' }],
+        },
+      };
+    };
+    const response: CourseQueryResponseV1 = {
+      ...COURSE_RESPONSE,
+      items: [{
+        ...COURSE_RESPONSE.items[0]!,
+        variants: COURSE_RESPONSE.items[0]!.variants.map((entry, index) => ({
+          ...entry,
+          explanation: { outcome: 'MATCH', reasons: [] },
+          sections: [stale(index === 0 ? SECTION_KEY : SECOND_SECTION_KEY)],
+        })),
+      }],
+    };
+
+    const view = render(
+      <CourseResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={response}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+    );
+
+    const shared = screen.getByText(/Live seat data is not current/u);
+    expect(shared.textContent).toContain('The source data is unavailable.');
+    expandCourseSections();
+    for (const index of ['12345', '54321']) {
+      const row = view.container.querySelector<HTMLElement>(`[data-section-index="${index}"]`)!;
+      expect(row.querySelector('.search-results__note--warn')).toBeNull();
+      expect(within(row).queryByText('Incomplete data')).toBeNull();
+    }
+  });
+
+  it('keeps per-row doubt when the Sections do not all share it', () => {
+    // COURSE_RESPONSE mixes a certain Section with an uncertain one, so nothing
+    // is hoisted and the uncertain row keeps its own note.
+    const view = render(
+      <CourseResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={COURSE_RESPONSE}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+    );
+    expect(screen.queryByText(/Live seat data is not current/u)).toBeNull();
+    expandCourseSections();
+    const uncertainRow = view.container.querySelector<HTMLElement>('[data-section-index="54321"]')!;
+    expect(uncertainRow.querySelector('.search-results__note--warn')).not.toBeNull();
   });
 
   it('translates Chinese result chrome while preserving Rutgers course and Section data', () => {
@@ -415,11 +542,16 @@ describe('typed search result and detail views', () => {
     );
 
     expect(screen.getByRole('heading', { name: '课程结果' })).toBeTruthy();
+    expect(screen.getByText('2 个开课版本')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '版本 1' })).toBeTruthy();
     expandCourseSections('显示 1 个课节');
     expect(screen.getAllByRole('link', { name: '打开课节' }).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Data Structures' })).toBeTruthy();
-    expect(screen.getByText('实时状态：OPEN')).toBeTruthy();
-    expect(screen.getAllByText(/MONDAY, WEDNESDAY · 10:20–11:40 · HLL 116/u).length).toBe(2);
+    expect(screen.getByText('开放')).toBeTruthy();
+    expect(screen.getAllByText(/周一 周三 · 10:20–11:40 · HLL 116/u).length).toBe(2);
+    // No English chrome leaks into the Chinese UI.
+    expect(screen.queryByText(/MATCH|UNCERTAIN|MONDAY/u)).toBeNull();
+    expect(screen.getAllByText('数据不完整').length).toBeGreaterThan(0);
   });
 
   it('keeps a direct Section URL, delegates unmodified primary navigation, and pages with one-based callbacks', () => {
@@ -495,7 +627,9 @@ describe('typed search result and detail views', () => {
       />,
     );
 
-    expect(screen.getByRole('heading', { name: /01:198:211 · Data Structures/u })).toBeTruthy();
+    const heading = screen.getByRole('heading', { name: 'Data Structures' });
+    expect(heading.parentElement?.querySelector('.search-results__identity')?.textContent)
+      .toContain('01:198:211');
     fireEvent.click(screen.getByRole('button', { name: 'Course detail' }));
     expect(detail).toHaveBeenCalledWith(GROUP_KEY);
   });

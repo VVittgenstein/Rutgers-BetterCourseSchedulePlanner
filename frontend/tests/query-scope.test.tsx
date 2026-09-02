@@ -226,6 +226,56 @@ function SessionProbe() {
   );
 }
 
+const STORED_SCOPE: SearchScope = { term: '72026', campuses: ['NB'] };
+const STORED_FILTERS = { ...createNeutralFilterState('72026'), campuses: ['NB'], keywords: ['data'] };
+const OTHER_SCOPE: SearchScope = { term: '72026', campuses: ['NK'] };
+
+/** Drives INITIALIZE_SCOPE the way SearchWorkspace does on every status poll:
+ * first with no applied scope, later with the stored scope once it is ready. */
+function AdoptionProbe({ initialTerm = '72026' }: { readonly initialTerm?: string | null }) {
+  const session = useSearchSession();
+  useEffect(() => {
+    session.initializeScope(
+      { term: initialTerm, campuses: [] },
+      null,
+      { ...createNeutralFilterState(initialTerm), keywords: ['data'] },
+    );
+  }, [initialTerm, session.initializeScope]);
+  return (
+    <>
+      <output data-testid="session-candidate">{JSON.stringify(session.state.candidateScope)}</output>
+      <output data-testid="session-applied">{JSON.stringify(session.state.appliedScope)}</output>
+      <output data-testid="session-draft-campuses">
+        {JSON.stringify(session.state.draftFilters?.campuses ?? null)}
+      </output>
+      <button
+        onClick={() => session.initializeScope(STORED_SCOPE, STORED_SCOPE, STORED_FILTERS)}
+        type="button"
+      >Adopt stored scope</button>
+      <button
+        onClick={() => session.initializeScope(OTHER_SCOPE, OTHER_SCOPE, { ...STORED_FILTERS, campuses: ['NK'] })}
+        type="button"
+      >Adopt other scope</button>
+      <button
+        onClick={() => session.initializeScope({ term: '72026', campuses: [] }, null, STORED_FILTERS)}
+        type="button"
+      >Poll without applied scope</button>
+      <button
+        onClick={() => session.setCandidateScope({ term: '72026', campuses: ['NK'] })}
+        type="button"
+      >Change candidate</button>
+      <button
+        onClick={() => session.setDraftFilters({ ...createNeutralFilterState('72026'), levels: ['U'] }, true)}
+        type="button"
+      >Edit draft</button>
+      <button
+        onClick={() => session.applyScope(OTHER_SCOPE, { ...createNeutralFilterState('72026'), campuses: ['NK'] })}
+        type="button"
+      >Apply other scope</button>
+    </>
+  );
+}
+
 const staleRequest: CourseQueryRequestV1 = {
   filters: {
     contractVersion: 3,
@@ -562,6 +612,93 @@ describe('RC3 query scope contract', () => {
     );
   });
 
+  it('adopts a stored scope once when it becomes ready and ignores every later initialisation', () => {
+    render(
+      <SearchSessionProvider>
+        <AdoptionProbe />
+      </SearchSessionProvider>,
+    );
+    expect(screen.getByTestId('session-applied').textContent).toBe('null');
+    fireEvent.click(screen.getByRole('button', { name: 'Poll without applied scope' }));
+    expect(screen.getByTestId('session-applied').textContent).toBe('null');
+    expect(screen.getByTestId('session-draft-campuses').textContent).toBe('[]');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt stored scope' }));
+    expect(screen.getByTestId('session-applied').textContent).toBe(JSON.stringify(STORED_SCOPE));
+    expect(screen.getByTestId('session-candidate').textContent).toBe(JSON.stringify(STORED_SCOPE));
+    expect(screen.getByTestId('session-draft-campuses').textContent).toBe('["NB"]');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt other scope' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Poll without applied scope' }));
+    expect(screen.getByTestId('session-applied').textContent).toBe(JSON.stringify(STORED_SCOPE));
+    expect(screen.getByTestId('session-candidate').textContent).toBe(JSON.stringify(STORED_SCOPE));
+  });
+
+  it('never adopts a stored scope after the user changed the candidate', () => {
+    render(
+      <SearchSessionProvider>
+        <AdoptionProbe />
+      </SearchSessionProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Change candidate' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt stored scope' }));
+    expect(screen.getByTestId('session-applied').textContent).toBe('null');
+    expect(screen.getByTestId('session-candidate').textContent).toBe(
+      JSON.stringify({ term: '72026', campuses: ['NK'] }),
+    );
+  });
+
+  it('never adopts a stored scope after the user edited the draft', () => {
+    render(
+      <SearchSessionProvider>
+        <AdoptionProbe />
+      </SearchSessionProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt stored scope' }));
+    expect(screen.getByTestId('session-applied').textContent).toBe('null');
+    expect(screen.getByTestId('session-draft-campuses').textContent).toBe('[]');
+  });
+
+  it('never resurrects a stored scope after an explicit Apply', () => {
+    render(
+      <SearchSessionProvider>
+        <AdoptionProbe />
+      </SearchSessionProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply other scope' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt stored scope' }));
+    expect(screen.getByTestId('session-applied').textContent).toBe(JSON.stringify(OTHER_SCOPE));
+    expect(screen.getByTestId('session-candidate').textContent).toBe(JSON.stringify(OTHER_SCOPE));
+  });
+
+  it('carries a stored applied scope through the null-term upgrade unless the candidate was touched', () => {
+    const first = render(
+      <SearchSessionProvider>
+        <AdoptionProbe initialTerm={null} />
+      </SearchSessionProvider>,
+    );
+    expect(screen.getByTestId('session-candidate').textContent).toBe(
+      JSON.stringify({ term: null, campuses: [] }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt stored scope' }));
+    expect(screen.getByTestId('session-applied').textContent).toBe(JSON.stringify(STORED_SCOPE));
+    expect(screen.getByTestId('session-candidate').textContent).toBe(JSON.stringify(STORED_SCOPE));
+    first.unmount();
+
+    render(
+      <SearchSessionProvider>
+        <AdoptionProbe initialTerm={null} />
+      </SearchSessionProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Change candidate' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Poll without applied scope' }));
+    expect(screen.getByTestId('session-applied').textContent).toBe('null');
+    expect(screen.getByTestId('session-candidate').textContent).toBe(
+      JSON.stringify({ term: '72026', campuses: ['NK'] }),
+    );
+  });
+
   it('rejects a late response from the previously applied scope', () => {
     render(
       <SearchSessionProvider>
@@ -611,8 +748,14 @@ describe('RC3 query scope contract', () => {
     expect((nk as HTMLInputElement).disabled).toBe(true);
     expect((cm as HTMLInputElement).disabled).toBe(false);
     expect(screen.getByText(/Refresh failed; retry scheduled/u)).toBeTruthy();
-    expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).toContain('CATALOG_PROCESS');
-    expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).toContain('2026-07-17T00:01:00Z');
+    // The stage enum reaches the reader as a translated phrase; the raw code
+    // stays available to tests and styling on data-stage.
+    expect(document.querySelector('[data-scope-cell="campus-NK"] [data-stage="CATALOG_PROCESS"]')?.textContent)
+      .toContain('processing the course catalogue');
+    expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).not.toContain('CATALOG_PROCESS');
+    expect(document.querySelector('[data-scope-cell="campus-NK"] time')?.getAttribute('datetime'))
+      .toBe('2026-07-17T00:01:00Z');
+    expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).not.toContain('2026-07-17T00:01:00Z');
     expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).toContain('RUTGERS_503');
     expect(document.querySelector('[data-scope-cell="campus-CM"]')?.textContent).toContain(
       'The last complete data remains available',
@@ -719,8 +862,10 @@ describe('RC3 query scope contract', () => {
       />,
     );
     expect((screen.getByRole('button', { name: 'Pull' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(document.querySelector('[data-scope-cell="campus-NB"]')?.textContent).toContain('CATALOG_FETCH');
-    expect(document.querySelector('[data-scope-cell="campus-NK"]')?.textContent).toContain('OPEN_FETCH');
+    expect(document.querySelector('[data-scope-cell="campus-NB"] [data-stage="CATALOG_FETCH"]')?.textContent)
+      .toContain('downloading the course catalogue');
+    expect(document.querySelector('[data-scope-cell="campus-NK"] [data-stage="OPEN_FETCH"]')?.textContent)
+      .toContain('reading open-seat status');
     expect(document.querySelector('[data-scope-cell="campus-CM"]')?.textContent).toContain('TERMINAL_PARSE');
   });
 

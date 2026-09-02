@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -8,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { isMessageKey } from '../../i18n/contract';
+import { isMessageKey, type MessageKey } from '../../i18n/contract';
 import {
   filterOptionMessageKey,
   filterSerializationIssueMessageKeys,
@@ -29,6 +30,7 @@ import type {
   WeekdayV1,
 } from '../../product';
 import {
+  canonicalCoreCode,
   createNeutralFilterState,
   type FilterStateV1,
 } from '../../product';
@@ -84,6 +86,29 @@ const SYNCHRONICITIES = [
   'ASYNC',
   'MIXED',
 ] as const satisfies FilterStateV1['synchronicities'];
+const SYNCHRONICITY_HELP: Readonly<Record<(typeof SYNCHRONICITIES)[number], MessageKey>> = {
+  SYNC: 'filter.option_help.sync',
+  ASYNC: 'filter.option_help.async',
+  MIXED: 'filter.option_help.mixed',
+};
+
+/** Spec v2 section 6: the 16 rows are shown as four contiguous groups so the
+ * ordinals 03-18 stay ascending. Unknown stable ids fall into the last group. */
+const FILTER_GROUPS: readonly {
+  readonly key: 'course' | 'requirements' | 'sections' | 'time-place';
+  readonly stableIds: readonly string[];
+  readonly titleKey: MessageKey;
+}[] = [
+  { key: 'course', stableIds: ['FLT-C03', 'FLT-C04', 'FLT-C05', 'FLT-C06', 'FLT-C07'], titleKey: 'filter.group.course' },
+  { key: 'requirements', stableIds: ['FLT-C08', 'FLT-C09'], titleKey: 'filter.group.requirements' },
+  { key: 'sections', stableIds: ['FLT-S01', 'FLT-S03', 'FLT-S04a', 'FLT-S04b', 'FLT-S05'], titleKey: 'filter.group.sections' },
+  { key: 'time-place', stableIds: ['FLT-S06', 'FLT-S07', 'FLT-S09', 'FLT-S10'], titleKey: 'filter.group.time_place' },
+];
+
+function groupIndexFor(stableId: string): number {
+  const index = FILTER_GROUPS.findIndex((group) => group.stableIds.includes(stableId));
+  return index === -1 ? FILTER_GROUPS.length - 1 : index;
+}
 
 const ACTIVE_REQUEST_FIELDS = new Set<keyof FilterStateV1>([
   'term', 'campuses', 'subjects', 'keywords', 'courseNumberBands', 'levels', 'credits',
@@ -108,6 +133,28 @@ function unique<T>(values: readonly T[]): T[] {
 
 function toggleValue<T extends string>(values: readonly T[], value: T, checked: boolean): T[] {
   return checked ? unique([...values, value]) : values.filter((candidate) => candidate !== value);
+}
+
+/** Core codes are case-insensitive: the dictionary publishes `AHo`, the request
+ * form stores `AHO`. Toggling on stores exactly one canonical value and drops
+ * every other case variant; toggling off drops every case variant. */
+function toggleCoreCode(codes: readonly string[], code: string, checked: boolean): string[] {
+  const canonical = canonicalCoreCode(code);
+  const rest = codes.filter((candidate) => canonicalCoreCode(candidate) !== canonical);
+  return checked ? [...rest, canonical] : rest;
+}
+
+function hasCoreCode(codes: readonly string[], code: string): boolean {
+  const canonical = canonicalCoreCode(code);
+  return codes.some((candidate) => canonicalCoreCode(candidate) === canonical);
+}
+
+/** Dictionary label for a stored Core code (any case), or the stored code
+ * itself when the dictionary does not know it. */
+type CoreLabels = ReadonlyMap<string, string>;
+
+function coreCodeLabel(code: string, labels: CoreLabels): string {
+  return labels.get(canonicalCoreCode(code)) ?? code;
 }
 
 function formatCredit(value: number | null): string {
@@ -143,6 +190,7 @@ function fieldSummary(
   field: FilterFieldSchemaV1,
   state: FilterStateV1,
   i18n: BcspI18nRuntime,
+  coreLabels: CoreLabels,
 ): string | null {
   switch (field.requestField) {
     case 'term': return state.term;
@@ -164,7 +212,7 @@ function fieldSummary(
       return `${minimum}–${maximum}`;
     }
     case 'core': return state.core.codes.length > 0
-      ? `${state.core.mode}: ${state.core.codes.join(', ')}`
+      ? `${state.core.mode}: ${unique(state.core.codes.map((code) => coreCodeLabel(code, coreLabels))).join(', ')}`
       : null;
     case 'prerequisite': return state.prerequisite === 'ANY' ? null : [
       optionText(state.prerequisite, i18n),
@@ -281,6 +329,7 @@ function DictionaryPicker({
   onChange,
   searchable = false,
   values,
+  variant,
 }: {
   readonly disabled: boolean;
   readonly field: FilterOptionsFieldV2;
@@ -289,6 +338,8 @@ function DictionaryPicker({
   readonly onChange: (values: readonly string[]) => void;
   readonly searchable?: boolean;
   readonly values: readonly string[];
+  /** Short 2-3 option lists render as choice pills that fill their row. */
+  readonly variant?: 'pills' | undefined;
 }) {
   const i18n = useBcspI18n();
   const inputId = useId();
@@ -433,7 +484,11 @@ function DictionaryPicker({
           </div>
         ) : null}
         {!loading && !failed && !searchable ? (
-          <div className="filter-panel__checks" role="group" aria-label={label}>
+          <div
+            className={variant === 'pills' ? 'filter-panel__checks filter-panel__checks--pills' : 'filter-panel__checks'}
+            role="group"
+            aria-label={label}
+          >
             {options.map((option) => (
               <label className="filter-panel__check" key={option.value}>
                 <input
@@ -481,29 +536,50 @@ function CheckboxSet<T extends string>({
   values,
   onChange,
   disabled,
+  help,
+  variant,
 }: {
   readonly label: string;
   readonly options: readonly T[];
   readonly values: readonly T[];
   readonly onChange: (values: readonly T[]) => void;
   readonly disabled: boolean;
+  /** Optional per-option explanation rendered under the option label. */
+  readonly help?: Partial<Record<T, MessageKey>> | undefined;
+  /** Short 2-3 option lists render as choice pills that fill their row. */
+  readonly variant?: 'pills' | undefined;
 }) {
   const i18n = useBcspI18n();
   return (
-    <div className="filter-panel__checks" role="group" aria-label={label}>
-      {options.map((option) => (
-        <label className="filter-panel__check" key={option}>
-          <input
-            aria-label={optionText(option, i18n)}
-            type="checkbox"
-            value={option}
-            checked={values.includes(option)}
-            disabled={disabled}
-            onChange={(event) => onChange(toggleValue(values, option, event.target.checked))}
-          />
-          <span>{optionText(option, i18n)}</span>
-        </label>
-      ))}
+    <div
+      className={variant === 'pills' ? 'filter-panel__checks filter-panel__checks--pills' : 'filter-panel__checks'}
+      role="group"
+      aria-label={label}
+    >
+      {options.map((option) => {
+        const helpKey = help?.[option];
+        return (
+          <label
+            className={helpKey === undefined
+              ? 'filter-panel__check'
+              : 'filter-panel__check filter-panel__check--explained'}
+            key={option}
+          >
+            <input
+              aria-label={optionText(option, i18n)}
+              type="checkbox"
+              value={option}
+              checked={values.includes(option)}
+              disabled={disabled}
+              onChange={(event) => onChange(toggleValue(values, option, event.target.checked))}
+            />
+            <span>
+              {optionText(option, i18n)}
+              {helpKey === undefined ? null : <small>{i18n.t(helpKey)}</small>}
+            </span>
+          </label>
+        );
+      })}
     </div>
   );
 }
@@ -594,10 +670,13 @@ function PrerequisiteControl({
 function IncompleteToggle({
   checked,
   disabled,
+  helpKey = 'filter.include_incomplete_help',
   onChange,
 }: {
   readonly checked: boolean;
   readonly disabled: boolean;
+  /** Field-specific explanation; defaults to the generic incomplete-data help. */
+  readonly helpKey?: MessageKey;
   readonly onChange: (checked: boolean) => void;
 }) {
   const i18n = useBcspI18n();
@@ -611,7 +690,7 @@ function IncompleteToggle({
       />
       <span>
         <strong>{i18n.t('filter.include_incomplete')}</strong>
-        <small>{i18n.t('filter.include_incomplete_help')}</small>
+        <small>{i18n.t(helpKey)}</small>
       </span>
     </label>
   );
@@ -651,14 +730,16 @@ function AvailabilityControl({
       <div className="filter-panel__availability-editor">
         <label>
           <span className="filter-panel__sub-label">{i18n.t('filter.availability.weekday')}</span>
-          <select
-            className="filter-panel__select"
-            value={weekday}
-            disabled={disabled}
-            onChange={(event) => setWeekday(event.target.value as WeekdayV1)}
-          >
-            {WEEKDAYS.map((day) => <option key={day} value={day}>{optionText(day, i18n)}</option>)}
-          </select>
+          <span className="filter-panel__select-control">
+            <select
+              className="filter-panel__select"
+              value={weekday}
+              disabled={disabled}
+              onChange={(event) => setWeekday(event.target.value as WeekdayV1)}
+            >
+              {WEEKDAYS.map((day) => <option key={day} value={day}>{optionText(day, i18n)}</option>)}
+            </select>
+          </span>
         </label>
         <label>
           <span className="filter-panel__sub-label">{i18n.t('filter.availability.start')}</span>
@@ -715,11 +796,16 @@ function AvailabilityControl({
 }
 
 export const FILTER_PANEL_CSS = String.raw`
+/* Quiet Catalog filter rail (spec v2 section 6). Invariants: no overflow on
+   .filter-panel, no transition/keyframes here (rail motion lives in
+   SEARCH_CONTROL_MOTION_CSS), inner scroll regions hide their scrollbar until
+   hover / focus-within (spec 11.2), option groups fill their row (spec 11.1). */
 .filter-panel {
+  --bcsp-rail-strip-h: 3.25rem;
   display: grid;
   gap: 0;
-  border: 1px solid var(--bcsp-line);
-  background: var(--bcsp-paper);
+  min-width: 0;
+  background: var(--bcsp-paper-raised);
 }
 
 .filter-panel__gate {
@@ -730,197 +816,973 @@ export const FILTER_PANEL_CSS = String.raw`
   border: 0;
 }
 
-.filter-panel__gate:disabled {
-  cursor: not-allowed;
+.filter-panel__gate:disabled { cursor: not-allowed; }
+
+/* Ordinals stay in the DOM for tests and screen readers; the scope tag is gone. */
+.filter-panel__ordinal {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-.filter-panel__ordinal,
-.filter-panel__scope,
-.filter-panel__sub-label {
-  font-family: var(--bcsp-font-data);
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
+.filter-panel__scope { display: none; }
 
+.filter-panel .bcsp-field__helper,
+.filter-panel .bcsp-field__error { margin: 0; }
+
+/* ---- Active conditions strip (sticky inside the rail) ---- */
 .filter-panel__active {
+  position: sticky;
+  top: 0;
+  z-index: var(--bcsp-z-rail-sticky);
   display: grid;
-  grid-template-columns: minmax(7rem, auto) minmax(0, 1fr) auto;
-  gap: var(--bcsp-space-2);
-  align-items: start;
-  padding: var(--bcsp-space-3) var(--bcsp-space-4);
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: var(--bcsp-space-1);
+  align-items: center;
+  min-height: var(--bcsp-rail-strip-h);
+  padding: 0.625rem var(--bcsp-space-4);
   border-bottom: 1px solid var(--bcsp-line);
   background: var(--bcsp-paper-raised);
 }
 
-.filter-panel__active-title { margin: 0.3rem 0 0; font-family: var(--bcsp-font-data); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; }
-.filter-panel__chips, .filter-panel__token-list { display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0; margin: 0; list-style: none; }
-.filter-panel__chip, .filter-panel__token { display: inline-grid; min-height: 2.75rem; grid-auto-flow: column; align-items: stretch; border: 1px solid var(--bcsp-line); background: var(--bcsp-paper); font-family: var(--bcsp-font-data); font-size: 0.68rem; }
-.filter-panel__chip-label { display: flex; align-items: center; min-height: 2.75rem; padding: 0.45rem 0.55rem; overflow-wrap: anywhere; }
-.filter-panel__chip-label strong { margin-right: 0.4rem; text-transform: uppercase; }
-.filter-panel__chip button, .filter-panel__token button, .filter-panel__window-list button { min-width: 2.75rem; min-height: 2.75rem; border: 0; border-left: 1px solid var(--bcsp-line); border-radius: 0; color: inherit; background: transparent; cursor: pointer; }
-.filter-panel__chip--target { border-color: var(--bcsp-accent); }
-.filter-panel__chip-pin { padding: 0.45rem; color: var(--bcsp-ink); border-left: 1px solid var(--bcsp-accent); font-weight: 800; }
-.filter-panel__empty { margin: 0.3rem 0 0; color: var(--bcsp-ink-muted); font-size: 0.8rem; }
-
-.filter-panel__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.filter-panel__row { min-width: 0; padding: var(--bcsp-space-3); margin: 0; border: 0; border-bottom: 1px solid var(--bcsp-line); }
-.filter-panel__row[data-filter-error='true'] {
-  outline: 3px solid var(--bcsp-danger, #b42318);
-  outline-offset: -3px;
-  background: color-mix(in srgb, var(--bcsp-danger, #b42318) 7%, var(--bcsp-paper));
-}
-.filter-panel__row:nth-child(odd) { border-right: 1px solid var(--bcsp-line); }
-.filter-panel__row--wide { grid-column: 1 / -1; border-right: 0 !important; }
-.filter-panel__legend { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--bcsp-space-2); align-items: baseline; padding: 0 0 var(--bcsp-space-2); }
-.filter-panel__ordinal { color: var(--bcsp-ink-muted); }
-.filter-panel__label { font-weight: 800; letter-spacing: -0.02em; }
-.filter-panel__scope { color: var(--bcsp-ink-muted); }
-.filter-panel__control { display: grid; gap: var(--bcsp-space-2); }
-.filter-panel__validation-error {
+.filter-panel__active-title {
+  grid-column: 1;
+  grid-row: 1;
   margin: 0;
-  padding: 0.55rem 0.65rem;
-  border-left: 3px solid var(--bcsp-danger, #b42318);
-  color: var(--bcsp-danger, #8f1d14);
-  background: var(--bcsp-paper-raised);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.72rem;
-  font-weight: 700;
-  line-height: 1.45;
+  color: var(--bcsp-ink-muted);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: var(--bcsp-lh-meta);
+  text-transform: none;
 }
 
+.filter-panel__active::after {
+  grid-column: 2;
+  grid-row: 1;
+  display: inline-flex;
+  height: 1.375rem;
+  align-items: center;
+  padding: 0 0.5rem;
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-accent-text);
+  background: var(--bcsp-accent-tint);
+  font-size: var(--bcsp-text-micro);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  content: attr(data-count);
+}
+
+.filter-panel__active[data-count='0']::after { display: none; }
+
+.filter-panel__active > .bcsp-action {
+  grid-column: 4;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.filter-panel__chips,
+.filter-panel__empty {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.filter-panel__empty {
+  margin: 0;
+  color: var(--bcsp-ink-muted);
+  font-size: var(--bcsp-text-body);
+  line-height: var(--bcsp-lh-body);
+}
+
+.filter-panel__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bcsp-space-2);
+  max-height: 6rem;
+  margin: 0;
+  padding: 0 0.5rem 0 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  list-style: none;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: none;
+  scrollbar-gutter: auto;
+}
+
+/* ---- Chips and value tokens ---- */
+.filter-panel__token-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bcsp-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.filter-panel__chip,
+.filter-panel__token {
+  position: relative;
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.25rem 0 0.75rem;
+  border: 0;
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-ink-2);
+  background: var(--bcsp-surface-2);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  line-height: var(--bcsp-lh-meta);
+}
+
+.filter-panel__token { min-height: 1.75rem; }
+
+.filter-panel__chip-label {
+  min-width: 0;
+  padding: 0.25rem 0;
+  overflow-wrap: anywhere;
+}
+
+.filter-panel__chip-label strong {
+  color: var(--bcsp-ink);
+  font-weight: 600;
+  text-transform: none;
+}
+
+.filter-panel__chip-label strong::after { content: ': '; }
+[data-bcsp-locale='zh-CN'] .filter-panel__chip-label strong::after { content: '：'; }
+
+.filter-panel__chip button,
+.filter-panel__token button {
+  position: relative;
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-ink-muted);
+  background: transparent;
+  font-family: var(--bcsp-font-sans);
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.filter-panel__token button {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+/* 44px hit box around the 32px glyph: chips keep 12px gaps, so extensions never overlap. */
+.filter-panel__chip button::before,
+.filter-panel__token button::before,
+.filter-panel__window-list button::before {
+  position: absolute;
+  inset: -0.375rem;
+  content: '';
+}
+
+.filter-panel__chip button:disabled,
+.filter-panel__token button:disabled,
+.filter-panel__window-list button:disabled {
+  color: var(--bcsp-ink-faint);
+  cursor: not-allowed;
+}
+
+.filter-panel__chip--target { background: var(--bcsp-accent-tint); }
+
+.filter-panel__chip-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0 0.5rem 0 0.25rem;
+  color: var(--bcsp-accent-text);
+  font-size: var(--bcsp-text-micro);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.filter-panel__chip-pin::before {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: var(--bcsp-radius-pill);
+  background: currentColor;
+  content: '';
+}
+
+.filter-panel__token samp {
+  padding: 0.25rem 0;
+  font-size: var(--bcsp-text-data);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.filter-panel__token--incompatible {
+  border: 1px solid var(--bcsp-danger-line);
+  color: var(--bcsp-danger);
+  background: var(--bcsp-danger-tint);
+}
+
+/* ---- Four groups with sticky heads ---- */
+.filter-panel__grid {
+  display: grid;
+  gap: var(--bcsp-space-3);
+  padding: 0 0 var(--bcsp-space-1);
+}
+
+.filter-panel__group {
+  display: grid;
+  min-width: 0;
+}
+
+.filter-panel__group-head {
+  position: sticky;
+  top: var(--bcsp-rail-strip-h);
+  z-index: var(--bcsp-z-sticky-sub);
+  display: flex;
+  height: 2.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bcsp-space-2);
+  padding: 0 var(--bcsp-space-4);
+  border-block: 1px solid var(--bcsp-line-soft);
+  background: var(--bcsp-surface-2);
+}
+
+.filter-panel__group-title {
+  margin: 0;
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-subtitle);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: var(--bcsp-lh-subtitle);
+  text-transform: none;
+}
+
+.filter-panel__group-count {
+  display: inline-flex;
+  height: 1.375rem;
+  align-items: center;
+  padding: 0 0.5rem;
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-accent-text);
+  background: var(--bcsp-accent-tint);
+  font-size: var(--bcsp-text-micro);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.filter-panel__group[data-count='0'] .filter-panel__group-count { display: none; }
+
+.filter-panel__group-body {
+  display: grid;
+  min-width: 0;
+  padding: 0 var(--bcsp-space-4) var(--bcsp-space-1);
+}
+
+/* ---- Row anatomy: single column, hairline separated ---- */
+.filter-panel__row {
+  position: relative;
+  min-width: 0;
+  margin: 0;
+  padding: 0.625rem 0 0.875rem;
+  border: 0;
+  border-bottom: 1px solid var(--bcsp-line-soft);
+  scroll-margin-top: calc(var(--bcsp-rail-strip-h) + 3rem);
+}
+
+.filter-panel__group-body > .filter-panel__row:last-child { border-bottom: 0; }
+
+.filter-panel__row[data-filter-error='true'] {
+  margin-inline: -0.75rem;
+  padding-inline: 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--bcsp-danger-tint);
+}
+
+.filter-panel__legend {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: var(--bcsp-space-2);
+  padding: 0 0 var(--bcsp-space-1);
+}
+
+.filter-panel__label {
+  color: var(--bcsp-ink);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-body);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.25rem;
+}
+
+.filter-panel__control {
+  display: grid;
+  gap: var(--bcsp-space-2);
+  min-width: 0;
+}
+
+.filter-panel__validation-error {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: start;
+  margin: 0;
+  color: var(--bcsp-danger);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  font-weight: 400;
+  line-height: var(--bcsp-lh-meta);
+}
+
+.filter-panel__validation-error::before {
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.0625rem;
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-accent-ink);
+  background: var(--bcsp-danger);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  content: '!';
+}
+
+/* ---- Inputs and selects ---- */
 .filter-panel__input,
 .filter-panel__select {
   width: 100%;
-  min-height: 2.75rem;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid var(--bcsp-line);
-  border-radius: 0;
+  height: var(--bcsp-control-h);
+  padding: 0 0.75rem;
+  border: 1px solid var(--bcsp-line-strong);
+  border-radius: var(--bcsp-radius-2);
   color: var(--bcsp-ink);
   background: var(--bcsp-paper-raised);
-  font-family: var(--bcsp-font-data);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-body);
+  line-height: 1.25rem;
 }
 
-.filter-panel__input:disabled, .filter-panel__select:disabled { cursor: not-allowed; opacity: 0.62; }
-.filter-panel__sub-label { display: block; margin-bottom: 0.35rem; color: var(--bcsp-ink-muted); }
-.filter-panel__input-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
-.filter-panel__minor-action { min-height: 2.75rem; padding: 0.55rem 0.75rem; border: 1px solid var(--bcsp-line); border-left: 0; border-radius: 0; color: var(--bcsp-ink); background: var(--bcsp-paper); font-family: var(--bcsp-font-data); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; cursor: pointer; }
-.filter-panel__minor-action:disabled { cursor: not-allowed; opacity: 0.5; }
-.filter-panel__clear-choice { justify-self: start; border-left: 1px solid var(--bcsp-line); }
-.filter-panel__token-control { display: grid; align-content: start; }
-.filter-panel__token-list { margin-top: 0.45rem; }
-.filter-panel__token samp { padding: 0.4rem 0.5rem; overflow-wrap: anywhere; }
-.filter-panel__checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); border-top: 1px solid var(--bcsp-line); border-left: 1px solid var(--bcsp-line); }
-.filter-panel__check { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.55rem; align-items: center; min-height: 2.75rem; padding: 0.55rem; border-right: 1px solid var(--bcsp-line); border-bottom: 1px solid var(--bcsp-line); font-family: var(--bcsp-font-data); font-size: 0.72rem; cursor: pointer; }
-.filter-panel__check input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--bcsp-accent); }
-.filter-panel__check:has(input:focus-visible) { z-index: 1; outline: 3px solid var(--bcsp-focus, var(--bcsp-accent)); outline-offset: -3px; }
-.filter-panel__check:has(input:disabled) { color: var(--bcsp-ink-muted); cursor: not-allowed; }
-.filter-panel__subject-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--bcsp-space-2); align-items: end; }
-.filter-panel__subject-count { min-width: 7rem; padding: 0.8rem 0; color: var(--bcsp-ink-muted); font-family: var(--bcsp-font-data); font-size: 0.7rem; text-align: right; }
+.filter-panel__input::placeholder { color: var(--bcsp-ink-faint); opacity: 1; }
+
+.filter-panel__input:focus-visible,
+.filter-panel__select:focus-visible {
+  border-color: var(--bcsp-focus);
+  outline-offset: 0;
+}
+
+.filter-panel__input:disabled,
+.filter-panel__select:disabled {
+  color: var(--bcsp-ink-muted);
+  background: var(--bcsp-surface-3);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+[data-filter-error='true'] .filter-panel__input,
+.filter-panel__input[aria-invalid='true'] { border-color: var(--bcsp-danger); }
+
+.filter-panel__select-control {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.filter-panel__select {
+  appearance: none;
+  padding-right: 2.25rem;
+}
+
+.filter-panel__select-control::after {
+  position: absolute;
+  top: 50%;
+  right: 0.875rem;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+  content: '';
+}
+
+/* Search-style inputs: the magnifier is drawn on the wrapper, no image assets. */
+.filter-panel__dictionary-input,
+.filter-panel__subject-search > label {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.filter-panel__dictionary-input .filter-panel__input,
+.filter-panel__subject-search .filter-panel__input { padding-left: 2.25rem; }
+
+.filter-panel__dictionary-input::before,
+.filter-panel__subject-search > label::before {
+  position: absolute;
+  bottom: 1.125rem;
+  left: 0.875rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1.5px solid var(--bcsp-ink-muted);
+  border-radius: var(--bcsp-radius-pill);
+  pointer-events: none;
+  content: '';
+}
+
+.filter-panel__dictionary-input::after,
+.filter-panel__subject-search > label::after {
+  position: absolute;
+  bottom: 0.9375rem;
+  left: 1.4375rem;
+  width: 0.3125rem;
+  height: 1.5px;
+  background: var(--bcsp-ink-muted);
+  transform: rotate(45deg);
+  pointer-events: none;
+  content: '';
+}
+
+.filter-panel__sub-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--bcsp-ink-muted);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: var(--bcsp-lh-meta);
+  text-transform: none;
+}
+
+.filter-panel__input-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.filter-panel__input-action .filter-panel__input {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.filter-panel__input-action .filter-panel__minor-action {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.filter-panel__minor-action {
+  display: inline-flex;
+  min-height: var(--bcsp-control-h);
+  align-items: center;
+  justify-content: center;
+  gap: var(--bcsp-space-1);
+  padding: 0 0.75rem;
+  border: 1px solid var(--bcsp-line-strong);
+  border-radius: var(--bcsp-radius-2);
+  color: var(--bcsp-ink);
+  background: var(--bcsp-paper-raised);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-body);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.25rem;
+  text-transform: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.filter-panel__minor-action:disabled {
+  color: var(--bcsp-ink-muted);
+  border-color: var(--bcsp-line);
+  background: var(--bcsp-surface-3);
+  cursor: not-allowed;
+}
+
+.filter-panel__clear-choice {
+  justify-self: start;
+  border-color: transparent;
+  color: var(--bcsp-ink-2);
+  background: transparent;
+}
+
+.filter-panel__token-control {
+  display: grid;
+  gap: var(--bcsp-space-2);
+  align-content: start;
+}
+
+/* ---- Option rows: flex wrap with growing items so every row fills its width ---- */
+.filter-panel__checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bcsp-space-1);
+  min-width: 0;
+}
+
+.filter-panel__check {
+  position: relative;
+  display: flex;
+  flex: 1 1 9rem;
+  min-width: 0;
+  min-height: var(--bcsp-control-h);
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: var(--bcsp-radius-2);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-body);
+  line-height: 1.25rem;
+  cursor: pointer;
+}
+
+.filter-panel__check input {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: none;
+  margin: 0;
+  accent-color: var(--bcsp-accent);
+}
+
+.filter-panel__check > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.filter-panel__check input:checked + span { font-weight: 600; }
+.filter-panel__check:has(input:checked) { background: var(--bcsp-surface-selected); }
+
+.filter-panel__check:has(input:focus-visible) {
+  z-index: 1;
+  outline: 2px solid var(--bcsp-focus);
+  outline-offset: -2px;
+}
+
+.filter-panel__check:has(input:disabled) {
+  color: var(--bcsp-ink-muted);
+  cursor: not-allowed;
+}
+
+.filter-panel__check--explained > span {
+  display: grid;
+  gap: 0.125rem;
+}
+
+.filter-panel__check--explained small {
+  color: var(--bcsp-ink-muted);
+  font-size: var(--bcsp-text-meta);
+  font-weight: 400;
+  line-height: var(--bcsp-lh-meta);
+}
+
+/* Choice pills (fields 06 / 11 / 12 / 13): borderless surface-2 pills, checked -> accent tint. */
+.filter-panel__checks--pills .filter-panel__check {
+  flex: 1 1 7rem;
+  padding: 0.375rem 0.875rem;
+  border: 1px solid transparent;
+  border-radius: var(--bcsp-radius-pill);
+  background: var(--bcsp-surface-2);
+}
+
+.filter-panel__checks--pills .filter-panel__check:has(input:checked) {
+  border-color: var(--bcsp-accent-tint-strong);
+  color: var(--bcsp-ink);
+  background: var(--bcsp-accent-tint);
+}
+
+/* Radio cards (prerequisites): two per row, tinted when chosen. */
+.filter-panel__checks[role='radiogroup'] .filter-panel__check {
+  flex: 1 1 10rem;
+  align-items: flex-start;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--bcsp-line-strong);
+  border-radius: var(--bcsp-radius-3);
+}
+
+.filter-panel__checks[role='radiogroup'] .filter-panel__check input { margin-top: 0.0625rem; }
+
+.filter-panel__checks[role='radiogroup'] .filter-panel__check:has(input:checked) {
+  border-color: var(--bcsp-accent-text);
+  color: var(--bcsp-ink);
+  background: var(--bcsp-accent-tint);
+}
+
+/* Switch-style row ("Complete data display"). */
+.filter-panel__incomplete {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: center;
+  min-height: var(--bcsp-control-h);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--bcsp-radius-2);
+  background: var(--bcsp-surface-2);
+}
+
+.filter-panel__incomplete:has(input:checked) { background: var(--bcsp-surface-selected); }
+
+.filter-panel__incomplete > span {
+  display: grid;
+  gap: 0.125rem;
+}
+
+.filter-panel__incomplete strong {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+}
+
+.filter-panel__incomplete small {
+  color: var(--bcsp-ink-muted);
+  font-size: var(--bcsp-text-meta);
+  line-height: var(--bcsp-lh-meta);
+}
+
+/* ---- Subject / core lists: 44px rows inside a scroll region ---- */
+.filter-panel__subject-picker {
+  display: grid;
+  gap: var(--bcsp-space-2);
+  min-width: 0;
+}
+
+.filter-panel__subject-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--bcsp-space-2);
+  align-items: end;
+}
+
+.filter-panel__subject-count {
+  display: flex;
+  min-height: var(--bcsp-control-h);
+  align-items: center;
+  color: var(--bcsp-ink-muted);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--bcsp-lh-meta);
+  text-align: right;
+}
+
 .filter-panel__subject-list {
-  max-height: clamp(14rem, 42vh, 22rem);
+  max-height: 12rem;
+  padding-right: 0.5rem;
   overflow-x: hidden;
   overflow-y: auto;
-  border-top: 1px solid var(--bcsp-line);
   overscroll-behavior: contain;
-  scrollbar-color: var(--bcsp-ink-muted) var(--bcsp-paper-raised);
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
   touch-action: pan-y;
+  scrollbar-width: none;
+  scrollbar-gutter: auto;
 }
-.filter-panel__subject-list .filter-panel__checks { border-top: 0; }
-.filter-panel__core-picker { display: grid; gap: var(--bcsp-space-2); }
-.filter-panel__dictionary { display: grid; gap: var(--bcsp-space-2); }
-.filter-panel__dictionary-input { display: grid; }
+
+.filter-panel__subject-list .filter-panel__check > span { font-variant-numeric: tabular-nums; }
+
+.filter-panel__core-picker {
+  display: grid;
+  gap: var(--bcsp-space-2);
+  min-width: 0;
+}
+
+.filter-panel__core-picker .filter-panel__subject-list { max-height: 10rem; }
+
+.filter-panel__incompatible {
+  display: grid;
+  gap: var(--bcsp-space-1);
+  padding-top: var(--bcsp-space-1);
+}
+
+/* ---- Dictionary combobox / option lists ---- */
+.filter-panel__dictionary {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.filter-panel__dictionary > * + * { margin-top: var(--bcsp-space-2); }
+
 .filter-panel__dictionary-options {
   display: none;
-  max-height: clamp(14rem, 42vh, 22rem);
+  max-height: min(16rem, 42vh);
+  padding-right: 0.5rem;
   overflow-x: hidden;
   overflow-y: auto;
-  border: 1px solid var(--bcsp-line);
-  background: var(--bcsp-paper-raised);
   overscroll-behavior: contain;
-  scrollbar-color: var(--bcsp-ink-muted) var(--bcsp-paper-raised);
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
   touch-action: pan-y;
+  scrollbar-width: none;
+  scrollbar-gutter: auto;
 }
-.filter-panel__subject-list::-webkit-scrollbar,
-.filter-panel__dictionary-options::-webkit-scrollbar { width: 10px; }
-.filter-panel__subject-list::-webkit-scrollbar-track,
-.filter-panel__dictionary-options::-webkit-scrollbar-track {
-  border-left: 1px solid var(--bcsp-line);
-  background: var(--bcsp-paper-raised);
-}
-.filter-panel__subject-list::-webkit-scrollbar-thumb,
-.filter-panel__dictionary-options::-webkit-scrollbar-thumb {
-  border: 2px solid var(--bcsp-paper-raised);
-  border-radius: 0;
-  background: var(--bcsp-ink-muted);
-}
-.filter-panel__subject-list::-webkit-scrollbar-thumb:hover,
-.filter-panel__dictionary-options::-webkit-scrollbar-thumb:hover { background: var(--bcsp-ink); }
+
 .filter-panel__dictionary-options[data-open='true'] { display: grid; }
-.filter-panel__dictionary-options > .bcsp-field__helper { padding: var(--bcsp-space-2); }
+
+/* The searchable combobox pops over the tokens below it (static vertical position = just under the input). */
+.filter-panel__dictionary-input + .filter-panel__dictionary-options {
+  position: absolute;
+  top: auto;
+  right: 0;
+  left: 0;
+  z-index: var(--bcsp-z-popover);
+  margin-top: 0.25rem;
+  padding: 0.25rem 0.5rem 0.25rem 0.25rem;
+  border: 1px solid var(--bcsp-line);
+  border-radius: var(--bcsp-radius-3);
+  background: var(--bcsp-paper-raised);
+  box-shadow: var(--bcsp-elev-2);
+}
+
+.filter-panel__dictionary-options > .bcsp-field__helper { padding: 0.5rem 0.625rem; }
+
 .filter-panel__dictionary-option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--bcsp-space-2);
-  min-height: 2.75rem;
+  gap: 0.625rem;
+  min-height: var(--bcsp-control-h);
   align-items: center;
-  padding: 0.55rem 0.65rem;
-  border-bottom: 1px solid var(--bcsp-line-soft);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.72rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: var(--bcsp-radius-2);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-body);
+  line-height: 1.25rem;
   cursor: pointer;
 }
-.filter-panel__dictionary-option[aria-selected='true'] {
-  color: var(--bcsp-paper-raised);
-  background: var(--bcsp-ink);
+
+/* The glyph span stays for its text; visually it is a CSS checkbox. */
+.filter-panel__dictionary-option > span:first-child {
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--bcsp-line-strong);
+  border-radius: var(--bcsp-radius-1);
+  color: transparent;
+  background: var(--bcsp-paper-raised);
+  font-size: 0;
+  line-height: 0;
 }
+
+.filter-panel__dictionary-option > span:last-child { overflow-wrap: anywhere; }
+
+.filter-panel__dictionary-option[aria-selected='true'] {
+  color: var(--bcsp-ink);
+  background: var(--bcsp-accent-tint);
+}
+
+.filter-panel__dictionary-option[aria-selected='true'] > span:first-child {
+  border-color: var(--bcsp-accent);
+  background: var(--bcsp-accent);
+}
+
+.filter-panel__dictionary-option[aria-selected='true'] > span:first-child::after {
+  width: 0.25rem;
+  height: 0.5rem;
+  border-right: 2px solid var(--bcsp-accent-ink);
+  border-bottom: 2px solid var(--bcsp-accent-ink);
+  transform: translateY(-1px) rotate(45deg);
+  content: '';
+}
+
 .filter-panel__dictionary-option[data-active='true'] {
-  outline: 2px solid var(--bcsp-accent);
+  outline: 2px solid var(--bcsp-focus);
   outline-offset: -2px;
 }
-.filter-panel__incomplete { border: 1px solid var(--bcsp-line); background: var(--bcsp-paper-raised); }
-.filter-panel__incomplete span { display: grid; gap: 0.2rem; }
-.filter-panel__incomplete small { color: var(--bcsp-ink-muted); font-size: 0.68rem; line-height: 1.4; }
-.filter-panel__incompatible { padding-top: var(--bcsp-space-2); border-top: 1px solid var(--bcsp-line); }
-.filter-panel__token--incompatible { border-color: var(--bcsp-accent); color: var(--bcsp-accent); }
-.filter-panel__credit-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--bcsp-space-2); }
-.filter-panel__availability { display: grid; gap: var(--bcsp-space-2); }
-.filter-panel__availability-editor { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; align-items: end; }
-.filter-panel__availability-add { border-left: 0; }
-.filter-panel__window-list { display: grid; gap: 1px; padding: 1px; margin: 0; list-style: none; background: var(--bcsp-line); }
-.filter-panel__window-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; background: var(--bcsp-paper-raised); }
+
+/* ---- Hidden-until-needed scrollbars (spec 11.2) ---- */
+.filter-panel__subject-list::-webkit-scrollbar,
+.filter-panel__dictionary-options::-webkit-scrollbar,
+.filter-panel__chips::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.filter-panel__subject-list:hover,
+.filter-panel__subject-list:focus-within,
+.filter-panel__dictionary-options:hover,
+.filter-panel__dictionary-options:focus-within,
+.filter-panel__chips:hover,
+.filter-panel__chips:focus-within {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bcsp-line-strong) transparent;
+}
+
+.filter-panel__subject-list:hover::-webkit-scrollbar,
+.filter-panel__subject-list:focus-within::-webkit-scrollbar,
+.filter-panel__dictionary-options:hover::-webkit-scrollbar,
+.filter-panel__dictionary-options:focus-within::-webkit-scrollbar,
+.filter-panel__chips:hover::-webkit-scrollbar,
+.filter-panel__chips:focus-within::-webkit-scrollbar { width: 8px; }
+
+.filter-panel__subject-list::-webkit-scrollbar-thumb,
+.filter-panel__dictionary-options::-webkit-scrollbar-thumb,
+.filter-panel__chips::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--bcsp-radius-pill);
+  background: var(--bcsp-line-strong);
+  background-clip: padding-box;
+}
+
+.filter-panel__subject-list::-webkit-scrollbar-track,
+.filter-panel__dictionary-options::-webkit-scrollbar-track,
+.filter-panel__chips::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- Credits, availability ---- */
+.filter-panel__credit-range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--bcsp-space-1);
+}
+
+.filter-panel__credit-range > label { min-width: 0; }
+
+.filter-panel__availability {
+  display: grid;
+  gap: var(--bcsp-space-2);
+  min-width: 0;
+}
+
+.filter-panel__availability-editor {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: var(--bcsp-space-1);
+  align-items: end;
+}
+
+.filter-panel__availability-editor > label {
+  display: block;
+  min-width: 0;
+}
+
+.filter-panel__availability-add {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.filter-panel__window-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bcsp-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.filter-panel__window-list li {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.25rem 0 0.75rem;
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-ink-2);
+  background: var(--bcsp-surface-2);
+}
+
+.filter-panel__window-list samp {
+  font-size: var(--bcsp-text-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.filter-panel__window-list button {
+  position: relative;
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  padding: 0 0.625rem;
+  border: 0;
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-ink-2);
+  background: transparent;
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+/* ---- Footer note ---- */
+.filter-panel__footer {
+  display: grid;
+  padding: var(--bcsp-space-1) var(--bcsp-space-4) var(--bcsp-space-3);
+}
+
+.filter-panel__footer-note {
+  margin: 0;
+  color: var(--bcsp-ink-muted);
+  font-size: var(--bcsp-text-meta);
+  line-height: var(--bcsp-lh-meta);
+}
 
 @media (hover: hover) and (pointer: fine) {
-  .filter-panel__check:hover:not(:has(input:disabled)) { background: var(--bcsp-paper); }
+  .filter-panel__check:hover:not(:has(input:disabled)):not(:has(input:checked)) { background: var(--bcsp-surface-2); }
+  .filter-panel__checks--pills .filter-panel__check:hover:not(:has(input:disabled)):not(:has(input:checked)) { background: var(--bcsp-surface-3); }
   .filter-panel__chip button:hover:not(:disabled),
   .filter-panel__token button:hover:not(:disabled),
-  .filter-panel__window-list button:hover:not(:disabled) { color: var(--bcsp-accent-ink); background: var(--bcsp-accent); }
-  .filter-panel__minor-action:hover:not(:disabled) { color: var(--bcsp-paper); background: var(--bcsp-ink); }
-  .filter-panel__dictionary-option:hover { color: var(--bcsp-paper-raised); background: var(--bcsp-ink); }
+  .filter-panel__window-list button:hover:not(:disabled) {
+    color: var(--bcsp-accent-text);
+    background: var(--bcsp-accent-tint);
+  }
+  .filter-panel__minor-action:hover:not(:disabled) {
+    border-color: var(--bcsp-ink-muted);
+    background: var(--bcsp-surface-2);
+  }
+  .filter-panel__clear-choice:hover:not(:disabled) {
+    border-color: transparent;
+    color: var(--bcsp-ink);
+  }
+  .filter-panel__dictionary-option:hover:not([aria-selected='true']) { background: var(--bcsp-surface-2); }
+  .filter-panel__input:hover:not(:disabled):not(:focus-visible),
+  .filter-panel__select:hover:not(:disabled):not(:focus-visible) { border-color: var(--bcsp-ink-muted); }
 }
 
-.filter-panel__window-list samp { padding: 0.65rem; }
-.filter-panel__window-list button { padding: 0.5rem 0.75rem; font-family: var(--bcsp-font-data); font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
-.filter-panel__footer { display: grid; gap: var(--bcsp-space-3); align-items: center; padding: var(--bcsp-space-4); border-top: 3px solid var(--bcsp-line); }
-.filter-panel__footer-note { max-width: 55ch; margin: 0; color: var(--bcsp-ink-muted); font-size: 0.78rem; }
-
-@container (max-width: 42rem) {
-  .filter-panel__active, .filter-panel__footer { grid-template-columns: 1fr; }
-  .filter-panel__grid { grid-template-columns: minmax(0, 1fr); }
-  .filter-panel__row, .filter-panel__row:nth-child(odd) { grid-column: 1; border-right: 0; }
-  .filter-panel__credit-range { grid-template-columns: minmax(0, 1fr); }
-  .filter-panel__availability-editor { grid-template-columns: minmax(0, 1fr); gap: var(--bcsp-space-2); }
-  .filter-panel__availability-add, .filter-panel__minor-action { border-left: 1px solid var(--bcsp-line); }
-  .filter-panel__input-action { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
-  .filter-panel__subject-search { grid-template-columns: 1fr; }
-  .filter-panel__subject-count { padding: 0; text-align: left; }
+/* CJK floor: meta text never drops below 13px. */
+[data-bcsp-locale='zh-CN'] .filter-panel__active-title,
+[data-bcsp-locale='zh-CN'] .filter-panel__chip,
+[data-bcsp-locale='zh-CN'] .filter-panel__token,
+[data-bcsp-locale='zh-CN'] .filter-panel__sub-label,
+[data-bcsp-locale='zh-CN'] .filter-panel__subject-count,
+[data-bcsp-locale='zh-CN'] .filter-panel__validation-error,
+[data-bcsp-locale='zh-CN'] .filter-panel__check--explained small,
+[data-bcsp-locale='zh-CN'] .filter-panel__incomplete small,
+[data-bcsp-locale='zh-CN'] .filter-panel__footer-note,
+[data-bcsp-locale='zh-CN'] .filter-panel__group-count,
+[data-bcsp-locale='zh-CN'] .filter-panel__active::after {
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
 }
 
+@container (max-width: 20rem) {
+  .filter-panel__availability-editor,
+  .filter-panel__subject-search { grid-template-columns: minmax(0, 1fr); }
+  .filter-panel__subject-count { min-height: 0; text-align: left; }
+  .filter-panel__input-action {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--bcsp-space-1);
+  }
+  .filter-panel__input-action .filter-panel__input,
+  .filter-panel__input-action .filter-panel__minor-action {
+    margin: 0;
+    border-radius: var(--bcsp-radius-2);
+  }
+}
 `;
 
 export function FilterPanel({
@@ -937,7 +1799,26 @@ export function FilterPanel({
 }: FilterPanelProps) {
   const i18n = useBcspI18n();
   const formRef = useRef<HTMLFormElement>(null);
+  const activeStripRef = useRef<HTMLElement>(null);
+  const groupIdBase = useId();
   const [subjectQuery, setSubjectQuery] = useState('');
+
+  // The sticky group heads sit directly under the sticky active strip, whose
+  // height depends on how many chips wrap; publish the measured height so the
+  // heads and the invalid-row scroll margin stay below it.
+  useLayoutEffect(() => {
+    const form = formRef.current;
+    const strip = activeStripRef.current;
+    if (form === null || strip === null || typeof ResizeObserver === 'undefined') return undefined;
+    const publish = () => {
+      const height = strip.getBoundingClientRect().height;
+      if (height > 0) form.style.setProperty('--bcsp-rail-strip-h', `${height}px`);
+    };
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, []);
 
   const fields = useMemo(
     () => [...schema.fields]
@@ -949,6 +1830,12 @@ export function FilterPanel({
       .sort((left, right) => left.chipOrder - right.chipOrder),
     [schema.fields],
   );
+
+  const groupedFields = useMemo(() => {
+    const members = FILTER_GROUPS.map(() => [] as FilterFieldSchemaV1[]);
+    for (const field of fields) members[groupIndexFor(field.stableId)]?.push(field);
+    return FILTER_GROUPS.map((group, index) => ({ group, members: members[index] ?? [] }));
+  }, [fields]);
 
   const invalidField = useMemo(() => {
     if (validationIssue === undefined) return undefined;
@@ -1000,36 +1887,54 @@ export function FilterPanel({
   }, [discovery.coreCodeDictionaries, selectedCoreTargets]);
   const coreDictionaryLoading = selectedCoreTargets.length > 0
     && selectedCoreDictionaries.length !== selectedCoreTargets.length;
+  // Keyed by the canonical (request-form, uppercase) code so a persisted `AHO`
+  // matches the dictionary's `AHo`; `displayCode` keeps the dictionary spelling.
   const coreDictionary = useMemo(() => {
-    const entries = new Map<string, { descriptions: Set<string>; incomplete: boolean }>();
+    const entries = new Map<string, { displayCode: string; descriptions: Set<string>; incomplete: boolean }>();
     for (const dictionary of selectedCoreDictionaries) {
       for (const option of dictionary.options) {
-        const entry = entries.get(option.code) ?? { descriptions: new Set<string>(), incomplete: false };
+        const canonical = canonicalCoreCode(option.code);
+        const entry = entries.get(canonical)
+          ?? { displayCode: option.code, descriptions: new Set<string>(), incomplete: false };
         const description = knownText(option.description)?.trim();
         if (description === undefined || description === null || description.length === 0) {
           entry.incomplete = true;
         } else {
           entry.descriptions.add(description);
         }
-        entries.set(option.code, entry);
+        entries.set(canonical, entry);
       }
     }
     return [...entries.entries()]
       .sort(([left], [right]) => left.localeCompare(right, 'en-US'))
       .map(([code, entry]) => ({
         code,
+        displayCode: entry.displayCode,
         label: !entry.incomplete && entry.descriptions.size === 1
-          ? `${code} · ${[...entry.descriptions][0]}`
-          : code,
+          ? `${entry.displayCode} · ${[...entry.descriptions][0]}`
+          : entry.displayCode,
       }));
   }, [selectedCoreDictionaries]);
   const validCoreCodes = useMemo(() => new Set(coreDictionary.map(({ code }) => code)), [coreDictionary]);
+  const coreLabels = useMemo<CoreLabels>(
+    () => new Map(coreDictionary.map(({ code, label }) => [code, label])),
+    [coreDictionary],
+  );
   const coreOptions = coreDictionary;
-  const incompatibleCoreCodes = coreDictionaryLoading
-    ? []
-    : value.core.codes.filter((code) => !validCoreCodes.has(code));
+  // One entry per canonical code: the first stored spelling represents every
+  // case variant, and removing it drops all of them.
+  const incompatibleCoreCodes = useMemo(() => {
+    if (coreDictionaryLoading) return [];
+    const seen = new Set<string>();
+    return value.core.codes.filter((code) => {
+      const canonical = canonicalCoreCode(code);
+      if (validCoreCodes.has(canonical) || seen.has(canonical)) return false;
+      seen.add(canonical);
+      return true;
+    });
+  }, [coreDictionaryLoading, validCoreCodes, value.core.codes]);
 
-  const summaries = fields.map((field) => ({ field, summary: fieldSummary(field, value, i18n) }))
+  const summaries = fields.map((field) => ({ field, summary: fieldSummary(field, value, i18n, coreLabels) }))
     .filter((entry): entry is { field: FilterFieldSchemaV1; summary: string } => entry.summary !== null);
   const clearable = summaries.filter(({ field }) => field.requestField !== 'term' && field.requestField !== 'campuses');
 
@@ -1111,7 +2016,7 @@ export function FilterPanel({
             .sort((left, right) => left - right))} />;
       case 'levels':
         return <DictionaryPicker disabled={disabled} field="COURSE_LEVEL" label={label}
-          loadOptions={loadOptions} values={value.levels}
+          loadOptions={loadOptions} values={value.levels} variant="pills"
           onChange={(next) => update('levels', next)} />;
       case 'credits':
         return (
@@ -1154,16 +2059,17 @@ export function FilterPanel({
                     <p className="bcsp-field__helper">{i18n.t('filter.core_empty')}</p>
                   ) : (
                     <div className="filter-panel__checks" role="group" aria-label={i18n.t('filter.core_list')}>
-                      {coreOptions.map(({ code, label: optionLabel }) => (
+                      {coreOptions.map(({ code, displayCode, label: optionLabel }) => (
                         <label className="filter-panel__check" key={code}>
                           <input
                             type="checkbox"
-                            checked={value.core.codes.includes(code)}
+                            checked={hasCoreCode(value.core.codes, code)}
                             disabled={disabled}
                             onChange={(event) => update('core', {
                               ...value.core,
-                              codes: toggleValue(value.core.codes, code, event.target.checked),
+                              codes: toggleCoreCode(value.core.codes, code, event.target.checked),
                             })}
+                            value={displayCode}
                           />
                           <span>{optionLabel}</span>
                         </label>
@@ -1184,7 +2090,7 @@ export function FilterPanel({
                           disabled={disabled}
                           onClick={() => update('core', {
                             ...value.core,
-                            codes: value.core.codes.filter((candidate) => candidate !== code),
+                            codes: toggleCoreCode(value.core.codes, code, false),
                           })}
                           type="button"
                         >×</button>
@@ -1208,20 +2114,23 @@ export function FilterPanel({
         return <TokenListControl label={i18n.t('filter.section_indexes')} values={value.sectionIndexes}
           onChange={(next) => update('sectionIndexes', next)} disabled={disabled} placeholder={i18n.t('filter.five_digits')} />;
       case 'openStatuses':
-        return <CheckboxSet label={label} options={OPEN_STATES} values={value.openStatuses}
+        return <CheckboxSet label={label} options={OPEN_STATES} values={value.openStatuses} variant="pills"
           onChange={(next) => update('openStatuses', next)} disabled={disabled} />;
       case 'modalities':
         return <div className="filter-panel__control">
-          <CheckboxSet label={label} options={MODALITIES} values={value.modalities}
+          <CheckboxSet label={label} options={MODALITIES} values={value.modalities} variant="pills"
             onChange={(next) => update('modalities', next)} disabled={disabled} />
           <IncompleteToggle checked={value.includeIncomplete.modality} disabled={disabled}
             onChange={(checked) => updateIncomplete('modality', checked)} />
         </div>;
       case 'synchronicities':
         return <div className="filter-panel__control">
-          <CheckboxSet label={label} options={SYNCHRONICITIES} values={value.synchronicities}
+          <p className="bcsp-field__helper">{i18n.t('filter.flt-s04b_help')}</p>
+          <CheckboxSet label={label} options={SYNCHRONICITIES} values={value.synchronicities} variant="pills"
+            help={SYNCHRONICITY_HELP}
             onChange={(next) => update('synchronicities', next)} disabled={disabled} />
           <IncompleteToggle checked={value.includeIncomplete.synchronicity} disabled={disabled}
+            helpKey="filter.flt-s04b_incomplete_help"
             onChange={(checked) => updateIncomplete('synchronicity', checked)} />
         </div>;
       case 'instructors':
@@ -1263,13 +2172,11 @@ export function FilterPanel({
 
   const renderRow = (field: FilterFieldSchemaV1) => {
     const index = fields.indexOf(field);
-    const wide = field.requestField === 'subjects'
-      || field.requestField === 'availability';
     const invalid = field.stableId === invalidField?.stableId;
     const errorId = `filter-panel-error-${field.stableId}`;
     return (
       <fieldset
-        className={`filter-panel__row${wide ? ' filter-panel__row--wide' : ''}`}
+        className="filter-panel__row"
         key={field.stableId}
         data-filter-row={field.stableId}
         data-filter-error={invalid ? 'true' : undefined}
@@ -1301,18 +2208,18 @@ export function FilterPanel({
     <>
       <style data-bcsp-filter-panel="">{FILTER_PANEL_CSS}</style>
       <form ref={formRef} id={formId} className="filter-panel" aria-label={i18n.t('filter.form_label')} onSubmit={submit}>
-        <header className="filter-panel__matrix-head">
-          <p>{i18n.t('filter.matrix_kicker', { count: fields.length })}</p>
-          <h3>{i18n.t('filter.form_label')}</h3>
-          <span>{i18n.t('filter.matrix_description')}</span>
-        </header>
         <fieldset
           aria-busy={disabled && searchAvailable ? true : undefined}
           className="filter-panel__gate"
           disabled={disabled || !searchAvailable}
         >
         <legend className="bcsp-visually-hidden">{i18n.t('filter.form_label')}</legend>
-        <section className="filter-panel__active" aria-labelledby="active-filter-title">
+        <section
+          className="filter-panel__active"
+          aria-labelledby="active-filter-title"
+          data-count={summaries.length}
+          ref={activeStripRef}
+        >
           <h3 className="filter-panel__active-title" id="active-filter-title">{i18n.t('filter.active_title')}</h3>
           {summaries.length === 0 ? <p className="filter-panel__empty">{i18n.t('filter.active_empty')}</p> : (
             <ul className="filter-panel__chips">
@@ -1341,7 +2248,35 @@ export function FilterPanel({
           </button>
         </section>
 
-        <div className="filter-panel__grid" data-filter-fields="03-18">{fields.map(renderRow)}</div>
+        <div className="filter-panel__grid" data-filter-fields="03-18">
+          {groupedFields.map(({ group, members }) => {
+            if (members.length === 0) return null;
+            const titleId = `${groupIdBase}-${group.key}`;
+            const activeInGroup = summaries
+              .filter(({ field }) => members.includes(field)).length;
+            return (
+              <section
+                aria-labelledby={titleId}
+                className="filter-panel__group"
+                data-count={activeInGroup}
+                data-filter-group={group.key}
+                key={group.key}
+                role="group"
+              >
+                <div className="filter-panel__group-head">
+                  <h4 className="filter-panel__group-title" id={titleId}>{i18n.t(group.titleKey)}</h4>
+                  <span
+                    aria-label={i18n.t('filter.group.active_count', { count: i18n.formatNumber(activeInGroup) })}
+                    className="filter-panel__group-count"
+                  >
+                    {i18n.formatNumber(activeInGroup)}
+                  </span>
+                </div>
+                <div className="filter-panel__group-body">{members.map(renderRow)}</div>
+              </section>
+            );
+          })}
+        </div>
 
         <footer className="filter-panel__footer">
           <p className="filter-panel__footer-note">

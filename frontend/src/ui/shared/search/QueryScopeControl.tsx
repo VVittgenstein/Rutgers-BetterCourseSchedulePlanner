@@ -1,5 +1,7 @@
 import { useId, useMemo, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
+import { isMessageKey } from '../i18n/contract';
 import { useBcspI18n, type BcspI18nRuntime } from '../i18n/runtime';
 import {
   isServiceStatusV2,
@@ -17,84 +19,189 @@ const MAIN_CAMPUSES = ['NB', 'NK', 'CM'] as const;
 export type TermPublicationState = ServiceTermPublicationV2;
 
 const QUERY_SCOPE_CSS = String.raw`
+/* Term & campus block (spec v2 section 6 step 2): two option columns, 44px rows,
+   no cell borders; cell ids and DOM order are unchanged. */
 .query-scope {
-  border-bottom: 3px solid var(--bcsp-line);
-  background: var(--bcsp-line);
+  display: grid;
+  min-width: 0;
 }
 .query-scope > fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.query-scope__legend {
+  display: block;
+  margin: 0 0 var(--bcsp-space-1);
+  padding: 0;
+  color: var(--bcsp-ink);
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-body);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.25rem;
+  text-transform: none;
+}
 .query-scope__matrix {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--bcsp-space-1) var(--bcsp-space-2);
+  align-items: start;
 }
 .query-scope__cell {
+  position: relative;
   min-width: 0;
-  min-height: 5rem;
-  background: var(--bcsp-paper);
+  border-radius: var(--bcsp-radius-2);
 }
 .query-scope__option {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.75rem;
+  gap: 0.625rem;
   align-items: center;
-  min-height: 5rem;
-  padding: 0.75rem 0.9rem;
+  min-height: var(--bcsp-control-h);
+  padding: 0.375rem 0.625rem;
+  border-radius: var(--bcsp-radius-2);
   cursor: pointer;
 }
 .query-scope__option input {
-  width: 1.15rem;
-  height: 1.15rem;
+  width: 1.125rem;
+  height: 1.125rem;
   margin: 0;
   accent-color: var(--bcsp-accent);
 }
 .query-scope__option:has(input:focus-visible) {
-  position: relative;
   z-index: 1;
-  outline: 3px solid var(--bcsp-focus, var(--bcsp-accent));
-  outline-offset: -3px;
+  outline: 2px solid var(--bcsp-focus);
+  outline-offset: -2px;
 }
 .query-scope__option:has(input:disabled) { cursor: not-allowed; }
-.query-scope__option-copy { display: grid; gap: 0.25rem; min-width: 0; }
-.query-scope__option-copy strong { overflow-wrap: anywhere; }
+.query-scope__option-copy { display: grid; gap: 0.125rem; min-width: 0; }
+.query-scope__option-copy strong {
+  font-size: var(--bcsp-text-body);
+  font-weight: 600;
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+}
 .query-scope__term-meta,
 .query-scope__campus-state,
 .query-scope__campus-diagnostic,
 .query-scope__status {
   margin: 0;
   color: var(--bcsp-ink-muted);
-  font-family: var(--bcsp-font-data);
-  font-size: 0.7rem;
-  letter-spacing: 0.045em;
-  line-height: 1.4;
+  font-family: var(--bcsp-font-sans);
+  font-size: var(--bcsp-text-meta);
+  letter-spacing: 0;
+  line-height: var(--bcsp-lh-meta);
 }
-.query-scope__term[data-readiness='none'] { color: var(--bcsp-ink-muted); background: var(--bcsp-paper-raised); }
-.query-scope__term[data-readiness='partial'] { border-left: 4px solid var(--bcsp-accent); }
-.query-scope__term[data-readiness='ready'] .query-scope__term-meta,
-.query-scope__campus-state[data-state='ready'] { color: var(--bcsp-ink); }
-.query-scope__campus-state[data-state='retry'] { color: var(--bcsp-danger, #8f1d14); }
-.query-scope__campus-details {
-  display: grid;
-  gap: 0.2rem;
-  padding: 0 0.9rem 0.75rem 2.8rem;
+/* Term readiness has to be readable without hovering, so the meta line wraps
+   onto as many lines as it needs instead of ending in an ellipsis. */
+.query-scope__term-meta {
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
-.query-scope__campus-details .query-scope__campus-state,
-.query-scope__campus-details .query-scope__campus-diagnostic { color: var(--bcsp-ink); }
+.query-scope__term-meta samp,
 .query-scope__campus-diagnostic samp,
-.query-scope__campus-diagnostic time { color: var(--bcsp-ink); overflow-wrap: anywhere; }
+.query-scope__campus-diagnostic time {
+  font-size: inherit;
+  font-variant-numeric: tabular-nums;
+}
+/* Selected term: tinted row with a 3px accent bar at the left edge. */
+.query-scope__term::before {
+  position: absolute;
+  top: 0.375rem;
+  bottom: 0.375rem;
+  left: 0;
+  width: 3px;
+  border-radius: var(--bcsp-radius-pill);
+  background: transparent;
+  content: '';
+}
+.query-scope__term[data-selected='true'] { background: var(--bcsp-surface-selected); }
+.query-scope__term[data-selected='true']::before { background: var(--bcsp-accent); }
+.query-scope__term[data-readiness='none'] .query-scope__option-copy strong { color: var(--bcsp-ink-muted); }
+/* Campus rows: mono code pill + name; details render inline beneath. */
+.query-scope__campus-copy {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.query-scope__campus-copy strong {
+  display: inline-flex;
+  height: 1.375rem;
+  flex: none;
+  align-items: center;
+  padding: 0 0.375rem;
+  border-radius: var(--bcsp-radius-1);
+  background: var(--bcsp-surface-2);
+  font-size: var(--bcsp-text-micro);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+.query-scope__campus-copy strong samp { font-size: inherit; }
+/* The campus name wraps rather than truncating: a half-shown campus is worse
+   than a two-line one. */
+.query-scope__campus-copy small {
+  min-width: 0;
+  font-size: var(--bcsp-text-body);
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.query-scope__campus[data-ready='false'] .query-scope__campus-copy { color: var(--bcsp-ink-muted); }
+.query-scope__campus-details {
+  display: block;
+  padding: 0 0.625rem 0.375rem 2.375rem;
+  color: var(--bcsp-ink-muted);
+  font-size: var(--bcsp-text-meta);
+  line-height: var(--bcsp-lh-meta);
+}
+.query-scope__campus-details > * { display: inline; }
+/* The literal middot keeps both flanking spaces; a \00B7 escape swallows the
+   one that terminates it and the line reads "service. ·Stage:". */
+.query-scope__campus-details > * + *::before { content: ' · '; }
+.query-scope__campus-details .query-scope__campus-diagnostic samp,
+.query-scope__campus-details .query-scope__campus-diagnostic time { overflow-wrap: anywhere; }
+/* A plainly ready campus needs no status line; diagnostics always show. */
+.query-scope__campus[data-ready='true'] .query-scope__campus-details:has(.query-scope__campus-state[data-state='ready']:only-child) { display: none; }
+.query-scope__campus-state[data-state='retry'] { color: var(--bcsp-danger); }
+/* Apply / Search cells. */
 .query-scope__cell--action,
 .query-scope__cell--search {
   display: grid;
-  align-content: stretch;
-  padding: 0.75rem;
-}
-.query-scope__cell--action { gap: 0.35rem; }
-.query-scope__cell--action .query-scope__status,
-.query-scope__cell--search .query-scope__status {
-  color: var(--bcsp-ink);
-  background: var(--bcsp-paper);
+  gap: 0.375rem;
+  align-content: start;
+  padding: 0;
 }
 .query-scope__cell--action .bcsp-action,
-.query-scope__cell--search .bcsp-action { min-height: 3.5rem; }
+.query-scope__cell--search .bcsp-action {
+  width: 100%;
+  min-width: 0;
+}
+.query-scope__status { overflow-wrap: anywhere; }
+.query-scope__error {
+  margin: 0;
+  color: var(--bcsp-danger);
+  font-size: var(--bcsp-text-meta);
+  line-height: var(--bcsp-lh-meta);
+  overflow-wrap: anywhere;
+}
+/* "Applied": a success-toned disabled pill with a CSS check (string kept). */
+.bcsp-action.query-scope__applied,
+.bcsp-action.query-scope__applied:disabled {
+  border-color: var(--bcsp-ok-line);
+  border-radius: var(--bcsp-radius-pill);
+  color: var(--bcsp-ok);
+  background: var(--bcsp-ok-tint);
+}
+.query-scope__applied::before {
+  width: 0.3125rem;
+  height: 0.625rem;
+  flex: none;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
+  content: '';
+}
+/* Explicit placement keeps terms in column one and campuses in column two. */
 .query-scope[data-scope-layout='local-2x5'] [data-scope-cell='term--2'] { grid-column: 1; grid-row: 1; }
 .query-scope[data-scope-layout='local-2x5'] [data-scope-cell='term--1'] { grid-column: 1; grid-row: 2; }
 .query-scope[data-scope-layout='local-2x5'] [data-scope-cell='term-0'] { grid-column: 1; grid-row: 3; }
@@ -103,27 +210,50 @@ const QUERY_SCOPE_CSS = String.raw`
 .query-scope[data-scope-layout='local-2x5'] [data-scope-cell='campus-NB'] { grid-column: 2; grid-row: 1; }
 .query-scope[data-scope-layout='local-2x5'] [data-scope-cell='campus-NK'] { grid-column: 2; grid-row: 2; }
 .query-scope[data-scope-layout='local-2x5'] [data-scope-cell='campus-CM'] { grid-column: 2; grid-row: 3; }
-.query-scope[data-scope-layout='local-2x5'] [data-scope-cell='scope-action'] { grid-column: 2; grid-row: 4; }
+.query-scope[data-scope-layout='local-2x5'] [data-scope-cell='scope-action'] { grid-column: 2; grid-row: 4 / span 2; }
+.query-scope[data-scope-layout='local-2x5']:has([data-scope-cell='search']) [data-scope-cell='scope-action'] { grid-row: 4; }
 .query-scope[data-scope-layout='local-2x5'] [data-scope-cell='search'] { grid-column: 2; grid-row: 5; }
 .query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='term-0'] { grid-column: 1; grid-row: 1; }
 .query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='term-1'] { grid-column: 1; grid-row: 2; }
 .query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='campus-NB'] { grid-column: 2; grid-row: 1; }
 .query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='campus-NK'] { grid-column: 2; grid-row: 2; }
-.query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='campus-CM'] { grid-column: 1; grid-row: 3; }
-.query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='scope-action'] { grid-column: 2; grid-row: 3; }
-.query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='search'] { grid-column: 1 / -1; grid-row: 4; }
-.query-scope__empty { grid-column: 1 / -1; padding: 1rem; background: var(--bcsp-paper); }
-@media (hover: hover) and (pointer: fine) {
-  .query-scope__option:hover:not(:has(input:disabled)) { background: var(--bcsp-paper-raised); }
+.query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='campus-CM'] { grid-column: 2; grid-row: 3; }
+.query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='scope-action'] { grid-column: 1 / -1; grid-row: 4; }
+.query-scope[data-scope-layout='public-2x3-search'] [data-scope-cell='search'] { grid-column: 1 / -1; grid-row: 5; }
+.query-scope__empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--bcsp-line-strong);
+  border-radius: var(--bcsp-radius-2);
+  color: var(--bcsp-ink-muted);
+  font-size: var(--bcsp-text-body);
+  line-height: var(--bcsp-lh-body);
 }
-/* Match the RC3 workspace collapse: desktop rails keep their internal matrix. */
+@media (hover: hover) and (pointer: fine) {
+  .query-scope__option:hover:not(:has(input:disabled)) { background: var(--bcsp-surface-2); }
+  .query-scope__term[data-selected='true'] .query-scope__option:hover { background: transparent; }
+}
+[data-bcsp-locale='zh-CN'] .query-scope__term-meta,
+[data-bcsp-locale='zh-CN'] .query-scope__campus-details,
+[data-bcsp-locale='zh-CN'] .query-scope__status,
+[data-bcsp-locale='zh-CN'] .query-scope__error,
+[data-bcsp-locale='zh-CN'] .query-scope__campus-copy strong {
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+/* Match the workspace collapse: below it the two option columns stack. */
 @media (max-width: 47.999rem) {
+  .query-scope__matrix { grid-template-columns: minmax(0, 1fr); }
+  .query-scope[data-scope-layout] [data-scope-cell] { grid-column: auto; grid-row: auto; }
+}
+@container (max-width: 20rem) {
   .query-scope__matrix { grid-template-columns: minmax(0, 1fr); }
   .query-scope[data-scope-layout] [data-scope-cell] { grid-column: auto; grid-row: auto; }
 }
 `;
 
-function deterministicTermLabel(term: string, i18n: BcspI18nRuntime): string {
+export function deterministicTermLabel(term: string, i18n: BcspI18nRuntime): string {
   const match = /^([0179])(\d{4})$/u.exec(term);
   const season = match?.[1];
   const year = match?.[2];
@@ -133,6 +263,22 @@ function deterministicTermLabel(term: string, i18n: BcspI18nRuntime): string {
       : season === '7' ? 'scope.term_summer'
         : 'scope.term_fall';
   return i18n.t(key, { year });
+}
+
+/** A refresh stage is an internal enum; the user only ever sees the translated
+ * phrase. An unrecognised value keeps its raw code so a new server stage is
+ * still legible rather than silently dropped. */
+function stageLabel(stage: string, i18n: BcspI18nRuntime): string | null {
+  const key = `scope.stage.${stage}`;
+  return isMessageKey(key) ? i18n.t(key) : null;
+}
+
+/** Instants are shown in the reader's locale; the machine-readable ISO value
+ * stays on the <time> element's dateTime attribute. */
+function instantLabel(iso: string, i18n: BcspI18nRuntime): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return i18n.formatDate(parsed, { dateStyle: 'short', timeStyle: 'short' });
 }
 
 function sameScope(left: SearchScope | null, right: SearchScope): boolean {
@@ -320,6 +466,9 @@ export interface QueryScopeControlProps {
   readonly searchAvailable: boolean;
   readonly searchFormId: string;
   readonly searchPending?: boolean | undefined;
+  /** When set, the search cell is portaled into this element (the rail's
+   * sticky submit footer); otherwise it renders inline after the Apply cell. */
+  readonly searchSlot?: HTMLElement | null | undefined;
   readonly status: ServiceStatus | null;
 }
 
@@ -343,6 +492,7 @@ export function QueryScopeControl({
   searchAvailable,
   searchFormId,
   searchPending = false,
+  searchSlot = null,
   status,
 }: QueryScopeControlProps) {
   const i18n = useBcspI18n();
@@ -467,13 +617,15 @@ export function QueryScopeControl({
             {i18n.t(stateKey)}
           </span>
           {target?.stage === null || target?.stage === undefined ? null : (
-            <span className="query-scope__campus-diagnostic">
-              {i18n.t('scope.target_stage')} <samp>{target.stage}</samp>
+            <span className="query-scope__campus-diagnostic" data-stage={target.stage}>
+              {i18n.t('scope.target_stage')}{' '}
+              {stageLabel(target.stage, i18n) ?? <samp>{target.stage}</samp>}
             </span>
           )}
           {target?.nextRetryAt === null || target?.nextRetryAt === undefined ? null : (
             <span className="query-scope__campus-diagnostic">
-              {i18n.t('scope.target_retry_at')} <time dateTime={target.nextRetryAt}>{target.nextRetryAt}</time>
+              {i18n.t('scope.target_retry_at')}{' '}
+              <time dateTime={target.nextRetryAt}>{instantLabel(target.nextRetryAt, i18n)}</time>
             </span>
           )}
           {target?.error?.code === undefined ? null : (
@@ -490,7 +642,11 @@ export function QueryScopeControl({
     <div className="query-scope__cell query-scope__cell--action query-scope__action" data-scope-cell="scope-action" key="action">
       {unavailableAction ?? (
         <button
-          className="bcsp-action bcsp-action--accent"
+          className={scopeAction.kind === 'APPLIED'
+            ? 'bcsp-action query-scope__applied'
+            : scopeAction.enabled
+              ? 'bcsp-action bcsp-action--accent'
+              : 'bcsp-action'}
           aria-busy={scopeAction.reason === 'VALIDATING' || undefined}
           aria-describedby={scopeAction.reason === 'VALIDATING'
             ? validationStatusId
@@ -550,7 +706,7 @@ export function QueryScopeControl({
     ...terms.map(termCell),
     ...MAIN_CAMPUSES.map(campusCell),
     actionCell,
-    searchCell,
+    ...(searchSlot === null ? [searchCell] : []),
   ];
 
   return (
@@ -561,13 +717,14 @@ export function QueryScopeControl({
     >
       <style data-bcsp-query-scope="">{QUERY_SCOPE_CSS}</style>
       <fieldset className="bcsp-plain-fieldset">
-        <legend className="bcsp-visually-hidden">{i18n.t('scope.accessible_label')}</legend>
+        <legend className="query-scope__legend">{i18n.t('scope.title')}</legend>
         <div className="query-scope__matrix">
           {terms.length === 0
             ? <p className="query-scope__status query-scope__empty" role="status">{i18n.t('scope.term_window_unavailable')}</p>
             : cells}
         </div>
       </fieldset>
+      {searchSlot === null ? null : createPortal(searchCell, searchSlot)}
     </section>
   );
 }

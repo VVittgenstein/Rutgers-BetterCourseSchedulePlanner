@@ -1,99 +1,40 @@
+/* The only home for filter-rail transitions (FILTER_PANEL_CSS stays
+ * transition-free). Colour, border, shadow and opacity only, 120ms ease-out;
+ * the press transform comes from the design-system .bcsp-action rule. */
 export const SEARCH_CONTROL_MOTION_CSS = String.raw`
-@media (hover: hover) and (pointer: fine) {
-  .bcsp-search-workspace__filters .bcsp-action:not(:disabled),
-  .bcsp-search-workspace__filters button:not(:disabled),
-  .query-scope__term,
-  .query-scope__campus,
-  .filter-panel__check,
-  .filter-panel__dictionary-option,
-  .filter-panel__chip,
-  .filter-panel__token {
-    transition-duration: 120ms;
-    transition-property: background-color, border-color, color, box-shadow, opacity;
-    transition-timing-function: ease-out;
-  }
-}
-
 .bcsp-search-workspace__filters .bcsp-action,
-.bcsp-search-workspace__filters button,
-.query-scope__term,
-.query-scope__campus,
-.filter-panel__check,
-.filter-panel__dictionary-option,
-.filter-panel__chip,
-.filter-panel__token {
-  -webkit-tap-highlight-color: transparent;
+.bcsp-search-workspace__filters .filter-panel__minor-action,
+.bcsp-search-workspace__filters .filter-panel__input,
+.bcsp-search-workspace__filters .filter-panel__select,
+.bcsp-search-workspace__filters .filter-panel__check,
+.bcsp-search-workspace__filters .filter-panel__incomplete,
+.bcsp-search-workspace__filters .filter-panel__dictionary-option,
+.bcsp-search-workspace__filters .filter-panel__chip button,
+.bcsp-search-workspace__filters .filter-panel__token button,
+.bcsp-search-workspace__filters .filter-panel__window-list button,
+.bcsp-search-workspace__filters .query-scope__option,
+.bcsp-search-workspace__filters .query-scope__term,
+.bcsp-search-workspace__filters .bcsp-search-workspace__back,
+.bcsp-search-diagnosis__action {
+  transition-property: background-color, border-color, color, box-shadow, opacity;
+  transition-duration: var(--bcsp-dur-1, 120ms);
+  transition-timing-function: var(--bcsp-ease-out);
 }
 
-.bcsp-search-workspace__filters .bcsp-action:active,
-.bcsp-search-workspace__filters button:active {
-  transform: none !important;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .bcsp-search-workspace__filters .bcsp-action[data-pointer-pressed='true'],
-  .bcsp-search-workspace__filters button[data-pointer-pressed='true'] {
-    transform: translateY(1px) !important;
-  }
-}
-
-.query-scope__term:has(input:checked),
-.query-scope__campus:has(input:checked) {
-  box-shadow: inset 0 0 0 1px var(--bcsp-accent);
-}
-
-.query-scope__term:has(input:focus-visible),
-.query-scope__campus:has(input:focus-visible),
-.filter-panel__check:has(input:focus-visible),
-.filter-panel__dictionary:has(.filter-panel__input:focus-visible) .filter-panel__dictionary-option[data-active='true'] {
-  position: relative;
-  z-index: 1;
-  box-shadow: inset 0 0 0 2px var(--bcsp-focus);
-}
-
-.query-scope__action:has(.bcsp-action[aria-busy='true']),
-.query-scope__search:has(.bcsp-action[aria-busy='true']) {
-  background: color-mix(in srgb, var(--bcsp-accent) 9%, var(--bcsp-paper-raised));
-  animation: bcsp-search-busy-confirm 160ms ease-out both;
-}
-
-.query-scope__action .bcsp-action[aria-busy='true'],
-.query-scope__search .bcsp-action[aria-busy='true'] {
-  cursor: progress;
-}
-
-.filter-panel__dictionary-option[data-active='true'],
-.filter-panel__check:has(input:checked) {
-  background: color-mix(in srgb, var(--bcsp-accent) 8%, var(--bcsp-paper-raised));
-}
-
-.filter-panel__validation-error,
-.bcsp-search-workspace__scope [role='alert'] {
-  animation: bcsp-search-feedback-emphasis 160ms ease-out both;
-}
-
-@keyframes bcsp-search-feedback-emphasis {
-  from { opacity: .65; transform: translateX(-3px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-@keyframes bcsp-search-busy-confirm {
-  from { opacity: .72; }
-  to { opacity: 1; }
+.bcsp-search-workspace__filters .filter-panel__dictionary-input + .filter-panel__dictionary-options[data-open='true'] {
+  transition-property: opacity;
+  transition-duration: var(--bcsp-dur-1, 120ms);
+  transition-timing-function: var(--bcsp-ease-out);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .bcsp-search-workspace__filters *,
   .bcsp-search-workspace__filters *::before,
-  .bcsp-search-workspace__filters *::after {
+  .bcsp-search-workspace__filters *::after,
+  .bcsp-search-diagnosis__action {
     scroll-behavior: auto !important;
     animation: none !important;
-    transition-duration: 0ms !important;
-  }
-
-  .bcsp-search-workspace__filters .bcsp-action:active,
-  .bcsp-search-workspace__filters button:active {
-    transform: none !important;
+    transition-duration: 0.001ms !important;
   }
 }
 `;

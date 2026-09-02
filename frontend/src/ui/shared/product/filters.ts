@@ -163,12 +163,28 @@ function canonicalIdentity(value: string, field: string): string {
   return value;
 }
 
+/** ASCII-only uppercase, exactly as the canonical request form folds
+ * case-insensitive tokens (Core codes, levels, exam codes, locations). */
+function uppercaseAscii(value: string): string {
+  return value.replace(/[a-z]/gu, (character) => character.toUpperCase());
+}
+
+/**
+ * The canonical (request-form) spelling of a Core curriculum code. The server
+ * dictionary publishes mixed-case codes such as `AHo` or `WCd`, while the
+ * request form uppercases them; UI code must compare Core codes through this
+ * function so a persisted `AHO` still matches the dictionary's `AHo`.
+ */
+export function canonicalCoreCode(code: string): string {
+  return uppercaseAscii(code.trim());
+}
+
 function normalizeToken(value: string, field: string, uppercase: boolean): string {
   const normalized = value.trim();
   if (normalized.length === 0 || utf8.encode(normalized).length > 256 || /[\p{Cc}]/u.test(normalized)) {
     return fail('INVALID_TOKEN', `${field} contains an invalid token`);
   }
-  return uppercase ? normalized.replace(/[a-z]/gu, (character) => character.toUpperCase()) : normalized;
+  return uppercase ? uppercaseAscii(normalized) : normalized;
 }
 
 function compareUtf8(left: string, right: string): number {

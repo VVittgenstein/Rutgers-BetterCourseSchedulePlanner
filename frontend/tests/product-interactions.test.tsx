@@ -159,7 +159,7 @@ describe('P7.3-002 local interaction lifecycle', () => {
     renderSettings({ onUpdateSettings: updateSettings });
 
     const save = screen.getByRole('button', { name: 'Save settings' }) as HTMLButtonElement;
-    const state = screen.getByText('NO UNSAVED CHANGES');
+    const state = screen.getByText('No unsaved changes');
     const catalog = screen.getByRole('spinbutton', {
       name: 'Catalog refresh interval (minutes)',
     });

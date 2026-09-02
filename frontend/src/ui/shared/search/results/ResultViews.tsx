@@ -1,4 +1,4 @@
-import { useId, useState, type MouseEvent } from 'react';
+import { createContext, useContext, useId, useState, type MouseEvent } from 'react';
 
 import type {
   CatalogFieldKnowledge,
@@ -7,8 +7,8 @@ import type {
   CourseQueryItemV1,
   CourseQueryResponseV1,
   CourseVariantQueryItemV1,
-  FilterMatchV1,
   MatchExplanation,
+  MatchReasonCode,
   NormalizedCourseVariantV1,
   NormalizedOccurrenceV1,
   PageInfoV1,
@@ -17,11 +17,12 @@ import type {
   SectionQueryItemV1,
   SectionQueryResponseV1,
 } from '../../product';
+import type { MessageKey } from '../../i18n/contract';
 import {
   catalogUnknownReasonMessageKeys,
   filterOptionMessageKey,
+  matchReasonMessageKeys,
   openStateMessageKeys,
-  openUncertaintyMessageKeys,
 } from '../../i18n/presenter';
 import { useBcspI18n, type BcspI18nRuntime } from '../../i18n/runtime';
 import { SectionSelectionAction } from '../../watch';
@@ -68,6 +69,7 @@ function formatSectionKey(key: SectionKey): string {
   return `${key.index} / ${key.term} / ${key.campus}`;
 }
 
+/* The variant fingerprint never reaches the UI; it only keys the disclosure map. */
 function formatVariantDisclosureId(variant: NormalizedCourseVariantV1): string {
   const { group, fingerprint } = variant.key;
   return `${group.term}\u0000${group.campus}\u0000${group.courseString}\u0000${fingerprint}`;
@@ -100,6 +102,31 @@ function formatArray(
   );
 }
 
+/** A catalog value only when it is genuinely reported; never a placeholder sentence. */
+function reported<T>(
+  field: CatalogFieldKnowledge<T>,
+  format: (value: T) => string = String,
+): string | null {
+  if (field.knowledge !== 'KNOWN' || field.presence.presence !== 'PRESENT') return null;
+  const text = format(field.presence.value).trim();
+  return text.length === 0 ? null : text;
+}
+
+/** A detail-grid value, dropped only when it would render a label with nothing after it. */
+function detailText<T>(
+  field: CatalogFieldKnowledge<T>,
+  i18n: BcspI18nRuntime,
+  format: (value: T) => string = String,
+): string | null {
+  const text = formatKnowledge(field, i18n, format).trim();
+  return text.length === 0 ? null : text;
+}
+
+function joinParts(parts: readonly (string | null)[], separator: string): string | null {
+  const kept = parts.filter((part): part is string => part !== null && part.trim().length > 0);
+  return kept.length === 0 ? null : kept.join(separator);
+}
+
 function formatCredits(value: string): string {
   const encoded = /^(\d+)_(\d+)$/u.exec(value.trim());
   if (encoded === null) return value;
@@ -114,14 +141,47 @@ function formatMinute(value: number): string {
   return `${hours}:${minutes}`;
 }
 
-function formatOccurrenceTime(occurrence: NormalizedOccurrenceV1, i18n: BcspI18nRuntime): string {
-  if (occurrence.time.knowledge !== 'KNOWN') return i18n.t('common.unknown');
+const shortWeekdayMessageKeys: Readonly<Record<string, MessageKey>> = {
+  MONDAY: 'result.day.monday',
+  TUESDAY: 'result.day.tuesday',
+  WEDNESDAY: 'result.day.wednesday',
+  THURSDAY: 'result.day.thursday',
+  FRIDAY: 'result.day.friday',
+  SATURDAY: 'result.day.saturday',
+  SUNDAY: 'result.day.sunday',
+};
+
+const levelMessageKeys: Readonly<Record<string, MessageKey>> = {
+  U: 'result.level.undergraduate',
+  UNDERGRADUATE: 'result.level.undergraduate',
+  G: 'result.level.graduate',
+  GRADUATE: 'result.level.graduate',
+};
+
+function shortDay(value: string, i18n: BcspI18nRuntime): string {
+  const key = shortWeekdayMessageKeys[value.toUpperCase()];
+  return key === undefined ? value : i18n.t(key);
+}
+
+function levelText(field: CatalogFieldKnowledge<string>, i18n: BcspI18nRuntime): string | null {
+  const raw = reported(field);
+  if (raw === null) return null;
+  const key = levelMessageKeys[raw.toUpperCase()];
+  return key === undefined ? raw : i18n.t(key);
+}
+
+function formatOccurrenceTime(occurrence: NormalizedOccurrenceV1): string | null {
+  if (occurrence.time.knowledge !== 'KNOWN') return null;
   return `${formatMinute(occurrence.time.startMinute)}–${formatMinute(occurrence.time.endMinute)}`;
 }
 
-function reasonText(explanation: MatchExplanation, i18n: BcspI18nRuntime): string {
-  if (explanation.reasons.length === 0) return i18n.t('common.none');
-  return explanation.reasons.map((reason) => `${reason.field}: ${reason.code}`).join('; ');
+/** days · time · place, with every unreported part simply left out. */
+function occurrenceSummary(occurrence: NormalizedOccurrenceV1, i18n: BcspI18nRuntime): string {
+  const days = reported(occurrence.days, (values) =>
+    values.map((day) => shortDay(day, i18n)).join(' '));
+  const place = joinParts([reported(occurrence.building), reported(occurrence.room)], ' ');
+  return joinParts([days, formatOccurrenceTime(occurrence), place], ' · ')
+    ?? i18n.t('result.meeting_unspecified');
 }
 
 function formatDateTime(value: string | null, i18n: BcspI18nRuntime): string {
@@ -132,9 +192,55 @@ function formatDateTime(value: string | null, i18n: BcspI18nRuntime): string {
     : i18n.t('common.invalid_timestamp');
 }
 
+function formatClock(value: string | null, i18n: BcspI18nRuntime): string | null {
+  if (value === null) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? i18n.formatDate(timestamp, { timeStyle: 'short' }) : null;
+}
+
 function optionTextForResult(value: string, i18n: BcspI18nRuntime): string {
   const key = filterOptionMessageKey(value);
   return key === undefined ? value : i18n.t(key);
+}
+
+/** The headline a student scans: the expanded title only when it says more. */
+function variantHeadline(variant: NormalizedCourseVariantV1, fallback: string): string {
+  const title = reported(variant.title);
+  const expanded = reported(variant.expandedTitle);
+  if (expanded !== null && (title === null || (expanded !== title && expanded.length > title.length))) {
+    return expanded;
+  }
+  return title ?? fallback;
+}
+
+/** The quiet 12.5px line under a headline: only facts that carry information. */
+function variantMetaItems(
+  variant: NormalizedCourseVariantV1,
+  i18n: BcspI18nRuntime,
+  options: { readonly credits: boolean },
+): string[] {
+  const items: string[] = [];
+  const credits = options.credits ? reported(variant.credits, formatCredits) : null;
+  if (credits !== null) items.push(i18n.t('result.credits_value', { credits }));
+  const subject = reported(variant.subjectDescription);
+  if (subject !== null) items.push(subject);
+  const level = levelText(variant.level, i18n);
+  if (level !== null) items.push(level);
+  const core = reported(variant.coreCodes, (codes) => codes.join(', '));
+  if (core !== null) items.push(i18n.t('result.core_value', { codes: core }));
+  const supplement = reported(variant.supplementCode);
+  if (supplement !== null) items.push(i18n.t('result.supplement_value', { code: supplement }));
+  return items;
+}
+
+function MetaItems({ items }: { readonly items: readonly string[] }) {
+  return (
+    <>
+      {items.map((text, index) => (
+        <span className="search-results__meta" key={`${index}-${text}`}>{text}</span>
+      ))}
+    </>
+  );
 }
 
 function Fact({ label, value }: { readonly label: string; readonly value: string }) {
@@ -142,17 +248,6 @@ function Fact({ label, value }: { readonly label: string; readonly value: string
     <div className="search-results__fact">
       <span className="search-results__label">{label}</span>
       <span className="search-results__value">{value}</span>
-    </div>
-  );
-}
-
-function VariantFacts({ variant }: { readonly variant: NormalizedCourseVariantV1 }) {
-  const i18n = useBcspI18n();
-  return (
-    <div className="search-results__variant-facts" aria-label={i18n.t('result.variant_fields')}>
-      <Fact label={i18n.t('result.title')} value={formatKnowledge(variant.title, i18n)} />
-      <Fact label={i18n.t('course.credits')} value={formatKnowledge(variant.credits, i18n, formatCredits)} />
-      <Fact label={i18n.t('result.supplement')} value={formatKnowledge(variant.supplementCode, i18n)} />
     </div>
   );
 }
@@ -191,15 +286,58 @@ function SectionLink({
   );
 }
 
-function OutcomeBadge({ explanation }: { readonly explanation: MatchExplanation }) {
-  const modifier = explanation.outcome === 'MATCH'
-    ? 'match'
-    : explanation.outcome === 'UNCERTAIN'
-      ? 'uncertain'
-      : 'no-match';
+/**
+ * Live seat evidence goes stale for a whole target at once — the first seconds
+ * after launch, or a failed Open fetch. Repeating that on every row buries the
+ * one fact the reader needs, so a doubt every visible Section shares is stated
+ * once above the list and withdrawn from the rows it would otherwise flood.
+ */
+const SharedOpenDoubtContext = createContext<MatchReasonCode | null>(null);
+
+function sharedOpenDoubt(sections: readonly SectionQueryItemV1[]): MatchReasonCode | null {
+  const first = sections[0]?.open.uncertainty ?? null;
+  if (first === null) return null;
+  return sections.every((section) => section.open.uncertainty === first) ? first : null;
+}
+
+function courseSections(items: readonly CourseQueryItemV1[]): SectionQueryItemV1[] {
+  return items.flatMap((item) => item.variants
+    .filter(({ explanation }) => explanation.outcome !== 'NO_MATCH')
+    .flatMap((variant) => variant.sections
+      .filter(({ explanation }) => explanation.outcome !== 'NO_MATCH')));
+}
+
+/** States a shared doubt once, in the reader's language, above the results. */
+function SharedOpenDoubtNotice({ reason }: { readonly reason: MatchReasonCode | null }) {
+  const i18n = useBcspI18n();
+  if (reason === null) return null;
   return (
-    <span className={`search-results__badge search-results__badge--${modifier}`}>
-      {explanation.outcome}
+    <p className="search-results__note search-results__note--warn" role="status">
+      {i18n.t('result.open_evidence_shared', { reason: i18n.t(matchReasonMessageKeys[reason]) })}
+    </p>
+  );
+}
+
+/** A plain MATCH is the norm, so it earns no pill; only doubt is worth a badge. */
+function OutcomeBadge({ explanation }: { readonly explanation: MatchExplanation }) {
+  const { t } = useBcspI18n();
+  const shared = useContext(SharedOpenDoubtContext);
+  if (explanation.outcome === 'MATCH') return null;
+  // Doubt the notice above already carries is not repeated on the row.
+  if (
+    shared !== null
+    && explanation.outcome === 'UNCERTAIN'
+    && explanation.reasons.length > 0
+    && explanation.reasons.every((entry) => entry.code === shared)
+  ) {
+    return null;
+  }
+  const uncertain = explanation.outcome === 'UNCERTAIN';
+  return (
+    <span
+      className={`search-results__badge search-results__badge--${uncertain ? 'uncertain' : 'no-match'}`}
+    >
+      {t(uncertain ? 'result.outcome_uncertain' : 'match.outcome.no_match')}
     </span>
   );
 }
@@ -208,80 +346,49 @@ function LiveBadge({ section }: { readonly section: SectionQueryItemV1 }) {
   const { t } = useBcspI18n();
   return (
     <span className={`search-results__badge search-results__badge--${section.open.state.toLowerCase()}`}>
-      {t('result.live_state', { state: section.open.state })}
+      {t(openStateMessageKeys[section.open.state])}
     </span>
   );
 }
 
-function FilterWitness({
-  explanation,
-  matches,
-}: {
-  readonly explanation: MatchExplanation;
-  readonly matches: readonly FilterMatchV1[];
-}) {
+/** Uncertain evidence reads as one quiet warn line, never a red block. */
+function EvidenceNote({ item }: { readonly item: SectionQueryItemV1 }) {
   const i18n = useBcspI18n();
-  const fallbackReasons = explanation.reasons;
+  const shared = useContext(SharedOpenDoubtContext);
+  const notes = new Set<string>();
+  if (item.explanation.outcome !== 'MATCH') {
+    for (const reason of item.explanation.reasons) {
+      if (reason.code === shared) continue;
+      notes.add(i18n.t(matchReasonMessageKeys[reason.code]));
+    }
+    const onlyShared = item.explanation.reasons.length > 0
+      && item.explanation.reasons.every((entry) => entry.code === shared);
+    if (notes.size === 0 && !onlyShared) notes.add(i18n.t('result.outcome_uncertain'));
+  }
+  if (item.open.uncertainty !== null && item.open.uncertainty !== shared) {
+    notes.add(i18n.t(matchReasonMessageKeys[item.open.uncertainty]));
+  }
+  if (notes.size === 0) return null;
   return (
-    <section
-      className={`search-results__witness${explanation.outcome === 'UNCERTAIN' ? ' search-results__witness--uncertain' : ''}`}
-      aria-label={i18n.t('result.same_section_witness')}
-    >
-      <strong className="search-results__witness-title">{i18n.t('result.witness_title')}</strong>
-      <ul className="search-results__witness-list">
-        {matches.map((match, index) => (
-          <li className="search-results__witness-item" key={`${match.fieldId}-${index}`}>
-            <span className="search-results__label">
-              {match.fieldId} · {match.explanation.outcome}
-            </span>
-            <span>{reasonText(match.explanation, i18n)}</span>
-          </li>
-        ))}
-        {matches.length === 0 && fallbackReasons.map((reason, index) => (
-          <li className="search-results__witness-item" key={`${reason.field}-${reason.code}-${index}`}>
-            <span className="search-results__label">{i18n.t('result.reason')}</span>
-            <span>{reason.field}: {reason.code}</span>
-          </li>
-        ))}
-        {matches.length === 0 && fallbackReasons.length === 0 ? (
-          <li className="search-results__witness-item">
-            <span className="search-results__label">{i18n.t('result.witness')}</span>
-            <span>{i18n.t('result.match_confirmed')}</span>
-          </li>
-        ) : null}
-      </ul>
-    </section>
+    <p className="search-results__note search-results__note--warn">{[...notes].join(' · ')}</p>
   );
 }
 
 function Occurrences({ occurrences }: { readonly occurrences: readonly NormalizedOccurrenceV1[] }) {
   const i18n = useBcspI18n();
   return (
-    <section className="search-results__occurrences" aria-label={i18n.t('result.meeting_occurrences')}>
-      <strong className="search-results__occurrence-title">
-        {i18n.t('result.occurrences_count', { count: i18n.formatNumber(occurrences.length) })}
-      </strong>
+    <div className="search-results__schedule" aria-label={i18n.t('result.meeting_occurrences')}>
       {occurrences.length === 0 ? (
-        <p className="search-results__value">{i18n.t('result.no_occurrences')}</p>
-      ) : (
-        <ol className="search-results__occurrence-list">
-          {occurrences.map((occurrence) => (
-            <li
-              className="search-results__occurrence"
-              key={`${occurrence.key.section.index}-${occurrence.key.ordinal}`}
-            >
-              <span className="search-results__label">
-                {i18n.t('result.occurrence', { number: i18n.formatNumber(occurrence.key.ordinal) })}
-              </span>
-              <span>
-                {formatArray(occurrence.days, i18n)} · {formatOccurrenceTime(occurrence, i18n)} ·{' '}
-                {formatKnowledge(occurrence.building, i18n)} {formatKnowledge(occurrence.room, i18n)}
-              </span>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
+        <p className="search-results__schedule-line">{i18n.t('result.no_occurrences')}</p>
+      ) : occurrences.map((occurrence) => (
+        <p
+          className="search-results__schedule-line"
+          key={`${occurrence.key.section.index}-${occurrence.key.ordinal}`}
+        >
+          {occurrenceSummary(occurrence, i18n)}
+        </p>
+      ))}
+    </div>
   );
 }
 
@@ -295,6 +402,14 @@ function SectionResult({
   readonly onSectionNavigate?: ((key: SectionKey) => void) | undefined;
 }) {
   const i18n = useBcspI18n();
+  const sectionNumber = reported(item.section.sectionNumber);
+  const observed = formatClock(item.open.observedAt, i18n);
+  const identity = [
+    sectionNumber === null ? null : i18n.t('result.section_number', { number: sectionNumber }),
+    optionTextForResult(item.section.deliveryModality, i18n),
+    optionTextForResult(item.section.synchronicity, i18n),
+    observed === null ? null : i18n.t('result.observed_short', { time: observed }),
+  ].filter((text): text is string => text !== null);
   return (
     <article
       className="search-results__section"
@@ -302,26 +417,21 @@ function SectionResult({
       data-section-index={item.section.key.index}
     >
       <header className="search-results__section-header">
-        <div>
-          <span className="search-results__eyebrow">{i18n.t('result.section_identity')}</span>
-          <h4 className="search-results__section-title">
-            {formatKnowledge(item.section.sectionNumber, i18n)} · {item.section.key.index}
-          </h4>
-          <div className="search-results__identity">
-            <data className="search-results__meta" value={item.section.key.term}>{item.section.key.term}</data>
-            <data className="search-results__meta" value={item.section.key.campus}>{item.section.key.campus}</data>
-            <span className="search-results__meta">
-              {i18n.t(filterOptionMessageKey(item.section.deliveryModality) ?? 'common.unknown')}
-            </span>
-            <span className="search-results__meta">
-              {i18n.t(filterOptionMessageKey(item.section.synchronicity) ?? 'common.unknown')}
-            </span>
+        <div className="search-results__section-summary">
+          <div className="search-results__section-identity">
+            <h4 className="search-results__section-title">{item.section.key.index}</h4>
+            <LiveBadge section={item} />
+          </div>
+          <div className="search-results__section-body">
+            <div className="search-results__identity">
+              <MetaItems items={identity} />
+            </div>
+            <Occurrences occurrences={item.occurrences} />
           </div>
         </div>
         <div className="search-results__section-actions">
           <div className="search-results__badges">
             <OutcomeBadge explanation={item.explanation} />
-            <LiveBadge section={item} />
           </div>
           <SectionSelectionAction sectionKey={item.section.key} />
           <SectionLink
@@ -331,57 +441,47 @@ function SectionResult({
           />
         </div>
       </header>
-      <div className="search-results__live" aria-label={i18n.t('result.live_freshness')}>
-        <Fact label={i18n.t('result.open_state')} value={i18n.t(openStateMessageKeys[item.open.state])} />
-        <Fact label={i18n.t('result.observed_at')} value={formatDateTime(item.open.observedAt, i18n)} />
-        <Fact
-          label={i18n.t('freshness.fresh')}
-          value={item.open.freshUntil === null
-            ? i18n.t('result.no_fresh_until')
-            : i18n.t('result.fresh_until', { time: formatDateTime(item.open.freshUntil, i18n) })}
-        />
-      </div>
-      {item.open.uncertainty === null ? null : (
-        <p className="search-results__meta">
-          {i18n.t('result.open_uncertainty', {
-            reason: item.open.uncertainty,
-          })}
-        </p>
-      )}
-      <FilterWitness explanation={item.explanation} matches={item.filterMatches} />
-      <Occurrences occurrences={item.occurrences} />
+      <EvidenceNote item={item} />
     </article>
   );
 }
 
 function VariantResult({
+  cardHeadline,
   expandedSectionDisclosures,
   item,
+  ordinal,
   onSectionDisclosureChange,
   sectionHref,
   onSectionNavigate,
 }: {
+  readonly cardHeadline: string;
   readonly expandedSectionDisclosures?: ReadonlySet<string> | undefined;
   readonly item: CourseVariantQueryItemV1;
+  readonly ordinal: number;
   readonly onSectionDisclosureChange?: ((disclosureId: string, expanded: boolean) => void) | undefined;
   readonly sectionHref: (key: SectionKey) => string;
   readonly onSectionNavigate?: ((key: SectionKey) => void) | undefined;
 }) {
   const i18n = useBcspI18n();
+  const label = i18n.t('result.offering_label', { number: i18n.formatNumber(ordinal) });
+  // An offering that carries the card's own name says nothing new; it shows its label instead.
+  const headline = variantHeadline(item.variant, label);
+  const named = headline !== cardHeadline;
   return (
-    <article className="search-results__variant" data-variant-fingerprint={item.variant.key.fingerprint}>
+    <article className="search-results__variant" data-variant-ordinal={ordinal}>
       <header className="search-results__variant-summary">
         <div>
-          <span className="search-results__eyebrow">
-            {i18n.t('result.variant', { fingerprint: item.variant.key.fingerprint })}
-          </span>
-          <h3 className="search-results__variant-title">{formatKnowledge(item.variant.title, i18n)}</h3>
+          {named ? <span className="search-results__eyebrow">{label}</span> : null}
+          <h3 className="search-results__variant-title">{named ? headline : label}</h3>
+          <div className="search-results__identity" aria-label={i18n.t('result.variant_fields')}>
+            <MetaItems items={variantMetaItems(item.variant, i18n, { credits: true })} />
+          </div>
         </div>
         <div className="search-results__badges">
           <OutcomeBadge explanation={item.explanation} />
         </div>
       </header>
-      <VariantFacts variant={item.variant} />
       <SectionDisclosure
         disclosureId={formatVariantDisclosureId(item.variant)}
         expandedSectionDisclosures={expandedSectionDisclosures}
@@ -479,19 +579,26 @@ function CourseGroupResult({
 }) {
   const i18n = useBcspI18n();
   const visibleVariants = item.variants.filter(({ explanation }) => explanation.outcome !== 'NO_MATCH');
-  if (visibleVariants.length === 0) return null;
+  const primary = visibleVariants[0];
+  if (primary === undefined) return null;
+  // Several genuinely distinct offerings are disclosed as such; one is just the course.
+  const several = visibleVariants.length > 1 || item.group.variantKeys.length > 1;
+  const courseString = item.group.key.courseString;
+  const headline = variantHeadline(primary.variant, courseString);
+  const metaItems = [
+    ...(several
+      ? [i18n.t('result.offerings_count', { count: i18n.formatNumber(visibleVariants.length) })]
+      : []),
+    ...variantMetaItems(primary.variant, i18n, { credits: !several }),
+  ];
   return (
-    <article className="search-results__group" data-course-group={item.group.key.courseString}>
+    <article className="search-results__group" data-course-group={courseString}>
       <header className="search-results__group-header">
         <div>
-          <span className="search-results__eyebrow">{i18n.t('result.course_group')}</span>
-          <h2 className="search-results__group-title">{item.group.key.courseString}</h2>
+          <h2 className="search-results__group-title">{headline}</h2>
           <div className="search-results__identity">
-            <span className="search-results__meta">{i18n.t('common.term')} {item.group.key.term}</span>
-            <span className="search-results__meta">{i18n.t('common.campus')} {item.group.key.campus}</span>
-            <span className="search-results__meta">
-              {i18n.t('result.explicit_variants', { count: i18n.formatNumber(visibleVariants.length) })}
-            </span>
+            <data className="search-results__meta" value={courseString}>{courseString}</data>
+            <MetaItems items={metaItems} />
           </div>
         </div>
         <button
@@ -502,18 +609,31 @@ function CourseGroupResult({
           {i18n.t('result.course_detail')}
         </button>
       </header>
-      <div className="search-results__variant-list">
-        {visibleVariants.map((variant) => (
-          <VariantResult
-            expandedSectionDisclosures={expandedSectionDisclosures}
-            item={variant}
-            key={variant.variant.key.fingerprint}
-            onSectionDisclosureChange={onSectionDisclosureChange}
-            onSectionNavigate={onSectionNavigate}
-            sectionHref={sectionHref}
-          />
-        ))}
-      </div>
+      {several ? (
+        <div className="search-results__variant-list">
+          {visibleVariants.map((variant, index) => (
+            <VariantResult
+              cardHeadline={headline}
+              expandedSectionDisclosures={expandedSectionDisclosures}
+              item={variant}
+              key={variant.variant.key.fingerprint}
+              onSectionDisclosureChange={onSectionDisclosureChange}
+              onSectionNavigate={onSectionNavigate}
+              ordinal={index + 1}
+              sectionHref={sectionHref}
+            />
+          ))}
+        </div>
+      ) : (
+        <SectionDisclosure
+          disclosureId={formatVariantDisclosureId(primary.variant)}
+          expandedSectionDisclosures={expandedSectionDisclosures}
+          onSectionDisclosureChange={onSectionDisclosureChange}
+          onSectionNavigate={onSectionNavigate}
+          sectionHref={sectionHref}
+          sections={primary.sections.filter(({ explanation }) => explanation.outcome !== 'NO_MATCH')}
+        />
+      )}
     </article>
   );
 }
@@ -581,10 +701,13 @@ export function CourseResultsView({
   const i18n = useBcspI18n();
   const visibleItems = response.items.filter((item) =>
     item.variants.some(({ explanation }) => explanation.outcome !== 'NO_MATCH'));
+  const shared = sharedOpenDoubt(courseSections(visibleItems));
   return (
+    <SharedOpenDoubtContext.Provider value={shared}>
     <section className="search-results" aria-label={i18n.t('result.course_results_label')}>
       <SearchResultsStyles />
       <ResultsHeader kind={i18n.t('result.course_results')} page={response.page} />
+      <SharedOpenDoubtNotice reason={shared} />
       {visibleItems.length === 0 ? (
         <p className="search-results__empty">{i18n.t('result.no_courses')}</p>
       ) : (
@@ -604,6 +727,7 @@ export function CourseResultsView({
       )}
       <Pagination onPageChange={onPageChange} page={response.page} />
     </section>
+    </SharedOpenDoubtContext.Provider>
   );
 }
 
@@ -616,10 +740,13 @@ export function SectionResultsView({
 }: SectionResultsViewProps) {
   const i18n = useBcspI18n();
   const visibleItems = response.items.filter(({ section }) => section.explanation.outcome !== 'NO_MATCH');
+  const shared = sharedOpenDoubt(visibleItems.map(({ section }) => section));
   return (
+    <SharedOpenDoubtContext.Provider value={shared}>
     <section className="search-results" aria-label={i18n.t('result.section_results_label')}>
       <SearchResultsStyles />
       <ResultsHeader kind={i18n.t('result.section_results')} page={response.page} />
+      <SharedOpenDoubtNotice reason={shared} />
       {visibleItems.length === 0 ? (
         <p className="search-results__empty">{i18n.t('result.no_sections')}</p>
       ) : (
@@ -628,13 +755,18 @@ export function SectionResultsView({
             <article className="search-results__standalone-section" key={formatSectionKey(item.section.section.key)}>
               <header className="search-results__group-header">
                 <div>
-                  <span className="search-results__eyebrow">{i18n.t('result.course_variant')}</span>
                   <h2 className="search-results__group-title">
-                    {item.variant.key.group.courseString} · {formatKnowledge(item.variant.title, i18n)}
+                    {variantHeadline(item.variant, item.variant.key.group.courseString)}
                   </h2>
-                  <span className="search-results__meta">
-                    {i18n.t('result.variant', { fingerprint: item.variant.key.fingerprint })}
-                  </span>
+                  <div className="search-results__identity">
+                    <data
+                      className="search-results__meta"
+                      value={item.variant.key.group.courseString}
+                    >
+                      {item.variant.key.group.courseString}
+                    </data>
+                    <MetaItems items={variantMetaItems(item.variant, i18n, { credits: true })} />
+                  </div>
                 </div>
                 <button
                   className="search-results__button"
@@ -644,7 +776,6 @@ export function SectionResultsView({
                   {i18n.t('result.course_detail')}
                 </button>
               </header>
-              <VariantFacts variant={item.variant} />
               <SectionResult
                 item={item.section}
                 onSectionNavigate={onSectionNavigate}
@@ -656,28 +787,44 @@ export function SectionResultsView({
       )}
       <Pagination onPageChange={onPageChange} page={response.page} />
     </section>
+    </SharedOpenDoubtContext.Provider>
   );
 }
 
-function DetailFields({ variant }: { readonly variant: NormalizedCourseVariantV1 }) {
+function DetailFields({
+  headline,
+  variant,
+}: {
+  readonly headline: string;
+  readonly variant: NormalizedCourseVariantV1;
+}) {
   const i18n = useBcspI18n();
-  const fields = [
-    [i18n.t('result.expanded_title'), formatKnowledge(variant.expandedTitle, i18n)],
-    [i18n.t('course.credits'), formatKnowledge(variant.credits, i18n, formatCredits)],
-    [i18n.t('result.supplement'), formatKnowledge(variant.supplementCode, i18n)],
-    [i18n.t('course.description'), formatKnowledge(variant.description, i18n)],
-    [i18n.t('result.prerequisite'), formatKnowledge(variant.prerequisiteNotes, i18n)],
+  const title = reported(variant.title);
+  const expandedTitle = reported(variant.expandedTitle);
+  const fields: readonly (readonly [string, string | null])[] = [
+    [i18n.t('result.title'), title === headline ? null : title],
+    [i18n.t('result.expanded_title'), expandedTitle === headline ? null : expandedTitle],
+    [i18n.t('course.credits'), detailText(variant.credits, i18n, formatCredits)],
+    [i18n.t('result.supplement'), reported(variant.supplementCode)],
+    [i18n.t('course.description'), detailText(variant.description, i18n)],
+    [i18n.t('result.prerequisite'), detailText(variant.prerequisiteNotes, i18n)],
     [i18n.t('result.prerequisite_state'), optionTextForResult(variant.prerequisiteState, i18n)],
-    [i18n.t('result.level'), formatKnowledge(variant.level, i18n)],
-    [i18n.t('course.subject'), `${formatKnowledge(variant.subjectCode, i18n)} · ${formatKnowledge(variant.subjectDescription, i18n)}`],
-    [i18n.t('result.offering_unit'), `${formatKnowledge(variant.offeringUnit, i18n)} · ${formatKnowledge(variant.offeringUnitTitle, i18n)}`],
-    [i18n.t('course.core_codes'), formatArray(variant.coreCodes, i18n)],
-    [i18n.t('result.campus_locations'), formatArray(variant.campusLocations, i18n)],
-    [i18n.t('result.synopsis_url'), formatKnowledge(variant.synopsisUrl, i18n)],
-  ] as const;
+    [i18n.t('result.level'), levelText(variant.level, i18n)],
+    [
+      i18n.t('course.subject'),
+      joinParts([reported(variant.subjectCode), reported(variant.subjectDescription)], ' · '),
+    ],
+    [
+      i18n.t('result.offering_unit'),
+      joinParts([reported(variant.offeringUnit), reported(variant.offeringUnitTitle)], ' · '),
+    ],
+    [i18n.t('course.core_codes'), reported(variant.coreCodes, (codes) => codes.join(', '))],
+    [i18n.t('result.campus_locations'), reported(variant.campusLocations, (values) => values.join(', '))],
+    [i18n.t('result.synopsis_url'), reported(variant.synopsisUrl)],
+  ];
   return (
     <dl className="search-results__field-list">
-      {fields.map(([label, value]) => (
+      {fields.map(([label, value]) => value === null ? null : (
         <div className="search-results__field" key={label}>
           <dt className="search-results__label">{label}</dt>
           <dd className="search-results__value">{value}</dd>
@@ -696,40 +843,50 @@ export function CourseDetailView({
 }: CourseDetailViewProps) {
   const i18n = useBcspI18n();
   const course = response.course;
+  const courseString = course.group.key.courseString;
+  const primary = course.variants[0];
+  const several = course.variants.length > 1;
+  const cardHeadline = primary === undefined
+    ? courseString
+    : variantHeadline(primary.variant, courseString);
   return (
     <section className="search-results" aria-label={i18n.t('result.course_detail')}>
       <SearchResultsStyles />
       <article className="search-results__detail">
         <header className="search-results__detail-header">
           <div>
-            <span className="search-results__eyebrow">{i18n.t('result.course_detail')}</span>
-            <h1 className="search-results__detail-title">{course.group.key.courseString}</h1>
+            <h1 className="search-results__detail-title">{cardHeadline}</h1>
             <span className="search-results__meta">{formatGroupKey(course.group.key)}</span>
           </div>
           <OutcomeBadge explanation={course.explanation} />
         </header>
-        {course.variants.map((variant) => (
-          <article className="search-results__variant" key={variant.variant.key.fingerprint}>
-            <header className="search-results__variant-summary">
-              <div>
-                <span className="search-results__eyebrow">
-                  {i18n.t('result.variant', { fingerprint: variant.variant.key.fingerprint })}
-                </span>
-                <h2 className="search-results__variant-title">{formatKnowledge(variant.variant.title, i18n)}</h2>
-              </div>
-              <OutcomeBadge explanation={variant.explanation} />
-            </header>
-            <DetailFields variant={variant.variant} />
-            <SectionDisclosure
-              disclosureId={formatVariantDisclosureId(variant.variant)}
-              expandedSectionDisclosures={expandedSectionDisclosures}
-              onSectionDisclosureChange={onSectionDisclosureChange}
-              onSectionNavigate={onSectionNavigate}
-              sectionHref={sectionHref}
-              sections={variant.sections}
-            />
-          </article>
-        ))}
+        {course.variants.map((variant, index) => {
+          const label = i18n.t('result.offering_label', { number: i18n.formatNumber(index + 1) });
+          const headline = variantHeadline(variant.variant, label);
+          const named = several && headline !== cardHeadline;
+          return (
+            <article className="search-results__variant" key={variant.variant.key.fingerprint}>
+              {several ? (
+                <header className="search-results__variant-summary">
+                  <div>
+                    {named ? <span className="search-results__eyebrow">{label}</span> : null}
+                    <h2 className="search-results__variant-title">{named ? headline : label}</h2>
+                  </div>
+                  <OutcomeBadge explanation={variant.explanation} />
+                </header>
+              ) : null}
+              <DetailFields headline={cardHeadline} variant={variant.variant} />
+              <SectionDisclosure
+                disclosureId={formatVariantDisclosureId(variant.variant)}
+                expandedSectionDisclosures={expandedSectionDisclosures}
+                onSectionDisclosureChange={onSectionDisclosureChange}
+                onSectionNavigate={onSectionNavigate}
+                sectionHref={sectionHref}
+                sections={variant.sections}
+              />
+            </article>
+          );
+        })}
       </article>
     </section>
   );
@@ -738,21 +895,21 @@ export function CourseDetailView({
 export function SectionDetailView({ response, sectionHref, onSectionNavigate }: SectionDetailViewProps) {
   const i18n = useBcspI18n();
   const { section, variant } = response;
+  const headline = variantHeadline(variant, variant.key.group.courseString);
   return (
     <section className="search-results" aria-label={i18n.t('search.section_detail_title')}>
       <SearchResultsStyles />
       <article className="search-results__detail">
         <header className="search-results__detail-header">
           <div>
-            <span className="search-results__eyebrow">{i18n.t('search.section_detail_title')}</span>
-            <h1 className="search-results__detail-title">
-              {variant.key.group.courseString} · {section.section.key.index}
-            </h1>
-            <span className="search-results__meta">{formatSectionKey(section.section.key)}</span>
+            <h1 className="search-results__detail-title">{headline}</h1>
+            <span className="search-results__meta">
+              {variant.key.group.courseString} · {formatSectionKey(section.section.key)}
+            </span>
           </div>
           <OutcomeBadge explanation={section.explanation} />
         </header>
-        <DetailFields variant={variant} />
+        <DetailFields headline={headline} variant={variant} />
         <dl className="search-results__field-list">
           <div className="search-results__field">
             <dt className="search-results__label">{i18n.t('result.section_subtitle')}</dt>
@@ -775,6 +932,22 @@ export function SectionDetailView({ response, sectionHref, onSectionNavigate }: 
             </dd>
           </div>
         </dl>
+        <div className="search-results__live" aria-label={i18n.t('result.live_freshness')}>
+          <Fact
+            label={i18n.t('result.open_state')}
+            value={i18n.t(openStateMessageKeys[section.open.state])}
+          />
+          <Fact
+            label={i18n.t('result.observed_at')}
+            value={formatDateTime(section.open.observedAt, i18n)}
+          />
+          <Fact
+            label={i18n.t('freshness.fresh')}
+            value={section.open.freshUntil === null
+              ? i18n.t('result.no_fresh_until')
+              : i18n.t('result.fresh_until', { time: formatDateTime(section.open.freshUntil, i18n) })}
+          />
+        </div>
         <SectionResult
           item={section}
           onSectionNavigate={onSectionNavigate}
