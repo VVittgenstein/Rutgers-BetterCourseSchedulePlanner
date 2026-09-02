@@ -123,7 +123,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bcsp-application"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "bcsp-catalog",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-catalog"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-contracts",
  "bcsp-domain",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-contracts"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -178,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-domain"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-contracts",
  "jiff",
@@ -191,14 +191,14 @@ dependencies = [
 
 [[package]]
 name = "bcsp-local"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-local-runtime",
 ]
 
 [[package]]
 name = "bcsp-local-runtime"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-application",
  "bcsp-catalog",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-local-user-state"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-contracts",
  "bcsp-domain",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-open"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-contracts",
  "bcsp-domain",
@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-operational-storage"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-contracts",
  "bcsp-domain",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-public-operations"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-operational-storage",
  "rusqlite",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-public-runtime"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "bcsp-application",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-query"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-contracts",
  "bcsp-domain",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-rutgers-client"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-contracts",
  "reqwest",
@@ -336,7 +336,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-public-runtime",
  "tokio",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "bcsp-watch"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bcsp-contracts",
  "bcsp-domain",

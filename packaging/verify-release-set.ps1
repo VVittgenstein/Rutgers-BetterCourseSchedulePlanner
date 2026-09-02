@@ -28,7 +28,7 @@ if ($PSCmdlet.ParameterSetName -ceq 'Verify') {
         # Only when OMITTED. An explicitly passed empty value -- a wrapper's
         # unset variable -- must keep failing loudly, not verify the default
         # directory in place of the one the caller meant.
-        $ReleaseDirectory = Join-Path (Split-Path -Parent $PSScriptRoot) 'release\0.1.1'
+        $ReleaseDirectory = Join-Path (Split-Path -Parent $PSScriptRoot) 'release\0.1.2'
     }
     if ($SourceCommit -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$') {
         throw 'SourceCommit must be a full lowercase hexadecimal commit id.'
