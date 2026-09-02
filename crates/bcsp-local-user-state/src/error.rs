@@ -112,8 +112,7 @@ impl PersonalStateError {
             self,
             Self::Sqlite(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error {
-                    code: rusqlite::ErrorCode::DatabaseBusy
-                        | rusqlite::ErrorCode::DatabaseLocked,
+                    code: rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked,
                     ..
                 },
                 _,

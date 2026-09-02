@@ -502,8 +502,10 @@ mod tests {
             [section("NB", "00001"), section("NB", "00002")],
         )
         .expect("catalog");
-        let first_plan = reconcile_open_set(version(1), &first, &forward, false).expect("same target");
-        let second_plan = reconcile_open_set(version(2), &second, &forward, false).expect("same target");
+        let first_plan =
+            reconcile_open_set(version(1), &first, &forward, false).expect("same target");
+        let second_plan =
+            reconcile_open_set(version(2), &second, &forward, false).expect("same target");
         assert_eq!(
             first_plan.state_hash.as_deref(),
             Some("09a3c51f4f65611abf20f0179c001a6cd782c057524ba591899dfdd3b4331d3b")

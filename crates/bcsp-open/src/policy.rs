@@ -202,7 +202,9 @@ pub enum OpenFailureKind {
     /// Integrity-gate hold: the target is quarantined and needs dense probe
     /// samples to drive recovery/confirmation (gate design section 4).
     SuspectPartial,
-    RateLimited { retry_after: Option<Duration> },
+    RateLimited {
+        retry_after: Option<Duration>,
+    },
     FatalProtocol,
 }
 
@@ -510,9 +512,7 @@ mod tests {
         let nb = target();
         let cap = Duration::from_secs(GATE_QUARANTINE_PROBE_CAP_SECONDS);
         assert!(
-            (0..6).any(|streak| {
-                deterministic_jitter_v1(&nb, streak + 1, cap) > Duration::ZERO
-            }),
+            (0..6).any(|streak| { deterministic_jitter_v1(&nb, streak + 1, cap) > Duration::ZERO }),
             "the removed jitter term must be non-zero somewhere in this range,              otherwise the equality assertions below prove nothing",
         );
 
@@ -553,9 +553,13 @@ mod tests {
                 let requested = Duration::from_secs(u64::from(seconds));
                 let bound = requested.min(Duration::from_secs(GATE_QUARANTINE_PROBE_CAP_SECONDS));
                 for streak in 0..4 {
-                    let delay =
-                        retry_directive(&target, requested, streak, OpenFailureKind::SuspectPartial)
-                            .delay;
+                    let delay = retry_directive(
+                        &target,
+                        requested,
+                        streak,
+                        OpenFailureKind::SuspectPartial,
+                    )
+                    .delay;
                     assert!(
                         delay <= bound,
                         "{campus} interval={seconds}s streak={streak} delay={delay:?} > {bound:?}"
@@ -575,18 +579,29 @@ mod tests {
     fn removing_the_probe_jitter_does_not_disturb_the_other_retry_paths() {
         let nb = target();
         for streak in 0..5 {
-            let base = Duration::from_secs(u64::from(NB_TRANSIENT_BACKOFF_SECONDS[
-                usize::try_from(streak).expect("streak")
-            ]));
+            let base = Duration::from_secs(u64::from(
+                NB_TRANSIENT_BACKOFF_SECONDS[usize::try_from(streak).expect("streak")],
+            ));
             assert_eq!(
-                retry_directive(&nb, Duration::from_secs(30), streak, OpenFailureKind::Transient)
-                    .delay,
+                retry_directive(
+                    &nb,
+                    Duration::from_secs(30),
+                    streak,
+                    OpenFailureKind::Transient
+                )
+                .delay,
                 base + deterministic_jitter_v1(&nb, streak + 1, base),
             );
         }
         let content_base = Duration::from_secs(u64::from(CONTENT_BACKOFF_SECONDS[0]));
         assert_eq!(
-            retry_directive(&nb, Duration::from_secs(30), 0, OpenFailureKind::UnsafeEmpty).delay,
+            retry_directive(
+                &nb,
+                Duration::from_secs(30),
+                0,
+                OpenFailureKind::UnsafeEmpty
+            )
+            .delay,
             content_base + deterministic_jitter_v1(&nb, 1, content_base),
         );
         let limited = retry_directive(

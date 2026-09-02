@@ -343,9 +343,9 @@ impl WebSocketExtension for LocalPresenceRoute {
     }
 
     fn receive_text(&self, connection_id: TraceId, message: &str) {
-        let Ok(envelope) = decode_versioned_envelope_json::<
-            WsClientEnvelope<LocalPresenceCommandV1>,
-        >(message.as_bytes()) else {
+        let Ok(envelope) = decode_versioned_envelope_json::<WsClientEnvelope<LocalPresenceCommandV1>>(
+            message.as_bytes(),
+        ) else {
             self.close(connection_id, "presence frame could not be decoded");
             return;
         };
@@ -363,7 +363,10 @@ impl WebSocketExtension for LocalPresenceRoute {
                 // a socket refused at admission is: closed, not counted, not
                 // reported as a page.
                 drop(registry);
-                self.close(connection_id, "presence HELLO arrived after the exit decision");
+                self.close(
+                    connection_id,
+                    "presence HELLO arrived after the exit decision",
+                );
                 return;
             }
             let Some(connection) = registry.connections.get(&connection_id) else {
@@ -598,7 +601,10 @@ mod tests {
         harness.route.tick();
 
         assert_eq!(harness.route.state().pages, 0);
-        assert!(inbound.try_recv().is_err(), "an unidentified socket is closed, not answered");
+        assert!(
+            inbound.try_recv().is_err(),
+            "an unidentified socket is closed, not answered"
+        );
     }
 
     #[test]
@@ -906,8 +912,14 @@ mod tests {
         // The user must never read "a page is open" about a page the runtime
         // is in the middle of taking away.
         let lines = recorder.lines.lock().expect("recorder").clone();
-        let opened = lines.iter().filter(|line| line.contains("A page is open")).count();
-        let closed = lines.iter().filter(|line| line.contains("A page closed")).count();
+        let opened = lines
+            .iter()
+            .filter(|line| line.contains("A page is open"))
+            .count();
+        let closed = lines
+            .iter()
+            .filter(|line| line.contains("A page closed"))
+            .count();
         assert_eq!(opened, 1, "only the original page ever opened: {lines:?}");
         assert_eq!(closed, 1, "the rejected socket was never a page: {lines:?}");
     }

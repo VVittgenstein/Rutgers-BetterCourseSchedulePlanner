@@ -101,8 +101,12 @@ fn self_check() {
 }
 
 fn section(term: &str) -> SectionKey {
-    SectionKey::try_new(term, support::FIXTURE_CAMPUS, support::FIXTURE_SECTION_INDEX)
-        .expect("fixture Section identity")
+    SectionKey::try_new(
+        term,
+        support::FIXTURE_CAMPUS,
+        support::FIXTURE_SECTION_INDEX,
+    )
+    .expect("fixture Section identity")
 }
 
 /// The whole point of the fixture, asserted rather than assumed: this exact

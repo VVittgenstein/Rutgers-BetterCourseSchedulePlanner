@@ -20,9 +20,8 @@ pub use gate::{
     GATE_CONFIRM_MIN_CONSISTENT, GATE_CONFIRM_MIN_SPAN_SECONDS, GATE_CONSISTENCY_DENOMINATOR,
     GATE_DROP_THRESHOLD_DENOMINATOR, GATE_MAX_SAMPLE_GAP_SECONDS, GATE_MIN_ABSOLUTE_DROP,
     GATE_QUARANTINE_PROBE_CAP_SECONDS, GATE_RECOVERY_THRESHOLD_DENOMINATOR, GateDecision,
-    GateDecisionKind, GateDisposition,
-    GateRuntime, GateSample, GateState, RestartAttemptSummary, TargetGateSet,
-    catalog_section_set_identity_v1, rebuild_after_restart,
+    GateDecisionKind, GateDisposition, GateRuntime, GateSample, GateState, RestartAttemptSummary,
+    TargetGateSet, catalog_section_set_identity_v1, rebuild_after_restart,
 };
 pub use policy::{
     ACTIVE_WATCH_OPEN_INTERVAL_SECONDS, FATAL_DIAGNOSTIC_COOLDOWN_SECONDS, GeneralOpenInterval,

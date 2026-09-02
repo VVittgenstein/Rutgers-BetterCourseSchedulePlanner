@@ -361,7 +361,9 @@ mod tests {
             1,
             "releasing a slot does not un-admit it"
         );
-        let replacement = capacity.admit("newcomer".to_owned()).expect("the freed slot");
+        let replacement = capacity
+            .admit("newcomer".to_owned())
+            .expect("the freed slot");
         assert_eq!(
             capacity.admissions(),
             2,

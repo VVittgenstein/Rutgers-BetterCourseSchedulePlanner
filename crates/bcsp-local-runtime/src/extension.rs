@@ -30,8 +30,7 @@ pub trait LocalSurfaceState: Send + Sync + 'static {
     /// The desired-watch authority read.
     fn desired_watch(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
     /// One desired-watch compare-and-swap.
-    fn put_desired_watch(&self, body: &[u8])
-    -> Result<LocalSurfaceOutcome, LocalSurfaceFailure>;
+    fn put_desired_watch(&self, body: &[u8]) -> Result<LocalSurfaceOutcome, LocalSurfaceFailure>;
     fn settings(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
     fn put_settings(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
     fn selection(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;

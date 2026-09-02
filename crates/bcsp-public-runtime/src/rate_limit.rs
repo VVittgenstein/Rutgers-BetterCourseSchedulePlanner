@@ -113,7 +113,9 @@ pub(crate) enum RateDecision {
     Allow,
     /// Denied; carry the whole-second wait until one token is available
     /// (the `Retry-After` response header, always at least 1).
-    Deny { retry_after_seconds: u32 },
+    Deny {
+        retry_after_seconds: u32,
+    },
 }
 
 pub(crate) struct IssuanceRateLimiter {
@@ -262,9 +264,7 @@ impl IssuanceRateLimiter {
                 retry_after_seconds: client_wait.max(global_wait).max(1),
             }
         };
-        state
-            .buckets
-            .insert(client_key.to_owned(), bucket);
+        state.buckets.insert(client_key.to_owned(), bucket);
         state
             .by_staleness
             .insert((bucket.last_refill, client_key.to_owned()));
@@ -320,10 +320,7 @@ mod tests {
             RateDecision::Deny { .. }
         ));
         assert!(
-            matches!(
-                limiter.check_at("client-a", t1),
-                RateDecision::Deny { .. }
-            ),
+            matches!(limiter.check_at("client-a", t1), RateDecision::Deny { .. }),
             "an out-of-order timestamp must not reset the exhausted bucket",
         );
         // And the timestamp did not rewind: one second AFTER t2 refills.
@@ -344,7 +341,10 @@ mod tests {
         ));
         // Past the idle expiry the entry is swept and recreated full.
         let much_later = now + BUCKET_IDLE_EXPIRY + Duration::from_secs(1);
-        assert_eq!(limiter.check_at("client-a", much_later), RateDecision::Allow);
+        assert_eq!(
+            limiter.check_at("client-a", much_later),
+            RateDecision::Allow
+        );
     }
 
     #[test]

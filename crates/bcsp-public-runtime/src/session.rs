@@ -471,16 +471,21 @@ mod tests {
         ));
         assert_eq!(
             registry
-                .locale_at(nonce.as_str(), later + DOCUMENT_SESSION_TTL - Duration::from_secs(1))
+                .locale_at(
+                    nonce.as_str(),
+                    later + DOCUMENT_SESSION_TTL - Duration::from_secs(1)
+                )
                 .expect("slid window"),
             Some(PublicLocale::ZhCn),
         );
 
         // Renew: an unknown nonce yields a usable replacement; the supplied
         // one stays invalid (nothing resurrects it).
-        let Ok(ValidateOutcome::Renewed(renewed)) =
-            registry.validate_or_renew_at("00000000-0000-4000-8000-00000000dead", PublicLocale::EnUs, later)
-        else {
+        let Ok(ValidateOutcome::Renewed(renewed)) = registry.validate_or_renew_at(
+            "00000000-0000-4000-8000-00000000dead",
+            PublicLocale::EnUs,
+            later,
+        ) else {
             panic!("unknown nonce must renew");
         };
         assert_eq!(

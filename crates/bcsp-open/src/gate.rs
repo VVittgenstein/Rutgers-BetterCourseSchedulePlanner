@@ -289,7 +289,11 @@ impl GateRuntime {
         missing < relative.max(GATE_MIN_ABSOLUTE_DROP)
     }
 
-    fn consistent_with_anchor(episode: &CandidateEpisode, sample: &GateSample<'_>, sample_hash: &str) -> bool {
+    fn consistent_with_anchor(
+        episode: &CandidateEpisode,
+        sample: &GateSample<'_>,
+        sample_hash: &str,
+    ) -> bool {
         match &episode.anchor_set {
             Some(anchor) => {
                 let tolerance = anchor.len().div_ceil(GATE_CONSISTENCY_DENOMINATOR);
@@ -323,7 +327,9 @@ impl GateRuntime {
     pub fn evaluate(&self, sample: &GateSample<'_>) -> GateDecision {
         let observed_count = sample.observed.len() as u64;
         let sample_hash = canonical_open_set_hash_v1(sample.observed.iter());
-        let decision = |kind: GateDecisionKind, disposition: GateDisposition, next_state: GateState| GateDecision {
+        let decision = |kind: GateDecisionKind,
+                        disposition: GateDisposition,
+                        next_state: GateState| GateDecision {
             disposition,
             kind,
             catalog_identity: sample.catalog_identity.clone(),
@@ -342,8 +348,7 @@ impl GateRuntime {
                 // never saw. Without this, an unseeded runtime would pass
                 // forever and the first-full/second-partial sequence would
                 // apply the partial.
-                let mut seeded =
-                    BaselineEpoch::seeded(sample.catalog_identity.clone(), None);
+                let mut seeded = BaselineEpoch::seeded(sample.catalog_identity.clone(), None);
                 seeded.push_applied(observed_count);
                 decision(
                     GateDecisionKind::Pass,
@@ -528,8 +533,7 @@ pub fn rebuild_after_restart(
     let Some(newest) = attempts_newest_first.first() else {
         return healthy(lkg_reference);
     };
-    if !newest.is_suspect_partial
-        || newest.catalog_set_identity.as_ref() != Some(&catalog_identity)
+    if !newest.is_suspect_partial || newest.catalog_set_identity.as_ref() != Some(&catalog_identity)
     {
         return healthy(lkg_reference);
     }
@@ -564,7 +568,9 @@ pub fn rebuild_after_restart(
             break;
         }
     }
-    let oldest = run.last().expect("run contains at least the newest attempt");
+    let oldest = run
+        .last()
+        .expect("run contains at least the newest attempt");
     let mut baseline = BaselineEpoch::seeded(catalog_identity, Some(reference));
     baseline.set_lkg_floor(Some(reference));
     GateRuntime {
@@ -717,7 +723,10 @@ mod tests {
             "the first applied sample must install a baseline",
         );
 
-        let d = apply(&mut runtime, &sample(&identity, &partial, t0() + Duration::seconds(30)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &partial, t0() + Duration::seconds(30)),
+        );
         assert_eq!(d.kind, GateDecisionKind::Suspect);
         assert_eq!(d.disposition, GateDisposition::Hold);
         assert!(runtime.is_quarantined());
@@ -743,7 +752,11 @@ mod tests {
         let mut runtime = GateRuntime::seeded(identity.clone(), 24);
         let empty = BTreeSet::new();
         let d = apply(&mut runtime, &sample(&identity, &empty, t0()));
-        assert_eq!(d.kind, GateDecisionKind::Pass, "24 -> 0 stays under the absolute floor");
+        assert_eq!(
+            d.kind,
+            GateDecisionKind::Pass,
+            "24 -> 0 stays under the absolute floor"
+        );
 
         // Growth is never suspect.
         let grown = set(0..500);
@@ -768,13 +781,23 @@ mod tests {
         // 1000 = 8% short) clears the ENTRY threshold but not the tighter
         // recovery threshold -- it must stay held and re-anchor, never apply.
         let drifting = set(0..920);
-        let d = apply(&mut runtime, &sample(&identity, &drifting, t0() + Duration::seconds(10)));
-        assert_eq!(d.kind, GateDecisionKind::Suspect, "8% short: inside hysteresis band, held");
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &drifting, t0() + Duration::seconds(10)),
+        );
+        assert_eq!(
+            d.kind,
+            GateDecisionKind::Suspect,
+            "8% short: inside hysteresis band, held"
+        );
         assert_eq!(d.disposition, GateDisposition::Hold);
         assert!(runtime.is_quarantined());
 
         let recovered = set(0..960);
-        let d = apply(&mut runtime, &sample(&identity, &recovered, t0() + Duration::seconds(20)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &recovered, t0() + Duration::seconds(20)),
+        );
         assert_eq!(d.kind, GateDecisionKind::QuarantineRecover);
         assert_eq!(d.disposition, GateDisposition::Apply);
         assert!(!runtime.is_quarantined());
@@ -789,20 +812,32 @@ mod tests {
 
         apply(&mut runtime, &sample(&identity, &partial, t0()));
         // Second consistent sample 100s later: count=2, span=100 -> still held.
-        let d = apply(&mut runtime, &sample(&identity, &partial, t0() + Duration::seconds(100)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &partial, t0() + Duration::seconds(100)),
+        );
         assert_eq!(d.kind, GateDecisionKind::Suspect);
         // Third consistent sample at 200s: count=3 but span 200 < 300 -> held.
-        let d = apply(&mut runtime, &sample(&identity, &partial, t0() + Duration::seconds(200)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &partial, t0() + Duration::seconds(200)),
+        );
         assert_eq!(d.kind, GateDecisionKind::Suspect);
         // Fourth at 310s: count=4, span=310 >= 300, gaps all <= 120 -> confirm.
-        let d = apply(&mut runtime, &sample(&identity, &partial, t0() + Duration::seconds(310)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &partial, t0() + Duration::seconds(310)),
+        );
         assert_eq!(d.kind, GateDecisionKind::QuarantineConfirm);
         assert_eq!(d.disposition, GateDisposition::Apply);
         assert!(!runtime.is_quarantined());
 
         // After confirmation the shrunken cardinality is the new baseline:
         // the same feed keeps applying.
-        let d = apply(&mut runtime, &sample(&identity, &partial, t0() + Duration::seconds(340)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &partial, t0() + Duration::seconds(340)),
+        );
         assert_eq!(d.kind, GateDecisionKind::Pass);
     }
 
@@ -816,7 +851,10 @@ mod tests {
 
         apply(&mut runtime, &sample(&identity, &partial_a, t0()));
         // Divergent shrunken set: re-anchor (first_seen resets to this sample).
-        apply(&mut runtime, &sample(&identity, &partial_b, t0() + Duration::seconds(30)));
+        apply(
+            &mut runtime,
+            &sample(&identity, &partial_b, t0() + Duration::seconds(30)),
+        );
         // Consistent with the new anchor but after an over-gap: re-anchor again.
         apply(
             &mut runtime,
@@ -826,11 +864,20 @@ mod tests {
         // measured from the LAST re-anchor -- confirmation only at >= 300s
         // after it, proving no stitching happened.
         let base = t0() + Duration::seconds(151);
-        let d = apply(&mut runtime, &sample(&identity, &partial_b, base + Duration::seconds(100)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &partial_b, base + Duration::seconds(100)),
+        );
         assert_eq!(d.kind, GateDecisionKind::Suspect);
-        let d = apply(&mut runtime, &sample(&identity, &partial_b, base + Duration::seconds(200)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &partial_b, base + Duration::seconds(200)),
+        );
         assert_eq!(d.kind, GateDecisionKind::Suspect);
-        let d = apply(&mut runtime, &sample(&identity, &partial_b, base + Duration::seconds(310)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &partial_b, base + Duration::seconds(310)),
+        );
         assert_eq!(d.kind, GateDecisionKind::QuarantineConfirm);
     }
 
@@ -844,7 +891,10 @@ mod tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             runtime.advance(&stale);
         }));
-        assert!(result.is_err(), "second advance with the same decision must panic");
+        assert!(
+            result.is_err(),
+            "second advance with the same decision must panic"
+        );
     }
 
     #[test]
@@ -858,11 +908,19 @@ mod tests {
         runtime.reset_for_catalog_identity(new_identity.clone(), Some(900));
         let partial = set(100..700);
         let d = runtime.evaluate(&sample(&new_identity, &partial, t0()));
-        assert_eq!(d.kind, GateDecisionKind::Suspect, "transferred floor keeps guarding");
+        assert_eq!(
+            d.kind,
+            GateDecisionKind::Suspect,
+            "transferred floor keeps guarding"
+        );
 
         runtime.reset_for_catalog_identity(new_identity.clone(), None);
         let d = runtime.evaluate(&sample(&new_identity, &partial, t0()));
-        assert_eq!(d.kind, GateDecisionKind::Pass, "no transfer -> gate suspended until reseeded");
+        assert_eq!(
+            d.kind,
+            GateDecisionKind::Pass,
+            "no transfer -> gate suspended until reseeded"
+        );
     }
 
     #[test]
@@ -883,13 +941,20 @@ mod tests {
         let rebuilt = rebuild_after_restart(
             identity.clone(),
             Some(1000),
-            &[attempt(true, &hash, 60), attempt(true, &hash, 90), attempt(false, "x", 120)],
+            &[
+                attempt(true, &hash, 60),
+                attempt(true, &hash, 90),
+                attempt(false, "x", 120),
+            ],
             t0(),
         );
         assert!(rebuilt.is_quarantined());
         // Exact-hash sample continues the episode across the restart.
         let mut rebuilt = rebuilt;
-        let d = apply(&mut rebuilt, &sample(&identity, &partial, t0() + Duration::seconds(10)));
+        let d = apply(
+            &mut rebuilt,
+            &sample(&identity, &partial, t0() + Duration::seconds(10)),
+        );
         assert_eq!(d.kind, GateDecisionKind::Suspect);
         match rebuilt.state() {
             GateState::Quarantined { episode, .. } => {
@@ -914,7 +979,11 @@ mod tests {
         let rebuilt = rebuild_after_restart(
             identity.clone(),
             Some(1000),
-            &[attempt(true, &hash, 30), attempt(false, "x", 60), attempt(true, &hash, 90)],
+            &[
+                attempt(true, &hash, 30),
+                attempt(false, "x", 60),
+                attempt(true, &hash, 90),
+            ],
             t0(),
         );
         match rebuilt.state() {
@@ -956,7 +1025,10 @@ mod tests {
         );
         match rebuilt.state() {
             GateState::Quarantined { episode, .. } => {
-                assert_eq!(episode.consistent_count, 1, "over-gap history must not stitch");
+                assert_eq!(
+                    episode.consistent_count, 1,
+                    "over-gap history must not stitch"
+                );
                 assert_eq!(episode.first_seen, t0() - Duration::seconds(30));
             }
             GateState::Healthy { .. } => panic!("newest suspect must still quarantine"),
@@ -1028,7 +1100,10 @@ mod tests {
         // (wall-clock rollback) must re-anchor, not continue the episode.
         let mut runtime = GateRuntime::seeded(identity.clone(), 1000);
         apply(&mut runtime, &sample(&identity, &partial, t0()));
-        let d = apply(&mut runtime, &sample(&identity, &partial, t0() - Duration::seconds(30)));
+        let d = apply(
+            &mut runtime,
+            &sample(&identity, &partial, t0() - Duration::seconds(30)),
+        );
         assert_eq!(d.kind, GateDecisionKind::Suspect);
         match runtime.state() {
             GateState::Quarantined { episode, .. } => {
@@ -1053,7 +1128,11 @@ mod tests {
         );
         assert!(!rebuilt.is_quarantined());
         let d = rebuilt.evaluate(&sample(&identity, &partial, t0()));
-        assert_eq!(d.kind, GateDecisionKind::Suspect, "the floor still guards the next sample");
+        assert_eq!(
+            d.kind,
+            GateDecisionKind::Suspect,
+            "the floor still guards the next sample"
+        );
     }
 
     #[test]
@@ -1080,15 +1159,17 @@ mod tests {
             &[attempt(30, Some(foreign.clone()))],
             t0(),
         );
-        assert!(!rebuilt.is_quarantined(), "foreign-identity suspect is not our evidence");
-
-        let rebuilt = rebuild_after_restart(
-            identity.clone(),
-            Some(1000),
-            &[attempt(30, None)],
-            t0(),
+        assert!(
+            !rebuilt.is_quarantined(),
+            "foreign-identity suspect is not our evidence"
         );
-        assert!(!rebuilt.is_quarantined(), "pre-gate history carries no identity");
+
+        let rebuilt =
+            rebuild_after_restart(identity.clone(), Some(1000), &[attempt(30, None)], t0());
+        assert!(
+            !rebuilt.is_quarantined(),
+            "pre-gate history carries no identity"
+        );
 
         let rebuilt = rebuild_after_restart(
             identity.clone(),
@@ -1127,9 +1208,11 @@ mod tests {
         // A re-created later runs from its fresh seed, not retained state:
         // with a None seed it starts unseeded and the same partial passes,
         // proving the old runtime (floor 1000) is gone.
-        let d = gates
-            .candidate_mut(&identity_a, || None)
-            .evaluate(&sample(&identity_a, &partial, t0() + Duration::seconds(10)));
+        let d = gates.candidate_mut(&identity_a, || None).evaluate(&sample(
+            &identity_a,
+            &partial,
+            t0() + Duration::seconds(10),
+        ));
         assert_eq!(d.disposition, GateDisposition::Apply);
     }
 
@@ -1151,12 +1234,19 @@ mod tests {
         assert_eq!(d.disposition, GateDisposition::Hold);
         candidate.advance(&d);
         assert!(candidate.is_quarantined());
-        assert!(!gates.serving_mut().is_quarantined(), "serving state untouched");
+        assert!(
+            !gates.serving_mut().is_quarantined(),
+            "serving state untouched"
+        );
 
         // Candidate retries with a full feed -> recover -> publish -> promote.
         let candidate_full = set(50..1040);
         let candidate = gates.candidate_mut(&candidate_identity, || Some(950));
-        let d = candidate.evaluate(&sample(&candidate_identity, &candidate_full, t0() + Duration::seconds(30)));
+        let d = candidate.evaluate(&sample(
+            &candidate_identity,
+            &candidate_full,
+            t0() + Duration::seconds(30),
+        ));
         assert_eq!(d.disposition, GateDisposition::Apply);
         candidate.advance(&d);
         gates.promote_candidate(&candidate_identity);

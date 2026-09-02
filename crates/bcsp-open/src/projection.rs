@@ -1082,9 +1082,18 @@ mod tests {
         // here takes /open/status and watch START down until the row is
         // overwritten, across later successful pulls.
         for (code, expected) in [
-            ("SUSPECT_PARTIAL_SNAPSHOT", OpenFailureClass::SuspectPartialSnapshot),
-            ("UNSAFE_EMPTY_WITH_CATALOG_ROWS", OpenFailureClass::UnsafeEmpty),
-            ("UNSAFE_ZERO_INTERSECTION", OpenFailureClass::UnsafeZeroIntersection),
+            (
+                "SUSPECT_PARTIAL_SNAPSHOT",
+                OpenFailureClass::SuspectPartialSnapshot,
+            ),
+            (
+                "UNSAFE_EMPTY_WITH_CATALOG_ROWS",
+                OpenFailureClass::UnsafeEmpty,
+            ),
+            (
+                "UNSAFE_ZERO_INTERSECTION",
+                OpenFailureClass::UnsafeZeroIntersection,
+            ),
         ] {
             let mut state = batch(trace(3), 3);
             state.last_attempt_at = Some(text(110));

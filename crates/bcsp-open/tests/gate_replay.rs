@@ -51,7 +51,11 @@ struct Replay {
 }
 
 impl Replay {
-    fn feed(&mut self, observed: &BTreeSet<SectionIndex>, at: OffsetDateTime) -> (GateDecisionKind, GateDisposition) {
+    fn feed(
+        &mut self,
+        observed: &BTreeSet<SectionIndex>,
+        at: OffsetDateTime,
+    ) -> (GateDecisionKind, GateDisposition) {
         let sample = GateSample {
             catalog_identity: &self.identity,
             observed,
@@ -90,12 +94,23 @@ fn replayed_incident_holds_every_partial_and_applies_recovery_immediately() {
     for step in 0..13 {
         let at = t0() + Duration::milliseconds(step * 3_500);
         let (kind, disposition) = replay.feed(&partial, at);
-        assert_eq!(kind, GateDecisionKind::Suspect, "partial sample {step} must be suspect");
-        assert_eq!(disposition, GateDisposition::Hold, "partial sample {step} must be held");
+        assert_eq!(
+            kind,
+            GateDecisionKind::Suspect,
+            "partial sample {step} must be suspect"
+        );
+        assert_eq!(
+            disposition,
+            GateDisposition::Hold,
+            "partial sample {step} must be held"
+        );
         held += 1;
     }
     assert_eq!(held, 13);
-    assert!(replay.runtime.is_quarantined(), "sticky quarantine across the anomaly");
+    assert!(
+        replay.runtime.is_quarantined(),
+        "sticky quarantine across the anomaly"
+    );
 
     // Recovery snapshot 45 seconds after onset (21:18:01): applies at once.
     let (kind, disposition) = replay.feed(&recovery, t0() + Duration::seconds(45));
@@ -154,8 +169,16 @@ fn v1_design_loophole_sequence_never_applies_the_drifting_partial() {
     assert_eq!(drifting.len(), 10_300);
 
     let (kind, disposition) = replay.feed(&drifting, t0() + Duration::seconds(10));
-    assert_eq!(kind, GateDecisionKind::Suspect, "drifting partial re-anchors");
-    assert_eq!(disposition, GateDisposition::Hold, "drifting partial must not apply");
+    assert_eq!(
+        kind,
+        GateDecisionKind::Suspect,
+        "drifting partial re-anchors"
+    );
+    assert_eq!(
+        disposition,
+        GateDisposition::Hold,
+        "drifting partial must not apply"
+    );
     assert!(replay.runtime.is_quarantined());
 
     // Full recovery still applies immediately afterwards.
