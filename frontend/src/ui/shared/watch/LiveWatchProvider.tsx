@@ -18,6 +18,7 @@ import type {
   OpenSectionStatusV1,
   ProductRuntimePort,
   SectionKey,
+  TermCampusKey,
   WatchAlertV1,
   WatchAudioCueV1,
   WatchClientCommandV1,
@@ -96,6 +97,16 @@ export interface WatchTelemetryResourceError {
   readonly httpStatus: number | null;
   readonly apiCode: string | null;
   readonly traceId: string | null;
+  /**
+   * Whether repeating the identical request could plausibly succeed.
+   *
+   * A transport failure, a 5xx, a timeout or a rate limit is the server (or
+   * the network) having a bad moment; the same request later is a fair
+   * question. A 400/404/422 is the server refusing the request AS WRITTEN --
+   * a contract mismatch between this client and that server -- and asking
+   * again on a timer only fills the log with the same refusal.
+   */
+  readonly retryable: boolean;
 }
 
 /** Per-resource REST evidence. WebSocket and audio state are intentionally independent. */
@@ -103,7 +114,7 @@ export interface WatchTelemetryResourceState {
   readonly key: string;
   readonly kind: WatchTelemetryResourceKind;
   readonly sectionKey: SectionKey | null;
-  readonly batch: { readonly term: string; readonly campus: string } | null;
+  readonly batch: TermCampusKey | null;
   readonly availability: WatchTelemetryResourceAvailability;
   readonly loading: boolean;
   readonly lastSuccessAt: string | null;
@@ -290,14 +301,24 @@ function sameSection(left: SectionKey, right: SectionKey): boolean {
   return sectionIdentity(left) === sectionIdentity(right);
 }
 
-function sameBatch(
-  left: { readonly term: string; readonly campus: string },
-  right: { readonly term: string; readonly campus: string },
-): boolean {
+/**
+ * The one place a `{term, campus}` batch key is minted.
+ *
+ * `SectionKey extends TermCampusKey`, so a Section key passes anywhere a
+ * batch key is wanted -- and its `index` then goes on the wire with it. The
+ * server's batch key is strict (`deny_unknown_fields`) and answers 400 to
+ * the extra field. Every batch request and every stored batch identity goes
+ * through here so nothing but the two fields survives, whatever was handed in.
+ */
+function batchOf(key: TermCampusKey): TermCampusKey {
+  return { term: key.term, campus: key.campus };
+}
+
+function sameBatch(left: TermCampusKey, right: TermCampusKey): boolean {
   return left.term === right.term && left.campus === right.campus;
 }
 
-function batchIdentity(batch: { readonly term: string; readonly campus: string }): string {
+function batchIdentity(batch: TermCampusKey): string {
   return `${batch.term}\u0000${batch.campus}`;
 }
 
@@ -305,11 +326,20 @@ function sectionTelemetryFailureKey(sectionKey: SectionKey): string {
   return `section:${sectionIdentity(sectionKey)}`;
 }
 
-function batchTelemetryFailureKey(
-  batch: { readonly term: string; readonly campus: string },
-): string {
+function batchTelemetryFailureKey(batch: TermCampusKey): string {
   return `batch:${batchIdentity(batch)}`;
 }
+
+/**
+ * How long a burst of observations for one batch is allowed to settle before
+ * the page asks for that batch's status once.
+ *
+ * The server emits one OPEN_OBSERVATION per watched Section as it walks a
+ * refresh, so nine Sections in one batch arrive as nine frames within a
+ * fraction of a second. Each status read costs the server most of a second
+ * under a shared lock; nine of them for one answer is eight too many.
+ */
+export const BATCH_STATUS_COALESCE_MILLISECONDS = 250;
 
 function sectionTelemetryTarget(sectionKey: SectionKey): WatchTelemetryResourceState {
   return {
@@ -324,19 +354,120 @@ function sectionTelemetryTarget(sectionKey: SectionKey): WatchTelemetryResourceS
   };
 }
 
-function batchTelemetryTarget(
-  batch: { readonly term: string; readonly campus: string },
-): WatchTelemetryResourceState {
+function batchTelemetryTarget(batch: TermCampusKey): WatchTelemetryResourceState {
   return {
     key: batchTelemetryFailureKey(batch),
     kind: 'BATCH',
     sectionKey: null,
-    batch,
+    batch: batchOf(batch),
     availability: 'ERROR_NO_DATA',
     loading: false,
     lastSuccessAt: null,
     error: null,
   };
+}
+
+/**
+ * What this page knows about the reads it has issued for one resource.
+ *
+ * `issued` is the revision of the newest read -- or of a WebSocket answer
+ * that outranks any read still out; `settled` is the revision of the newest
+ * answer already put on the resource; `inFlight` counts reads not yet
+ * answered, from every path that issues them. Revisions only grow, so two
+ * reads for one resource can always be ordered, whichever path issued them
+ * and however they overlap -- and `loading` can be derived from the count
+ * instead of being flipped by whichever read happens to finish last.
+ */
+interface TelemetryReadLedger {
+  issued: number;
+  settled: number;
+  inFlight: number;
+}
+
+interface TelemetryReadOutcome {
+  /** Another read for this resource is still out. */
+  readonly loading: boolean;
+  /** No newer answer is on the resource yet, so this one may go on it. */
+  readonly ordered: boolean;
+  /** This is the newest read issued, so its status may replace the content. */
+  readonly newest: boolean;
+}
+
+type TelemetryReadLedgers = Map<string, TelemetryReadLedger>;
+
+function beginTelemetryRead(ledgers: TelemetryReadLedgers, key: string): number {
+  const ledger = ledgers.get(key) ?? { issued: 0, settled: 0, inFlight: 0 };
+  ledger.issued += 1;
+  ledger.inFlight += 1;
+  ledgers.set(key, ledger);
+  return ledger.issued;
+}
+
+/** Books the end of one read. Applying its answer is the caller's decision. */
+function settleTelemetryRead(
+  ledgers: TelemetryReadLedgers,
+  key: string,
+  revision: number,
+): TelemetryReadOutcome {
+  const ledger = ledgers.get(key) ?? { issued: revision, settled: 0, inFlight: 1 };
+  ledger.inFlight = Math.max(0, ledger.inFlight - 1);
+  ledgers.set(key, ledger);
+  return {
+    loading: ledger.inFlight > 0,
+    ordered: revision > ledger.settled,
+    newest: revision === ledger.issued,
+  };
+}
+
+function recordTelemetryAnswer(ledgers: TelemetryReadLedgers, key: string, revision: number): void {
+  const ledger = ledgers.get(key);
+  if (ledger !== undefined && revision > ledger.settled) ledger.settled = revision;
+}
+
+/**
+ * Outranks every read still out for a resource, without issuing one.
+ *
+ * A WebSocket observation is newer than any REST answer that was asked for
+ * before it arrived; the read still settles its resource when it lands, but
+ * its status no longer replaces the content.
+ */
+function supersedeTelemetryReads(ledgers: TelemetryReadLedgers, key: string): void {
+  const ledger = ledgers.get(key) ?? { issued: 0, settled: 0, inFlight: 0 };
+  ledger.issued += 1;
+  ledgers.set(key, ledger);
+}
+
+function telemetryReadInFlight(ledgers: TelemetryReadLedgers, key: string): boolean {
+  return (ledgers.get(key)?.inFlight ?? 0) > 0;
+}
+
+type TelemetryAnswer<T> =
+  | { readonly kind: 'ANSWERED'; readonly status: T }
+  | { readonly kind: 'FAILED'; readonly error: unknown };
+
+/** Runs one read to an answer or a failure; never throws, never hangs a ledger. */
+async function readTelemetry<T>(
+  read: () => Promise<T>,
+  normalize: (status: T) => T,
+): Promise<TelemetryAnswer<T>> {
+  try {
+    return { kind: 'ANSWERED', status: normalize(await read()) };
+  } catch (error) {
+    return { kind: 'FAILED', error };
+  }
+}
+
+/**
+ * Whether the same request, repeated, is a reasonable thing to send.
+ *
+ * Classified strictly by HTTP status: no status (the network, an abort, a
+ * decode failure) and every 5xx are transient by nature, and so are a
+ * timeout (408) and a rate limit (429). Any other 4xx is the server rejecting
+ * the request as sent -- this client and that server disagree about the
+ * contract -- and nothing about waiting changes that.
+ */
+function isRetryableTelemetryStatus(status: number | null): boolean {
+  return status === null || status >= 500 || status === 408 || status === 429;
 }
 
 function telemetryError(error: unknown): WatchTelemetryResourceError {
@@ -345,9 +476,10 @@ function telemetryError(error: unknown): WatchTelemetryResourceError {
       httpStatus: error.status,
       apiCode: error.apiError?.error.code ?? null,
       traceId: error.apiError?.error.traceId ?? null,
+      retryable: isRetryableTelemetryStatus(error.status),
     };
   }
-  return { httpStatus: null, apiCode: null, traceId: null };
+  return { httpStatus: null, apiCode: null, traceId: null, retryable: true };
 }
 
 function sectionLastSuccessAt(status: OpenSectionStatusV1): string | null {
@@ -667,9 +799,19 @@ export function LiveWatchProvider({
   const queuedStart = useRef<readonly WatchStartItemV1[] | null>(null);
   const noticeId = useRef(0);
   const telemetryAbort = useRef<AbortController | null>(null);
+  /**
+   * The generation of the desk's telemetry. Bumped by a reset -- the last
+   * Section leaving, a removal, unmount -- so a read that was out across one
+   * cannot put anything back. A refresh pass is not a reset: it outranks the
+   * reads before it by revision, and lets them settle their own rows.
+   */
   const telemetryEpoch = useRef(0);
-  const batchRequestRevisions = useRef(new Map<string, number>());
-  const sectionRequestRevisions = useRef(new Map<string, number>());
+  const telemetryReads = useRef<TelemetryReadLedgers>(new Map());
+  // Batch status reads are coalesced per batch identity: a burst of
+  // observations settles into one read, and a batch with a read in flight
+  // takes at most one follow-up rather than one more read per frame.
+  const batchStatusTimers = useRef(new Map<string, ReturnType<typeof globalThis.setTimeout>>());
+  const batchStatusFollowUps = useRef(new Set<string>());
   const hadConnection = useRef(runtime.watch.state === 'OPEN');
   const announcedAlerts = useRef(new Set<string>());
   const announcedAudioCaps = useRef(new Set<ActiveWatchId>());
@@ -829,10 +971,30 @@ export function LiveWatchProvider({
     updateTelemetryResource(target, (current) => ({ ...current, loading: true }));
   }, [updateTelemetryResource]);
 
+  /**
+   * A read ended without an answer this page may put on the resource: only
+   * `loading` moves, and only on a resource still on the desk -- a late
+   * answer must not put back a row the user has taken off.
+   */
+  const settleTelemetryResource = useCallback((
+    target: WatchTelemetryResourceState,
+    loading: boolean,
+  ) => {
+    setTelemetryResources((current) => {
+      const existing = current.find((resource) => resource.key === target.key);
+      if (existing === undefined || existing.loading === loading) return current;
+      const next = replaceByIdentity(current, { ...existing, loading }, (resource) => resource.key);
+      telemetryResourcesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  /** `loading` says whether another read for the same resource is still out. */
   const markTelemetrySuccess = useCallback((
     target: WatchTelemetryResourceState,
     freshness: OpenFreshnessV1,
     lastSuccessAt: string | null,
+    loading: boolean,
   ) => {
     updateTelemetryResource(target, (current) => ({
       ...current,
@@ -841,7 +1003,7 @@ export function LiveWatchProvider({
         : freshness.state === 'STALE'
           ? 'LKG'
           : 'CURRENT',
-      loading: false,
+      loading,
       lastSuccessAt,
       error: null,
     }));
@@ -850,11 +1012,12 @@ export function LiveWatchProvider({
   const markTelemetryFailure = useCallback((
     target: WatchTelemetryResourceState,
     error: unknown,
+    loading: boolean,
   ) => {
     updateTelemetryResource(target, (current) => ({
       ...current,
       availability: current.lastSuccessAt === null ? 'ERROR_NO_DATA' : 'LKG',
-      loading: false,
+      loading,
       error: telemetryError(error),
     }));
   }, [updateTelemetryResource]);
@@ -1180,67 +1343,187 @@ export function LiveWatchProvider({
     });
   }, [runtime, send]);
 
-  const loadBatchStatus = useCallback(async (
-    batch: { readonly term: string; readonly campus: string },
+  const isBatchRelevant = useCallback((batch: TermCampusKey): boolean =>
+    selectedRef.current.some((section) => sameBatch(section, batch))
+      || activeRef.current.some((watch) => sameBatch(watch.sectionKey, batch)), []);
+
+  const cancelScheduledBatchStatus = useCallback((identity: string) => {
+    const timer = batchStatusTimers.current.get(identity);
+    if (timer === undefined) return;
+    globalThis.clearTimeout(timer);
+    batchStatusTimers.current.delete(identity);
+  }, []);
+
+  const isSectionRelevant = useCallback((sectionKey: SectionKey): boolean =>
+    selectedRef.current.some((section) => sameSection(section, sectionKey))
+      || activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey)), []);
+
+  /**
+   * Books one finished Section read against its resource.
+   *
+   * The ledger is settled first, whatever happens next, so `loading` can only
+   * say a read is out while one is. The answer then goes on the resource
+   * unless the Section has left the desk, a newer answer is already on it,
+   * the desk was reset while the read was out, or the pass was cancelled
+   * before the read could fail honestly -- and in EVERY one of those cases
+   * `loading` still moves. Which answers may be SHOWN and whether a read is
+   * still out are different questions, and a read this page issued has ended
+   * whatever it decided to do with what came back: returning early here is
+   * how a row that was marked "reading" keeps saying so for ever, because
+   * nothing else will ever put that mark down. A row the desk no longer
+   * holds is protected by `settleTelemetryResource`, which will not put one
+   * back. The status replaces the content only when nothing newer has been
+   * asked for since: a follow-up that started on this answer is not newer
+   * than it; an observation that arrived during the read is.
+   */
+  const applySectionRead = useCallback((
+    sectionKey: SectionKey,
+    revision: number,
+    epoch: number,
+    answer: TelemetryAnswer<OpenSectionStatusV1>,
+    cancelled: boolean,
+  ) => {
+    const target = sectionTelemetryTarget(sectionKey);
+    const read = settleTelemetryRead(telemetryReads.current, target.key, revision);
+    const usable = isSectionRelevant(sectionKey)
+      && telemetryEpoch.current === epoch
+      && read.ordered
+      && !(cancelled && answer.kind === 'FAILED');
+    if (!usable) {
+      settleTelemetryResource(target, read.loading);
+      return;
+    }
+    recordTelemetryAnswer(telemetryReads.current, target.key, revision);
+    if (answer.kind === 'FAILED') {
+      markTelemetryFailure(target, answer.error, read.loading);
+      return;
+    }
+    if (read.newest) {
+      setSectionStatuses((current) => replaceByIdentity(
+        current,
+        answer.status,
+        (value) => sectionIdentity(value.sectionKey),
+      ));
+    }
+    markTelemetrySuccess(
+      target,
+      answer.status.freshness,
+      sectionLastSuccessAt(answer.status),
+      read.loading,
+    );
+  }, [isSectionRelevant, markTelemetryFailure, markTelemetrySuccess, settleTelemetryResource]);
+
+  /** The batch half of `applySectionRead`. `batch` must already be projected. */
+  const applyBatchRead = useCallback((
+    batch: TermCampusKey,
+    revision: number,
+    epoch: number,
+    answer: TelemetryAnswer<OpenRefreshStatusV1>,
+    cancelled: boolean,
   ) => {
     const target = batchTelemetryTarget(batch);
-    const identity = batchIdentity(batch);
-    const epoch = telemetryEpoch.current;
-    const revision = (batchRequestRevisions.current.get(identity) ?? 0) + 1;
-    batchRequestRevisions.current.set(identity, revision);
-    markTelemetryLoading(target);
-    try {
-      const response = await runtime.product.openStatus({ contractVersion: 1, batch });
-      const isCurrent = telemetryEpoch.current === epoch
-        && batchRequestRevisions.current.get(identity) === revision;
-      const isRelevant = selectedRef.current.some((section) => sameBatch(section, batch))
-        || activeRef.current.some((watch) => sameBatch(watch.sectionKey, batch));
-      if (!isCurrent || !isRelevant) return;
-      const status = normalizeBatchStatus(response);
+    const read = settleTelemetryRead(telemetryReads.current, target.key, revision);
+    const usable = isBatchRelevant(batch)
+      && telemetryEpoch.current === epoch
+      && read.ordered
+      && !(cancelled && answer.kind === 'FAILED');
+    if (!usable) {
+      settleTelemetryResource(target, read.loading);
+      return;
+    }
+    recordTelemetryAnswer(telemetryReads.current, target.key, revision);
+    if (answer.kind === 'FAILED') {
+      markTelemetryFailure(target, answer.error, read.loading);
+      return;
+    }
+    if (read.newest) {
       setBatchStatuses((current) => replaceByIdentity(
         current,
-        status,
+        answer.status,
         (value) => batchIdentity(value.batch),
       ));
-      markTelemetrySuccess(target, status.freshness, batchLastSuccessAt(status));
-    } catch (error) {
-      const isCurrent = telemetryEpoch.current === epoch
-        && batchRequestRevisions.current.get(identity) === revision;
-      const isRelevant = selectedRef.current.some((section) => sameBatch(section, batch))
-        || activeRef.current.some((watch) => sameBatch(watch.sectionKey, batch));
-      if (isCurrent && isRelevant) markTelemetryFailure(target, error);
     }
-  }, [markTelemetryFailure, markTelemetryLoading, markTelemetrySuccess, runtime]);
+    markTelemetrySuccess(
+      target,
+      answer.status.freshness,
+      batchLastSuccessAt(answer.status),
+      read.loading,
+    );
+  }, [isBatchRelevant, markTelemetryFailure, markTelemetrySuccess, settleTelemetryResource]);
+
+  /** One status read for one batch. `batch` must already be projected. */
+  const readBatchStatus = useCallback(async (batch: TermCampusKey) => {
+    const target = batchTelemetryTarget(batch);
+    // This read is issued now, so it already answers for any observation
+    // that was still waiting for its coalescing window to close.
+    cancelScheduledBatchStatus(batchIdentity(batch));
+    const epoch = telemetryEpoch.current;
+    const revision = beginTelemetryRead(telemetryReads.current, target.key);
+    markTelemetryLoading(target);
+    const answer = await readTelemetry(
+      () => runtime.product.openStatus({ contractVersion: 1, batch }),
+      normalizeBatchStatus,
+    );
+    applyBatchRead(batch, revision, epoch, answer, false);
+  }, [applyBatchRead, cancelScheduledBatchStatus, markTelemetryLoading, runtime]);
+
+  /**
+   * Reads one batch's status now, then once more if anything asked for it
+   * while the read was in flight.
+   *
+   * The argument is projected to `{term, campus}` here, so a caller that
+   * hands over a Section key -- or anything else that merely looks like a
+   * batch key -- cannot put extra fields on the wire.
+   */
+  const loadBatchStatus = useCallback(async (input: TermCampusKey) => {
+    const batch = batchOf(input);
+    const identity = batchIdentity(batch);
+    do {
+      await readBatchStatus(batch);
+    } while (batchStatusFollowUps.current.delete(identity) && isBatchRelevant(batch));
+  }, [isBatchRelevant, readBatchStatus]);
+
+  /**
+   * Asks for a batch's status once the current burst of observations settles.
+   *
+   * Trailing debounce keyed by batch identity: every observation restarts the
+   * window, and when it closes the page issues ONE read for that batch. A
+   * batch that already has a read in flight is not asked twice at once; it
+   * is marked for at most one follow-up, which `loadBatchStatus` runs when
+   * the in-flight read returns.
+   */
+  const scheduleBatchStatus = useCallback((input: TermCampusKey) => {
+    const batch = batchOf(input);
+    const identity = batchIdentity(batch);
+    cancelScheduledBatchStatus(identity);
+    batchStatusTimers.current.set(identity, globalThis.setTimeout(() => {
+      batchStatusTimers.current.delete(identity);
+      if (!isBatchRelevant(batch)) return;
+      if (telemetryReadInFlight(telemetryReads.current, batchTelemetryFailureKey(batch))) {
+        batchStatusFollowUps.current.add(identity);
+        return;
+      }
+      void loadBatchStatus(batch);
+    }, BATCH_STATUS_COALESCE_MILLISECONDS));
+  }, [cancelScheduledBatchStatus, isBatchRelevant, loadBatchStatus]);
+
+  const clearScheduledBatchStatuses = useCallback(() => {
+    for (const timer of batchStatusTimers.current.values()) globalThis.clearTimeout(timer);
+    batchStatusTimers.current.clear();
+    batchStatusFollowUps.current.clear();
+  }, []);
 
   const loadSectionStatus = useCallback(async (sectionKey: SectionKey) => {
     const target = sectionTelemetryTarget(sectionKey);
-    const identity = sectionIdentity(sectionKey);
     const epoch = telemetryEpoch.current;
-    const revision = (sectionRequestRevisions.current.get(identity) ?? 0) + 1;
-    sectionRequestRevisions.current.set(identity, revision);
+    const revision = beginTelemetryRead(telemetryReads.current, target.key);
     markTelemetryLoading(target);
-    try {
-      const response = await runtime.product.openSectionStatus({ contractVersion: 1, sectionKey });
-      const isCurrent = telemetryEpoch.current === epoch
-        && sectionRequestRevisions.current.get(identity) === revision;
-      const isRelevant = selectedRef.current.some((section) => sameSection(section, sectionKey))
-        || activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey));
-      if (!isCurrent || !isRelevant) return;
-      const status = normalizeSectionStatus(response);
-      setSectionStatuses((current) => replaceByIdentity(
-        current,
-        status,
-        (value) => sectionIdentity(value.sectionKey),
-      ));
-      markTelemetrySuccess(target, status.freshness, sectionLastSuccessAt(status));
-    } catch (error) {
-      const isCurrent = telemetryEpoch.current === epoch
-        && sectionRequestRevisions.current.get(identity) === revision;
-      const isRelevant = selectedRef.current.some((section) => sameSection(section, sectionKey))
-        || activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey));
-      if (isCurrent && isRelevant) markTelemetryFailure(target, error);
-    }
-  }, [markTelemetryFailure, markTelemetryLoading, markTelemetrySuccess, runtime]);
+    const answer = await readTelemetry(
+      () => runtime.product.openSectionStatus({ contractVersion: 1, sectionKey }),
+      normalizeSectionStatus,
+    );
+    applySectionRead(sectionKey, revision, epoch, answer, false);
+  }, [applySectionRead, markTelemetryLoading, runtime]);
 
   const startContinuousAudio = useCallback((nextVolume: number, nextMuted: boolean) => {
     const outcome = audioController.startContinuous(nextVolume, nextMuted);
@@ -1351,17 +1634,15 @@ export function LiveWatchProvider({
         schedulerLagMilliseconds: observation.schedulerLagMilliseconds,
         counterSnapshot: observation.counterSnapshot,
       });
-      const projectedIdentity = sectionIdentity(projected.sectionKey);
-      sectionRequestRevisions.current.set(
-        projectedIdentity,
-        (sectionRequestRevisions.current.get(projectedIdentity) ?? 0) + 1,
-      );
+      // Newer than any REST read of this Section still out: such a read must
+      // still settle its row, but its status no longer replaces this one.
+      supersedeTelemetryReads(telemetryReads.current, sectionTelemetryFailureKey(projected.sectionKey));
       setSectionStatuses((current) => replaceByIdentity(
         current,
         projected,
         (value) => sectionIdentity(value.sectionKey),
       ));
-      void loadBatchStatus(observation.batch);
+      scheduleBatchStatus(observation.batch);
       return;
     }
     if (event.type === 'EPISODE_UPDATED') {
@@ -1456,7 +1737,7 @@ export function LiveWatchProvider({
         audioController.stopContinuous();
       }
     }
-  }, [addNotice, audioController, bumpConnectionPlan, canNotify, disprove, intent, loadBatchStatus, queueNotification, refreshIntent, send, startContinuousAudio]);
+  }, [addNotice, audioController, bumpConnectionPlan, canNotify, disprove, intent, queueNotification, refreshIntent, scheduleBatchStatus, send, startContinuousAudio]);
 
   useEffect(() => {
     const unsubscribeEvents = runtime.watch.subscribe(handleServerEvent);
@@ -1671,8 +1952,7 @@ export function LiveWatchProvider({
     return () => {
       telemetryAbort.current?.abort();
       telemetryEpoch.current += 1;
-      batchRequestRevisions.current.clear();
-      sectionRequestRevisions.current.clear();
+      clearScheduledBatchStatuses();
       announcedAudioCaps.current.clear();
       startAttempt.current += 1;
       audioProviderMounted.current = false;
@@ -1680,7 +1960,7 @@ export function LiveWatchProvider({
         if (!audioProviderMounted.current) audioController.dispose();
       });
     };
-  }, [audioController]);
+  }, [audioController, clearScheduledBatchStatuses]);
 
   /**
    * Whether a section may be taken off the managed list.
@@ -1750,8 +2030,6 @@ export function LiveWatchProvider({
     const next = selectedRef.current.filter((value) => !sameSection(value, sectionKey));
     selectedRef.current = next;
     telemetryEpoch.current += 1;
-    batchRequestRevisions.current.clear();
-    sectionRequestRevisions.current.clear();
     telemetryAbort.current?.abort();
     setSelected(next);
     onSelectedChange?.(next);
@@ -2048,12 +2326,26 @@ export function LiveWatchProvider({
     }
   }, [onVolumeChange, startContinuousAudio]);
 
-  const refreshTelemetry = useCallback(async () => {
+  /**
+   * Re-reads every relevant Section and batch status.
+   *
+   * `automatic` says nobody asked: the page is doing this on its own because
+   * a freshness window closed or the socket dropped. On such a pass a
+   * resource whose last answer was a NON-RETRYABLE refusal (a 4xx that is
+   * not a timeout or a rate limit) is left alone -- the same request would
+   * draw the same refusal, and a timer that keeps sending it is a log full
+   * of noise and a card that flickers. Its error stays on the desk until the
+   * selection changes or the user asks explicitly, which are the only two
+   * things that make the question worth asking again. A 5xx keeps being
+   * retried: an outage is exactly what the timer is for.
+   */
+  const refreshTelemetryWith = useCallback(async (automatic: boolean) => {
     telemetryAbort.current?.abort();
-    const epoch = telemetryEpoch.current + 1;
-    telemetryEpoch.current = epoch;
-    batchRequestRevisions.current.clear();
-    sectionRequestRevisions.current.clear();
+    const epoch = telemetryEpoch.current;
+    // Every relevant batch is being read now; a read scheduled for a burst
+    // that arrived earlier, or queued behind a read this pass supersedes,
+    // would only repeat the question.
+    clearScheduledBatchStatuses();
     const keys = [...selectedRef.current];
     for (const watch of activeRef.current) {
       if (!keys.some((key) => sameSection(key, watch.sectionKey))) keys.push(watch.sectionKey);
@@ -2069,20 +2361,31 @@ export function LiveWatchProvider({
     const abort = new AbortController();
     telemetryAbort.current = abort;
     setTelemetryLoading(true);
-    const batches = keys.filter((key, index) =>
-      keys.findIndex((candidate) => sameBatch(candidate, key)) === index);
-    const sectionTickets = keys.map((sectionKey) => {
-      const identity = sectionIdentity(sectionKey);
-      const revision = (sectionRequestRevisions.current.get(identity) ?? 0) + 1;
-      sectionRequestRevisions.current.set(identity, revision);
-      return { identity, revision, sectionKey };
-    });
-    const batchTickets = batches.map((batch) => {
-      const identity = batchIdentity(batch);
-      const revision = (batchRequestRevisions.current.get(identity) ?? 0) + 1;
-      batchRequestRevisions.current.set(identity, revision);
-      return { batch, identity, revision };
-    });
+    // Project every key to a pure `{term, campus}` while de-duplicating: a
+    // Section key is a batch key plus an `index`, and the server refuses a
+    // batch key that carries one.
+    const batches: TermCampusKey[] = [];
+    for (const key of keys) {
+      if (!batches.some((batch) => sameBatch(batch, key))) batches.push(batchOf(key));
+    }
+    const held = (resourceKey: string): boolean => automatic
+      && telemetryResourcesRef.current.some((resource) =>
+        resource.key === resourceKey && resource.error?.retryable === false);
+    const requestedSections = keys.filter((sectionKey) =>
+      !held(sectionTelemetryFailureKey(sectionKey)));
+    const requestedBatches = batches.filter((batch) => !held(batchTelemetryFailureKey(batch)));
+    // Every ticket is booked before anything is sent, so a read another path
+    // issues while this pass is out is ordered against all of these.
+    const sectionTickets = requestedSections.map((sectionKey) => ({
+      sectionKey,
+      revision: beginTelemetryRead(telemetryReads.current, sectionTelemetryFailureKey(sectionKey)),
+    }));
+    const batchTickets = requestedBatches.map((batch) => ({
+      batch,
+      revision: beginTelemetryRead(telemetryReads.current, batchTelemetryFailureKey(batch)),
+    }));
+    const relevantSections = new Set(keys.map(sectionIdentity));
+    const relevantBatches = new Set(batches.map(batchIdentity));
     const relevantResourceKeys = new Set([
       ...keys.map((sectionKey) => sectionTelemetryFailureKey(sectionKey)),
       ...batches.map((batch) => batchTelemetryFailureKey(batch)),
@@ -2090,12 +2393,12 @@ export function LiveWatchProvider({
     setTelemetryResources((current) => {
       const retained = current.filter((resource) => relevantResourceKeys.has(resource.key));
       let next: readonly WatchTelemetryResourceState[] = retained;
-      for (const sectionKey of keys) {
+      for (const sectionKey of requestedSections) {
         const target = sectionTelemetryTarget(sectionKey);
         const existing = next.find((resource) => resource.key === target.key) ?? target;
         next = replaceByIdentity(next, { ...existing, loading: true }, (resource) => resource.key);
       }
-      for (const batch of batches) {
+      for (const batch of requestedBatches) {
         const target = batchTelemetryTarget(batch);
         const existing = next.find((resource) => resource.key === target.key) ?? target;
         next = replaceByIdentity(next, { ...existing, loading: true }, (resource) => resource.key);
@@ -2103,61 +2406,59 @@ export function LiveWatchProvider({
       telemetryResourcesRef.current = next;
       return next;
     });
-    const [sectionResults, batchResults] = await Promise.all([
-      Promise.allSettled(sectionTickets.map(({ sectionKey }) =>
-        runtime.product.openSectionStatus({ contractVersion: 1, sectionKey }, abort.signal))),
-      Promise.allSettled(batchTickets.map(({ batch }) =>
-        runtime.product.openStatus({ contractVersion: 1, batch }, abort.signal))),
+    // What this pass no longer asks about does not stay on the desk.
+    setSectionStatuses((current) => current.filter((status) =>
+      relevantSections.has(sectionIdentity(status.sectionKey))));
+    setBatchStatuses((current) => current.filter((status) =>
+      relevantBatches.has(batchIdentity(status.batch))));
+    // Each answer settles its own resource as it lands. Waiting for the
+    // slowest read of the pass would keep a Section row "loading" long after
+    // it was answered, and a follow-up started on one answer could then
+    // outrank another answer of the same pass before it was even booked.
+    await Promise.all([
+      ...sectionTickets.map(async ({ sectionKey, revision }) => {
+        const answer = await readTelemetry(
+          () => runtime.product.openSectionStatus({ contractVersion: 1, sectionKey }, abort.signal),
+          normalizeSectionStatus,
+        );
+        applySectionRead(sectionKey, revision, epoch, answer, abort.signal.aborted);
+      }),
+      ...batchTickets.map(async ({ batch, revision }) => {
+        const answer = await readTelemetry(
+          () => runtime.product.openStatus({ contractVersion: 1, batch }, abort.signal),
+          normalizeBatchStatus,
+        );
+        applyBatchRead(batch, revision, epoch, answer, abort.signal.aborted);
+        if (abort.signal.aborted || telemetryEpoch.current !== epoch) return;
+        // An observation that landed while this read was out asked for one
+        // more read of its batch; honour it now that the batch is free.
+        if (batchStatusFollowUps.current.delete(batchIdentity(batch)) && isBatchRelevant(batch)) {
+          void loadBatchStatus(batch);
+        }
+      }),
     ]);
-    if (abort.signal.aborted || telemetryEpoch.current !== epoch) return;
-    const relevantSections = new Set(keys.map(sectionIdentity));
-    const relevantBatches = new Set(batches.map(batchIdentity));
-    sectionResults.forEach((result, index) => {
-      const ticket = sectionTickets[index]!;
-      if (sectionRequestRevisions.current.get(ticket.identity) !== ticket.revision) return;
-      const target = sectionTelemetryTarget(ticket.sectionKey);
-      if (result.status === 'rejected') markTelemetryFailure(target, result.reason);
-      else {
-        const status = normalizeSectionStatus(result.value);
-        markTelemetrySuccess(target, status.freshness, sectionLastSuccessAt(status));
-      }
-    });
-    batchResults.forEach((result, index) => {
-      const ticket = batchTickets[index]!;
-      if (batchRequestRevisions.current.get(ticket.identity) !== ticket.revision) return;
-      const target = batchTelemetryTarget(ticket.batch);
-      if (result.status === 'rejected') markTelemetryFailure(target, result.reason);
-      else {
-        const status = normalizeBatchStatus(result.value);
-        markTelemetrySuccess(target, status.freshness, batchLastSuccessAt(status));
-      }
-    });
-    setSectionStatuses((current) => {
-      let next: readonly OpenSectionStatusV1[] = current.filter((status) =>
-        relevantSections.has(sectionIdentity(status.sectionKey)));
-      sectionResults.forEach((result, index) => {
-        const ticket = sectionTickets[index]!;
-        if (sectionRequestRevisions.current.get(ticket.identity) !== ticket.revision) return;
-        if (result.status === 'rejected') return;
-        next = replaceByIdentity(next, normalizeSectionStatus(result.value), (status) =>
-          sectionIdentity(status.sectionKey));
-      });
-      return next;
-    });
-    setBatchStatuses((current) => {
-      let next: readonly OpenRefreshStatusV1[] = current.filter((status) =>
-        relevantBatches.has(batchIdentity(status.batch)));
-      batchResults.forEach((result, index) => {
-        const ticket = batchTickets[index]!;
-        if (batchRequestRevisions.current.get(ticket.identity) !== ticket.revision) return;
-        if (result.status === 'rejected') return;
-        next = replaceByIdentity(next, normalizeBatchStatus(result.value), (status) =>
-          batchIdentity(status.batch));
-      });
-      return next;
-    });
-    setTelemetryLoading(false);
-  }, [markTelemetryFailure, markTelemetrySuccess, runtime]);
+    // Only the pass the desk is still waiting on may say the desk is done.
+    // A pass a newer one took over from leaves that to its successor -- but
+    // one that nothing replaced has to put the flag down however it ended.
+    // Reading `aborted` instead is what leaves the desk saying "reading" for
+    // ever after a gesture that cancels a pass without starting another: a
+    // Remove of a Section the pass was not reading for aborts it and leaves
+    // the selection -- and therefore the effect that would start the next
+    // one -- exactly as it was.
+    if (telemetryAbort.current === abort) setTelemetryLoading(false);
+  }, [
+    applyBatchRead,
+    applySectionRead,
+    clearScheduledBatchStatuses,
+    isBatchRelevant,
+    loadBatchStatus,
+    runtime,
+  ]);
+
+  const refreshTelemetry = useCallback(
+    () => refreshTelemetryWith(false),
+    [refreshTelemetryWith],
+  );
 
   const retryTelemetryResource = useCallback(async (key: string) => {
     const resource = telemetryResourcesRef.current.find((candidate) => candidate.key === key);
@@ -2334,7 +2635,7 @@ export function LiveWatchProvider({
         }
         setSectionStatuses((current) => current.map((status) => normalizeSectionStatus(status, now)));
         setBatchStatuses((current) => current.map((status) => normalizeBatchStatus(status, now)));
-        void refreshTelemetry();
+        void refreshTelemetryWith(true);
       }, delay);
     };
     schedule();
@@ -2342,15 +2643,13 @@ export function LiveWatchProvider({
       cancelled = true;
       if (timer !== null) globalThis.clearTimeout(timer);
     };
-  }, [nextFreshnessExpiry, refreshTelemetry]);
+  }, [nextFreshnessExpiry, refreshTelemetryWith]);
 
   const telemetryKey = useMemo(() => selected.map(sectionIdentity).sort().join('|'), [selected]);
   useEffect(() => {
     if (telemetryKey.length === 0) {
       telemetryAbort.current?.abort();
       telemetryEpoch.current += 1;
-      batchRequestRevisions.current.clear();
-      sectionRequestRevisions.current.clear();
       setBatchStatuses([]);
       setSectionStatuses([]);
       telemetryResourcesRef.current = [];
@@ -2363,9 +2662,9 @@ export function LiveWatchProvider({
 
   useEffect(() => {
     if ((connection === 'CLOSED' || connection === 'ERROR') && selectedRef.current.length > 0) {
-      void refreshTelemetry();
+      void refreshTelemetryWith(true);
     }
-  }, [connection, refreshTelemetry]);
+  }, [connection, refreshTelemetryWith]);
 
   const value = useMemo<LiveWatchValue>(() => ({
     selected,

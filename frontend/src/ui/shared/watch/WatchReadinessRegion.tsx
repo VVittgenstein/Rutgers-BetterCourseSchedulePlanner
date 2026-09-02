@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 
+
 import { useBcspI18n, type BcspI18nRuntime } from '../i18n/runtime';
 import { useLiveWatch, type LiveWatchValue } from './LiveWatchProvider';
 import type { WatchNotificationRequest } from './notification';
@@ -64,7 +65,37 @@ export function WatchReadinessRegion() {
   const i18n = useBcspI18n();
   const watch = useLiveWatch();
   const { readiness } = watch;
-  if (readiness.level === 'STOPPED') return null;
+  const bannerRef = useRef<HTMLElement | null>(null);
+  const stopped = readiness.level === 'STOPPED';
+
+  // The banner is sticky under the app bar on every route, so anything else that
+  // sticks to the top of the viewport (the search rail, the results header) has to
+  // clear it. Publishing the measured height keeps that offset honest while the
+  // banner stacks on phones or grows a second line of reason text.
+  useEffect(() => {
+    const root = globalThis.document?.documentElement;
+    if (root === undefined) return undefined;
+    const banner = bannerRef.current;
+    if (stopped || banner === null) {
+      root.style.removeProperty('--bcsp-readiness-height');
+      return undefined;
+    }
+    const measure = () => {
+      const height = Math.max(0, banner.getBoundingClientRect().height);
+      root.style.setProperty('--bcsp-readiness-height', `${height}px`);
+    };
+    measure();
+    globalThis.addEventListener('resize', measure);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(banner);
+    return () => {
+      observer?.disconnect();
+      globalThis.removeEventListener('resize', measure);
+      root.style.removeProperty('--bcsp-readiness-height');
+    };
+  }, [stopped]);
+
+  if (stopped) return null;
   const ready = readiness.level === 'READY';
   const reason = readiness.reason === null ? null : reasonText(readiness.reason, i18n);
   const action = actionText(readiness.action, i18n);
@@ -79,6 +110,7 @@ export function WatchReadinessRegion() {
       className="watch-readiness"
       data-bcsp-watch-readiness={readiness.level}
       data-broken-ring={readiness.brokenRing ?? undefined}
+      ref={bannerRef}
       role="status"
     >
       <p className="watch-readiness__summary">

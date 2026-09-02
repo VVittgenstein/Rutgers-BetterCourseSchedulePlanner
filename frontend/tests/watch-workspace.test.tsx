@@ -42,6 +42,7 @@ import { ProductClientError } from '../src/ui/shared/product';
 import {
   LiveWatchProvider,
   SectionSelectionAction,
+  WATCH_WORKSPACE_CSS,
   WatchNotificationRegion,
   WatchToastRegion,
   WatchWorkspace,
@@ -714,6 +715,9 @@ describe('Watch workspace product flow', () => {
       /Confirm the CONTINUOUS alarm before starting or applying this policy/u,
     );
     expect(confirmationRequired.getAttribute('role')).toBe('alert');
+    // A policy waiting on a confirmation is a warning banner (spec 4.9); red is
+    // kept for something that actually failed.
+    expect(confirmationRequired.className).toContain('watch-workspace__notice');
 
     const duration = screen.getByRole('combobox', { name: 'Continuous duration' }) as HTMLSelectElement;
     expect(duration.value).toBe('FINITE');
@@ -814,6 +818,10 @@ describe('Watch workspace product flow', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add Section 00001 to the watch list' }));
     await waitFor(() => expect(openStatus).toHaveBeenCalledOnce());
+    expect(openStatus.mock.calls[0]![0]).toStrictEqual({
+      contractVersion: 1,
+      batch: { term: sectionKey.term, campus: sectionKey.campus },
+    });
 
     const telemetry = screen.getByRole('region', {
       name: 'Freshness / lag / circuit / counters',
@@ -822,10 +830,60 @@ describe('Watch workspace product flow', () => {
       /Select a Section to read its current BCSP Open status/u,
     )).toBeNull();
 
+    // A read in flight is not a failure: it carries the busy tone, and nothing
+    // on the panel is dressed as an error while it is the only thing happening.
+    const loading = telemetry.querySelectorAll('.watch-telemetry__resource[data-loading]');
+    expect(loading.length).toBeGreaterThan(0);
+    for (const resource of loading) expect(resource.getAttribute('data-tone')).toBe('busy');
+    expect(telemetry.querySelectorAll('.watch-telemetry__resource[data-tone="danger"]'))
+      .toHaveLength(0);
+
     await act(async () => {
-      pendingBatch.resolve(batchStatus(sectionKey));
+      pendingBatch.resolve(batchStatus({ term: sectionKey.term, campus: sectionKey.campus }));
       await pendingBatch.promise;
     });
+  });
+
+  it('names a rejected batch request as a contract error and offers no Retry for it', async () => {
+    const sectionKey = section(1);
+    const openStatus = vi.fn<ProductApiPort['openStatus']>().mockRejectedValue(
+      new ProductClientError(400, {
+        protocolVersion: 1,
+        error: {
+          code: 'MALFORMED_REQUEST',
+          messageKey: 'error.malformed_request',
+          traceId: 'trace-batch-400',
+          details: [],
+        },
+      }),
+    );
+    renderWatch(
+      [sectionKey],
+      new FakeWatchClient(),
+      new FakeAudioController(),
+      'en-US',
+      { openStatus },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Section 00001 to the watch list' }));
+    const telemetry = screen.getByRole('region', {
+      name: 'Freshness / lag / circuit / counters',
+    });
+    const message = await within(telemetry).findByText(
+      'The server rejected the live status request (HTTP 400, MALFORMED_REQUEST). '
+      + 'This is a client-side defect; retrying will not recover it. Please update the app.',
+    );
+    expect(within(telemetry).queryByText(
+      'Live status is temporarily unavailable; no result is available yet.',
+    )).toBeNull();
+    const resource = message.closest('article');
+    if (!(resource instanceof HTMLElement)) throw new Error('Batch telemetry resource was not rendered');
+    expect(within(resource).queryByRole('button', { name: 'Retry this status' })).toBeNull();
+    fireEvent.click(within(resource).getByText('Technical diagnostics'));
+    expect(within(resource).getByText('400')).toBeTruthy();
+    expect(within(resource).getByText('MALFORMED_REQUEST')).toBeTruthy();
+    expect(within(resource).getByText('trace-batch-400')).toBeTruthy();
+    expect(openStatus).toHaveBeenCalledOnce();
   });
 
   it('shows status, API code, and trace ID for one failed resource and retries only it', async () => {
@@ -864,10 +922,16 @@ describe('Watch workspace product flow', () => {
     expect(within(resource).getByText('UPSTREAM_UNAVAILABLE')).toBeTruthy();
     expect(within(resource).getByText('trace-section-00001')).toBeTruthy();
 
+    // No data and a request that actually failed is the one case that earns the
+    // danger surface (spec 4.7).
+    expect(resource.getAttribute('data-tone')).toBe('danger');
+
     fireEvent.click(within(resource).getByRole('button', { name: 'Retry this status' }));
     await waitFor(() => expect(openSectionStatus).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(within(resource).queryByRole('alert')).toBeNull());
     expect(within(resource).getByText(/Showing the latest valid result from/u)).toBeTruthy();
+    // Held-over data is a warning, not a failure.
+    expect(resource.getAttribute('data-tone')).toBe('warn');
   });
 
   it('clears telemetry after the final Section is removed', async () => {
@@ -1128,5 +1192,53 @@ describe('Watch workspace product flow', () => {
       rules: { 'color-contrast': { enabled: false } },
     });
     expect(accessibility.violations).toEqual([]);
+  });
+});
+
+describe('Watch workspace stylesheet', () => {
+  it('keeps the readiness bar sticky below the app bar instead of under it', () => {
+    expect(WATCH_WORKSPACE_CSS).toMatch(/\.watch-readiness\s*\{[^}]*position:\s*sticky/u);
+    expect(WATCH_WORKSPACE_CSS).toMatch(/\.watch-readiness\s*\{[^}]*top:\s*var\(--bcsp-navigation-height/u);
+    expect(WATCH_WORKSPACE_CSS).not.toMatch(/\.watch-readiness[^{]*\{[^}]*border-left:\s*6px/u);
+  });
+
+  it('tints a telemetry resource by tone and never paints a pending read as an error', () => {
+    expect(WATCH_WORKSPACE_CSS).toMatch(
+      /\.watch-telemetry__resource\[data-tone='warn'\]\s*\{[^}]*background:\s*var\(--bcsp-warn-tint\)/u,
+    );
+    expect(WATCH_WORKSPACE_CSS).toMatch(
+      /\.watch-telemetry__resource\[data-tone='danger'\]\s*\{[^}]*background:\s*var\(--bcsp-danger-tint\)/u,
+    );
+    // The old rule tinted every resource without data -- which includes every
+    // resource that has merely not answered yet -- with the danger surface.
+    expect(WATCH_WORKSPACE_CSS).not.toMatch(
+      /\.watch-telemetry__resource\[data-availability='ERROR_NO_DATA'\][^{]*\{[^}]*danger-tint/u,
+    );
+    expect(WATCH_WORKSPACE_CSS).toMatch(
+      /\.watch-telemetry__resource\[data-tone='busy'\] p::before\s*\{[^}]*animation:\s*bcsp-telemetry-turn/u,
+    );
+    expect(WATCH_WORKSPACE_CSS).toContain('@keyframes bcsp-telemetry-turn');
+    expect(WATCH_WORKSPACE_CSS).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*data-tone='busy'\] p::before[^}]*animation:\s*none/u,
+    );
+  });
+
+  it('states an unconfirmed CONTINUOUS policy as a warn banner instead of loose red text', () => {
+    expect(WATCH_WORKSPACE_CSS).toMatch(
+      /\.watch-workspace__notice\s*\{[^}]*background:\s*var\(--bcsp-warn-tint\)/u,
+    );
+    expect(WATCH_WORKSPACE_CSS).toMatch(
+      /\.watch-workspace__notice\s*\{[^}]*border:\s*1px solid var\(--bcsp-warn-line\)/u,
+    );
+    expect(WATCH_WORKSPACE_CSS).toMatch(
+      /\.watch-workspace__notice::before\s*\{[^}]*background:\s*var\(--bcsp-warn\)/u,
+    );
+  });
+
+  it('pulses the watching dot only when motion is allowed', () => {
+    expect(WATCH_WORKSPACE_CSS).toContain('@keyframes bcsp-pulse');
+    expect(WATCH_WORKSPACE_CSS).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.watch-workspace__badge::before[^}]*animation:\s*none/u,
+    );
   });
 });

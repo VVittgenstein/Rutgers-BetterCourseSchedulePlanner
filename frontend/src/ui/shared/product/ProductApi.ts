@@ -1,4 +1,5 @@
 import type { CatalogDiscoveryRequestV1, CatalogDiscoveryResponseV1 } from './contracts/catalog';
+import type { TermCampusKey } from './contracts/common';
 import type {
   CourseDetailRequestV1,
   CourseDetailResponseV1,
@@ -187,9 +188,13 @@ export class ProductApi implements ProductApiPort {
     request: OpenStatusRequestV1,
     signal?: AbortSignal,
   ): Promise<OpenRefreshStatusV1> {
+    // The server's batch key is strict (`deny_unknown_fields`), and a Section
+    // key satisfies `TermCampusKey` structurally -- `index` included. Only
+    // the two batch fields go on the wire, whatever the caller handed over.
+    const batch: TermCampusKey = { term: request.batch.term, campus: request.batch.campus };
     return this.#client.post<OpenStatusRequestV1, OpenRefreshStatusV1>(
       PRODUCT_API_ROUTES.openStatus.path,
-      request,
+      { contractVersion: request.contractVersion, batch },
       signal,
     );
   }

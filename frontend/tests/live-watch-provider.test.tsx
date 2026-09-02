@@ -21,7 +21,9 @@ import type {
   WatchServerEventV1,
   WsServerEnvelope,
 } from '../src/ui/shared/product';
+import { ProductClientError } from '../src/ui/shared/product';
 import {
+  BATCH_STATUS_COALESCE_MILLISECONDS,
   DEFAULT_WATCH_POLICY,
   LiveWatchProvider,
   useLiveWatch,
@@ -37,6 +39,12 @@ const LATER = '2030-01-01T00:00:30Z';
 const SECTION_A = { term: 'T2030F', campus: 'CAMPUS_A', index: '00001' } satisfies SectionKey;
 const SECTION_C = { term: 'T2030F', campus: 'CAMPUS_A', index: '00003' } satisfies SectionKey;
 const SECTION_D = { term: 'T2030F', campus: 'CAMPUS_A', index: '00004' } satisfies SectionKey;
+/** A Section of a SECOND batch, so one batch can leave the desk while another stays. */
+const SECTION_E = { term: 'T2030F', campus: 'CAMPUS_B', index: '00009' } satisfies SectionKey;
+/** The only shape the server accepts for a batch key: nothing but these two fields. */
+const BATCH_A = { term: SECTION_A.term, campus: SECTION_A.campus };
+/** The provider's resource key joins term and campus with a NUL separator. */
+const BATCH_A_RESOURCE_KEY = `batch:${SECTION_A.term}${String.fromCharCode(0)}${SECTION_A.campus}`;
 const ACTIVE_A = '00000000-0000-4000-8000-0000000000a1';
 const ACTIVE_C = '00000000-0000-4000-8000-0000000000c1';
 const ACTIVE_D = '00000000-0000-4000-8000-0000000000d1';
@@ -268,6 +276,60 @@ function createHarness(
     rerenderVolume(volume) {
       view.rerender(renderProvider(volume));
     },
+    watch,
+    value() {
+      if (current === null) throw new Error('LiveWatch context was not published');
+      return current;
+    },
+  };
+}
+
+/**
+ * A desk that opens with Sections already on it, the way a reload does.
+ *
+ * The difference from `createHarness` is not cosmetic: a persisted selection
+ * is present in the very first render, so the telemetry pass and the
+ * connection-driven pass both run on mount and overlap -- which is the shape
+ * the real page has and the one a `select()` in a test never produces.
+ */
+function createPersistedHarness(
+  initialSelected: readonly SectionKey[],
+  initialState: WatchConnectionState,
+  productOverrides: Partial<ProductApiPort>,
+  strictMode = false,
+): Harness {
+  const watch = new FakeWatch();
+  watch.state = initialState;
+  const audio = new FakeAudio();
+  const product: ProductApiPort = {
+    catalogDiscovery: unexpected,
+    courseDetail: unexpected,
+    filterSchema: unexpected,
+    openSectionStatus: vi.fn(async ({ sectionKey }) => sectionStatus(sectionKey)),
+    openStatus: vi.fn(async ({ batch }) => refreshStatus(batch)),
+    searchCourses: unexpected,
+    searchSections: unexpected,
+    sectionDetail: unexpected,
+    ...productOverrides,
+  };
+  const runtime: ProductRuntimePort = { product, watch, dispose: vi.fn() };
+  let current: LiveWatchValue | null = null;
+  const onVolumeChange = vi.fn();
+  const tree = (
+    <LiveWatchProvider
+      audio={audio as unknown as WatchAudioController}
+      initialSelected={initialSelected}
+      onVolumeChange={onVolumeChange}
+      runtime={runtime}
+    >
+      <Probe publish={(value) => { current = value; }} />
+    </LiveWatchProvider>
+  );
+  render(strictMode ? <StrictMode>{tree}</StrictMode> : tree);
+  return {
+    audio,
+    onVolumeChange,
+    rerenderVolume() { throw new Error('not supported'); },
     watch,
     value() {
       if (current === null) throw new Error('LiveWatch context was not published');
@@ -532,7 +594,7 @@ describe('LiveWatchProvider', () => {
 
     openStatus.mockImplementationOnce(async () => slow.promise);
     await emit(harness, observationEvent());
-    expect(openStatus).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(2));
 
     const newer = {
       ...refreshStatus({ term: SECTION_A.term, campus: SECTION_A.campus }),
@@ -653,6 +715,7 @@ describe('LiveWatchProvider', () => {
 
     openStatus.mockImplementationOnce(async () => slow.promise);
     await emit(harness, observationEvent());
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(2));
     await act(async () => harness.value().remove(SECTION_A));
     expect(harness.value().batchStatuses).toEqual([]);
     expect(harness.value().sectionStatuses).toEqual([]);
@@ -693,6 +756,475 @@ describe('LiveWatchProvider', () => {
 
     await emit(harness, observationEvent(AT));
     expect(harness.value().sectionStatuses[0]?.freshness.state).toBe('STALE');
+  });
+
+  it('sends only term and campus in every batch status request', async () => {
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => refreshStatus(batch));
+    const harness = createHarness('OPEN', false, { openStatus });
+    await act(async () => harness.value().select(SECTION_A));
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(1));
+    // toStrictEqual + Object.keys are what catch a stray `index`: a Section
+    // key satisfies the batch key type structurally, so nothing at compile
+    // time would.
+    expect(openStatus.mock.calls[0]![0]).toStrictEqual({ contractVersion: 1, batch: BATCH_A });
+    expect(Object.keys(openStatus.mock.calls[0]![0].batch)).toEqual(['term', 'campus']);
+    await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
+
+    await emit(harness, observationEvent());
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(2));
+    expect(openStatus.mock.calls[1]![0]).toStrictEqual({ contractVersion: 1, batch: BATCH_A });
+    expect(Object.keys(openStatus.mock.calls[1]![0].batch)).toEqual(['term', 'campus']);
+    await waitFor(() => expect(harness.value().telemetryResources.every((resource) =>
+      !resource.loading)).toBe(true));
+
+    openStatus.mockRejectedValueOnce(new ProductClientError(503, null));
+    await act(async () => harness.value().refreshTelemetry());
+    expect(openStatus).toHaveBeenCalledTimes(3);
+    expect(harness.value().telemetryResources.find((resource) => resource.kind === 'BATCH'))
+      .toMatchObject({ error: { httpStatus: 503, retryable: true }, loading: false });
+
+    await act(async () => harness.value().retryTelemetryResource(BATCH_A_RESOURCE_KEY));
+    expect(openStatus).toHaveBeenCalledTimes(4);
+    expect(openStatus.mock.calls[3]![0]).toStrictEqual({ contractVersion: 1, batch: BATCH_A });
+    expect(Object.keys(openStatus.mock.calls[3]![0].batch)).toEqual(['term', 'campus']);
+    const resource = harness.value().telemetryResources.find((value) => value.kind === 'BATCH');
+    expect(resource?.error).toBeNull();
+    expect(resource?.batch).toStrictEqual(BATCH_A);
+    expect(Object.keys(resource!.batch!)).toEqual(['term', 'campus']);
+  });
+
+  it('reads one batch status for two Sections of the same batch', async () => {
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async ({ sectionKey }) =>
+      sectionStatus(sectionKey));
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => refreshStatus(batch));
+    const harness = createHarness('OPEN', false, { openSectionStatus, openStatus });
+    await act(async () => {
+      harness.value().select(SECTION_A);
+      harness.value().select(SECTION_C);
+    });
+    await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
+
+    expect(openSectionStatus).toHaveBeenCalledTimes(2);
+    expect(openStatus).toHaveBeenCalledTimes(1);
+    expect(openStatus.mock.calls[0]![0]).toStrictEqual({ contractVersion: 1, batch: BATCH_A });
+  });
+
+  it('coalesces a burst of observations for one batch into a single status read', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AT));
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => refreshStatus(batch));
+    const harness = createHarness('OPEN', false, { openStatus });
+    await act(async () => harness.value().select(SECTION_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(openStatus).toHaveBeenCalledTimes(1);
+
+    await emit(harness, observationEvent());
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    await emit(harness, observationEvent());
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    await emit(harness, observationEvent());
+    expect(openStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_STATUS_COALESCE_MILLISECONDS + 1); });
+    expect(openStatus).toHaveBeenCalledTimes(2);
+    expect(openStatus.mock.calls[1]![0]).toStrictEqual({ contractVersion: 1, batch: BATCH_A });
+    expect(harness.value().batchStatuses).toHaveLength(1);
+
+    // A fourth observation after the in-flight read completed is a new burst.
+    await emit(harness, observationEvent());
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_STATUS_COALESCE_MILLISECONDS + 1); });
+    expect(openStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it('queues at most one follow-up read while a batch status read is in flight', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AT));
+    const slow = deferred<OpenRefreshStatusV1>();
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => refreshStatus(batch));
+    const harness = createHarness('OPEN', false, { openStatus });
+    await act(async () => harness.value().select(SECTION_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(openStatus).toHaveBeenCalledTimes(1);
+
+    openStatus.mockImplementationOnce(async () => slow.promise);
+    await emit(harness, observationEvent());
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_STATUS_COALESCE_MILLISECONDS + 1); });
+    expect(openStatus).toHaveBeenCalledTimes(2);
+
+    // Two more bursts while that read is still out: neither starts a read.
+    await emit(harness, observationEvent());
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_STATUS_COALESCE_MILLISECONDS + 1); });
+    await emit(harness, observationEvent());
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_STATUS_COALESCE_MILLISECONDS + 1); });
+    expect(openStatus).toHaveBeenCalledTimes(2);
+
+    slow.resolve(refreshStatus(BATCH_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(openStatus).toHaveBeenCalledTimes(3);
+    expect(openStatus.mock.calls[2]![0]).toStrictEqual({ contractVersion: 1, batch: BATCH_A });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_STATUS_COALESCE_MILLISECONDS * 4); });
+    expect(openStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not auto-retry a non-retryable 4xx on freshness expiry while a 5xx keeps retrying', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AT));
+    const malformed = new ProductClientError(400, {
+      protocolVersion: 1,
+      error: {
+        code: 'MALFORMED_REQUEST',
+        messageKey: 'error.malformed_request',
+        traceId: 'trace-batch-400',
+        details: [],
+      },
+    });
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async () => { throw malformed; });
+    const freshFor = (milliseconds: number) => new Date(Date.now() + milliseconds).toISOString();
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async ({ sectionKey }) => ({
+      ...sectionStatus(sectionKey),
+      state: 'OPEN',
+      freshness: {
+        state: 'FRESH',
+        observedAt: freshFor(0),
+        freshUntil: freshFor(1_000),
+        lastKnownGoodAgeSeconds: 0,
+        uncertainty: null,
+      },
+    }));
+    const harness = createHarness('OPEN', false, { openSectionStatus, openStatus });
+    const batchResource = () =>
+      harness.value().telemetryResources.find((resource) => resource.kind === 'BATCH');
+
+    await act(async () => harness.value().select(SECTION_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(openSectionStatus).toHaveBeenCalledTimes(1);
+    expect(openStatus).toHaveBeenCalledTimes(1);
+    expect(batchResource()).toMatchObject({
+      availability: 'ERROR_NO_DATA',
+      loading: false,
+      error: {
+        httpStatus: 400,
+        apiCode: 'MALFORMED_REQUEST',
+        traceId: 'trace-batch-400',
+        retryable: false,
+      },
+    });
+
+    // Two freshness expiries: the Section is re-read each time, the batch is not.
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
+    expect(openSectionStatus).toHaveBeenCalledTimes(2);
+    expect(openStatus).toHaveBeenCalledTimes(1);
+    expect(batchResource()).toMatchObject({ loading: false, error: { retryable: false } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
+    expect(openSectionStatus).toHaveBeenCalledTimes(3);
+    expect(openStatus).toHaveBeenCalledTimes(1);
+
+    // An explicit read asks again.
+    await act(async () => harness.value().refreshTelemetry());
+    expect(openStatus).toHaveBeenCalledTimes(2);
+    expect(batchResource()?.error?.retryable).toBe(false);
+
+    // A 5xx is an outage, and the timer keeps asking.
+    openStatus.mockImplementation(async () => { throw new ProductClientError(503, null); });
+    await act(async () => harness.value().refreshTelemetry());
+    expect(openStatus).toHaveBeenCalledTimes(3);
+    expect(batchResource()?.error).toMatchObject({ httpStatus: 503, retryable: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
+    expect(openSectionStatus).toHaveBeenCalledTimes(6);
+    expect(openStatus).toHaveBeenCalledTimes(4);
+  });
+
+  it('settles the batch resource after a follow-up queued behind the refresh pass', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AT));
+    const farFresh = '2030-01-01T01:00:00Z';
+    const observed = (batch: { readonly term: string; readonly campus: string }): OpenRefreshStatusV1 => ({
+      ...refreshStatus(batch),
+      freshness: {
+        state: 'FRESH',
+        observedAt: AT,
+        freshUntil: farFresh,
+        lastKnownGoodAgeSeconds: 0,
+        uncertainty: null,
+      },
+    });
+    const sectionCalls: ReturnType<typeof deferred<OpenSectionStatusV1>>[] = [];
+    const batchCalls: ReturnType<typeof deferred<OpenRefreshStatusV1>>[] = [];
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async () => {
+      const call = deferred<OpenSectionStatusV1>();
+      sectionCalls.push(call);
+      return call.promise;
+    });
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async () => {
+      const call = deferred<OpenRefreshStatusV1>();
+      batchCalls.push(call);
+      return call.promise;
+    });
+    const harness = createHarness('OPEN', false, { openSectionStatus, openStatus });
+    const batchResource = () =>
+      harness.value().telemetryResources.find((resource) => resource.key === BATCH_A_RESOURCE_KEY);
+
+    // Two persisted Sections of one batch: one pass of two Section reads and
+    // one batch read, all slow and answered one after another.
+    await act(async () => {
+      harness.value().select(SECTION_A);
+      harness.value().select(SECTION_C);
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(openSectionStatus).toHaveBeenCalledTimes(2);
+    expect(openStatus).toHaveBeenCalledTimes(1);
+    expect(batchResource()).toMatchObject({ loading: true });
+
+    sectionCalls[0]!.resolve(sectionStatus(SECTION_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_300); });
+    sectionCalls[1]!.resolve(sectionStatus(SECTION_C));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_300); });
+
+    // The server walks a refresh while the batch read is still out: the
+    // observation asks for a follow-up, which queues behind the pass.
+    await emit(harness, observationEvent(farFresh));
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_STATUS_COALESCE_MILLISECONDS + 1); });
+    expect(openStatus).toHaveBeenCalledTimes(1);
+
+    batchCalls[0]!.resolve(observed(BATCH_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(openStatus).toHaveBeenCalledTimes(2);
+    expect(openStatus.mock.calls[1]![0]).toStrictEqual({ contractVersion: 1, batch: BATCH_A });
+    // The pass's answer is the newest one this page has: the follow-up that
+    // just started has not answered anything yet.
+    expect(harness.value().batchStatuses).toHaveLength(1);
+    expect(batchResource()).toMatchObject({ loading: true, error: null, lastSuccessAt: AT });
+
+    batchCalls[1]!.resolve(observed(BATCH_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_300); });
+    expect(openStatus).toHaveBeenCalledTimes(2);
+    expect(harness.value().batchStatuses).toHaveLength(1);
+    expect(batchResource()).toMatchObject({ loading: false, error: null, lastSuccessAt: AT });
+    // Every read this page issued has been answered, so nothing is loading.
+    expect(harness.value().telemetryResources.map((resource) => [resource.key, resource.loading]))
+      .toEqual(harness.value().telemetryResources.map((resource) => [resource.key, false]));
+    expect(harness.value().telemetryLoading).toBe(false);
+  });
+
+  it('settles the batch resource for a reloaded desk whose passes overlap', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AT));
+    const farFresh = '2030-01-01T01:00:00Z';
+    const observed = (batch: { readonly term: string; readonly campus: string }): OpenRefreshStatusV1 => ({
+      ...refreshStatus(batch),
+      freshness: {
+        state: 'FRESH',
+        observedAt: AT,
+        freshUntil: farFresh,
+        lastKnownGoodAgeSeconds: 0,
+        uncertainty: null,
+      },
+    });
+    // A read the page abandons is a read the transport aborts: the promise
+    // rejects, exactly as `fetch` does, rather than hanging forever.
+    const answerOnAbort = <T,>(
+      call: ReturnType<typeof deferred<T>>,
+      signal: AbortSignal | undefined,
+    ) => {
+      if (signal === undefined) return call.promise;
+      if (signal.aborted) call.reject(new ProductClientError(null, null));
+      signal.addEventListener('abort', () => call.reject(new ProductClientError(null, null)));
+      return call.promise;
+    };
+    const sectionCalls: ReturnType<typeof deferred<OpenSectionStatusV1>>[] = [];
+    const batchCalls: ReturnType<typeof deferred<OpenRefreshStatusV1>>[] = [];
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async (_request, signal) => {
+      const call = deferred<OpenSectionStatusV1>();
+      sectionCalls.push(call);
+      return answerOnAbort(call, signal);
+    });
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async (_request, signal) => {
+      const call = deferred<OpenRefreshStatusV1>();
+      batchCalls.push(call);
+      return answerOnAbort(call, signal);
+    });
+    // The real page: two persisted Sections of one batch, and a socket that
+    // has not connected yet -- so the selection pass and the connection pass
+    // both run on mount, and the second abandons the first.
+    const harness = createPersistedHarness([SECTION_A, SECTION_C], 'CLOSED', {
+      openSectionStatus,
+      openStatus,
+    });
+    const batchResource = () =>
+      harness.value().telemetryResources.find((resource) => resource.key === BATCH_A_RESOURCE_KEY);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const liveSections = sectionCalls.slice(-2);
+    const liveBatch = batchCalls[batchCalls.length - 1]!;
+    expect(batchResource()).toMatchObject({ loading: true });
+
+    // The Section reads answer first, as they do on the real server.
+    liveSections[0]!.resolve(sectionStatus(SECTION_A));
+    liveSections[1]!.resolve(sectionStatus(SECTION_C));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_300); });
+
+    // The server walks a refresh while the batch read is still out: the
+    // observation asks for a follow-up, which queues behind the pass.
+    await emit(harness, observationEvent(farFresh));
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_STATUS_COALESCE_MILLISECONDS + 1); });
+
+    liveBatch.resolve(observed(BATCH_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(harness.value().batchStatuses).toHaveLength(1);
+    const followUp = batchCalls[batchCalls.length - 1]!;
+    followUp.resolve(observed(BATCH_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_300); });
+
+    // Every read this page issued has been answered. The row may not still
+    // be saying it is reading the current state.
+    expect(batchResource()).toMatchObject({
+      availability: 'CURRENT',
+      loading: false,
+      error: null,
+      lastSuccessAt: AT,
+    });
+    expect(harness.value().telemetryResources.every((resource) => !resource.loading)).toBe(true);
+    expect(harness.value().telemetryLoading).toBe(false);
+  });
+
+  it('settles a batch read that answers after the last watch for it stopped', async () => {
+    const batchCalls: {
+      readonly batch: { readonly term: string; readonly campus: string };
+      readonly call: ReturnType<typeof deferred<OpenRefreshStatusV1>>;
+    }[] = [];
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async ({ sectionKey }) =>
+      sectionStatus(sectionKey));
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => {
+      const call = deferred<OpenRefreshStatusV1>();
+      batchCalls.push({ batch, call });
+      return call.promise;
+    });
+    const harness = createHarness('OPEN', false, { openSectionStatus, openStatus });
+    const batchResource = () =>
+      harness.value().telemetryResources.find((resource) => resource.key === BATCH_A_RESOURCE_KEY);
+
+    // One Section of another batch is on the desk, so the desk survives what
+    // happens to this one.
+    await act(async () => harness.value().select(SECTION_E));
+    await act(async () => {
+      batchCalls.forEach(({ batch, call }) => call.resolve(refreshStatus(batch)));
+    });
+
+    // A watch this page never selected is running in BATCH_A, so the pass
+    // reads that batch too: its row goes on the desk saying it is reading.
+    await emit(harness, startResult([[SECTION_A, ACTIVE_A]]));
+    await act(async () => { void harness.value().refreshTelemetry(); });
+    expect(batchResource()).toMatchObject({ loading: true });
+    const pendingBatchA = batchCalls.filter(({ batch }) => batch.campus === SECTION_A.campus).at(-1)!;
+
+    // The watch ends while that read is still out, so nothing on the desk
+    // wants BATCH_A any more -- and then the read answers.
+    await emit(harness, stopped(SECTION_A, ACTIVE_A));
+    await act(async () => {
+      pendingBatchA.call.resolve(refreshStatus(BATCH_A));
+      batchCalls.forEach(({ batch, call }) => call.resolve(refreshStatus(batch)));
+    });
+
+    // The read this page issued has been answered. Whatever it decided to do
+    // with the answer, the row may not still say it is reading.
+    expect(batchResource()).toMatchObject({ loading: false });
+    expect(harness.value().telemetryResources.filter((resource) => resource.loading)).toEqual([]);
+  });
+
+  it('stops saying it is reading when a removal cancels the pass it started', async () => {
+    const sectionCalls: ReturnType<typeof deferred<OpenSectionStatusV1>>[] = [];
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async (_request, signal) => {
+      const call = deferred<OpenSectionStatusV1>();
+      sectionCalls.push(call);
+      signal?.addEventListener('abort', () => call.reject(new ProductClientError(null, null)));
+      return call.promise;
+    });
+    const batchCalls: ReturnType<typeof deferred<OpenRefreshStatusV1>>[] = [];
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async (_request, signal) => {
+      const call = deferred<OpenRefreshStatusV1>();
+      batchCalls.push(call);
+      signal?.addEventListener('abort', () => call.reject(new ProductClientError(null, null)));
+      return call.promise;
+    });
+    const harness = createHarness('OPEN', false, { openSectionStatus, openStatus });
+    await act(async () => harness.value().select(SECTION_A));
+    expect(harness.value().telemetryLoading).toBe(true);
+
+    // Removing a Section the desk was not reading for cancels the pass -- and
+    // leaves the selection, so no new pass follows to finish the sentence.
+    await act(async () => harness.value().remove(SECTION_D));
+    await act(async () => {
+      sectionCalls.forEach((call) => call.resolve(sectionStatus(SECTION_A)));
+      batchCalls.forEach((call) => call.resolve(refreshStatus(BATCH_A)));
+    });
+
+    expect(harness.value().selected).toEqual([SECTION_A]);
+    expect(harness.value().telemetryLoading).toBe(false);
+    expect(harness.value().telemetryResources.filter((resource) => resource.loading)).toEqual([]);
+  });
+
+  it('books a superseded batch read without unsettling the newer one still in flight', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(AT));
+    const farFresh = '2030-01-01T01:00:00Z';
+    const observed = (batch: { readonly term: string; readonly campus: string }): OpenRefreshStatusV1 => ({
+      ...refreshStatus(batch),
+      freshness: {
+        state: 'FRESH',
+        observedAt: AT,
+        freshUntil: farFresh,
+        lastKnownGoodAgeSeconds: 0,
+        uncertainty: null,
+      },
+    });
+    const batchCalls: ReturnType<typeof deferred<OpenRefreshStatusV1>>[] = [];
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async () => {
+      const call = deferred<OpenRefreshStatusV1>();
+      batchCalls.push(call);
+      return call.promise;
+    });
+    const harness = createHarness('OPEN', false, { openStatus });
+    const batchResource = () =>
+      harness.value().telemetryResources.find((resource) => resource.key === BATCH_A_RESOURCE_KEY);
+
+    await act(async () => harness.value().select(SECTION_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(openStatus).toHaveBeenCalledTimes(1);
+    batchCalls[0]!.resolve(refreshStatus(BATCH_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(batchResource()).toMatchObject({ loading: false, lastSuccessAt: null });
+
+    // An observation-driven read goes out, and an explicit refresh asks
+    // again before it is answered: two reads for one batch are out at once.
+    await emit(harness, observationEvent(farFresh));
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_STATUS_COALESCE_MILLISECONDS + 1); });
+    expect(openStatus).toHaveBeenCalledTimes(2);
+    await act(async () => { void harness.value().refreshTelemetry(); });
+    expect(openStatus).toHaveBeenCalledTimes(3);
+    expect(batchResource()).toMatchObject({ loading: true });
+
+    // The older read lands first: its success is booked, and the row keeps
+    // saying a read is out, because one is.
+    batchCalls[1]!.resolve(observed(BATCH_A));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(batchResource()).toMatchObject({
+      availability: 'CURRENT',
+      loading: true,
+      error: null,
+      lastSuccessAt: AT,
+    });
+
+    // The newer read fails: that is the newest answer, and it settles the row.
+    batchCalls[2]!.reject(new ProductClientError(503, null));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(batchResource()).toMatchObject({
+      availability: 'LKG',
+      loading: false,
+      error: { httpStatus: 503, retryable: true },
+      lastSuccessAt: AT,
+    });
+    expect(harness.value().telemetryLoading).toBe(false);
+    expect(harness.value().batchStatuses).toHaveLength(1);
   });
 
   it('reduces active start/stop and keeps an active watch when its audible cap is reached', async () => {
