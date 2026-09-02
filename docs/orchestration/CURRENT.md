@@ -332,20 +332,22 @@ PUT /api/v1/local/desired-watch
 
 ## 12. 当前仓库检查点
 
-记录日期：2026-08-26。
+记录日期：2026-09-02。
 
 ```text
-当前检出：main（v0.1.1 发布后的编排文档收口）
+当前检出：main（v0.1.2 发布后的编排文档收口）
+v0.1.2 产品源码与轻量 tag：76316dd2eedae844bd48fabc75c6b48e343c6d61
+GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.2
 v0.1.1 产品源码与轻量 tag：0988dadeeef2db16bbc2e64bc432125674c60325
-GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.1
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
 L1/R4 accepted head：75cefb0
 Claude Stage 2 主交付 head：553371f；R1 lane head：5af49d9
 Codex Stage 2 最终集成 head：6a35c74
 Stage 2/3/4/5：均已裁定、串行集成并随 v0.1.1 发布
-当前产品源码工作树：无未提交源码；三个 conversation 归档目录保持未跟踪
-v0.1.0：tag/Release/资产保持不可变；v0.1.1 为当前 Latest
+v0.1.2：真实使用暴露的筛选、可用性、存储与界面缺陷收口，迁移 0007 + derivation stamp 不可回滚
+当前产品源码工作树：无未提交源码；conversation 归档目录保持未跟踪
+v0.1.0/v0.1.1：tag/Release/资产保持不可变；v0.1.2 为当前 Latest
 ```
 
 恢复时必须重新核实这些值，不得永久假设它们仍然成立。
@@ -425,7 +427,8 @@ v0.1.0：tag/Release/资产保持不可变；v0.1.1 为当前 Latest
 
 ## 16. 当前 Parallel Wave
 
-状态：**Parallel Wave 1 与 v0.1.1 发布均已完成。Stage 2 → P2 → S4 → S3 evidence 已串行回收；
+状态：**Parallel Wave 1、v0.1.1 与 v0.1.2 发布均已完成。v0.1.2 收口了真实使用暴露的筛选、
+可用性、存储与界面缺陷。Stage 2 → P2 → S4 → S3 evidence 已串行回收；
 Windows/Linux 同源归档、联合验证与 Linux 600 秒 CORE soak 全部通过。**
 
 Stage 2（已完成）：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
@@ -500,6 +503,49 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-09-02 — v0.1.2 已发布，真实使用缺陷收口
+
+- 用户以 0.1.1 正式包在自己机器上使用后报告三件事：按条件筛选“一节课都没有刷出来”、界面混乱、
+  反复出现“无法完成本地更改”。逐条复现并沿用户要求扩查了全部 16 个筛选项的每一个可选值；
+- 对照真实 Fall 2026 目录（92026/NB，4,391 门课 / 11,976 个课节）逐项探测发现四个筛选缺陷：
+  Rutgers `meetingModeCode 90` 一律被判为 `UNSPECIFIED`，全库只有 1 个 `ASYNC`、0 个 `MIXED`；
+  可用时间窗与子校区 `ALL_REQUIRED_MEETINGS` 因 `UNKNOWN_REQUIREDNESS` 永不排除，任何取值都返回全集；
+  `AHo/AHp/AHq/AHr/WCd/WCr` 六个核心码因请求端大写、字典端保留原大小写而被判 `INVALID_FILTER_OPTION`；
+- 新推导规则：`90` + 已知时间 → `SYNC`（`ONLINE_SCHEDULED_SYNCHRONOUS`），`90` + `baClassHours=B` 且
+  无时间 → `ASYNC`（`ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS`），其余保持 `UNSPECIFIED`；可靠 occurrence
+  同时出现 `SYNC` 与 `ASYNC` 的 section 归为 `MIXED`。真实数据由此变为 ASYNC 1,152 / SYNC 238 /
+  MIXED 29；投影侧强校验会拒绝旧行，因此迁移 0007 增加 per-target `catalog_derivation_state`，
+  本地与公网 runtime 在开库后、任何投影之前原地重算并打戳；
+- 可用性缺陷：每次 Open 提交都关闭 prepared-serving 准入，实测 100ms 节奏连续请求中约 20% 返回
+  `500`（本地 bootstrap）且单次停顿 3.5–4.5 秒。改为有界等待（本地 5s / 公网 2s），超时后返回
+  `503 STORAGE_BUSY`；refresh policy 改用独立 personal 连接，不再与服务连接争锁；
+- 存储缺陷：`\\?\\` 前缀路径让 SQLite 走 UNC 分支，WAL-index 锁记账竞态泄漏一个读锁，
+  `nBackfill` 恒为 0，实测 WAL 一小时到 3 GB、主库 92 分钟从 173 MB 涨到 867 MB；同时 Open 诊断按
+  Rutgers 日保留导致当天永不清理。已规范化路径、给所有写连接设 `journal_size_limit`、由 refresh
+  runtime 在 executor 之外做检查点、并改为按 attempt 数分批清理；
+- 前端：监看台 `/api/v1/open/status` 请求体误带 index 被服务端拒收，且两处读取未落终态标记导致
+  资源永远停在“正在读取”；本地个人状态的任何失败（含写入成功后的刷新失败）都显示同一句话；
+  搜索页每次启动丢弃已存学期/校区；空结果不解释原因；结果卡片把 64 位 fingerprint、重复三遍的
+  课程名、空列与英文 MATCH 徽章摆在最显眼处。以上全部修复；
+- 界面按用户裁定整体重做为 quiet catalog 设计系统：56px 单行 app bar、卡片式结果、四组筛选栏
+  （常驻已选条件与搜索动作）、完整深色调色板、选项网格铺满整行、内层滚动条悬停才出现；
+- 验证：workspace 849 项 / 前端 457 项测试通过，clippy、rustfmt、Rust 与前端架构图、公网零表面门
+  全绿；Windows 12 文件包通过桌面/移动真实浏览器验收、非空 desired-watch 与两次重启 + Full Reset；
+  Linux 22 文件包由 run `33663375119` 在 ubuntu-24.04 上同源构建并验证；双平台联合 release-set
+  验证通过（172 shared components、12 shared frontend capabilities）；
+- 用真实 867 MB 的 0.1.1 数据库做升级预演：启动重算 8 秒完成，两分钟内 967 次 bootstrap 全部
+  `200`（中位 16ms），WAL 稳定在 11 MB，用户原始筛选条件返回 4 门课；
+- Windows `rbcsp-windows-x86_64-0.1.2.zip` 为 12 文件，SHA-256
+  `fcb42e7cfb0de2603262f9c3016f1a694c269b82e916c32ea9a4203fdf8dc3df`；Linux
+  `rbcsp-linux-x86_64-0.1.2.tar.gz` 为 22 文件，SHA-256
+  `a7c2afd625805a161f0d1aa4df99d3356db560fa3cbf26311f5c6ca7251c7516`；正式 GitHub Release 为
+  `https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.2`；
+- 本轮未运行 600 秒公网 CORE soak（Linux 包由 iteration job 构建并验证），未连接 Vultr，未修改
+  DNS/UFW/SSH/Caddy/systemd 生产主机；旧 `v0.1.0`/`v0.1.1` tag、Release 与资产未变；
+- 按仓库既定归因要求，本轮 7 个提交仍全部由
+  `VVittgenstein <158061732+VVittgenstein@users.noreply.github.com>` author/commit，不带任何
+  Claude/Anthropic co-author trailer。
 
 ### 2026-08-26 — v0.1.1 已发布，归因与双平台 release 收口
 
