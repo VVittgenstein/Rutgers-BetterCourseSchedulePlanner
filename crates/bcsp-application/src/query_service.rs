@@ -1044,12 +1044,15 @@ fn collect_invalid_dynamic_filter_values_with(
         }
     }
 
+    // Core codes are mixed-case in the feed ("AHo") while a request's codes
+    // are canonical uppercase; the engine compares them case-insensitively,
+    // so the validator must too.
     let core_options = catalogs
         .iter()
         .flat_map(|catalog| &catalog.course_variants)
         .filter_map(|variant| known_value(&variant.core_codes))
         .flatten()
-        .map(|value| value.as_str())
+        .map(|value| value.to_ascii_uppercase())
         .collect::<BTreeSet<_>>();
     invalid_values.extend(
         filters
@@ -1169,6 +1172,7 @@ mod tests {
                 to_catalog_refresh_command(&normalized, trace(observation), STARTED, COMPLETED)
                     .expect("map synthetic Catalog"),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("publish synthetic Catalog");
         assert!(matches!(outcome, PublishOutcome::AppliedChanged { .. }));
@@ -2128,6 +2132,109 @@ mod tests {
         assert_eq!(
             serde_json::to_value(prepared_section_detail).unwrap(),
             serde_json::to_value(reference_section_detail).unwrap()
+        );
+    }
+
+    #[test]
+    fn online_by_arrangement_sections_match_async_without_the_incomplete_switch() {
+        // P1: the real Rutgers online shape (sectionCourseType O, generic mode
+        // 90, "hours by arrangement", no day/time) must be a confident ASYNC
+        // match; before derivation v2 it was UNSPECIFIED and the ONLINE+ASYNC
+        // filter returned nothing unless includeIncomplete.synchronicity was set.
+        let (mut storage, nb, _) = fixture_storage();
+        let mut by_arrangement = raw_course(
+            "NB",
+            "01:198:216",
+            "198",
+            "216",
+            "Computer Science online by arrangement",
+            "10006",
+        );
+        by_arrangement["sections"][0]["sectionCourseType"] = json!("O");
+        by_arrangement["sections"][0]["meetingTimes"] = json!([{
+            "meetingModeCode": "90",
+            "meetingDay": "",
+            "startTimeMilitary": "",
+            "endTimeMilitary": "",
+            "baClassHours": "B",
+            "campusLocation": "O"
+        }]);
+        let mut scheduled = raw_course(
+            "NB",
+            "01:198:217",
+            "198",
+            "217",
+            "Computer Science online scheduled",
+            "10007",
+        );
+        scheduled["sections"][0]["sectionCourseType"] = json!("O");
+        scheduled["sections"][0]["meetingTimes"] = json!([{
+            "meetingModeCode": "90",
+            "meetingDay": "M",
+            "startTimeMilitary": "0900",
+            "endTimeMilitary": "1020",
+            "campusLocation": "O"
+        }]);
+        let uncertain = raw_course(
+            "NB",
+            "01:198:218",
+            "198",
+            "218",
+            "Computer Science uncertain",
+            "10008",
+        );
+        publish(
+            &mut storage,
+            &nb,
+            vec![by_arrangement, scheduled, uncertain],
+            5,
+        );
+
+        let search = |storage: &mut OperationalStorage,
+                      synchronicity: UserSynchronicityV3,
+                      include_incomplete: bool| {
+            let mut input = FilterValuesInputV1::for_term(TermId::try_from("92026").unwrap());
+            input.campuses = vec![CampusCode::try_from("NB").unwrap()];
+            input.modalities = vec![UserModalityV3::Online];
+            input.synchronicities = vec![synchronicity];
+            input.include_incomplete.synchronicity = include_incomplete;
+            let request = CourseQueryRequestV1 {
+                filters: FilterRequestV1::new(
+                    NormalizedFilterValuesV1::try_new(input).expect("filters"),
+                ),
+                page: PageRequestV1::default(),
+                sort: CourseSortV1::default(),
+            };
+            let response = SharedQueryService::new(storage)
+                .course_search(
+                    std::slice::from_ref(&nb),
+                    &request,
+                    OffsetDateTime::UNIX_EPOCH,
+                    &[],
+                )
+                .expect("course search");
+            response
+                .items
+                .iter()
+                .map(|item| item.group.key.course_string().as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            search(&mut storage, UserSynchronicityV3::Async, false),
+            vec!["01:198:216".to_owned()],
+            "ONLINE + ASYNC matches the by-arrangement section without includeIncomplete"
+        );
+        assert_eq!(
+            search(&mut storage, UserSynchronicityV3::Sync, false),
+            vec!["01:198:217".to_owned()],
+            "the same section is excluded from ONLINE + SYNC"
+        );
+        assert!(search(&mut storage, UserSynchronicityV3::Mixed, false).is_empty());
+        assert_eq!(
+            search(&mut storage, UserSynchronicityV3::Async, true),
+            vec!["01:198:216".to_owned()],
+            "the incomplete switch adds nothing: every online section is now confident"
         );
     }
 }

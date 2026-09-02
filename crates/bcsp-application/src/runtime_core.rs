@@ -273,6 +273,12 @@ where
         self.counter_audience
     }
 
+    /// The provider this context reads its policy from, so a host can hand
+    /// the SAME reader to its refresh side instead of building a second one.
+    pub const fn refresh_policy_provider(&self) -> &P {
+        &self.policy
+    }
+
     pub fn refresh_policy(&self) -> Result<RefreshPolicy, SharedRuntimeError> {
         self.policy
             .refresh_policy()

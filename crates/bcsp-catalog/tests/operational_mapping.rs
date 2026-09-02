@@ -131,6 +131,7 @@ fn mapped_catalog_publishes_changed_then_unchanged_without_content_version_churn
             to_catalog_refresh_command(&normalized, trace_id(2), STARTED, COMPLETED)
                 .expect("first command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("first publication");
     assert!(matches!(
@@ -146,6 +147,7 @@ fn mapped_catalog_publishes_changed_then_unchanged_without_content_version_churn
             to_catalog_refresh_command(&normalized, trace_id(3), STARTED, COMPLETED)
                 .expect("second command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("unchanged publication");
     assert!(matches!(
@@ -222,6 +224,7 @@ fn open_sections_is_snapshot_only_provenance_and_never_semantic_identity() {
             .apply_catalog_refresh(
                 baseline_command,
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("baseline publish"),
         PublishOutcome::AppliedChanged {
@@ -234,6 +237,7 @@ fn open_sections_is_snapshot_only_provenance_and_never_semantic_identity() {
             .apply_catalog_refresh(
                 changed_command,
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("snapshot-only change publish"),
         PublishOutcome::AppliedUnchanged {
@@ -306,6 +310,7 @@ fn equivalent_duplicate_audit_is_complete_sorted_and_publishable() {
             .apply_catalog_refresh(
                 command,
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("duplicate audit publication"),
         PublishOutcome::AppliedChanged { .. }

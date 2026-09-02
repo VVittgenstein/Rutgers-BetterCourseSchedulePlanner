@@ -17,9 +17,9 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::{
-    DayKnowledge, DuplicateDisposition, NormalizedCatalogTarget, NormalizedCourseGroup,
-    NormalizedCourseVariant, NormalizedOccurrence, NormalizedSection, Sha256Hex, TimeKnowledge,
-    Weekday,
+    DayKnowledge, DeliveryModality, DuplicateDisposition, NormalizedCatalogTarget,
+    NormalizedCourseGroup, NormalizedCourseVariant, NormalizedOccurrence, NormalizedSection,
+    Sha256Hex, Synchronicity, TimeKnowledge, Weekday,
 };
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -374,16 +374,16 @@ fn map_section(
         Presence::Missing | Presence::Null | Presence::Malformed(_) => None,
     };
     let section_entity_key = section.key.to_string();
-    let delivery_modality = CatalogModality::from(section.delivery_modality);
-    let synchronicity = CatalogSynchronicity::from(section.synchronicity);
+    let (delivery_modality, synchronicity) =
+        section_delivery_wire(section.delivery_modality, section.synchronicity);
     snapshot.sections.push(StoredSection {
         key: section.key.clone(),
         variant_key: variant_key.clone(),
         section_number: known_string(&section.section_number),
         catalog_status,
         section_course_type: known_string(&section.raw_section_course_type),
-        delivery_modality: delivery_modality.wire_name().to_owned(),
-        synchronicity: synchronicity.wire_name().to_owned(),
+        delivery_modality: delivery_modality.to_owned(),
+        synchronicity: synchronicity.to_owned(),
         canonical_facts: section.canonical_facts.clone(),
         canonical_sha256: section.semantic_hash.as_str().to_owned(),
     });
@@ -413,7 +413,7 @@ fn map_occurrence(
     source_sha256: &Sha256Hex,
 ) -> Result<(), SnapshotMappingError> {
     let ordinal = checked_ordinal(occurrence.source_ordinal, "occurrence ordinal")?;
-    let occurrence_key = format!("{ordinal:010}-{}", occurrence.raw_hash.as_str());
+    let occurrence_key = occurrence_key(occurrence)?;
     let (start_minute, end_minute) = match occurrence.time {
         TimeKnowledge::Known {
             start_minute,
@@ -421,11 +421,8 @@ fn map_occurrence(
         } => (Some(start_minute), Some(end_minute)),
         _ => (None, None),
     };
-    let modality = CatalogModality::from(occurrence.modality);
-    let synchronicity = CatalogSynchronicity::from(occurrence.synchronicity);
     let requiredness = CatalogRequiredness::from(occurrence.requiredness);
-    let kind = CatalogOccurrenceKind::from(occurrence.kind);
-    let evidence = CatalogOccurrenceEvidence::from(occurrence.evidence);
+    let wire = occurrence_delivery_wire(occurrence);
     snapshot.occurrences.push(StoredOccurrence {
         section_key: section.key.clone(),
         occurrence_key: occurrence_key.clone(),
@@ -435,11 +432,11 @@ fn map_occurrence(
         end_minute,
         time_knowledge: time_knowledge_name(occurrence.time).to_owned(),
         requiredness: requiredness.wire_name().to_owned(),
-        occurrence_kind: kind.wire_name().to_owned(),
-        evidence: evidence.wire_name().to_owned(),
-        normalization_reason: occurrence.normalization_reason.to_owned(),
-        modality: modality.wire_name().to_owned(),
-        synchronicity: synchronicity.wire_name().to_owned(),
+        occurrence_kind: wire.kind.to_owned(),
+        evidence: wire.evidence.to_owned(),
+        normalization_reason: wire.normalization_reason.to_owned(),
+        modality: wire.modality.to_owned(),
+        synchronicity: wire.synchronicity.to_owned(),
         location: known_string(&occurrence.raw_campus_location),
         building: known_string(&occurrence.raw_building_code),
         room: known_string(&occurrence.raw_room_number),
@@ -454,11 +451,55 @@ fn map_occurrence(
         ordinal,
         json!({
             "rawSha256": occurrence.raw_hash.as_str(),
-            "normalizationReason": occurrence.normalization_reason,
-            "evidence": evidence.wire_name(),
+            "normalizationReason": wire.normalization_reason,
+            "evidence": wire.evidence,
         }),
     ));
     Ok(())
+}
+
+/// The stored wire form of a section's derived delivery columns.
+///
+/// Shared by publication mapping and startup re-derivation so the two can never
+/// disagree about what the projection will later recompute and compare against.
+pub(crate) fn section_delivery_wire(
+    delivery_modality: DeliveryModality,
+    synchronicity: Synchronicity,
+) -> (&'static str, &'static str) {
+    (
+        CatalogModality::from(delivery_modality).wire_name(),
+        CatalogSynchronicity::from(synchronicity).wire_name(),
+    )
+}
+
+/// The stored wire form of an occurrence's derived delivery columns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OccurrenceDeliveryWire {
+    pub(crate) kind: &'static str,
+    pub(crate) evidence: &'static str,
+    pub(crate) normalization_reason: &'static str,
+    pub(crate) modality: &'static str,
+    pub(crate) synchronicity: &'static str,
+}
+
+pub(crate) fn occurrence_delivery_wire(
+    occurrence: &NormalizedOccurrence,
+) -> OccurrenceDeliveryWire {
+    OccurrenceDeliveryWire {
+        kind: CatalogOccurrenceKind::from(occurrence.kind).wire_name(),
+        evidence: CatalogOccurrenceEvidence::from(occurrence.evidence).wire_name(),
+        normalization_reason: occurrence.normalization_reason,
+        modality: CatalogModality::from(occurrence.modality).wire_name(),
+        synchronicity: CatalogSynchronicity::from(occurrence.synchronicity).wire_name(),
+    }
+}
+
+/// The stored `catalog_occurrences.occurrence_key` of a normalized occurrence.
+pub(crate) fn occurrence_key(
+    occurrence: &NormalizedOccurrence,
+) -> Result<String, SnapshotMappingError> {
+    let ordinal = checked_ordinal(occurrence.source_ordinal, "occurrence ordinal")?;
+    Ok(format!("{ordinal:010}-{}", occurrence.raw_hash.as_str()))
 }
 
 fn group_entity_key(group: &NormalizedCourseGroup) -> String {

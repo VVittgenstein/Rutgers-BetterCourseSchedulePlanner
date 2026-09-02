@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bcsp_contracts::{
     ApiErrorBody, ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope, CatalogDiscoveryRequestV1,
@@ -16,14 +16,16 @@ use bcsp_operational_storage::{OperationalStorage, OperationalStorageInterruptHa
 use bcsp_query::QueryError;
 use serde::Serialize;
 
+use crate::refresh_maintenance::StorageConnectionInventoryEntry;
 use crate::service_status::{project_service_status_v2, unavailable_service_status};
 use crate::{
     ApplicationClock, ExtensionRequest, ExtensionResponse, ExtensionRoute,
-    OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError, PreparedQueryService,
-    PreparedServingBinding, PreparedServingError, PreparedServingRegistry, PreparedServingSnapshot,
-    RefreshPolicyProvider, RequestMethod, RouteExtension, ServiceStatusRegistry, SharedQueryError,
-    SharedRuntimeContext, SharedRuntimeError, TargetRefreshDemand, TargetRefreshDemandError,
-    is_product_campus, rebuild_prepared_serving_from_access,
+    OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError, PREPARED_REQUEST_ADMISSION_WAIT,
+    PreparedQueryService, PreparedServingBinding, PreparedServingError, PreparedServingRegistry,
+    PreparedServingSnapshot, RefreshPolicyProvider, RequestMethod, RouteExtension,
+    ServiceStatusRegistry, SharedQueryError, SharedRuntimeContext, SharedRuntimeError,
+    TargetRefreshDemand, TargetRefreshDemandError, is_product_campus,
+    rebuild_prepared_serving_from_access,
 };
 
 pub const PRODUCT_FILTER_SCHEMA_PATH: &str = "/api/v1/query/filter-schema";
@@ -70,6 +72,26 @@ pub trait ProductStorageAccess: Send + Sync + 'static {
         self.lock_operational()
             .map(|storage| storage.interrupt_handle())
     }
+
+    /// The transaction state of every long-lived SQLite connection this
+    /// host owns, for the `WAL_CHECKPOINT_STARVED` diagnostic.
+    ///
+    /// The default names only the connection behind [`Self::lock_operational`].
+    /// A host that owns more (the local product keeps seven) overrides this
+    /// so the warning can say WHICH connection is holding the read
+    /// transaction that keeps the log from being checkpointed.
+    fn connection_inventory(&self) -> Vec<StorageConnectionInventoryEntry> {
+        vec![match self.lock_operational() {
+            Ok(storage) => StorageConnectionInventoryEntry::from_state(
+                "operational",
+                storage.transaction_state(),
+            ),
+            Err(_) => StorageConnectionInventoryEntry::new(
+                "operational",
+                StorageConnectionInventoryEntry::LOCKED,
+            ),
+        }]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +117,9 @@ pub struct SharedProductRoutes<C, P, S = SharedProductStorage> {
     service_status: Arc<ServiceStatusRegistry>,
     target_refresh_demand: Option<TargetRefreshDemand>,
     prepared_serving: Arc<PreparedServingRegistry>,
+    /// How long a prepared route waits for a committed publication barrier to
+    /// clear before answering 503; see [`PREPARED_REQUEST_ADMISSION_WAIT`].
+    admission_wait: Duration,
 }
 
 impl<C, P> SharedProductRoutes<C, P>
@@ -114,6 +139,7 @@ where
             service_status: Arc::new(ServiceStatusRegistry::new(ServiceRuntimeV1::Local)),
             target_refresh_demand: None,
             prepared_serving: Arc::new(PreparedServingRegistry::default()),
+            admission_wait: PREPARED_REQUEST_ADMISSION_WAIT,
         };
         routes.rebuild_prepared_serving_lkg();
         routes
@@ -142,6 +168,7 @@ where
             service_status: Arc::new(ServiceStatusRegistry::new(ServiceRuntimeV1::Local)),
             target_refresh_demand: None,
             prepared_serving: Arc::new(PreparedServingRegistry::default()),
+            admission_wait: PREPARED_REQUEST_ADMISSION_WAIT,
         };
         routes.rebuild_prepared_serving_lkg();
         routes
@@ -150,6 +177,19 @@ where
     pub fn with_target_refresh_demand(mut self, demand: TargetRefreshDemand) -> Self {
         self.target_refresh_demand = Some(demand);
         self
+    }
+
+    /// Replaces the prepared-route admission wait. Hosts whose request
+    /// waiters share a small blocking pool with the rebuild pick a shorter
+    /// wait; tests use tens of milliseconds.
+    #[must_use]
+    pub const fn with_prepared_admission_wait(mut self, admission_wait: Duration) -> Self {
+        self.admission_wait = admission_wait;
+        self
+    }
+
+    pub const fn prepared_admission_wait(&self) -> Duration {
+        self.admission_wait
     }
 
     pub fn with_service_status(mut self, service_status: Arc<ServiceStatusRegistry>) -> Self {
@@ -712,7 +752,9 @@ where
         T: Serialize,
     {
         // Bind exactly once before target selection or demand bookkeeping.
-        let snapshot = match self.prepared_serving.snapshot() {
+        // No storage lock is held here, so waiting out a committed
+        // publication barrier cannot block the rebuild that clears it.
+        let snapshot = match self.prepared_serving.snapshot_within(self.admission_wait) {
             Ok(snapshot) => snapshot,
             Err(error) => return product_failure_response(prepared_route_failure(error)),
         };

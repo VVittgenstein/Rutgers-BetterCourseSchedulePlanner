@@ -448,6 +448,10 @@ fn admit_filter_evaluation(
     }
 }
 
+/// FLT-S07. `ALL_REQUIRED_MEETINGS` evaluates every meeting the student
+/// attends: required ones and, because the Rutgers feed never states
+/// requiredness and lists no skippable meetings, those of unknown
+/// requiredness too. Only an explicit `OPTIONAL` occurrence is left out.
 fn evaluate_meeting_location(
     occurrences: Option<&[&NormalizedOccurrenceV1]>,
     selected: &bcsp_contracts::MeetingLocationFilterV2,
@@ -483,14 +487,10 @@ fn evaluate_meeting_location(
             let required = occurrences
                 .iter()
                 .filter_map(|occurrence| match occurrence.requiredness {
-                    CatalogRequiredness::Required => Some(evaluate_occurrence(occurrence)),
-                    CatalogRequiredness::Optional => None,
-                    CatalogRequiredness::UnknownRequiredness => {
-                        Some(PredicateEvaluation::uncertain(
-                            FilterFieldId::SectionMeetingLocation.wire_name(),
-                            MatchReasonCode::MissingReliableData,
-                        ))
+                    CatalogRequiredness::Required | CatalogRequiredness::UnknownRequiredness => {
+                        Some(evaluate_occurrence(occurrence))
                     }
+                    CatalogRequiredness::Optional => None,
                 })
                 .collect::<Vec<_>>();
             if required.is_empty() {

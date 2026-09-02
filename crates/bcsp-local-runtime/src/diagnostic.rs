@@ -2,7 +2,7 @@ use std::fmt;
 
 use bcsp_contracts::{SystemTraceIdSource, TraceId, TraceIdSource};
 
-use crate::{LocalInstanceError, LocalRuntimeError};
+use crate::{LocalBootstrapError, LocalInstanceError, LocalRuntimeError};
 
 /// A user-facing startup failure that is safe to show or copy into a support report.
 ///
@@ -17,6 +17,9 @@ pub struct StartupFailureReport {
 impl StartupFailureReport {
     pub fn from_error(error: &LocalRuntimeError) -> Self {
         let summary = match error {
+            LocalRuntimeError::Bootstrap(LocalBootstrapError::CatalogDerivation(_)) => {
+                "RBCSP could not upgrade the course catalog stored in its data folder. Start RBCSP again; if this repeats, rename the data folder next to RBCSP.exe so a fresh catalog can be downloaded."
+            }
             LocalRuntimeError::Path(_)
             | LocalRuntimeError::Bootstrap(_)
             | LocalRuntimeError::Surface(_)
@@ -111,6 +114,20 @@ mod tests {
         assert!(rendered.contains("writable folder"));
         assert!(rendered.contains("Trace ID: "));
         assert!(!rendered.contains(private_path));
+        assert!(!rendered.contains("stale RBCSP process"));
+    }
+
+    #[test]
+    fn catalog_derivation_failure_does_not_blame_the_package_folder() {
+        let error = LocalRuntimeError::Bootstrap(LocalBootstrapError::CatalogDerivation(
+            bcsp_application::RederivationError::Timestamp,
+        ));
+
+        let rendered = StartupFailureReport::from_error(&error).to_string();
+
+        assert!(rendered.contains("course catalog"));
+        assert!(rendered.contains("Trace ID: "));
+        assert!(!rendered.contains("writable folder"));
         assert!(!rendered.contains("stale RBCSP process"));
     }
 

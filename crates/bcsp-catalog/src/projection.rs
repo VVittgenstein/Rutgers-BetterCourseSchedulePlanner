@@ -2270,7 +2270,7 @@ fn require_keys(
     }
 }
 
-fn decode_facts<T: DeserializeOwned>(
+pub(crate) fn decode_facts<T: DeserializeOwned>(
     context: &'static str,
     facts: &Value,
 ) -> Result<T, ProjectionError> {

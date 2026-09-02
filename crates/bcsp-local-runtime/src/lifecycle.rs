@@ -1,6 +1,7 @@
+use std::ffi::OsStr;
 use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bcsp_application::{
@@ -9,23 +10,45 @@ use bcsp_application::{
     SessionNonce, SharedWatchSocket, TargetRefreshDemand, WebSocketExtension,
     spawn_loopback_server_with_sockets,
 };
-use bcsp_local_user_state::PersonalStateStore;
+use bcsp_local_user_state::{PersonalStateStore, WalCheckpointMode};
 use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::{
-    DesiredWatchCoordinator, ExistingLocalInstance, LOCAL_PRESENCE_SOCKET_PATH, LocalConsole,
-    LocalConsoleEvent, LocalConsoleLocale, LocalExitReason,
-    LocalBootstrapError, LocalInstanceClaim, LocalInstanceError, LocalPathError,
-    LocalPresenceRoute, LocalRouteExtension, LocalRuntimeCore, LocalRuntimePaths,
+    DesiredWatchCoordinator, ExistingLocalInstance, LOCAL_PRESENCE_SOCKET_PATH,
+    LocalBootstrapError, LocalConsole, LocalConsoleEvent, LocalConsoleLocale, LocalExitReason,
+    LocalInstanceClaim, LocalInstanceError, LocalPathError, LocalPresenceRoute,
+    LocalRefreshPolicyProvider, LocalRouteExtension, LocalRuntimeCore, LocalRuntimePaths,
     LocalRuntimeState, LocalSurfaceFailure, LocalWatchRoute, OperationalGate, PersonalSurface,
-    PrimaryInstanceLease, create_local_runtime_core, create_local_watch_socket,
+    PrimaryInstanceLease, create_local_runtime_core,
+    history::LocalWatchHistorySink,
     product::{
-        LocalProductRefreshResources, create_local_product_routes, start_local_product_refresh,
+        LOCAL_PREPARED_ADMISSION_WAIT, LocalConnectionInventory, LocalProductRefreshResources,
+        LocalRefreshStorageAccess, create_local_product_routes, start_local_product_refresh,
     },
+    watch::create_local_watch_socket_with_history,
 };
 
 const EXISTING_INSTANCE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Set to `1` to keep the runtime from opening a browser window.
+///
+/// A testing option: an integration harness or a person driving the runtime
+/// from a script wants the page's URL, not a browser stealing focus on every
+/// run. The URL is reported through the console instead.
+pub const SKIP_BROWSER_LAUNCH_ENVIRONMENT: &str = "RBCSP_SKIP_BROWSER_LAUNCH";
+
+/// Whether `RBCSP_SKIP_BROWSER_LAUNCH` asks for no browser window.
+///
+/// Exactly `1`, nothing else: an empty value, `true` or `yes` still opens the
+/// browser, so a half-configured environment behaves like the product.
+pub fn browser_launch_skipped(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|value| value == OsStr::new("1"))
+}
+
+fn browser_launch_skipped_by_environment() -> bool {
+    browser_launch_skipped(std::env::var_os(SKIP_BROWSER_LAUNCH_ENVIRONMENT).as_deref())
+}
 
 /// The language tag the process was started in, if the environment states one.
 ///
@@ -113,13 +136,22 @@ pub struct PreparedLocalRuntime {
     extension: Arc<LocalRouteExtension>,
     nonce: SessionNonce,
     shutdown_requests: LocalShutdownListener,
+    mutation_store: Arc<Mutex<PersonalStateStore>>,
+    history: Arc<LocalWatchHistorySink>,
 }
 
 impl PreparedLocalRuntime {
     pub fn open(paths: LocalRuntimePaths) -> Result<Self, LocalRuntimeError> {
         let operational = OperationalGate::open(paths)?;
         let database = operational.database();
-        let core = create_local_runtime_core(database.clone());
+        // The refresh policy gets its own connection, like the history,
+        // mutation, desired-watch and console stores below. Reading it
+        // through LocalPrimaryDatabase made the prepared rebuild worker queue
+        // behind every route projection holding that mutex, which stretched
+        // the window during which prepared requests could not be admitted.
+        let policy = LocalRefreshPolicyProvider::open(operational.paths().database())
+            .map_err(LocalBootstrapError::PersonalState)?;
+        let core = create_local_runtime_core(policy);
         let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
         let target_refresh_demand = TargetRefreshDemand::default();
         let product_routes =
@@ -130,7 +162,7 @@ impl PreparedLocalRuntime {
         let product_routes: Arc<dyn RouteExtension> = Arc::new(product_routes);
         let history_store = PersonalStateStore::open(operational.paths().database())
             .map_err(LocalBootstrapError::PersonalState)?;
-        let watch = create_local_watch_socket(
+        let (watch, history) = create_local_watch_socket_with_history(
             database.clone(),
             history_store,
             core.clone(),
@@ -167,7 +199,9 @@ impl PreparedLocalRuntime {
             .with_target_refresh_demand(target_refresh_demand.clone())
             .with_service_status(service_status.clone())
             .with_prepared_serving(prepared_serving.clone())
+            .with_prepared_admission_wait(LOCAL_PREPARED_ADMISSION_WAIT)
             .with_desired_watch(desired_watch.clone());
+        let mutation_store = personal.mutation_store_handle();
         let nonce = SessionNonce::generate();
         let (shutdown_trigger, shutdown_requests) = local_shutdown_channel();
         // Two things can ask this runtime to exit, and they ask the same way:
@@ -202,6 +236,8 @@ impl PreparedLocalRuntime {
             extension,
             nonce,
             shutdown_requests,
+            mutation_store,
+            history,
         })
     }
 
@@ -282,10 +318,28 @@ impl PreparedLocalRuntime {
         self.open_runtime.clone()
     }
 
+    /// The prepared-serving registry every product route and personal-surface
+    /// read binds through. Exposed so a test can drive the publication
+    /// barrier the refresh coordinator would otherwise own.
+    pub fn prepared_serving_registry(&self) -> Arc<bcsp_application::PreparedServingRegistry> {
+        self.prepared_serving.clone()
+    }
+
+    /// The dedicated-connection policy reader the routes and the refresh side
+    /// share; see [`LocalRefreshPolicyProvider`].
+    pub fn refresh_policy_provider(&self) -> LocalRefreshPolicyProvider {
+        self.core.refresh_policy_provider().clone()
+    }
+
     pub async fn start(self) -> Result<RunningLocalRuntime, LocalRuntimeError> {
         let refresh = start_local_product_refresh(
-            self.operational.refresh_storage(),
-            self.operational.database(),
+            LocalRefreshStorageAccess::new(LocalConnectionInventory {
+                refresh_storage: self.operational.refresh_storage(),
+                database: self.operational.database(),
+                mutation_store: self.mutation_store.clone(),
+                desired_watch: self.desired_watch.clone(),
+                history: self.history.clone(),
+            }),
             &self.core,
             LocalProductRefreshResources {
                 watch: self.watch.clone(),
@@ -362,7 +416,9 @@ impl RunningLocalRuntime {
     ///
     /// The request only signals intent. Call [`Self::shutdown`] afterwards so
     /// watch transport, the HTTP server, and SQLite are closed in order.
-    pub async fn wait_for_local_exit_request(&mut self) -> Result<LocalExitReason, LocalRuntimeError> {
+    pub async fn wait_for_local_exit_request(
+        &mut self,
+    ) -> Result<LocalExitReason, LocalRuntimeError> {
         match self.prepared.shutdown_requests.wait().await {
             Some(reason) => Ok(reason),
             None => Err(LocalRuntimeError::ShutdownRequestChannelClosed),
@@ -391,7 +447,7 @@ impl RunningLocalRuntime {
         drop(prepared);
         PersonalStateStore::open(database_path)
             .map_err(LocalBootstrapError::PersonalState)?
-            .checkpoint_wal()
+            .checkpoint_wal(WalCheckpointMode::Truncate)
             .map_err(LocalBootstrapError::PersonalState)?;
         Ok(())
     }
@@ -427,7 +483,12 @@ async fn run_primary(
         let _ = running.shutdown().await;
         return Err(source.into());
     }
-    if let Err(source) = open::that(&browser_url) {
+    if browser_launch_skipped_by_environment() {
+        running
+            .prepared()
+            .console()
+            .report(&LocalConsoleEvent::BrowserLaunchSkipped { url: browser_url });
+    } else if let Err(source) = open::that(&browser_url) {
         let _ = running.shutdown().await;
         return Err(LocalRuntimeError::OpenBrowser {
             url: browser_url,
@@ -550,10 +611,37 @@ pub fn run_blocking() -> Result<(), LocalRuntimeError> {
 
 fn reuse_existing(instance: ExistingLocalInstance) -> Result<(), LocalRuntimeError> {
     let browser_url = instance.wait_for_healthy_browser_url(EXISTING_INSTANCE_DISCOVERY_TIMEOUT)?;
+    if browser_launch_skipped_by_environment() {
+        // The secondary instance has no console of its own; it gets one in
+        // the language the environment states, which is all a script driving
+        // it can have configured. It writes stdout directly: this process is
+        // about to exit, and the ordinary console's detached writer thread
+        // would not be guaranteed to get the line out first.
+        LocalConsole::new(LocalConsoleLocale::resolve(
+            Default::default(),
+            system_locale_tag().as_deref(),
+        ))
+        .with_sink(Arc::new(DirectStdoutSink))
+        .report(&LocalConsoleEvent::BrowserLaunchSkipped {
+            url: browser_url.to_string(),
+        });
+        return Ok(());
+    }
     open::that(browser_url.as_str()).map_err(|source| LocalRuntimeError::OpenBrowser {
         url: browser_url.to_string(),
         source,
     })
+}
+
+/// Writes console lines on the calling thread. Only for a process that is
+/// exiting anyway, where the detached console writer's "never block the
+/// runtime" rule has nothing left to protect.
+struct DirectStdoutSink;
+
+impl crate::LocalConsoleSink for DirectStdoutSink {
+    fn line(&self, text: &str) {
+        println!("{text}");
+    }
 }
 
 #[derive(Debug, Error)]
@@ -614,5 +702,18 @@ mod tests {
     #[tokio::test]
     async fn all_windows_console_shutdown_listeners_can_be_installed() {
         let _signals = WindowsShutdownSignals::install().unwrap();
+    }
+
+    #[test]
+    fn only_an_exact_one_skips_the_browser_launch() {
+        assert!(browser_launch_skipped(Some(OsStr::new("1"))));
+        for value in ["", "0", "true", "yes", "01", " 1", "1 "] {
+            assert!(
+                !browser_launch_skipped(Some(OsStr::new(value))),
+                "{value:?}"
+            );
+        }
+        assert!(!browser_launch_skipped(None));
+        assert_eq!(SKIP_BROWSER_LAUNCH_ENVIRONMENT, "RBCSP_SKIP_BROWSER_LAUNCH");
     }
 }

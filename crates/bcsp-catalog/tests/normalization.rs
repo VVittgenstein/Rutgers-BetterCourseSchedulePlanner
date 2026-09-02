@@ -1,6 +1,7 @@
 use bcsp_catalog::{
-    CollectionPresence, DayKnowledge, DeliveryModality, NormalizationError, OccurrenceModality,
-    Synchronicity, TimeKnowledge, Weekday, normalize_target, variant_fingerprint_v1,
+    CollectionPresence, DayKnowledge, DeliveryModality, NormalizationError, OccurrenceKind,
+    OccurrenceModality, Synchronicity, TimeKnowledge, Weekday, normalize_target,
+    variant_fingerprint_v1,
 };
 use bcsp_contracts::TermCampusKey;
 use bcsp_rutgers_client::{Presence, RawCatalogCourse, SourceProvenance, decode_catalog_payload};
@@ -430,14 +431,15 @@ fn delivery_registry_preserves_t_h_o_unknown_and_conflicts() {
       "campusCode":"SYN","courseString":"SYN:CAT:001","sections":[
         {"campusCode":"SYN","index":"10001","sectionCourseType":"T","meetingTimes":[{"meetingModeCode":"02","meetingDay":"TH","startTimeMilitary":"0900","endTimeMilitary":"1020","campusLocation":"SYN"}]},
         {"campusCode":"SYN","index":"10002","sectionCourseType":"H","meetingTimes":[{"meetingModeCode":"91","meetingDay":"M","startTimeMilitary":"1000","endTimeMilitary":"1120"}]},
-        {"campusCode":"SYN","index":"10003","sectionCourseType":"O","meetingTimes":[{"meetingModeCode":"90","meetingDay":"","startTimeMilitary":"","endTimeMilitary":"","campusLocation":"O"}]},
+        {"campusCode":"SYN","index":"10003","sectionCourseType":"O","meetingTimes":[{"meetingModeCode":"90","meetingDay":"","startTimeMilitary":"","endTimeMilitary":"","baClassHours":"B","campusLocation":"O"}]},
         {"campusCode":"SYN","index":"10004","sectionCourseType":"O","meetingTimes":[{"meetingModeCode":"92","meetingDay":"W","startTimeMilitary":"1800","endTimeMilitary":"2120","campusLocation":"T"}]},
         {"campusCode":"SYN","index":"10005","sectionCourseType":"O","meetingTimes":[{"meetingModeCode":"93","meetingDay":null,"startTimeMilitary":null,"endTimeMilitary":null,"campusLocation":"O"}]},
         {"campusCode":"SYN","index":"10006","sectionCourseType":"X","meetingTimes":[{"meetingModeCode":"ZZ","meetingDay":"TTH","startTimeMilitary":"0900","endTimeMilitary":"1020"}]},
         {"campusCode":"SYN","index":"10007","sectionCourseType":"T","meetingTimes":[{"meetingModeCode":"90","campusLocation":"O"}]},
         {"campusCode":"SYN","index":"10008","sectionCourseType":"O","meetingTimes":[{"meetingModeCode":"02","campusLocation":"SYN"}]},
         {"campusCode":"SYN","index":"10009","sectionCourseType":"T","meetingTimes":[{"meetingModeCode":"ZZ","campusLocation":"SYN"}]},
-        {"campusCode":"SYN","index":"10010","sectionCourseType":"O","meetingTimes":[{"meetingModeCode":"ZZ","campusLocation":"O"}]}
+        {"campusCode":"SYN","index":"10010","sectionCourseType":"O","meetingTimes":[{"meetingModeCode":"ZZ","campusLocation":"O"}]},
+        {"campusCode":"SYN","index":"10011","sectionCourseType":"O","meetingTimes":[{"meetingModeCode":"90","meetingDay":"M","startTimeMilitary":"0900","endTimeMilitary":"1020","campusLocation":"O"}]}
       ]
     }]"#;
     let target = normalize(body, "T2030", "SYN", "2030-01-01T00:00:00Z")
@@ -454,9 +456,27 @@ fn delivery_registry_preserves_t_h_o_unknown_and_conflicts() {
         sections[2].occurrences[0].modality,
         OccurrenceModality::Online
     );
-    assert_eq!(sections[2].synchronicity, Synchronicity::Unspecified);
+    // Mode 90 with "hours by arrangement" and no time is asynchronous.
+    assert_eq!(sections[2].synchronicity, Synchronicity::Asynchronous);
+    assert_eq!(
+        sections[2].occurrences[0].normalization_reason,
+        "ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS"
+    );
     assert_eq!(sections[3].synchronicity, Synchronicity::Synchronous);
     assert_eq!(sections[4].synchronicity, Synchronicity::Asynchronous);
+    // Mode 90 without a time and without "B" stays conservative.
+    assert_eq!(sections[6].synchronicity, Synchronicity::Unspecified);
+    assert_eq!(
+        sections[6].occurrences[0].normalization_reason,
+        "GENERIC_ONLINE_UNSPECIFIED"
+    );
+    // Mode 90 with a scheduled day/time is synchronous.
+    assert_eq!(sections[10].delivery_modality, DeliveryModality::Online);
+    assert_eq!(sections[10].synchronicity, Synchronicity::Synchronous);
+    assert_eq!(
+        sections[10].occurrences[0].normalization_reason,
+        "ONLINE_SCHEDULED_SYNCHRONOUS"
+    );
     assert_eq!(sections[5].delivery_modality, DeliveryModality::Unknown);
     assert_eq!(
         sections[5].occurrences[0].modality,
@@ -791,4 +811,89 @@ fn canonical_facts_retain_all_section_filter_sources_without_projection_loss() {
     ] {
         assert!(facts.contains_key(field), "missing canonical field {field}");
     }
+}
+
+#[test]
+fn real_shape_mode_90_sections_derive_synchronicity_from_time_facts() {
+    // Shapes copied from the real Rutgers feed (synthetic identifiers): the
+    // generic ONLINE INSTRUCTION(INTERNET) mode 90 carries its synchronicity
+    // in the time facts, not in the mode code.
+    let body = br#"[{
+      "campusCode":"SYN","courseString":"SYN:CAT:002","sections":[
+        {"campusCode":"SYN","index":"20001","sectionCourseType":"O","meetingTimes":[
+          {"meetingModeCode":"90","meetingDay":"","startTimeMilitary":"","endTimeMilitary":"","baClassHours":"B","campusLocation":"O"}]},
+        {"campusCode":"SYN","index":"20002","sectionCourseType":"O","meetingTimes":[
+          {"meetingModeCode":"90","meetingDay":"W","startTimeMilitary":"1000","endTimeMilitary":"1120","baClassHours":"","campusLocation":"7"}]},
+        {"campusCode":"SYN","index":"20003","sectionCourseType":"H","meetingTimes":[
+          {"meetingModeCode":"02","meetingDay":"W","startTimeMilitary":"1000","endTimeMilitary":"1120","baClassHours":"","campusLocation":"7"},
+          {"meetingModeCode":"90","meetingDay":"","startTimeMilitary":"","endTimeMilitary":"","baClassHours":"B","campusLocation":"7"}]},
+        {"campusCode":"SYN","index":"20004","sectionCourseType":"O","meetingTimes":[
+          {"meetingModeCode":"02","meetingDay":"M","startTimeMilitary":"0900","endTimeMilitary":"1020","baClassHours":"","campusLocation":"O"},
+          {"meetingModeCode":"90","meetingDay":"","startTimeMilitary":"","endTimeMilitary":"","baClassHours":"B","campusLocation":"O"}]},
+        {"campusCode":"SYN","index":"20005","sectionCourseType":"O","meetingTimes":[
+          {"meetingModeCode":"90","meetingDay":"","startTimeMilitary":"","endTimeMilitary":"","baClassHours":"B","campusLocation":""}]}
+      ]
+    }]"#;
+    let target = normalize(body, "T2030", "SYN", "2030-01-01T00:00:00Z")
+        .expect("real-shape fixture should normalize");
+    let sections = target.sections().collect::<Vec<_>>();
+    assert_eq!(sections.len(), 5);
+
+    // NB "O" section: online, hours by arrangement -> ASYNC.
+    assert_eq!(sections[0].delivery_modality, DeliveryModality::Online);
+    assert_eq!(sections[0].synchronicity, Synchronicity::Asynchronous);
+    assert_eq!(
+        sections[0].occurrences[0].kind,
+        OccurrenceKind::ByArrangement
+    );
+    assert_eq!(
+        sections[0].occurrences[0].normalization_reason,
+        "ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS"
+    );
+
+    // Newark physical location code on a mode-90 row: the WHERE conflict is
+    // preserved, the WHEN is still derived from the scheduled time.
+    assert_eq!(
+        sections[1].occurrences[0].modality,
+        OccurrenceModality::UnknownConflict
+    );
+    assert_eq!(
+        sections[1].occurrences[0].normalization_reason,
+        "MODE_LOCATION_CONFLICT"
+    );
+    assert_eq!(
+        sections[1].occurrences[0].synchronicity,
+        Synchronicity::Synchronous
+    );
+    // The frozen section oracle already counts the row as remote evidence
+    // for an "O" section; only the occurrence records the conflict.
+    assert_eq!(sections[1].delivery_modality, DeliveryModality::Online);
+    assert_eq!(sections[1].synchronicity, Synchronicity::Synchronous);
+
+    // Scheduled lecture plus online-by-arrangement component: both members
+    // are reliable and differ -> MIXED (hybrid and online sections alike).
+    assert_eq!(
+        sections[2]
+            .occurrences
+            .iter()
+            .map(|occurrence| occurrence.synchronicity)
+            .collect::<Vec<_>>(),
+        vec![Synchronicity::Synchronous, Synchronicity::Asynchronous]
+    );
+    assert_eq!(sections[2].delivery_modality, DeliveryModality::Hybrid);
+    assert_eq!(sections[2].synchronicity, Synchronicity::Mixed);
+    assert_eq!(sections[3].synchronicity, Synchronicity::Mixed);
+
+    // Empty campusLocation with "B": not the official by-arrangement tuple
+    // (kind stays UNSPECIFIED) but the synchronicity is still evident.
+    assert_eq!(sections[4].occurrences[0].kind, OccurrenceKind::Unspecified);
+    assert_eq!(
+        sections[4].occurrences[0].modality,
+        OccurrenceModality::Online
+    );
+    assert_eq!(
+        sections[4].occurrences[0].normalization_reason,
+        "ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS"
+    );
+    assert_eq!(sections[4].synchronicity, Synchronicity::Asynchronous);
 }

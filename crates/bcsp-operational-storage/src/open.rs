@@ -11,7 +11,19 @@ use crate::{
     EmptySnapshotDecision, OperationalStorage, PublishOutcome, StorageError, StorageResult,
 };
 
-const OPEN_DIAGNOSTIC_RETENTION_PER_TARGET: u64 = 256;
+/// How many of a target's most recent Open attempts keep their per-attempt
+/// detail rows (the catalog membership copy, batch observation and section
+/// events). Older attempts are pruned regardless of the Rutgers day they ran
+/// on; the daily and run counters are separate aggregates and never pruned.
+pub const OPEN_DIAGNOSTIC_RETENTION_PER_TARGET: u64 = 256;
+
+/// The most attempts one commit may prune. Each attempt cascades into a full
+/// catalog membership copy (about 12,000 rows on New Brunswick), so an
+/// unbounded prune after a long backlog would delete tens of millions of
+/// rows inside the Open commit transaction. Steady state produces one new
+/// attempt per commit, so a bound of eight catches up in a handful of commits
+/// without ever making one of them expensive.
+pub const OPEN_DIAGNOSTIC_PRUNE_ATTEMPTS_PER_COMMIT: u64 = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OpenAttemptClassification {
@@ -808,8 +820,8 @@ impl OperationalStorage {
             prune_open_diagnostics_transaction(
                 transaction,
                 &target_id,
-                &attempt.rutgers_day,
                 OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
+                OPEN_DIAGNOSTIC_PRUNE_ATTEMPTS_PER_COMMIT,
             )?;
             return Ok(OpenCommitOutcome {
                 attempt_id: command.attempt_id,
@@ -876,8 +888,8 @@ impl OperationalStorage {
             prune_open_diagnostics_transaction(
                 transaction,
                 &target_id,
-                &attempt.rutgers_day,
                 OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
+                OPEN_DIAGNOSTIC_PRUNE_ATTEMPTS_PER_COMMIT,
             )?;
             return Ok(OpenCommitOutcome {
                 attempt_id: command.attempt_id,
@@ -1128,8 +1140,8 @@ impl OperationalStorage {
         prune_open_diagnostics_transaction(
             transaction,
             &target_id,
-            &attempt.rutgers_day,
             OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
+            OPEN_DIAGNOSTIC_PRUNE_ATTEMPTS_PER_COMMIT,
         )?;
         Ok(OpenCommitOutcome {
             attempt_id: command.attempt_id,
@@ -1167,6 +1179,7 @@ impl OperationalStorage {
         catalog_observation_id: TraceId,
         empty_decision: EmptySnapshotDecision,
         mut command: FinishOpenPullSuccessCommand,
+        derivation_version: u32,
     ) -> StorageResult<CompleteSnapshotCommitOutcome> {
         let transaction = self
             .connection
@@ -1241,8 +1254,12 @@ impl OperationalStorage {
             });
         }
 
-        let catalog =
-            publish_staged_in_transaction(&transaction, catalog_observation_id, empty_decision)?;
+        let catalog = publish_staged_in_transaction(
+            &transaction,
+            catalog_observation_id,
+            empty_decision,
+            derivation_version,
+        )?;
         let published_version = publish_outcome_content_version(&catalog);
         if published_version != attempt.captured_catalog_content_version
             || matches!(catalog, PublishOutcome::SuspectEmptyRetained { .. })
@@ -1394,8 +1411,8 @@ impl OperationalStorage {
         prune_open_diagnostics_transaction(
             transaction,
             &target_id,
-            &attempt.rutgers_day,
             OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
+            OPEN_DIAGNOSTIC_PRUNE_ATTEMPTS_PER_COMMIT,
         )?;
         Ok(OpenCommitOutcome {
             attempt_id: command.attempt_id,
@@ -1473,17 +1490,14 @@ impl OperationalStorage {
              ORDER BY attempt_sequence DESC
              LIMIT ?2",
         )?;
-        let rows = statement.query_map(
-            params![open_target_id(target), limit],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            },
-        )?;
+        let rows = statement.query_map(params![open_target_id(target), limit], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
         let mut summaries = Vec::new();
         for row in rows {
             let (classification, canonical_set_sha256, completed_at, catalog_set_identity) = row?;
@@ -1989,15 +2003,22 @@ impl OperationalStorage {
         )
     }
 
-    /// Retains every detail from the current Rutgers day plus at least the most recent 256 attempts.
-    /// Daily and run counters are separate durable aggregates and are not pruned.
+    /// Prunes per-attempt Open detail beyond the most recent `retain_recent`
+    /// attempts of one target, at most
+    /// [`OPEN_DIAGNOSTIC_PRUNE_ATTEMPTS_PER_COMMIT`] attempts per call.
+    ///
+    /// Retention is COUNT-based: the Rutgers day an attempt ran on plays no
+    /// part, so a target polled every ten seconds keeps a bounded number of
+    /// membership copies rather than a whole day's worth. Daily and run
+    /// counters are separate durable aggregates and are never pruned; the
+    /// current last-known-good attempt and any attempt still `STARTED` are
+    /// always kept. Every Open commit runs the same prune, so calling this
+    /// explicitly is only needed to catch up after a change in retention.
     pub fn prune_open_diagnostics(
         &mut self,
         target: &TermCampusKey,
-        current_rutgers_day: &str,
         retain_recent: u64,
     ) -> StorageResult<OpenRetentionReport> {
-        validate_rutgers_day(current_rutgers_day)?;
         if retain_recent < OPEN_DIAGNOSTIC_RETENTION_PER_TARGET {
             return Err(StorageError::InvalidCommand {
                 field: "retain_recent",
@@ -2010,8 +2031,8 @@ impl OperationalStorage {
         let report = prune_open_diagnostics_transaction(
             &transaction,
             &open_target_id(target),
-            current_rutgers_day,
             retain_recent,
+            OPEN_DIAGNOSTIC_PRUNE_ATTEMPTS_PER_COMMIT,
         )?;
         transaction.commit()?;
         Ok(report)
@@ -2709,45 +2730,56 @@ fn load_committed_open_counters(
     Ok((run_counts, target_day_counts, service_day_counts))
 }
 
+/// One bounded, count-based prune step. See
+/// [`OperationalStorage::prune_open_diagnostics`] for the contract.
+///
+/// The candidate set is the oldest `prune_limit` attempts outside the
+/// `retain_recent` most recent ones; `rutgers_day` is deliberately absent
+/// from the filter. Deleting the parent rows cascades into the membership
+/// copy, the batch observation and the section events.
 fn prune_open_diagnostics_transaction(
     transaction: &Transaction<'_>,
     target_id: &str,
-    current_rutgers_day: &str,
     retain_recent: u64,
+    prune_limit: u64,
 ) -> StorageResult<OpenRetentionReport> {
     let retain_recent = positive_u64_to_i64("retain_recent", retain_recent)?;
-    let candidate_filter = "a.target_id = ?1
-         AND a.classification != 'STARTED'
-         AND a.rutgers_day != ?2
-         AND a.attempt_id != COALESCE(
-             (SELECT lkg_attempt_id FROM open_batch_state WHERE target_id = ?1), ''
-         )
-         AND a.attempt_id NOT IN (
-             SELECT recent.attempt_id FROM open_pull_attempts recent
-             WHERE recent.target_id = ?1
-             ORDER BY recent.attempt_sequence DESC LIMIT ?3
-         )";
+    let prune_limit = positive_u64_to_i64("prune_limit", prune_limit)?;
+    let candidate_attempts = "SELECT a.attempt_id FROM open_pull_attempts a
+         WHERE a.target_id = ?1
+           AND a.classification != 'STARTED'
+           AND a.attempt_id != COALESCE(
+               (SELECT lkg_attempt_id FROM open_batch_state WHERE target_id = ?1), ''
+           )
+           AND a.attempt_id NOT IN (
+               SELECT recent.attempt_id FROM open_pull_attempts recent
+               WHERE recent.target_id = ?1
+               ORDER BY recent.attempt_sequence DESC LIMIT ?2
+           )
+         ORDER BY a.attempt_sequence ASC
+         LIMIT ?3";
     let batch_observations_removed = transaction.query_row(
         &format!(
             "SELECT count(*) FROM open_batch_observations b
-             JOIN open_pull_attempts a ON a.attempt_id = b.attempt_id
-             WHERE {candidate_filter}"
+             WHERE b.attempt_id IN ({candidate_attempts})"
         ),
-        params![target_id, current_rutgers_day, retain_recent],
+        params![target_id, retain_recent, prune_limit],
         |row| row.get::<_, i64>(0),
     )?;
     let section_events_removed = transaction.query_row(
         &format!(
             "SELECT count(*) FROM open_section_events e
-             JOIN open_pull_attempts a ON a.attempt_id = e.attempt_id
-             WHERE {candidate_filter}"
+             WHERE e.attempt_id IN ({candidate_attempts})"
         ),
-        params![target_id, current_rutgers_day, retain_recent],
+        params![target_id, retain_recent, prune_limit],
         |row| row.get::<_, i64>(0),
     )?;
     let attempts_removed = transaction.execute(
-        &format!("DELETE FROM open_pull_attempts AS a WHERE {candidate_filter}"),
-        params![target_id, current_rutgers_day, retain_recent],
+        &format!(
+            "DELETE FROM open_pull_attempts
+             WHERE attempt_id IN ({candidate_attempts})"
+        ),
+        params![target_id, retain_recent, prune_limit],
     )?;
     Ok(OpenRetentionReport {
         attempts_removed: u64::try_from(attempts_removed)
@@ -3332,6 +3364,7 @@ mod tests {
                     snapshot,
                 },
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                1,
             )
             .expect("publish catalog");
         match outcome {
@@ -3436,7 +3469,10 @@ mod tests {
                 http: success_http(9),
             })
             .expect("first applied commit");
-        assert_eq!(first.classification, OpenAttemptClassification::ValidApplied);
+        assert_eq!(
+            first.classification,
+            OpenAttemptClassification::ValidApplied
+        );
         assert_eq!(
             insert_prepares.load(Ordering::SeqCst),
             1,

@@ -125,9 +125,26 @@ pub(crate) fn normalize_occurrence(
     } else {
         OccurrenceKind::Unspecified
     };
+    // Rutgers publishes almost every online meeting as the generic mode 90
+    // (ONLINE INSTRUCTION(INTERNET)); the explicit 92/93 pair is rare. For
+    // mode 90 the time facts carry the synchronicity: a scheduled day/time is
+    // a synchronous meeting, and "hours by arrangement" (baClassHours "B")
+    // without any time is asynchronous. Unlike `by_arrangement` this predicate
+    // deliberately ignores campusLocation: real mode-90 rows carry physical
+    // location codes (a mode/location conflict about WHERE, not WHEN) or an
+    // empty location, and the synchronicity is still evident from the time
+    // facts. Derivation changes here require a CATALOG_DERIVATION_VERSION bump.
+    let online_hours_by_arrangement = code == Some("90")
+        && matches!(trimmed_value(&raw.ba_class_hours), Some("B"))
+        && matches!(
+            time,
+            TimeKnowledge::Empty | TimeKnowledge::Missing | TimeKnowledge::Null
+        );
     let synchronicity = match code {
         Some("92") => Synchronicity::Synchronous,
         Some("93") => Synchronicity::Asynchronous,
+        Some("90") if matches!(time, TimeKnowledge::Known { .. }) => Synchronicity::Synchronous,
+        Some("90") if online_hours_by_arrangement => Synchronicity::Asynchronous,
         Some("90") => Synchronicity::Unspecified,
         _ if observed_code && matches!(time, TimeKnowledge::Known { .. }) => {
             Synchronicity::Synchronous
@@ -151,6 +168,10 @@ pub(crate) fn normalize_occurrence(
     let normalization_reason = match (code, time, by_arrangement, modality) {
         (_, _, _, _) if !observed_code => "UNRECOGNIZED_MODE_TUPLE",
         (_, _, _, OccurrenceModality::UnknownConflict) => "MODE_LOCATION_CONFLICT",
+        (Some("90"), TimeKnowledge::Known { .. }, _, _) => "ONLINE_SCHEDULED_SYNCHRONOUS",
+        (Some("90"), _, _, _) if online_hours_by_arrangement => {
+            "ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS"
+        }
         (Some("90"), _, _, _) => "GENERIC_ONLINE_UNSPECIFIED",
         (Some("91"), _, _, _) => "EXPLICIT_HYBRID",
         (Some("92"), _, _, _) => "EXPLICIT_REMOTE_SYNCHRONOUS",
@@ -212,20 +233,34 @@ pub(crate) fn classify_delivery(
         _ => DeliveryModality::Unknown,
     };
 
-    // Current occurrence requiredness is UNKNOWN_REQUIREDNESS.  Therefore a
-    // heterogeneous set cannot prove that a section is MIXED: sync+async,
-    // known+unspecified, and any set containing unknown all remain UNKNOWN.
-    // MIXED stays representable for a future source that explicitly supplies
-    // reliable evidence, but is never synthesized from today's tuples.
-    let synchronicity = occurrences
-        .first()
-        .map(|first| first.synchronicity)
-        .filter(|first| {
-            occurrences
+    // Section synchronicity aggregates only reliable occurrence evidence.
+    // A homogeneous set keeps its value.  When every occurrence is reliable
+    // (SYNC and/or ASYNC only) and both appear, the section is MIXED: a
+    // scheduled lecture plus an online-by-arrangement component is the real
+    // Rutgers shape behind that value.  Any UNKNOWN or UNSPECIFIED occurrence
+    // still makes the section UNKNOWN, because occurrence requiredness is
+    // UNKNOWN_REQUIREDNESS and an unreliable member cannot be discounted.
+    let synchronicity = match occurrences.first().map(|first| first.synchronicity) {
+        None => Synchronicity::Unknown,
+        Some(first)
+            if occurrences
                 .iter()
-                .all(|occurrence| occurrence.synchronicity == *first)
-        })
-        .unwrap_or(Synchronicity::Unknown);
+                .all(|occurrence| occurrence.synchronicity == first) =>
+        {
+            first
+        }
+        Some(_)
+            if occurrences.iter().all(|occurrence| {
+                matches!(
+                    occurrence.synchronicity,
+                    Synchronicity::Synchronous | Synchronicity::Asynchronous
+                )
+            }) =>
+        {
+            Synchronicity::Mixed
+        }
+        Some(_) => Synchronicity::Unknown,
+    };
     (modality, synchronicity)
 }
 
@@ -432,6 +467,10 @@ mod tests {
         assert_eq!(physical.modality, OccurrenceModality::OnCampusOrInPerson);
         assert_eq!(remote.evidence, OccurrenceEvidence::Remote);
         assert_eq!(remote.modality, OccurrenceModality::Online);
+        // Mode 90 without a time and without "hours by arrangement" stays
+        // the conservative generic-online value.
+        assert_eq!(remote.synchronicity, Synchronicity::Unspecified);
+        assert_eq!(remote.normalization_reason, "GENERIC_ONLINE_UNSPECIFIED");
         assert_eq!(hybrid.evidence, OccurrenceEvidence::Physical);
         assert_eq!(hybrid.modality, OccurrenceModality::Hybrid);
         assert_eq!(occurrence_conflict.evidence, OccurrenceEvidence::Remote);
@@ -558,8 +597,43 @@ mod tests {
             }),
             3,
         );
+        let online_async = occurrence(
+            json!({
+                "meetingModeCode": "90",
+                "meetingDay": "",
+                "startTimeMilitary": "",
+                "endTimeMilitary": "",
+                "baClassHours": "B",
+                "campusLocation": "O"
+            }),
+            4,
+        );
+        let online_sync = occurrence(
+            json!({
+                "meetingModeCode": "90",
+                "meetingDay": "M",
+                "startTimeMilitary": "0900",
+                "endTimeMilitary": "1020",
+                "campusLocation": "O"
+            }),
+            5,
+        );
+        let lec02_scheduled = occurrence(
+            json!({
+                "meetingModeCode": "02",
+                "meetingDay": "W",
+                "startTimeMilitary": "1000",
+                "endTimeMilitary": "1120",
+                "campusLocation": "7"
+            }),
+            6,
+        );
         let mut explicit_mixed = synchronous.clone();
         explicit_mixed.synchronicity = Synchronicity::Mixed;
+
+        assert_eq!(online_async.synchronicity, Synchronicity::Asynchronous);
+        assert_eq!(online_sync.synchronicity, Synchronicity::Synchronous);
+        assert_eq!(lec02_scheduled.synchronicity, Synchronicity::Synchronous);
 
         let aggregate = |occurrences: &[NormalizedOccurrence]| {
             classify_delivery(&section_type("O"), occurrences).1
@@ -572,13 +646,40 @@ mod tests {
             aggregate(std::slice::from_ref(&asynchronous)),
             Synchronicity::Asynchronous
         );
+        // Every member is reliable and both values appear: MIXED.
         assert_eq!(
             aggregate(&[synchronous.clone(), asynchronous.clone()]),
-            Synchronicity::Unknown
+            Synchronicity::Mixed
+        );
+        assert_eq!(
+            aggregate(&[synchronous.clone(), online_sync.clone()]),
+            Synchronicity::Synchronous
+        );
+        assert_eq!(
+            aggregate(std::slice::from_ref(&online_async)),
+            Synchronicity::Asynchronous
+        );
+        // The real Rutgers shape: a scheduled lecture (mode 02) plus an
+        // online-by-arrangement component (mode 90, "B", no time).
+        assert_eq!(
+            aggregate(&[lec02_scheduled.clone(), online_async.clone()]),
+            Synchronicity::Mixed
+        );
+        assert_eq!(
+            classify_delivery(&section_type("H"), &[lec02_scheduled, online_async.clone()]).1,
+            Synchronicity::Mixed
+        );
+        assert_eq!(
+            aggregate(&[online_sync, online_async]),
+            Synchronicity::Mixed
         );
         assert_eq!(
             aggregate(std::slice::from_ref(&explicit_mixed)),
             Synchronicity::Mixed
+        );
+        assert_eq!(
+            aggregate(&[explicit_mixed, synchronous.clone()]),
+            Synchronicity::Unknown
         );
         assert_eq!(
             aggregate(std::slice::from_ref(&unspecified)),
@@ -602,5 +703,181 @@ mod tests {
         );
         assert_eq!(aggregate(&[asynchronous, unknown]), Synchronicity::Unknown);
         assert_eq!(aggregate(&[]), Synchronicity::Unknown);
+    }
+
+    #[test]
+    fn mode_90_derives_synchronicity_from_time_and_by_arrangement() {
+        use crate::OccurrenceKind;
+
+        #[derive(Clone, Copy)]
+        enum Time {
+            Known,
+            Empty,
+            Missing,
+            Null,
+            Partial,
+            Invalid,
+        }
+        impl Time {
+            const fn label(self) -> &'static str {
+                match self {
+                    Self::Known => "known",
+                    Self::Empty => "empty",
+                    Self::Missing => "missing",
+                    Self::Null => "null",
+                    Self::Partial => "partial",
+                    Self::Invalid => "invalid",
+                }
+            }
+        }
+        let times = [
+            Time::Known,
+            Time::Empty,
+            Time::Missing,
+            Time::Null,
+            Time::Partial,
+            Time::Invalid,
+        ];
+        let hours = [Some("B"), Some(""), None];
+        let locations = ["O", "7", ""];
+
+        for time in times {
+            for ba_class_hours in hours {
+                for location in locations {
+                    let mut raw = json!({
+                        "meetingModeCode": "90",
+                        "campusLocation": location
+                    });
+                    match time {
+                        Time::Known => {
+                            raw["meetingDay"] = json!("M");
+                            raw["startTimeMilitary"] = json!("0900");
+                            raw["endTimeMilitary"] = json!("1020");
+                        }
+                        Time::Empty => {
+                            raw["meetingDay"] = json!("");
+                            raw["startTimeMilitary"] = json!("");
+                            raw["endTimeMilitary"] = json!("");
+                        }
+                        Time::Missing => {}
+                        Time::Null => {
+                            raw["meetingDay"] = Value::Null;
+                            raw["startTimeMilitary"] = Value::Null;
+                            raw["endTimeMilitary"] = Value::Null;
+                        }
+                        Time::Partial => {
+                            raw["startTimeMilitary"] = json!("0900");
+                        }
+                        Time::Invalid => {
+                            raw["startTimeMilitary"] = json!("1300");
+                            raw["endTimeMilitary"] = json!("1200");
+                        }
+                    }
+                    if let Some(hours) = ba_class_hours {
+                        raw["baClassHours"] = json!(hours);
+                    }
+                    let label = format!(
+                        "time={} hours={ba_class_hours:?} loc={location:?}",
+                        time.label()
+                    );
+                    let normalized = occurrence(raw, 0);
+
+                    let no_time = matches!(time, Time::Empty | Time::Missing | Time::Null);
+                    let expected_synchronicity = match time {
+                        Time::Known => Synchronicity::Synchronous,
+                        _ if no_time && ba_class_hours == Some("B") => Synchronicity::Asynchronous,
+                        _ => Synchronicity::Unspecified,
+                    };
+                    assert_eq!(normalized.synchronicity, expected_synchronicity, "{label}");
+
+                    // Evidence, modality and kind follow the frozen oracle and
+                    // are untouched by the synchronicity derivation.
+                    assert_eq!(normalized.evidence, OccurrenceEvidence::Remote, "{label}");
+                    let expected_modality = if location == "7" {
+                        OccurrenceModality::UnknownConflict
+                    } else {
+                        OccurrenceModality::Online
+                    };
+                    assert_eq!(normalized.modality, expected_modality, "{label}");
+                    let expected_kind = if no_time && ba_class_hours == Some("B") && location == "O"
+                    {
+                        OccurrenceKind::ByArrangement
+                    } else if matches!(time, Time::Known) {
+                        OccurrenceKind::Scheduled
+                    } else {
+                        OccurrenceKind::Unspecified
+                    };
+                    assert_eq!(normalized.kind, expected_kind, "{label}");
+
+                    let expected_reason = if location == "7" {
+                        "MODE_LOCATION_CONFLICT"
+                    } else {
+                        match expected_synchronicity {
+                            Synchronicity::Synchronous => "ONLINE_SCHEDULED_SYNCHRONOUS",
+                            Synchronicity::Asynchronous => "ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS",
+                            _ => "GENERIC_ONLINE_UNSPECIFIED",
+                        }
+                    };
+                    assert_eq!(normalized.normalization_reason, expected_reason, "{label}");
+                    assert!(
+                        normalized.normalization_reason.len() <= 64
+                            && normalized.normalization_reason.bytes().all(|byte| {
+                                byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                            }),
+                        "{label}: reason must satisfy the SQLite CHECK"
+                    );
+                }
+            }
+        }
+
+        // Explicit COVID-era codes and non-90 by-arrangement rows are unchanged.
+        let explicit_sync = occurrence(
+            json!({
+                "meetingModeCode": "92",
+                "campusLocation": "O",
+                "baClassHours": "B"
+            }),
+            0,
+        );
+        assert_eq!(explicit_sync.synchronicity, Synchronicity::Synchronous);
+        assert_eq!(
+            explicit_sync.normalization_reason,
+            "EXPLICIT_REMOTE_SYNCHRONOUS"
+        );
+        let explicit_async = occurrence(
+            json!({
+                "meetingModeCode": "93",
+                "meetingDay": "M",
+                "startTimeMilitary": "0900",
+                "endTimeMilitary": "1020",
+                "campusLocation": "O"
+            }),
+            0,
+        );
+        assert_eq!(explicit_async.synchronicity, Synchronicity::Asynchronous);
+        assert_eq!(
+            explicit_async.normalization_reason,
+            "EXPLICIT_REMOTE_ASYNCHRONOUS"
+        );
+        let official_by_arrangement = occurrence(
+            json!({
+                "meetingModeCode": "02",
+                "meetingDay": "",
+                "startTimeMilitary": "",
+                "endTimeMilitary": "",
+                "baClassHours": "B",
+                "campusLocation": "O"
+            }),
+            0,
+        );
+        assert_eq!(
+            official_by_arrangement.synchronicity,
+            Synchronicity::Unspecified
+        );
+        assert_eq!(
+            official_by_arrangement.normalization_reason,
+            "OFFICIAL_BY_ARRANGEMENT"
+        );
+        assert_eq!(official_by_arrangement.kind, OccurrenceKind::ByArrangement);
     }
 }

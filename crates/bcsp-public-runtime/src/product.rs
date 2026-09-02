@@ -1,5 +1,6 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, MutexGuard};
+use std::time::Duration;
 
 use bcsp_application::{
     FixedRefreshPolicyProvider, OpenRuntimeSnapshotRegistry, ProductStorageAccess,
@@ -58,6 +59,11 @@ impl ProductStorageAccess for PublicProductStorageAccess {
 pub type PublicProductRoutes =
     SharedProductRoutes<SystemApplicationClock, FixedRefreshPolicyProvider, SharedProductStorage>;
 
+/// Shorter than the local default: the public host serves many clients, and
+/// every request parked on a committed publication barrier occupies a
+/// blocking-pool thread the rebuild itself also needs.
+pub const PUBLIC_PREPARED_ADMISSION_WAIT: Duration = Duration::from_secs(2);
+
 pub fn create_public_product_routes(
     serving_storage: SharedProductStorage,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
@@ -68,8 +74,10 @@ pub fn create_public_product_routes(
         FixedRefreshPolicyProvider::new(fixed_public_refresh_policy()?),
     );
     Ok(
-        SharedProductRoutes::new(serving_storage, runtime, open_runtime).with_service_status(
-            Arc::new(ServiceStatusRegistry::new(ServiceRuntimeV1::Public)),
-        ),
+        SharedProductRoutes::new(serving_storage, runtime, open_runtime)
+            .with_service_status(Arc::new(ServiceStatusRegistry::new(
+                ServiceRuntimeV1::Public,
+            )))
+            .with_prepared_admission_wait(PUBLIC_PREPARED_ADMISSION_WAIT),
     )
 }

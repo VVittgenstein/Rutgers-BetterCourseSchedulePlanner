@@ -660,6 +660,7 @@ mod tests {
                     snapshot,
                 },
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_application::CATALOG_DERIVATION_VERSION,
             )
             .expect("publish catalog");
         target

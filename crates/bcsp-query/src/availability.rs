@@ -27,6 +27,15 @@ struct OccurrenceFact {
     schedule: ScheduleEvidence,
 }
 
+/// FLT-S06: every meeting the student attends must fit one of the windows.
+///
+/// Rutgers lists only the meetings a student attends, and the feed states no
+/// requiredness for them (every stored occurrence is
+/// `UNKNOWN_REQUIREDNESS`), so an occurrence of unknown requiredness is
+/// evaluated exactly like a required one: a scheduled meeting that fits no
+/// window excludes the section. Only an explicit `OPTIONAL` occurrence is
+/// left out, and an occurrence without usable times (TBA, missing, invalid)
+/// stays uncertain rather than excluding anything.
 pub(crate) fn evaluate_availability(
     section: &NormalizedSectionV1,
     occurrences: Option<&[&NormalizedOccurrenceV1]>,
@@ -86,10 +95,11 @@ fn evaluate_facts(
                 });
                 if fits {
                     PredicateEvaluation::matched()
-                } else if fact.requiredness == CatalogRequiredness::Required {
-                    PredicateEvaluation::no_match(FIELD)
                 } else {
-                    PredicateEvaluation::uncertain(FIELD, MatchReasonCode::UnknownValue)
+                    // Required and unknown requiredness alike: the feed does
+                    // not list meetings the student can skip, so a scheduled
+                    // meeting outside every window is a real exclusion.
+                    PredicateEvaluation::no_match(FIELD)
                 }
             }
         };
@@ -227,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_requiredness_only_uncertain_when_it_could_exclude() {
+    fn unknown_requiredness_is_evaluated_like_required() {
         let windows = [window(WeekdayV1::Monday, 540, 660)];
         assert_eq!(
             evaluate_facts(
@@ -242,6 +252,9 @@ mod tests {
             .outcome(),
             bcsp_contracts::MatchOutcome::Match
         );
+        // The Rutgers feed lists only meetings the student attends and never
+        // states requiredness, so a scheduled meeting outside every window
+        // excludes the section instead of leaving it uncertain.
         assert_eq!(
             evaluate_facts(
                 &[timed(
@@ -250,6 +263,42 @@ mod tests {
                     540,
                     660,
                 )],
+                &windows,
+            )
+            .outcome(),
+            bcsp_contracts::MatchOutcome::NoMatch
+        );
+        // One fitting and one non-fitting meeting of unknown requiredness
+        // still exclude: every attended meeting has to fit.
+        assert_eq!(
+            evaluate_facts(
+                &[
+                    timed(
+                        CatalogRequiredness::UnknownRequiredness,
+                        WeekdayV1::Monday,
+                        540,
+                        600,
+                    ),
+                    timed(
+                        CatalogRequiredness::UnknownRequiredness,
+                        WeekdayV1::Monday,
+                        700,
+                        760,
+                    ),
+                ],
+                &windows,
+            )
+            .outcome(),
+            bcsp_contracts::MatchOutcome::NoMatch
+        );
+        // Without usable times there is nothing to exclude on: TBA stays
+        // uncertain whatever the requiredness.
+        assert_eq!(
+            evaluate_facts(
+                &[OccurrenceFact {
+                    requiredness: CatalogRequiredness::UnknownRequiredness,
+                    schedule: ScheduleEvidence::Unknown(MatchReasonCode::Tba),
+                }],
                 &windows,
             )
             .outcome(),

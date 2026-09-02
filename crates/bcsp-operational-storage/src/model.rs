@@ -371,6 +371,56 @@ pub struct CatalogCounts {
     pub occurrences: u64,
 }
 
+/// One `catalog_targets` row: the target and the content version it serves.
+///
+/// Enumerates every target row, including targets that are absent from the
+/// current selector and targets that have never published (`current_content_version == 0`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogTargetVersion {
+    pub target: TermCampusKey,
+    pub current_content_version: u64,
+}
+
+/// In-place replacement of the derived delivery columns of one published target.
+///
+/// The rewrite touches only columns that are recomputed from stored canonical facts:
+/// it never changes content versions, canonical hashes, accepted semantic hashes,
+/// checkpoints, counts, FTS, staging or Open state. Rows omitted from the lists keep
+/// their stored values; the derivation stamp is written even when both lists are empty.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogDeliveryRewrite {
+    pub derivation_version: u32,
+    pub stamped_at: String,
+    pub sections: Vec<SectionDeliveryRewrite>,
+    pub occurrences: Vec<OccurrenceDeliveryRewrite>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SectionDeliveryRewrite {
+    pub key: SectionKey,
+    pub delivery_modality: String,
+    pub synchronicity: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OccurrenceDeliveryRewrite {
+    pub section_key: SectionKey,
+    pub occurrence_key: String,
+    pub occurrence_kind: String,
+    pub modality: String,
+    pub synchronicity: String,
+    pub evidence: String,
+    pub normalization_reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogDeliveryRewriteReport {
+    pub target: TermCampusKey,
+    pub derivation_version: u32,
+    pub sections_rewritten: u64,
+    pub occurrences_rewritten: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TargetState {
     pub target: TermCampusKey,
@@ -640,5 +690,71 @@ impl StorageIntegrityReport {
             && self.orphan_fts_rows == 0
             && self.duplicate_fts_rows == 0
             && self.version_mismatched_fts_rows == 0
+    }
+}
+
+/// The WAL checkpoint modes SQLite offers, exposed as a typed command so a
+/// dependent never has to run a `PRAGMA` against the sealed connection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WalCheckpointMode {
+    /// Backfills as many frames as it can without waiting for anyone. Never
+    /// blocks; a reader older than the newest frame caps the progress.
+    Passive,
+    /// Waits for writers (up to the connection's busy timeout) and backfills
+    /// every frame; readers may keep the log from being reset.
+    Full,
+    /// `Full`, then waits for readers so the next writer restarts the log
+    /// from the beginning.
+    Restart,
+    /// `Restart`, then truncates the log file to zero bytes.
+    Truncate,
+}
+
+impl WalCheckpointMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Passive => "PASSIVE",
+            Self::Full => "FULL",
+            Self::Restart => "RESTART",
+            Self::Truncate => "TRUNCATE",
+        }
+    }
+}
+
+/// What `PRAGMA wal_checkpoint` reported.
+///
+/// `log_frames` is the size of the log in frames and `checkpointed_frames`
+/// how many of them have been copied into the main database. A report whose
+/// two counters are equal after a small write proves that no connection is
+/// holding a stale read transaction against the file.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WalCheckpointReport {
+    pub busy: bool,
+    pub log_frames: u64,
+    pub checkpointed_frames: u64,
+}
+
+impl WalCheckpointReport {
+    /// Every frame of the log has been backfilled into the main database.
+    pub const fn is_complete(self) -> bool {
+        self.checkpointed_frames == self.log_frames
+    }
+}
+
+/// The transaction the connection is in right now, per `sqlite3_txn_state`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StorageTransactionState {
+    None,
+    Read,
+    Write,
+}
+
+impl StorageTransactionState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::Read => "READ",
+            Self::Write => "WRITE",
+        }
     }
 }

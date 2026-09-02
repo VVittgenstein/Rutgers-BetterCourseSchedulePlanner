@@ -105,28 +105,56 @@ impl LocalConsoleSink for StdoutSink {
 pub enum LocalConsoleEvent {
     /// The runtime is up and serving on `origin` (never the browser URL: that
     /// one carries the session nonce).
-    Started { origin: String },
+    Started {
+        origin: String,
+    },
     /// A page attached to, or left, the presence channel.
-    PageOpened { pages: u64 },
-    PageClosed { pages: u64 },
+    PageOpened {
+        pages: u64,
+    },
+    PageClosed {
+        pages: u64,
+    },
     /// The last page left; the program will exit unless one returns.
-    ExitCountdown { seconds: u64 },
+    ExitCountdown {
+        seconds: u64,
+    },
     /// A page came back inside the window.
-    ExitCancelled { pages: u64 },
+    ExitCancelled {
+        pages: u64,
+    },
     /// The program is shutting down, and why.
-    Exiting { reason: LocalExitReason },
+    Exiting {
+        reason: LocalExitReason,
+    },
     Stopped,
     /// A page connected to the alert channel, or left it.
     AlertsAttached,
     AlertsDetached,
     /// The runtime started or stopped actually watching a section.
-    WatchArmed { section: String },
-    WatchDisarmed { section: String },
+    WatchArmed {
+        section: String,
+    },
+    WatchDisarmed {
+        section: String,
+    },
     /// A watched section is open right now.
-    SectionOpen { section: String },
+    SectionOpen {
+        section: String,
+    },
     /// The snapshot-integrity gate withheld a suspect snapshot, or released.
-    GateHolding { target: String },
-    GateReleased { target: String },
+    GateHolding {
+        target: String,
+    },
+    GateReleased {
+        target: String,
+    },
+    /// `RBCSP_SKIP_BROWSER_LAUNCH=1` asked the runtime not to open a browser.
+    /// This is the one line that carries the session URL, because the person
+    /// who set that variable has to open the page themselves.
+    BrowserLaunchSkipped {
+        url: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,7 +192,8 @@ impl LocalConsole {
     }
 
     pub fn report(&self, event: &LocalConsoleEvent) {
-        self.sink.line(&format!("{}  {}", stamp(), self.render(event)));
+        self.sink
+            .line(&format!("{}  {}", stamp(), self.render(event)));
     }
 
     fn render(&self, event: &LocalConsoleEvent) -> String {
@@ -188,7 +217,9 @@ impl LocalConsole {
                 format!("有页面关闭（当前 {pages} 个）")
             }
             (LocalConsoleLocale::EnUs, LocalConsoleEvent::ExitCountdown { seconds }) => {
-                format!("Every page has closed. Exiting in {seconds} seconds; reopen a page to cancel.")
+                format!(
+                    "Every page has closed. Exiting in {seconds} seconds; reopen a page to cancel."
+                )
             }
             (LocalConsoleLocale::ZhCn, LocalConsoleEvent::ExitCountdown { seconds }) => {
                 format!("页面已全部关闭，{seconds} 秒后退出；页面回归即取消。")
@@ -200,18 +231,24 @@ impl LocalConsole {
                 format!("页面已回归（当前 {pages} 个），退出已取消。")
             }
             (LocalConsoleLocale::EnUs, LocalConsoleEvent::Exiting { reason }) => {
-                format!("Shutting down: {}", match reason {
-                    LocalExitReason::NoPages => "no page returned",
-                    LocalExitReason::Requested => "the page asked RBCSP to exit",
-                    LocalExitReason::Signal => "the console asked RBCSP to stop",
-                })
+                format!(
+                    "Shutting down: {}",
+                    match reason {
+                        LocalExitReason::NoPages => "no page returned",
+                        LocalExitReason::Requested => "the page asked RBCSP to exit",
+                        LocalExitReason::Signal => "the console asked RBCSP to stop",
+                    }
+                )
             }
             (LocalConsoleLocale::ZhCn, LocalConsoleEvent::Exiting { reason }) => {
-                format!("正在关闭：{}", match reason {
-                    LocalExitReason::NoPages => "没有页面回归",
-                    LocalExitReason::Requested => "页面请求退出",
-                    LocalExitReason::Signal => "控制台请求停止",
-                })
+                format!(
+                    "正在关闭：{}",
+                    match reason {
+                        LocalExitReason::NoPages => "没有页面回归",
+                        LocalExitReason::Requested => "页面请求退出",
+                        LocalExitReason::Signal => "控制台请求停止",
+                    }
+                )
             }
             (LocalConsoleLocale::EnUs, LocalConsoleEvent::Stopped) => {
                 "RBCSP has stopped. Your saved watches are kept for next time.".to_owned()
@@ -250,13 +287,23 @@ impl LocalConsole {
                 format!("开放：{section}")
             }
             (LocalConsoleLocale::EnUs, LocalConsoleEvent::GateHolding { target }) => {
-                format!("Safety gate is holding a suspect {target} snapshot; the last good data is still in use")
+                format!(
+                    "Safety gate is holding a suspect {target} snapshot; the last good data is still in use"
+                )
             }
             (LocalConsoleLocale::ZhCn, LocalConsoleEvent::GateHolding { target }) => {
                 format!("安全门扣住了 {target} 的可疑快照；仍在使用上一份可信数据")
             }
             (LocalConsoleLocale::EnUs, LocalConsoleEvent::GateReleased { target }) => {
                 format!("Safety gate released {target}; live data is in use again")
+            }
+            (LocalConsoleLocale::EnUs, LocalConsoleEvent::BrowserLaunchSkipped { url }) => {
+                format!(
+                    "Browser launch skipped (RBCSP_SKIP_BROWSER_LAUNCH=1). Open this page yourself: {url}"
+                )
+            }
+            (LocalConsoleLocale::ZhCn, LocalConsoleEvent::BrowserLaunchSkipped { url }) => {
+                format!("已跳过打开浏览器（RBCSP_SKIP_BROWSER_LAUNCH=1）。请自行打开此页面：{url}")
             }
             (LocalConsoleLocale::ZhCn, LocalConsoleEvent::GateReleased { target }) => {
                 format!("安全门已放行 {target}；恢复使用实时数据")
@@ -332,23 +379,38 @@ where
         let mut fields = EventFields::default();
         event.record(&mut fields);
         let Some(code) = fields.code else { return };
-        let target = || fields.target.clone().unwrap_or_else(|| "the course feed".to_owned());
-        let section = || fields.section.clone().unwrap_or_else(|| "a section".to_owned());
+        let target = || {
+            fields
+                .target
+                .clone()
+                .unwrap_or_else(|| "the course feed".to_owned())
+        };
+        let section = || {
+            fields
+                .section
+                .clone()
+                .unwrap_or_else(|| "a section".to_owned())
+        };
         match code.as_str() {
             "OPEN_SNAPSHOT_GATE_HOLD" => {
-                self.console.report(&LocalConsoleEvent::GateHolding { target: target() });
+                self.console
+                    .report(&LocalConsoleEvent::GateHolding { target: target() });
             }
             "OPEN_SNAPSHOT_GATE_RELEASED" => {
-                self.console.report(&LocalConsoleEvent::GateReleased { target: target() });
+                self.console
+                    .report(&LocalConsoleEvent::GateReleased { target: target() });
             }
             "LOCAL_WATCH_ARMED" => {
-                self.console.report(&LocalConsoleEvent::WatchArmed { section: section() });
+                self.console
+                    .report(&LocalConsoleEvent::WatchArmed { section: section() });
             }
             "LOCAL_WATCH_DISARMED" => {
-                self.console.report(&LocalConsoleEvent::WatchDisarmed { section: section() });
+                self.console
+                    .report(&LocalConsoleEvent::WatchDisarmed { section: section() });
             }
             "LOCAL_SECTION_OPEN" => {
-                self.console.report(&LocalConsoleEvent::SectionOpen { section: section() });
+                self.console
+                    .report(&LocalConsoleEvent::SectionOpen { section: section() });
             }
             _ => {}
         }
@@ -452,6 +514,9 @@ mod tests {
             LocalConsoleEvent::GateReleased {
                 target: "92026 NB".to_owned(),
             },
+            LocalConsoleEvent::BrowserLaunchSkipped {
+                url: "http://127.0.0.1:1234/?session=abc".to_owned(),
+            },
         ];
         let (english, english_lines) = console(LocalConsoleLocale::EnUs);
         let (chinese, chinese_lines) = console(LocalConsoleLocale::ZhCn);
@@ -466,7 +531,10 @@ mod tests {
         for (index, (left, right)) in english_lines.iter().zip(&chinese_lines).enumerate() {
             // Every user-facing line follows the locale. A line that read the
             // same in both would be one that was never translated.
-            assert_ne!(left, right, "event {index} reads the same in both languages");
+            assert_ne!(
+                left, right,
+                "event {index} reads the same in both languages"
+            );
         }
     }
 
@@ -497,9 +565,17 @@ mod tests {
         assert_eq!(reported.len(), 5, "{reported:?}");
         assert!(reported[0].contains("安全门"), "{}", reported[0]);
         assert!(reported[1].contains("放行"), "{}", reported[1]);
-        assert!(reported[2].contains("正在监控 92026 NB 12345"), "{}", reported[2]);
+        assert!(
+            reported[2].contains("正在监控 92026 NB 12345"),
+            "{}",
+            reported[2]
+        );
         assert!(reported[3].contains("已停止监控"), "{}", reported[3]);
-        assert!(reported[4].contains("开放：92026 NB 12345"), "{}", reported[4]);
+        assert!(
+            reported[4].contains("开放：92026 NB 12345"),
+            "{}",
+            reported[4]
+        );
     }
 
     #[test]

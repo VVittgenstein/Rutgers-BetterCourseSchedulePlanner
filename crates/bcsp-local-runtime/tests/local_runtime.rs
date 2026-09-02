@@ -10,11 +10,17 @@ use std::time::{Duration, Instant};
 
 use bcsp_application::{
     CoordinatorStatusSink, ExtensionRequest, NoopWatchDispatchSink, OpenRuntimeSnapshot,
-    OutboundSender,
-    PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_SERVICE_STATUS_PATH,
-    RequestMethod, RouteExtension, ServiceStatusRegistry, SharedWatchSocket, TargetRefreshDemand,
-    TargetWorkActivity, WebSocketExtension,
+    OutboundSender, PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_FILTER_SCHEMA_PATH,
+    PRODUCT_SERVICE_STATUS_PATH, PreparedServingError, PreparedServingRebuildRuntime,
+    RequestMethod, RouteExtension, ServiceStatusRegistry, SessionNonce, SharedWatchSocket,
+    TargetRefreshDemand, TargetWorkActivity, WebSocketExtension,
+    rebuild_prepared_serving_from_access,
 };
+use bcsp_catalog::{
+    CATALOG_DERIVATION_VERSION, LEGACY_CATALOG_DERIVATION_VERSION, normalize_target,
+    to_catalog_refresh_command, to_normalized_catalog_v1,
+};
+use bcsp_contracts::CatalogSynchronicity;
 use bcsp_contracts::{
     CampusCode, CatalogDiscoveryRequestV1, FilterRequestV1, FilterValuesInputV1,
     HttpRequestEnvelope, NormalizedFilterValuesV1, SectionKey, ServiceOperationStageV2,
@@ -24,10 +30,9 @@ use bcsp_contracts::{
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_runtime::{
     DesiredWatchCoordinator, DesiredWatchMutationV1, DesiredWatchOwner,
-    LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
-    LOCAL_DESIRED_WATCH_PATH, LOCAL_PRESENCE_SOCKET_PATH, LocalRuntimeError, LocalRuntimePaths,
-    LocalSurfaceState, LocalWatchRoute, PersonalSurface, PreparedLocalRuntime,
-    prepare_and_start_with,
+    LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_PATH, LOCAL_PRESENCE_SOCKET_PATH,
+    LocalRouteExtension, LocalRuntimeError, LocalRuntimePaths, LocalSurfaceState, LocalWatchRoute,
+    PersonalSurface, PreparedLocalRuntime, prepare_and_start_with,
 };
 use bcsp_local_user_state::{
     CatalogRefreshMinutes, LocalSettings, OpenRefreshSeconds, PersonalStateStore, SettingsRevision,
@@ -35,15 +40,19 @@ use bcsp_local_user_state::{
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_operational_storage::{
-    DiscoveredCampus, DiscoveredTerm, DiscoveryRefreshCommand, DiscoverySnapshot,
-    DiscoverySourceKind, DiscoverySourceVersion,
+    BeginOpenPullAttemptCommand, CatalogDeliveryRewrite, DiscoveredCampus, DiscoveredTerm,
+    DiscoveryRefreshCommand, DiscoverySnapshot, DiscoverySourceKind, DiscoverySourceVersion,
+    EmptySnapshotDecision, FinishOpenPullSuccessCommand, OccurrenceDeliveryRewrite,
+    OpenCacheStatus, OpenHttpAuditMetadata, OpenRequestLane, OperationalStorage,
+    SectionDeliveryRewrite,
 };
+use bcsp_rutgers_client::{SourceProvenance, decode_catalog_payload};
 use bcsp_watch::WatchStartAdmission;
 
 mod support;
 
-use support::{FaultOwner, OwnerFaults, seed_ready_query_scope};
 use rusqlite::{Connection, TransactionBehavior};
+use support::{FaultOwner, OwnerFaults, seed_ready_query_scope};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -706,6 +715,327 @@ fn catalog_writer_does_not_block_local_bootstrap_or_product_serving_reads() {
     prepare_worker.join().expect("prepare worker");
 }
 
+/// Holds a mutex on a helper thread until released, reporting how long the
+/// acquisition took, so a test can prove who does and does not own a lock
+/// while a request is parked -- without holding a std guard across an await.
+struct HeldMutex {
+    acquired_after: Duration,
+    release: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HeldMutex {
+    fn hold<T: Send + 'static>(mutex: Arc<Mutex<T>>) -> Self {
+        let (held, held_rx) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || {
+            let started = Instant::now();
+            let guard = mutex.lock().expect("hold the mutex");
+            held.send(started.elapsed()).expect("announce the hold");
+            let _ = release_rx.recv();
+            drop(guard);
+        });
+        let acquired_after = held_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the holder thread acquires the mutex");
+        Self {
+            acquired_after,
+            release: Some(release),
+            thread: Some(thread),
+        }
+    }
+
+    fn release(mut self) {
+        drop(self.release.take());
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("holder thread");
+        }
+    }
+}
+
+/// One more successful Open attempt for the seeded fixture target, written
+/// through the refresh connection the coordinator would use.
+fn publish_fixture_open_attempt(
+    storage: &mut OperationalStorage,
+    target: &TermCampusKey,
+    ordinal: u64,
+) {
+    let completed = (OffsetDateTime::now_utc() - time::Duration::seconds(1))
+        .format(&Rfc3339)
+        .unwrap();
+    let started = (OffsetDateTime::now_utc() - time::Duration::seconds(2))
+        .format(&Rfc3339)
+        .unwrap();
+    let section = SectionKey::try_new(
+        target.term().as_str(),
+        support::FIXTURE_CAMPUS,
+        support::FIXTURE_SECTION_INDEX,
+    )
+    .unwrap();
+    storage
+        .begin_open_pull_attempt(&BeginOpenPullAttemptCommand {
+            attempt_id: trace(0x900 + ordinal),
+            run_id: trace(0x950 + ordinal),
+            target: target.clone(),
+            captured_catalog_content_version: 1,
+            rutgers_day: "2026-07-17".to_owned(),
+            started_at: started,
+            lane: OpenRequestLane::ActiveWatch,
+            requested_interval_seconds: Some(30),
+            effective_interval_seconds: Some(10),
+            schedule_lag_ms: Some(0),
+        })
+        .unwrap();
+    storage
+        .finish_open_pull_success(FinishOpenPullSuccessCommand {
+            gate_hold: false,
+            gate_catalog_set_identity: None,
+            attempt_id: trace(0x900 + ordinal),
+            completed_at: completed,
+            open_sections: Vec::new(),
+            source_value_count: 0,
+            watched_sections: vec![section],
+            http: OpenHttpAuditMetadata {
+                http_status: Some(200),
+                cache_status: Some(OpenCacheStatus::Miss),
+                decoded_bytes: Some(2),
+                decoded_body_sha256: Some("d".repeat(64)),
+                content_type: Some("application/json".to_owned()),
+                etag: None,
+                cache_control: Some("no-store".to_owned()),
+                date: None,
+                age_seconds: None,
+                last_modified: None,
+                retry_after: None,
+                retry_after_seconds: None,
+            },
+        })
+        .unwrap();
+}
+
+fn local_get(
+    routes: &LocalRouteExtension,
+    path: &'static str,
+) -> bcsp_application::ExtensionResponse {
+    routes.handle(ExtensionRequest::new(
+        RequestMethod::Get,
+        path,
+        None,
+        Vec::new(),
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bootstrap_during_committed_open_ticket_waits_instead_of_returning_500() {
+    let temp = TestDirectory::new("bootstrap-admission-wait");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    seed_ready_query_scope(&prepared, &["92026"]);
+    let registry = prepared.prepared_serving_registry();
+    let refresh_storage = prepared.operational().refresh_storage();
+    let database = prepared.operational().database();
+    let open_runtime = prepared.open_runtime();
+    rebuild_prepared_serving_from_access(
+        &refresh_storage,
+        prepared.core(),
+        &open_runtime,
+        ServiceRuntimeV1::Local,
+        &registry,
+    )
+    .expect("prepared generation over the seeded scope");
+    let target = TermCampusKey::try_new("92026", support::FIXTURE_CAMPUS).unwrap();
+    let old = Arc::clone(registry.snapshot().unwrap().generation());
+
+    // The real worker, wired the way the runtime wires it: refresh-side
+    // storage and the dedicated-connection policy reader.
+    let worker = PreparedServingRebuildRuntime::spawn(
+        refresh_storage.clone(),
+        prepared.refresh_policy_provider(),
+        prepared.core().counter_audience(),
+        open_runtime.clone(),
+        registry.clone(),
+    );
+    let demand = worker.demand();
+    let barrier = demand.begin_open_publication(target.clone()).unwrap();
+    {
+        let mut storage = refresh_storage.lock().unwrap();
+        publish_fixture_open_attempt(&mut storage, &target, 1);
+    }
+    // Park the worker on its storage lock so the Committed phase lasts
+    // exactly as long as this test wants it to.
+    let worker_hold = HeldMutex::hold(refresh_storage.clone());
+    barrier.commit();
+    assert!(matches!(
+        registry.snapshot(),
+        Err(PreparedServingError::SnapshotRebuilding)
+    ));
+
+    let routes = prepared.route_extension();
+    let request_routes = routes.clone();
+    let (response_tx, response_rx) = std::sync::mpsc::channel();
+    let request = std::thread::spawn(move || {
+        let started = Instant::now();
+        let response = local_get(&request_routes, "/api/v1/local/bootstrap");
+        response_tx
+            .send((response, started.elapsed()))
+            .expect("publish bootstrap response");
+    });
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(
+        matches!(
+            response_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ),
+        "bootstrap must wait for the committed ticket instead of answering 500"
+    );
+
+    // The parked request holds NOTHING: the primary mutex is free while it
+    // waits, so a rebuild (or any other route) can still take it.
+    let primary_hold = HeldMutex::hold(database.clone());
+    assert!(
+        primary_hold.acquired_after < Duration::from_millis(500),
+        "LocalPrimaryDatabase was held by the parked bootstrap for {:?}",
+        primary_hold.acquired_after
+    );
+
+    // Release the worker while the primary mutex is STILL held: the rebuild
+    // reads its policy through its own connection and clears the ticket
+    // without ever needing LocalPrimaryDatabase.
+    worker_hold.release();
+    let cleared_at = Instant::now();
+    loop {
+        if registry.snapshot().is_ok() {
+            break;
+        }
+        assert!(
+            cleared_at.elapsed() < Duration::from_secs(5),
+            "the worker must clear the ticket while LocalPrimaryDatabase is held"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!Arc::ptr_eq(
+        registry.snapshot().unwrap().generation(),
+        &old
+    ));
+    assert!(
+        matches!(
+            response_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ),
+        "bootstrap takes the primary mutex only AFTER binding, so it is still queued behind the holder"
+    );
+    primary_hold.release();
+
+    let (response, elapsed) = response_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("bootstrap completes once the primary mutex is released");
+    request.join().expect("bootstrap thread");
+    assert_eq!(
+        response.status(),
+        200,
+        "{}",
+        String::from_utf8_lossy(response.body())
+    );
+    assert!(elapsed >= Duration::from_millis(100), "elapsed {elapsed:?}");
+    assert_eq!(registry.snapshot_wait_timeouts(), 0);
+
+    worker.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bootstrap_reports_retryable_status_after_admission_timeout() {
+    let temp = TestDirectory::new("bootstrap-admission-timeout");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    seed_ready_query_scope(&prepared, &["92026"]);
+    let registry = prepared.prepared_serving_registry();
+    let refresh_storage = prepared.operational().refresh_storage();
+    let worker = PreparedServingRebuildRuntime::spawn(
+        refresh_storage.clone(),
+        prepared.refresh_policy_provider(),
+        prepared.core().counter_audience(),
+        prepared.open_runtime(),
+        registry.clone(),
+    );
+    let demand = worker.demand();
+
+    // The production surface with a test-sized admission wait.
+    let admission = Arc::new(|_: &SectionKey| WatchStartAdmission::admitted(None));
+    let watch =
+        Arc::new(SharedWatchSocket::try_new(admission, Arc::new(NoopWatchDispatchSink)).unwrap());
+    let mutation_store = PersonalStateStore::open(prepared.paths().database()).unwrap();
+    let surface = PersonalSurface::new(prepared.operational().database(), mutation_store, watch)
+        .with_prepared_serving(registry.clone())
+        .with_prepared_admission_wait(Duration::from_millis(50));
+    let routes = Arc::new(LocalRouteExtension::new(
+        SessionNonce::generate(),
+        Box::new(surface),
+        || {},
+    ));
+
+    let target = TermCampusKey::try_new("92026", support::FIXTURE_CAMPUS).unwrap();
+    let barrier = demand.begin_open_publication(target).unwrap();
+    // The worker never gets its storage lock: the ticket is never cleared.
+    let worker_hold = HeldMutex::hold(refresh_storage.clone());
+    barrier.commit();
+
+    // Every prepared personal read follows the same admission wait and
+    // reports the same retryable failure.
+    let paths = [
+        "/api/v1/local/bootstrap",
+        "/api/v1/local/current-filters",
+        "/api/v1/local/saved-views",
+    ];
+    for (ordinal, path) in paths.into_iter().enumerate() {
+        let request_routes = routes.clone();
+        let (response, elapsed) = tokio::task::spawn_blocking(move || {
+            let started = Instant::now();
+            (local_get(&request_routes, path), started.elapsed())
+        })
+        .await
+        .unwrap();
+        assert_eq!(response.status(), 503, "{path}");
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["error"]["code"], "STORAGE_BUSY", "{path}: {body}");
+        assert!(
+            body["error"]["traceId"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()),
+            "{path}: {body}"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(50) && elapsed < Duration::from_secs(2),
+            "{path} elapsed {elapsed:?}"
+        );
+        assert_eq!(
+            registry.snapshot_wait_timeouts(),
+            u64::try_from(ordinal + 1).unwrap()
+        );
+    }
+
+    // Once the worker can rebuild, the very same reads succeed.
+    worker_hold.release();
+    let waiting_registry = registry.clone();
+    tokio::task::spawn_blocking(move || waiting_registry.snapshot_within(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .expect("the worker clears the ticket once it can rebuild");
+    for path in paths {
+        let request_routes = routes.clone();
+        let response = tokio::task::spawn_blocking(move || local_get(&request_routes, path))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            200,
+            "{path}: {}",
+            String::from_utf8_lossy(response.body())
+        );
+    }
+
+    worker.shutdown().await;
+}
+
 #[test]
 fn database_symlink_cannot_escape_the_package() {
     let temp = TestDirectory::new("database-link");
@@ -854,7 +1184,14 @@ async fn every_desired_watch_outcome_is_reported_with_the_status_it_earned() {
 
     // A commit.
     let (status_code, committed) = put_desired_watch(
-        authority, &origin, nonce, &section, Some(watch_policy()), 0, 1, trace(1),
+        authority,
+        &origin,
+        nonce,
+        &section,
+        Some(watch_policy()),
+        0,
+        1,
+        trace(1),
     );
     assert_eq!(status_code, 200, "{committed}");
     assert_eq!(committed["outcome"], "COMMITTED");
@@ -869,7 +1206,14 @@ async fn every_desired_watch_outcome_is_reported_with_the_status_it_earned() {
 
     // The same id again: the ledger answers, and the answer is the same 200.
     let (status_code, replayed) = put_desired_watch(
-        authority, &origin, nonce, &section, Some(watch_policy()), 0, 1, trace(1),
+        authority,
+        &origin,
+        nonce,
+        &section,
+        Some(watch_policy()),
+        0,
+        1,
+        trace(1),
     );
     assert_eq!(status_code, 200, "{replayed}");
     assert_eq!(replayed["outcome"], "COMMITTED");
@@ -878,14 +1222,28 @@ async fn every_desired_watch_outcome_is_reported_with_the_status_it_earned() {
 
     // A stale revision, and then the SAME id replayed. Both 409.
     let (status_code, stale) = put_desired_watch(
-        authority, &origin, nonce, &section, Some(watch_policy()), 999, 1, trace(2),
+        authority,
+        &origin,
+        nonce,
+        &section,
+        Some(watch_policy()),
+        999,
+        1,
+        trace(2),
     );
     assert_eq!(status_code, 409, "{stale}");
     assert_eq!(stale["outcome"], "STALE_REVISION");
     assert_eq!(stale["currentRevision"], revision);
     assert!(stale["state"].is_null(), "a refused page must re-read");
     let (status_code, stale_replay) = put_desired_watch(
-        authority, &origin, nonce, &section, Some(watch_policy()), 999, 1, trace(2),
+        authority,
+        &origin,
+        nonce,
+        &section,
+        Some(watch_policy()),
+        999,
+        1,
+        trace(2),
     );
     assert_eq!(
         status_code, 409,
@@ -896,7 +1254,14 @@ async fn every_desired_watch_outcome_is_reported_with_the_status_it_earned() {
 
     // A generation that no longer exists.
     let (status_code, stale_generation) = put_desired_watch(
-        authority, &origin, nonce, &other, Some(watch_policy()), 0, 99, trace(3),
+        authority,
+        &origin,
+        nonce,
+        &other,
+        Some(watch_policy()),
+        0,
+        99,
+        trace(3),
     );
     assert_eq!(status_code, 409, "{stale_generation}");
     assert_eq!(stale_generation["outcome"], "STALE_GENERATION");
@@ -907,7 +1272,14 @@ async fn every_desired_watch_outcome_is_reported_with_the_status_it_earned() {
 
     // The same id carrying a different command.
     let (status_code, conflict) = put_desired_watch(
-        authority, &origin, nonce, &other, Some(watch_policy()), 0, 1, trace(1),
+        authority,
+        &origin,
+        nonce,
+        &other,
+        Some(watch_policy()),
+        0,
+        1,
+        trace(1),
     );
     assert_eq!(status_code, 409, "{conflict}");
     assert_eq!(conflict["outcome"], "MUTATION_ID_CONFLICT");
@@ -922,7 +1294,10 @@ async fn every_desired_watch_outcome_is_reported_with_the_status_it_earned() {
         r#"{"protocolVersion":1,"payload":{"contractVersion":1}}"#,
     );
     assert_eq!(status(&malformed), 400, "{malformed}");
-    assert_eq!(response_json(&malformed)["error"]["code"], "MALFORMED_REQUEST");
+    assert_eq!(
+        response_json(&malformed)["error"]["code"],
+        "MALFORMED_REQUEST"
+    );
 
     // A write still needs the Origin and the session nonce the rest of the
     // local surface needs.
@@ -968,7 +1343,14 @@ async fn the_desired_watch_cap_refuses_a_tenth_section_with_the_maximum() {
 
     let tenth = SectionKey::try_new("T2026F", "CAMPUS_A", "00010").unwrap();
     let (status_code, capped) = put_desired_watch(
-        authority, &origin, nonce, &tenth, Some(watch_policy()), 0, 1, trace(10),
+        authority,
+        &origin,
+        nonce,
+        &tenth,
+        Some(watch_policy()),
+        0,
+        1,
+        trace(10),
     );
     assert_eq!(status_code, 409, "{capped}");
     assert_eq!(capped["outcome"], "LIMIT_EXCEEDED");
@@ -1098,7 +1480,10 @@ async fn desired_intent_survives_a_restart_and_a_full_reset_clears_it() {
     .await;
     let entry = desired_entry(&attached, &section).unwrap();
     assert!(!entry["policy"].is_null(), "the row is never withdrawn");
-    assert!(entry["failure"].is_null(), "and nothing went wrong: {entry}");
+    assert!(
+        entry["failure"].is_null(),
+        "and nothing went wrong: {entry}"
+    );
     assert_eq!(entry["pendingDisarm"], false);
     assert_eq!(
         attached["authorityGeneration"], 1,
@@ -1248,7 +1633,11 @@ async fn the_presence_path_is_a_websocket_route_and_only_that() {
         &origin,
         "00000000-0000-4000-8000-000000000000",
     );
-    assert_eq!(status(&wrong), 403, "presence with a wrong session: {wrong}");
+    assert_eq!(
+        status(&wrong),
+        403,
+        "presence with a wrong session: {wrong}"
+    );
 
     // A path nobody injected is still not in the route table.
     let absent = websocket_handshake(authority, "/api/v1/local/absent", &origin, nonce);
@@ -1280,7 +1669,10 @@ async fn the_last_page_leaving_ends_in_an_ordered_shutdown() {
     let nonce = running.nonce().as_str().to_owned();
 
     let mut page = open_presence_socket(&authority, &origin, &nonce);
-    send_websocket_text(&mut page, &presence_hello("00000000-0000-4000-8000-0000000ab001"));
+    send_websocket_text(
+        &mut page,
+        &presence_hello("00000000-0000-4000-8000-0000000ab001"),
+    );
     let registered = read_websocket_text(&mut page);
     let registered: serde_json::Value = serde_json::from_str(&registered).unwrap();
     assert_eq!(registered["payload"]["type"], "REGISTERED");
@@ -1308,7 +1700,13 @@ async fn the_last_page_leaving_ends_in_an_ordered_shutdown() {
 
     // And the exit is the ordinary ordered one: the runtime is still serving
     // when the request arrives, and the shutdown below is what stops it.
-    let alive = request(&authority, "GET /api/v1/local/desired-watch", &origin, &nonce, "");
+    let alive = request(
+        &authority,
+        "GET /api/v1/local/desired-watch",
+        &origin,
+        &nonce,
+        "",
+    );
     assert_eq!(status(&alive), 200, "{alive}");
 
     running.shutdown().await.unwrap();
@@ -1377,7 +1775,10 @@ async fn a_presence_socket_that_never_identifies_itself_is_not_a_page() {
     // A real page first: the countdown is about the last page LEAVING, and
     // this is what makes there be one.
     let mut page = open_presence_socket(&authority, &origin, &nonce);
-    send_websocket_text(&mut page, &presence_hello("00000000-0000-4000-8000-0000000ab003"));
+    send_websocket_text(
+        &mut page,
+        &presence_hello("00000000-0000-4000-8000-0000000ab003"),
+    );
     let _ = read_websocket_text(&mut page);
 
     // Held open, and silent. If an unidentified socket counted, this would
@@ -1395,8 +1796,6 @@ async fn a_presence_socket_that_never_identifies_itself_is_not_a_page() {
 
     running.shutdown().await.unwrap();
 }
-
-
 
 /// The desired-watch path is an ordinary local HTTP resource, and a plain
 /// GET on it succeeds. The earlier design put a second WebSocket route here
@@ -1438,7 +1837,9 @@ async fn the_desired_watch_path_reads_over_http_and_never_upgrades() {
     let upgrade = websocket_handshake(authority, LOCAL_DESIRED_WATCH_PATH, &origin, nonce);
     assert_ne!(status(&upgrade), 101, "desired-watch upgrade: {upgrade}");
     assert!(
-        !upgrade.to_ascii_lowercase().contains("sec-websocket-accept"),
+        !upgrade
+            .to_ascii_lowercase()
+            .contains("sec-websocket-accept"),
         "an upgrade must not be completed here: {upgrade}",
     );
 
@@ -2878,7 +3279,8 @@ fn a_full_reset_that_cannot_stop_a_watch_reports_a_retryable_failure() {
     let watch =
         Arc::new(SharedWatchSocket::try_new(admission, Arc::new(NoopWatchDispatchSink)).unwrap());
     let faults = Arc::new(OwnerFaults::default());
-    let owner: Arc<dyn DesiredWatchOwner> = Arc::new(FaultOwner::new(watch.clone(), faults.clone()));
+    let owner: Arc<dyn DesiredWatchOwner> =
+        Arc::new(FaultOwner::new(watch.clone(), faults.clone()));
     let coordinator = Arc::new(DesiredWatchCoordinator::with_owner(
         PersonalStateStore::open(prepared.paths().database()).unwrap(),
         owner,
@@ -2949,9 +3351,11 @@ fn a_full_reset_that_cannot_stop_a_watch_reports_a_retryable_failure() {
 
     assert_eq!(
         surface.confirm_local_user_data_reset(confirm.as_bytes()),
-        Err(bcsp_local_runtime::LocalSurfaceFailure::service_unavailable(
-            bcsp_local_runtime::LocalApiErrorCode::ResetIncomplete,
-        )),
+        Err(
+            bcsp_local_runtime::LocalSurfaceFailure::service_unavailable(
+                bcsp_local_runtime::LocalApiErrorCode::ResetIncomplete,
+            )
+        ),
         "a reset that left a watch running must not be reported as done",
     );
     assert!(
@@ -3005,6 +3409,265 @@ fn a_full_reset_that_cannot_stop_a_watch_reports_a_retryable_failure() {
         1,
         "a barrier is a moment, not a mode",
     );
+}
+
+/// The page's first load must not leave any runtime-owned connection inside
+/// a read transaction.
+///
+/// A connection that begins a read and never ends it pins the WAL read mark
+/// at the frame it started on. From then on no checkpoint can backfill past
+/// that frame, so the log grows by every Open commit until the process exits
+/// (3 GB in ninety minutes, observed). The proof is a checkpoint from a FRESH
+/// connection after a small write: with no pinned reader it backfills every
+/// frame; with one it reports fewer checkpointed frames than the log holds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_first_page_load_leaves_no_connection_pinning_the_wal() {
+    let temp = TestDirectory::new("wal-first-load");
+    let (_root, executable) = package(&temp);
+    let window = RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Local)
+        .expect("test execution date is covered by the bundled calendar");
+    let term = window.current_term().as_str().to_owned();
+    // Seeded in a first lifetime, like the live database the page loads
+    // against: the prepared serving generation is built at open, from what
+    // the file already holds.
+    let seeding = PreparedLocalRuntime::from_executable(&executable).unwrap();
+    seed_ready_query_scope(&seeding, &[&term]);
+    let database_path = seeding.paths().database().to_path_buf();
+    drop(seeding);
+    let running = PreparedLocalRuntime::from_executable(executable)
+        .unwrap()
+        .start()
+        .await
+        .unwrap();
+    let origin = running.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap().to_owned();
+    let nonce = running.nonce().as_str().to_owned();
+
+    // The page's first-load sequence, in the order the browser issues it.
+    let bootstrap = request(
+        &authority,
+        "GET /api/v1/local/bootstrap",
+        &origin,
+        &nonce,
+        "",
+    );
+    assert_eq!(status(&bootstrap), 200, "{bootstrap}");
+    let filters = serde_json::to_value(filter_request_with_nb(&term)).unwrap();
+    for expected_revision in [0, 1] {
+        let current = post_api(
+            &authority,
+            "PUT",
+            "/api/v1/local/current-filters",
+            &origin,
+            &nonce,
+            serde_json::json!({
+                "expectedUserStateRevision": 1,
+                "expectedCurrentFiltersRevision": expected_revision,
+                "filters": filters,
+            }),
+        );
+        assert_eq!(current["revision"], expected_revision + 1);
+    }
+    let service_status = request(
+        &authority,
+        &format!("GET {PRODUCT_SERVICE_STATUS_PATH}"),
+        &origin,
+        &nonce,
+        "",
+    );
+    assert_eq!(status(&service_status), 200, "{service_status}");
+    let _ = read_desired_watch(&authority, &origin, &nonce);
+    let _watch = open_watch_socket(&authority, &origin, &nonce);
+    let mut page = open_presence_socket(&authority, &origin, &nonce);
+    send_websocket_text(
+        &mut page,
+        &presence_hello("00000000-0000-4000-8000-0000000ab0a1"),
+    );
+    let registered = read_websocket_text(&mut page);
+    assert!(registered.contains("REGISTERED"), "{registered}");
+    let target = TermCampusKey::new(
+        TermId::try_from(term.as_str()).unwrap(),
+        CampusCode::try_from("NB").unwrap(),
+    );
+    let options = raw_api(
+        &authority,
+        "POST",
+        bcsp_application::PRODUCT_FILTER_OPTIONS_PATH,
+        &origin,
+        &nonce,
+        serde_json::to_value(bcsp_contracts::FilterOptionsRequestV2 {
+            contract_version: bcsp_contracts::QUERY_CONTRACT_VERSION,
+            term: target.term().clone(),
+            campuses: vec![target.campus().clone()],
+            field: bcsp_contracts::FilterOptionsFieldV2::Instructor,
+            query: Some("S".to_owned()),
+            limit: Some(10),
+        })
+        .unwrap(),
+    );
+    assert_eq!(status(&options), 200, "{options}");
+    let courses = raw_api(
+        &authority,
+        "POST",
+        bcsp_application::PRODUCT_COURSE_SEARCH_PATH,
+        &origin,
+        &nonce,
+        serde_json::to_value(bcsp_contracts::CourseQueryRequestV1 {
+            filters: filter_request_with_nb(&term),
+            page: bcsp_contracts::PageRequestV1::default(),
+            sort: bcsp_contracts::CourseSortV1::default(),
+        })
+        .unwrap(),
+    );
+    assert_eq!(status(&courses), 200, "{courses}");
+    let open_status = raw_api(
+        &authority,
+        "POST",
+        bcsp_application::PRODUCT_OPEN_STATUS_PATH,
+        &origin,
+        &nonce,
+        serde_json::to_value(bcsp_contracts::OpenStatusRequestV1::new(
+            bcsp_contracts::OpenBatchKey::from(target.clone()),
+        ))
+        .unwrap(),
+    );
+    assert_eq!(status(&open_status), 200, "{open_status}");
+    for path in [
+        "/api/v1/local/settings",
+        "/api/v1/local/selection",
+        "/api/v1/local/history",
+        "/api/v1/local/current-filters",
+        "/api/v1/local/saved-views",
+        "/api/v1/local/bootstrap",
+        PRODUCT_FILTER_SCHEMA_PATH,
+    ] {
+        let response = request(&authority, &format!("GET {path}"), &origin, &nonce, "");
+        assert_eq!(status(&response), 200, "{path}: {response}");
+    }
+    let section = SectionKey::try_new(
+        &term,
+        support::FIXTURE_CAMPUS,
+        support::FIXTURE_SECTION_INDEX,
+    )
+    .unwrap();
+    let discovery = raw_api(
+        &authority,
+        "POST",
+        PRODUCT_CATALOG_DISCOVERY_PATH,
+        &origin,
+        &nonce,
+        serde_json::to_value(CatalogDiscoveryRequestV1::new()).unwrap(),
+    );
+    assert_eq!(status(&discovery), 200, "{discovery}");
+    let sections = raw_api(
+        &authority,
+        "POST",
+        bcsp_application::PRODUCT_SECTION_SEARCH_PATH,
+        &origin,
+        &nonce,
+        serde_json::to_value(bcsp_contracts::SectionQueryRequestV1 {
+            filters: filter_request_with_nb(&term),
+            page: bcsp_contracts::PageRequestV1::default(),
+            sort: bcsp_contracts::SectionSortV1::default(),
+        })
+        .unwrap(),
+    );
+    assert_eq!(status(&sections), 200, "{sections}");
+    let section_detail = raw_api(
+        &authority,
+        "POST",
+        bcsp_application::PRODUCT_SECTION_DETAIL_PATH,
+        &origin,
+        &nonce,
+        serde_json::to_value(bcsp_contracts::SectionDetailRequestV1::new(section.clone())).unwrap(),
+    );
+    assert_eq!(status(&section_detail), 200, "{section_detail}");
+    let section_status = raw_api(
+        &authority,
+        "POST",
+        bcsp_application::PRODUCT_OPEN_SECTION_STATUS_PATH,
+        &origin,
+        &nonce,
+        serde_json::to_value(bcsp_contracts::OpenSectionStatusRequestV1::new(
+            section.clone(),
+        ))
+        .unwrap(),
+    );
+    assert_eq!(status(&section_status), 200, "{section_status}");
+    let validation = raw_api(
+        &authority,
+        "POST",
+        bcsp_application::PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH,
+        &origin,
+        &nonce,
+        serde_json::to_value(bcsp_contracts::DynamicFilterValidationRequestV3::new(
+            filter_request_with_nb(&term),
+        ))
+        .unwrap(),
+    );
+    assert_eq!(status(&validation), 200, "{validation}");
+    // The attach-time reconcile and the audience change run on the server's
+    // own tasks; give them a moment so they are part of what is checked.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A small write from a fresh connection, then the checkpoint that proves
+    // every frame of it can be backfilled: nothing runtime-owned is reading.
+    let settings = serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {
+            "expectedUserStateRevision": 1,
+            "expectedRevision": 0,
+            "value": LocalSettings::default(),
+        },
+    })
+    .to_string();
+    assert_eq!(
+        status(&request(
+            &authority,
+            "PUT /api/v1/local/settings",
+            &origin,
+            &nonce,
+            &settings,
+        )),
+        200
+    );
+    // A PASSIVE checkpoint is capped by ANY reader that is active at that
+    // instant, including a legitimate short one (a desired-watch tick, a
+    // prepared-serving rebuild). The bug is a reader that never ends, so the
+    // proof polls: a transient reader lets a later checkpoint finish, a
+    // pinned one never does.
+    let probe = PersonalStateStore::open(&database_path).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let report = loop {
+        // The refresh runtime's own maintenance may be checkpointing at
+        // this instant; SQLite lets one checkpointer in at a time, so a
+        // refused or busy attempt is retried like a capped one.
+        let attempt = probe.checkpoint_wal(bcsp_local_user_state::WalCheckpointMode::Passive);
+        let timed_out = Instant::now() >= deadline;
+        match attempt {
+            Ok(report) if report.busy == 0 && report.is_complete() => break report,
+            Ok(report) if timed_out => break report,
+            Ok(_) => {}
+            Err(error) if timed_out => panic!("the checkpoint kept failing: {error}"),
+            Err(_) => {}
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(
+        report.busy, 0,
+        "another checkpoint kept running for the whole window: {report:?}"
+    );
+    assert!(
+        report.log_frames > 0,
+        "the settings write must have produced WAL frames: {report:?}"
+    );
+    assert!(
+        report.is_complete(),
+        "a runtime-owned connection is pinning the WAL read mark: {report:?}",
+    );
+    drop(probe);
+    drop(page);
+    running.shutdown().await.unwrap();
 }
 
 fn open_observation_for(section: &SectionKey) -> bcsp_contracts::OpenObservationV1 {
@@ -3124,6 +3787,7 @@ fn read_desired_watch(authority: &str, origin: &str, nonce: &str) -> serde_json:
 
 /// Submits one desired-watch compare-and-swap, returning the status and the
 /// decoded `data` object so a test can assert on both.
+#[allow(clippy::too_many_arguments)]
 fn put_desired_watch(
     authority: &str,
     origin: &str,
@@ -3462,4 +4126,137 @@ fn create_file_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
 #[cfg(windows)]
 fn create_file_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_file(source, target)
+}
+
+#[test]
+fn bootstrap_rederives_legacy_catalog_delivery_before_anything_reads_it() {
+    // A data directory written by v0.1.1 carries the v1 derivation (every
+    // mode-90 occurrence UNSPECIFIED). The projection rejects those rows, so
+    // the operational gate must repair them in place before the prepared
+    // build or the refresh runtime ever opens the database.
+    let temp = TestDirectory::new("catalog-rederive");
+    let (_root, executable) = package(&temp);
+    let window = RutgersTermWindow::at(OffsetDateTime::now_utc(), RutgersTermWindowScope::Public)
+        .expect("test execution date is covered by the bundled calendar");
+    let term = window.current_term().as_str().to_owned();
+    let target = TermCampusKey::new(
+        TermId::try_from(term.as_str()).unwrap(),
+        CampusCode::try_from(support::FIXTURE_CAMPUS).unwrap(),
+    );
+    let started = (OffsetDateTime::now_utc() - Duration::from_secs(2))
+        .format(&Rfc3339)
+        .unwrap();
+    let completed = (OffsetDateTime::now_utc() - Duration::from_secs(1))
+        .format(&Rfc3339)
+        .unwrap();
+
+    let prepared = PreparedLocalRuntime::from_executable(&executable).unwrap();
+    {
+        let database = prepared.operational().database();
+        let mut database = database.lock().unwrap();
+        let storage = database.operational_mut();
+        let body = serde_json::to_vec(&serde_json::json!([{
+            "campusCode": support::FIXTURE_CAMPUS,
+            "courseString": "01:198:111",
+            "subject": "198",
+            "subjectDescription": "Computer Science",
+            "courseNumber": "111",
+            "title": "Synthetic Online Course",
+            "sections": [{
+                "campusCode": support::FIXTURE_CAMPUS,
+                "index": support::FIXTURE_SECTION_INDEX,
+                "number": "90",
+                "sectionCourseType": "O",
+                "openStatus": false,
+                "meetingTimes": [{
+                    "meetingModeCode": "90",
+                    "meetingDay": "",
+                    "startTimeMilitary": "",
+                    "endTimeMilitary": "",
+                    "baClassHours": "B",
+                    "campusLocation": "O"
+                }],
+                "instructors": []
+            }]
+        }]))
+        .unwrap();
+        let normalized = normalize_target(
+            target.clone(),
+            decode_catalog_payload(&body).unwrap(),
+            SourceProvenance::from_body("LOCAL_RUNTIME_REDERIVE_FIXTURE", &started, &body),
+        )
+        .unwrap();
+        storage
+            .apply_catalog_refresh(
+                to_catalog_refresh_command(&normalized, trace(0x900), &started, &completed)
+                    .unwrap(),
+                EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                CATALOG_DERIVATION_VERSION,
+            )
+            .unwrap();
+        let published = storage
+            .published_catalog_snapshot(&target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(published.snapshot.sections[0].synchronicity, "ASYNC");
+        // Downgrade the stored rows to what v0.1.1 wrote, under its stamp.
+        storage
+            .rewrite_catalog_delivery(
+                &target,
+                &CatalogDeliveryRewrite {
+                    derivation_version: LEGACY_CATALOG_DERIVATION_VERSION,
+                    stamped_at: completed.clone(),
+                    sections: vec![SectionDeliveryRewrite {
+                        key: published.snapshot.sections[0].key.clone(),
+                        delivery_modality: "ONLINE".to_owned(),
+                        synchronicity: "UNSPECIFIED".to_owned(),
+                    }],
+                    occurrences: vec![OccurrenceDeliveryRewrite {
+                        section_key: published.snapshot.occurrences[0].section_key.clone(),
+                        occurrence_key: published.snapshot.occurrences[0].occurrence_key.clone(),
+                        occurrence_kind: "BY_ARRANGEMENT".to_owned(),
+                        modality: "ONLINE".to_owned(),
+                        synchronicity: "UNSPECIFIED".to_owned(),
+                        evidence: "REMOTE".to_owned(),
+                        normalization_reason: "GENERIC_ONLINE_UNSPECIFIED".to_owned(),
+                    }],
+                },
+            )
+            .unwrap();
+        let legacy = storage
+            .published_catalog_snapshot(&target)
+            .unwrap()
+            .unwrap();
+        assert!(to_normalized_catalog_v1(&legacy).is_err());
+        assert_eq!(
+            storage.catalog_derivation_versions().unwrap().get(&target),
+            Some(&LEGACY_CATALOG_DERIVATION_VERSION)
+        );
+    }
+    drop(prepared);
+
+    // Next launch: the gate repairs the rows before returning.
+    let restarted = PreparedLocalRuntime::from_executable(&executable).unwrap();
+    let database = restarted.operational().database();
+    let mut database = database.lock().unwrap();
+    let storage = database.operational_mut();
+    assert_eq!(
+        storage.catalog_derivation_versions().unwrap().get(&target),
+        Some(&CATALOG_DERIVATION_VERSION)
+    );
+    let published = storage
+        .published_catalog_snapshot(&target)
+        .unwrap()
+        .unwrap();
+    assert_eq!(published.content_version, 1);
+    assert_eq!(published.snapshot.sections[0].synchronicity, "ASYNC");
+    let projected = to_normalized_catalog_v1(&published).expect("prepared build input projects");
+    assert_eq!(
+        projected.sections[0].synchronicity,
+        CatalogSynchronicity::Async
+    );
+    assert_eq!(
+        projected.occurrences[0].normalization_reason.as_str(),
+        "ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS"
+    );
 }

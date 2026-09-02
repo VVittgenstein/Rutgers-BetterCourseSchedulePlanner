@@ -2,9 +2,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bcsp_application::{
-    PreparedQueryService, PreparedServingBinding, PreparedServingRegistry, PreparedServingSnapshot,
-    ServiceStatusRegistry, SessionNonce, SharedQueryService, SharedWatchSocket,
-    TargetRefreshDemand, is_product_campus, product_target_keys, product_term_publication,
+    PREPARED_REQUEST_ADMISSION_WAIT, PreparedQueryService, PreparedServingBinding,
+    PreparedServingError, PreparedServingRegistry, PreparedServingSnapshot, ServiceStatusRegistry,
+    SessionNonce, SharedQueryService, SharedWatchSocket, TargetRefreshDemand, is_product_campus,
+    product_target_keys, product_term_publication,
 };
 use bcsp_contracts::{
     ContractDecodeError, FilterFieldId, FilterRequestV1, HttpRequestEnvelope, HttpSuccessEnvelope,
@@ -17,6 +18,7 @@ use bcsp_local_user_state::{
     CurrentFiltersRevision, HistoryFilter, LocalSettings, PageRequest, PersonalStateError,
     PersonalStateStore, SavedViewContent, SavedViewDefinition, SavedViewMatch, SavedViewReviewCode,
     SavedViewReviewReason, SavedViewRevision, SettingsRevision, UnixMillis, UserStateRevision,
+    WalCheckpointMode,
 };
 use bcsp_operational_storage::OperationalStorage;
 use serde::{Deserialize, Serialize};
@@ -39,12 +41,13 @@ struct PendingLocalUserDataReset {
 
 pub struct PersonalSurface {
     database: Arc<Mutex<LocalPrimaryDatabase>>,
-    mutation_store: Mutex<PersonalStateStore>,
+    mutation_store: Arc<Mutex<PersonalStateStore>>,
     watch: Arc<SharedWatchSocket>,
     pending_reset: Mutex<Option<PendingLocalUserDataReset>>,
     target_refresh_demand: TargetRefreshDemand,
     service_status: Option<Arc<ServiceStatusRegistry>>,
     prepared_serving: Option<Arc<PreparedServingRegistry>>,
+    prepared_admission_wait: Duration,
     desired_watch: Option<Arc<DesiredWatchCoordinator>>,
 }
 
@@ -56,14 +59,29 @@ impl PersonalSurface {
     ) -> Self {
         Self {
             database,
-            mutation_store: Mutex::new(mutation_store),
+            mutation_store: Arc::new(Mutex::new(mutation_store)),
             watch,
             pending_reset: Mutex::new(None),
             target_refresh_demand: TargetRefreshDemand::default(),
             service_status: None,
             prepared_serving: None,
+            prepared_admission_wait: PREPARED_REQUEST_ADMISSION_WAIT,
             desired_watch: None,
         }
+    }
+
+    /// Replaces how long a personal read waits for a committed prepared
+    /// publication barrier to clear before answering 503 `STORAGE_BUSY`.
+    #[must_use]
+    pub const fn with_prepared_admission_wait(mut self, admission_wait: Duration) -> Self {
+        self.prepared_admission_wait = admission_wait;
+        self
+    }
+
+    /// The mutation connection, shared so the runtime can report its
+    /// transaction state in the WAL starvation diagnostic.
+    pub fn mutation_store_handle(&self) -> Arc<Mutex<PersonalStateStore>> {
+        Arc::clone(&self.mutation_store)
     }
 
     /// Attaches the desired-watch coordinator.
@@ -101,18 +119,36 @@ impl PersonalSurface {
             .ok_or_else(|| LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError))
     }
 
+    /// Binds the prepared generation a personal read projects against.
+    ///
+    /// ORDERING RULE: every caller (`bootstrap`, `current_filters`,
+    /// `saved_views`, `apply_saved_view`) calls this BEFORE `lock_database()`.
+    /// The bind may wait up to `prepared_admission_wait` for a committed
+    /// publication barrier to clear, and the rebuild that clears it must not
+    /// find the primary mutex held by the very request waiting on it. Keep
+    /// the order when adding a caller; the runtime integration test probes
+    /// the mutex while a bootstrap is parked here.
     fn prepared_snapshot(&self) -> Result<Option<PreparedServingBinding>, LocalSurfaceFailure> {
         match self.prepared_serving.as_ref() {
             // Legacy projection remains available only to isolated fixtures
             // that deliberately construct PersonalSurface without the
             // production prepared-serving registry.
             None => Ok(None),
-            Some(registry) => registry.snapshot().map(Some).map_err(|_| {
-                // A configured-but-rebuilding registry must never silently
-                // fall back to a full Catalog projection while holding the
-                // LocalPrimaryDatabase mutex.
-                LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError)
-            }),
+            Some(registry) => registry
+                .snapshot_within(self.prepared_admission_wait)
+                .map(Some)
+                .map_err(|error| match error {
+                    // The barrier outlasted the wait: the request is fine,
+                    // the surface is momentarily busy, and the page should
+                    // retry shortly rather than report a bug.
+                    PreparedServingError::SnapshotRebuilding => {
+                        LocalSurfaceFailure::service_unavailable(LocalApiErrorCode::StorageBusy)
+                    }
+                    // A configured-but-failing registry must never silently
+                    // fall back to a full Catalog projection while holding
+                    // the LocalPrimaryDatabase mutex.
+                    _ => LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError),
+                }),
         }
     }
 
@@ -212,20 +248,14 @@ impl LocalSurfaceState for PersonalSurface {
     /// not distinguish from the complete one, so the response is bounded by
     /// proof instead -- see `LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES`.
     fn desired_watch(&self) -> Result<Vec<u8>, LocalSurfaceFailure> {
-        let state = self
-            .coordinator()?
-            .read()
-            .map_err(map_coordinator_error)?;
+        let state = self.coordinator()?.read().map_err(map_coordinator_error)?;
         encode(&state)
     }
 
     /// One desired-watch compare-and-swap, followed immediately by a
     /// reconcile, so the response describes what is actually running rather
     /// than what was asked for.
-    fn put_desired_watch(
-        &self,
-        body: &[u8],
-    ) -> Result<LocalSurfaceOutcome, LocalSurfaceFailure> {
+    fn put_desired_watch(&self, body: &[u8]) -> Result<LocalSurfaceOutcome, LocalSurfaceFailure> {
         let mutation: DesiredWatchMutationV1 = decode_payload(body)?;
         if mutation.contract_version != LOCAL_DESIRED_WATCH_CONTRACT_VERSION {
             return Err(LocalSurfaceFailure::bad_request(
@@ -853,7 +883,7 @@ impl LocalSurfaceState for PersonalSurface {
     }
 
     fn checkpoint_wal(&self) -> Result<(), LocalSurfaceFailure> {
-        self.with_mutation_store(|store| store.checkpoint_wal())
+        self.with_mutation_store(|store| store.checkpoint_wal(WalCheckpointMode::Truncate))
             .map(|_| ())
     }
 }

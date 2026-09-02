@@ -1,5 +1,6 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -17,14 +18,14 @@ use crate::{
     DesiredWatch, DesiredWatchAuthority, DesiredWatchBudget, DesiredWatchBudgetKind,
     DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry,
     DesiredWatchMutationOutcome, DesiredWatchReceipt, DesiredWatchReceiptOutcome,
-    DesiredWatchRotation,
-    EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition,
-    EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput, HistoryFilter, HistoryPage,
-    HistoryWriteOutcome, LocalSettings, MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES,
-    MAX_DESIRED_WATCHES, MAX_SELECTED_SECTIONS, PageRequest, PersonalMigrationRecord,
-    PersonalResetResult, PersonalStateError, PersonalStateResult, PersonalStateSnapshot,
-    PersonalTableCounts, SelectionMutation, SettingsRevision, SqliteConfiguration, StoredSettings,
-    UnixMillis, UserStateRevision, WalCheckpoint,
+    DesiredWatchRotation, EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord,
+    EpisodeDisposition, EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput,
+    HistoryFilter, HistoryPage, HistoryWriteOutcome, LocalSettings, MAX_DESIRED_WATCH_RECEIPTS,
+    MAX_DESIRED_WATCH_TOMBSTONES, MAX_DESIRED_WATCHES, MAX_SELECTED_SECTIONS, PageRequest,
+    PersonalMigrationRecord, PersonalResetResult, PersonalStateError, PersonalStateResult,
+    PersonalStateSnapshot, PersonalTableCounts, PersonalTransactionState, SelectionMutation,
+    SettingsRevision, SqliteConfiguration, StoredSettings, UnixMillis, UserStateRevision,
+    WAL_JOURNAL_SIZE_LIMIT_BYTES, WalCheckpoint, WalCheckpointMode,
 };
 
 // A first-load Catalog publication can hold SQLite's single writer slot for
@@ -40,12 +41,57 @@ pub struct PersonalStateStore {
     pub(crate) connection: Connection,
 }
 
+/// The path SQLite is asked to open, as a plain drive path.
+///
+/// On Windows, `Path::canonicalize` yields a verbatim path (`\\?\C:\...`).
+/// SQLite's Windows VFS treats every path that starts with two backslashes as
+/// a UNC path and then locks the WAL-index through ONE file handle shared by
+/// every connection of the process, with per-connection bookkeeping of which
+/// shared locks are held. That bookkeeping races (SQLite 3.53 `winShmLock`
+/// takes the OS lock after leaving the node mutex): two readers taking the
+/// same read lock at once stack two OS locks and later release one, after
+/// which no checkpoint can backfill a single frame until the process exits.
+/// A plain drive path gets one lock handle per connection, which needs no
+/// such bookkeeping. `\\?\UNC\...` paths are left alone: a real share goes
+/// through the shared handle whatever the spelling.
+fn sqlite_open_path(path: &Path) -> Cow<'_, Path> {
+    #[cfg(windows)]
+    {
+        if let Some(rest) = path.to_str().and_then(|path| path.strip_prefix(r"\\?\")) {
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\'
+            {
+                return Cow::Owned(PathBuf::from(rest));
+            }
+        }
+    }
+    Cow::Borrowed(path)
+}
+
 impl PersonalStateStore {
     pub fn open(path: impl AsRef<Path>) -> PersonalStateResult<Self> {
-        let mut connection = Connection::open(path)?;
+        let mut connection = Connection::open(sqlite_open_path(path.as_ref()))?;
         connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
+        // Bounds the log FILE after a checkpoint has reset the log; it does
+        // nothing while a reader pins the log, which is what the runtime's
+        // maintenance policy and `transaction_state` exist for.
+        let journal_size_limit = connection.pragma_update_and_check(
+            None,
+            "journal_size_limit",
+            i64::try_from(WAL_JOURNAL_SIZE_LIMIT_BYTES)
+                .map_err(|_| PersonalStateError::SqliteConfiguration("journal_size_limit"))?,
+            |row| row.get::<_, i64>(0),
+        )?;
+        if u64::try_from(journal_size_limit) != Ok(WAL_JOURNAL_SIZE_LIMIT_BYTES) {
+            return Err(PersonalStateError::SqliteConfiguration(
+                "journal_size_limit",
+            ));
+        }
         apply_migrations(&mut connection)?;
 
         let store = Self { connection };
@@ -884,9 +930,33 @@ impl PersonalStateStore {
         })
     }
 
-    pub fn checkpoint_wal(&self) -> PersonalStateResult<WalCheckpoint> {
+    /// The configured `journal_size_limit` of this connection.
+    pub fn wal_journal_size_limit_bytes(&self) -> PersonalStateResult<u64> {
+        let limit = self
+            .connection
+            .pragma_query_value(None, "journal_size_limit", |row| row.get::<_, i64>(0))?;
+        nonnegative_i64_to_u64(limit)
+    }
+
+    /// The transaction this connection is holding right now.
+    pub fn transaction_state(&self) -> PersonalStateResult<PersonalTransactionState> {
+        Ok(match self.connection.transaction_state(None::<&str>)? {
+            rusqlite::TransactionState::None => PersonalTransactionState::None,
+            rusqlite::TransactionState::Read => PersonalTransactionState::Read,
+            rusqlite::TransactionState::Write => PersonalTransactionState::Write,
+            _ => return Err(PersonalStateError::SqliteConfiguration("transaction_state")),
+        })
+    }
+
+    /// Runs one WAL checkpoint through this connection.
+    ///
+    /// `Restart` and `Truncate` wait for other connections up to this
+    /// connection's busy timeout. A report with `busy != 0` is not an error:
+    /// it says another connection kept the checkpoint from finishing.
+    pub fn checkpoint_wal(&self, mode: WalCheckpointMode) -> PersonalStateResult<WalCheckpoint> {
+        let sql = format!("PRAGMA wal_checkpoint({})", mode.as_str());
         self.connection
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            .query_row(&sql, [], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, i64>(1)?,

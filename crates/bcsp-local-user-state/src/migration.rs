@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::sync::{Arc, Barrier, Mutex};
-use sha2::{Digest, Sha256};
 
 use crate::{
     PERSONAL_MIGRATION_ID_BASE, PERSONAL_MIGRATION_LEDGER_TABLE, PersonalMigrationRecord,
@@ -224,8 +224,7 @@ mod tests {
             .expect("rewind to 10003");
         drop(connection);
 
-        *PRE_LOCK_RENDEZVOUS.lock().expect("rendezvous mutex") =
-            Some(Arc::new(Barrier::new(2)));
+        *PRE_LOCK_RENDEZVOUS.lock().expect("rendezvous mutex") = Some(Arc::new(Barrier::new(2)));
         let outcomes = std::thread::scope(|scope| {
             let handles = (0..2)
                 .map(|_| {

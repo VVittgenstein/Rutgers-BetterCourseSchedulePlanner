@@ -1075,6 +1075,31 @@ async fn fake_upstream_drives_all_product_routes_and_watch_without_client_amplif
     assert_eq!(second_courses.page.total, 1);
     assert_eq!(upstream_state.catalog_calls.load(Ordering::SeqCst), 1);
     assert_eq!(upstream_state.open_calls.load(Ordering::SeqCst), 1);
+
+    // A Catalog publication followed by an Open commit leaves maintenance
+    // due, with the publication as the reason, and nothing above may leave
+    // the writer inside a read transaction: a fresh connection can backfill
+    // every frame of the log.
+    assert_eq!(
+        coordinator.maintenance_signal().take(),
+        Some(bcsp_application::WalMaintenanceReason::CatalogPublished)
+    );
+    assert_eq!(coordinator.maintenance_signal().take(), None);
+    let probe = OperationalStorage::open(fixture._directory.path().join("coordinator.sqlite"))
+        .expect("probe connection");
+    let report = probe
+        .checkpoint_wal(bcsp_operational_storage::WalCheckpointMode::Passive)
+        .expect("checkpoint")
+        .expect("file-backed");
+    assert!(!report.busy, "{report:?}");
+    assert!(
+        report.is_complete(),
+        "a coordinator connection is pinning the WAL read mark: {report:?}"
+    );
+    assert_eq!(
+        fixture.storage.lock().unwrap().transaction_state().unwrap(),
+        bcsp_operational_storage::StorageTransactionState::None
+    );
 }
 
 #[tokio::test]
@@ -1451,11 +1476,7 @@ fn wide_catalog_response(
     bcsp_application::CatalogPullResponse {
         target: fixture.target.clone(),
         courses: decode_catalog_payload(&body).expect("wide synthetic Catalog"),
-        provenance: SourceProvenance::from_body(
-            "SYNTHETIC_CATALOG",
-            "2030-01-01T00:00:00Z",
-            &body,
-        ),
+        provenance: SourceProvenance::from_body("SYNTHETIC_CATALOG", "2030-01-01T00:00:00Z", &body),
         selector_confirms_target: true,
     }
 }
@@ -1587,7 +1608,10 @@ async fn snapshot_integrity_gate_holds_partials_end_to_end_and_across_restart() 
     // (3) Recovery: the full snapshot applies immediately and fans out.
     clock.advance(Duration::from_secs(30));
     assert!(matches!(
-        coordinator.run_next().await.expect("recovery Open dispatch"),
+        coordinator
+            .run_next()
+            .await
+            .expect("recovery Open dispatch"),
         Some(CoordinatorDispatchOutcome::OpenCompleted { .. })
     ));
     let events = watch_events(&mut receiver);

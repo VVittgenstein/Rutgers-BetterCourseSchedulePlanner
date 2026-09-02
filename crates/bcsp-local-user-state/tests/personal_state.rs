@@ -19,7 +19,7 @@ use bcsp_local_user_state::{
     MAX_SELECTED_SECTIONS, OpenRefreshSeconds, PageRequest, PersonalStateError, PersonalStateStore,
     SavedViewContent, SavedViewIncompatibility, SavedViewMatch, SavedViewRevision,
     SelectionMutation, SettingsRevision, UnixMillis, UserStateRevision, VolumePercent,
-    WatchFastLaneSeconds,
+    WalCheckpointMode, WatchFastLaneSeconds,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -217,7 +217,7 @@ fn first_start_is_schema_only_and_enforces_sqlite_and_migration_contracts() {
     assert_eq!(migrations[2].migration_id, 10_003);
     assert_eq!(migrations[3].migration_id, 10_004);
     assert_eq!(migrations[0].checksum.len(), 64);
-    let _ = store.checkpoint_wal().unwrap();
+    let _ = store.checkpoint_wal(WalCheckpointMode::Truncate).unwrap();
     drop(store);
 
     let connection = Connection::open(&path).unwrap();
@@ -1016,7 +1016,11 @@ fn migration_10004_upgrades_intent_rows_and_separates_authority_from_the_wire() 
         authority
             .entries
             .iter()
-            .map(|entry| (entry.section.clone(), entry.revision, entry.materialization_epoch))
+            .map(|entry| (
+                entry.section.clone(),
+                entry.revision,
+                entry.materialization_epoch
+            ))
             .collect::<Vec<_>>(),
         vec![(section(1), 1, 1), (section(2), 2, 2)],
     );
@@ -1119,7 +1123,13 @@ fn full_reset_is_the_authority_generation_barrier() {
     let before = store.desired_watch_authority().unwrap();
     assert_eq!(before.counters.authority_generation, 1);
     assert_eq!(before.counters.revision_counter, 2);
-    assert_eq!(store.personal_table_counts().unwrap().desired_watch_receipts, 1);
+    assert_eq!(
+        store
+            .personal_table_counts()
+            .unwrap()
+            .desired_watch_receipts,
+        1
+    );
 
     let reset = store.clear_personal_data(state_one()).unwrap();
     assert_eq!(reset.deleted_desired_watches, 2);
@@ -1233,9 +1243,7 @@ fn the_cas_refusals_are_ordered_so_one_answer_never_hides_another() {
     let mut from_the_past = start(section(1), 999, 1);
     from_the_past.authority_generation = 7;
     assert_eq!(
-        store
-            .commit_desired_watch_mutation(&from_the_past)
-            .unwrap(),
+        store.commit_desired_watch_mutation(&from_the_past).unwrap(),
         DesiredWatchMutationOutcome::StaleGeneration { current: 1 },
     );
     assert_eq!(
@@ -1554,9 +1562,7 @@ fn a_repeated_mutation_id_replays_and_a_reused_one_reports_the_row_it_finds() {
     // just the section.
     let mut same_section = start(section(1), 0, 1);
     same_section.policy = Some(loud_policy());
-    let outcome = store
-        .commit_desired_watch_mutation(&same_section)
-        .unwrap();
+    let outcome = store.commit_desired_watch_mutation(&same_section).unwrap();
     assert!(
         matches!(outcome, DesiredWatchMutationOutcome::MutationIdConflict(_)),
         "a different command under the same id and section still collides: {outcome:?}",
@@ -1972,9 +1978,7 @@ fn every_recorded_answer_survives_closing_and_reopening_the_database() {
     let mut reopened = PersonalStateStore::open(&path).unwrap();
     for (command, outcome) in &expected {
         assert_eq!(
-            reopened
-                .commit_desired_watch_mutation(command)
-                .unwrap(),
+            reopened.commit_desired_watch_mutation(command).unwrap(),
             DesiredWatchMutationOutcome::Replayed(*outcome),
             "replay for {}",
             command.mutation_id,
@@ -2147,7 +2151,9 @@ fn the_tombstone_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
 
     // Rotation is what unblocks it. The stop then goes through -- against the
     // new generation, because the old one is exactly what rotation retired.
-    let rotation = store.rotate_desired_watch_authority(&BTreeSet::new()).unwrap();
+    let rotation = store
+        .rotate_desired_watch_authority(&BTreeSet::new())
+        .unwrap();
     assert_eq!(rotation.deleted_tombstones, MAX_DESIRED_WATCH_TOMBSTONES);
     let mut retry = stop(section(9000), rotation.retained[0].revision, 3);
     retry.authority_generation = rotation.authority_generation;
@@ -2217,7 +2223,9 @@ fn the_receipt_budget_signals_at_its_threshold_and_fails_closed_at_its_cap() {
     );
     assert_eq!(store.desired_watches().unwrap(), Vec::new());
 
-    let rotation = store.rotate_desired_watch_authority(&BTreeSet::new()).unwrap();
+    let rotation = store
+        .rotate_desired_watch_authority(&BTreeSet::new())
+        .unwrap();
     assert_eq!(rotation.deleted_receipts, MAX_DESIRED_WATCH_RECEIPTS);
     let mut retry = start(section(1), 0, 1);
     retry.authority_generation = rotation.authority_generation;
@@ -2342,7 +2350,9 @@ fn rotation_keeps_the_tombstones_the_caller_is_still_tearing_down() {
     );
 
     // Once the caller stops naming it, the next rotation collects it.
-    let second = store.rotate_desired_watch_authority(&BTreeSet::new()).unwrap();
+    let second = store
+        .rotate_desired_watch_authority(&BTreeSet::new())
+        .unwrap();
     assert_eq!(second.deleted_tombstones, 1);
     assert_eq!(
         second
@@ -2394,7 +2404,9 @@ fn rotation_carries_intent_into_a_new_generation_and_frees_both_budgets() {
     assert_eq!(before.counters.actor_incarnation, 7);
     assert_eq!(before.entries.len(), 2);
 
-    let rotation = store.rotate_desired_watch_authority(&BTreeSet::new()).unwrap();
+    let rotation = store
+        .rotate_desired_watch_authority(&BTreeSet::new())
+        .unwrap();
     assert_eq!(rotation.authority_generation, 2);
     assert_eq!(rotation.deleted_tombstones, 1);
     assert_eq!(rotation.deleted_receipts, 3);
@@ -2471,4 +2483,266 @@ fn the_largest_legal_authority_state_is_bounded_by_the_two_caps() {
         "no 513th tombstone",
     );
     assert_eq!(store.desired_watch_authority().unwrap().entries.len(), 521);
+}
+
+/// Every public read API leaves the connection out of any transaction, and
+/// a second connection proves it by checkpointing every frame of the log.
+///
+/// A store that kept a read transaction open would pin the WAL read mark:
+/// no checkpoint could backfill past it and the log would grow with every
+/// commit of every other connection until the process exited.
+#[test]
+fn every_public_read_leaves_the_connection_out_of_a_transaction() {
+    use bcsp_local_user_state::PersonalTransactionState;
+
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    assert_eq!(
+        store.wal_journal_size_limit_bytes().unwrap(),
+        bcsp_local_user_state::WAL_JOURNAL_SIZE_LIMIT_BYTES
+    );
+    seed_desired_watch(&path, section(1), 1);
+    store
+        .upsert_episode_summary(&acknowledged_summary(identity(section(1), 1, 1)))
+        .unwrap();
+    store
+        .append_episode_action(&EpisodeActionInput {
+            identity: identity(section(1), 1, 1),
+            action_id: trace(31),
+            kind: EpisodeActionKind::Acknowledged,
+            occurred_at: UnixMillis::try_from(2_100).unwrap(),
+        })
+        .unwrap();
+    store
+        .replace_current_filters(state_one(), current_revision(0), &filters())
+        .unwrap();
+    let created = store
+        .create_saved_view(
+            state_one(),
+            current_revision(1),
+            "Morning",
+            &filters(),
+            UnixMillis::try_from(3_000).unwrap(),
+        )
+        .unwrap();
+    let view_id = created.definition.id;
+
+    type StoreRead = Box<dyn Fn(&PersonalStateStore)>;
+    let reads: Vec<(&str, StoreRead)> = vec![
+        (
+            "sqlite_configuration",
+            Box::new(|s| {
+                s.sqlite_configuration().unwrap();
+            }),
+        ),
+        (
+            "migration_records",
+            Box::new(|s| {
+                s.migration_records().unwrap();
+            }),
+        ),
+        (
+            "settings",
+            Box::new(|s| {
+                s.settings().unwrap();
+            }),
+        ),
+        (
+            "selected_sections",
+            Box::new(|s| {
+                s.selected_sections().unwrap();
+            }),
+        ),
+        (
+            "desired_watches",
+            Box::new(|s| {
+                s.desired_watches().unwrap();
+            }),
+        ),
+        (
+            "desired_watch_authority",
+            Box::new(|s| {
+                s.desired_watch_authority().unwrap();
+            }),
+        ),
+        (
+            "desired_watch_budget",
+            Box::new(|s| {
+                s.desired_watch_budget().unwrap();
+            }),
+        ),
+        (
+            "episode_history",
+            Box::new(|s| {
+                s.episode_history(&HistoryFilter::default(), PageRequest::DEFAULT)
+                    .unwrap();
+            }),
+        ),
+        (
+            "episode_actions",
+            Box::new(|s| {
+                s.episode_actions(&HistoryFilter::default(), PageRequest::DEFAULT)
+                    .unwrap();
+            }),
+        ),
+        (
+            "snapshot",
+            Box::new(|s| {
+                s.snapshot(PageRequest::DEFAULT).unwrap();
+            }),
+        ),
+        (
+            "personal_table_counts",
+            Box::new(|s| {
+                s.personal_table_counts().unwrap();
+            }),
+        ),
+        (
+            "user_state_revision",
+            Box::new(|s| {
+                s.user_state_revision().unwrap();
+            }),
+        ),
+        (
+            "current_filters",
+            Box::new(|s| {
+                s.current_filters().unwrap();
+            }),
+        ),
+        (
+            "current_filters_raw_snapshot",
+            Box::new(|s| {
+                s.current_filters_raw_snapshot().unwrap();
+            }),
+        ),
+        (
+            "saved_views",
+            Box::new(|s| {
+                s.saved_views().unwrap();
+            }),
+        ),
+        (
+            "saved_view",
+            Box::new(move |s| {
+                s.saved_view(view_id).unwrap().unwrap();
+            }),
+        ),
+        (
+            "saved_view_raw_snapshot",
+            Box::new(move |s| {
+                s.saved_view_raw_snapshot(view_id).unwrap().unwrap();
+            }),
+        ),
+        (
+            "consistent_read nesting",
+            Box::new(|s| {
+                s.consistent_read(|s| {
+                    s.personal_table_counts()?;
+                    s.desired_watch_budget()?;
+                    s.settings()?;
+                    Ok(())
+                })
+                .unwrap();
+            }),
+        ),
+        (
+            "consistent_read failing",
+            Box::new(|s| {
+                assert!(
+                    s.consistent_read(|s| {
+                        s.settings()?;
+                        // A nested snapshot cannot start inside a snapshot, and
+                        // the failure must still end the outer transaction.
+                        s.snapshot(PageRequest::DEFAULT).map(|_| ())
+                    })
+                    .is_err()
+                );
+            }),
+        ),
+    ];
+    for (name, read) in &reads {
+        read(&store);
+        assert_eq!(
+            store.transaction_state().unwrap(),
+            PersonalTransactionState::None,
+            "{name} left the connection inside a transaction"
+        );
+    }
+
+    // A small write from a second connection, then a PASSIVE checkpoint from
+    // a third: complete only if no connection holds a stale read.
+    let mut writer = PersonalStateStore::open(&path).unwrap();
+    writer
+        .replace_current_filters(state_one(), current_revision(2), &filters_for("92026"))
+        .unwrap();
+    let probe = PersonalStateStore::open(&path).unwrap();
+    let report = probe.checkpoint_wal(WalCheckpointMode::Passive).unwrap();
+    assert_eq!(report.busy, 0, "{report:?}");
+    assert!(report.log_frames > 0, "{report:?}");
+    assert!(
+        report.is_complete(),
+        "a store connection is pinning the WAL read mark: {report:?}"
+    );
+    assert_eq!(
+        writer.transaction_state().unwrap(),
+        PersonalTransactionState::None
+    );
+}
+
+/// Concurrent readers on a verbatim (`\\?\`-prefixed) Windows path, the
+/// spelling the local runtime opens every personal connection with. SQLite's
+/// Windows VFS locks the WAL-index of such a path through one process-wide
+/// handle whose shared-lock bookkeeping races between connections; a lost
+/// race leaves an OS read lock behind that no checkpoint can get past. The
+/// store hands SQLite a plain drive path instead; this races readers and then
+/// demands a complete checkpoint.
+#[test]
+fn concurrent_readers_on_a_verbatim_path_do_not_pin_the_wal() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let verbatim = std::fs::canonicalize(directory.path())
+        .expect("canonical temp dir")
+        .join("verbatim.sqlite");
+    let mut writer = PersonalStateStore::open(&verbatim).expect("writer");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let readers = (0..8)
+        .map(|_| {
+            let path = verbatim.clone();
+            let stop = std::sync::Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let reader = PersonalStateStore::open(&path).expect("reader");
+                let mut reads = 0_u64;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    reader.settings().expect("read");
+                    reads += 1;
+                }
+                reads
+            })
+        })
+        .collect::<Vec<_>>();
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let reads = readers
+        .into_iter()
+        .map(|reader| reader.join().expect("reader thread"))
+        .sum::<u64>();
+    assert!(reads > 0);
+
+    let state_revision = writer.user_state_revision().expect("state revision");
+    writer
+        .compare_and_swap_settings(
+            state_revision,
+            SettingsRevision::ZERO,
+            &LocalSettings::default(),
+        )
+        .expect("small write");
+    let probe = PersonalStateStore::open(&verbatim).expect("probe");
+    let report = probe
+        .checkpoint_wal(WalCheckpointMode::Passive)
+        .expect("checkpoint");
+    assert!(report.log_frames > 0, "{report:?}");
+    assert!(
+        report.is_complete(),
+        "a leaked WAL read lock is pinning the log after {reads} concurrent reads: {report:?}"
+    );
 }

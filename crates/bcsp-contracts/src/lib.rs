@@ -102,10 +102,6 @@ pub use schema::{
     CONTRACT_SCHEMA_VERSION, ContractField, ContractManifest, ContractSchema, ContractVariant,
     ScalarConstraint, SchemaDirection, UnknownFieldPolicy, contract_manifest,
 };
-pub use session::{
-    CanonicalSessionNonce, SessionValidateRequestV1, SessionValidateResponseV1,
-    is_canonical_session_nonce,
-};
 pub use service::{
     SERVICE_STATUS_CONTRACT_VERSION, SERVICE_STATUS_V2_CONTRACT_VERSION,
     ServiceAutomaticTermSummaryV2, ServiceAvailabilitySummaryV1, ServiceAvailabilityV1,
@@ -114,6 +110,10 @@ pub use service::{
     ServiceOperationV2, ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceStatusV1,
     ServiceStatusV2, ServiceTargetErrorV2, ServiceTargetStatusV1, ServiceTargetStatusV2,
     ServiceTermPublicationV2, ServiceTermWindowV2, ServiceVisibleTermV2, ServiceWorkStateV2,
+};
+pub use session::{
+    CanonicalSessionNonce, SessionValidateRequestV1, SessionValidateResponseV1,
+    is_canonical_session_nonce,
 };
 pub use watch::{
     ACTIVE_WATCH_STATE_PERSISTENT, ActiveWatchId, ActiveWatchTargetV1,

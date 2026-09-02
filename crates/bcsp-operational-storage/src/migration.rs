@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn embedded_migration_ids_are_contiguous_and_checksums_are_lower_hex() {
         let migrations = embedded_migrations().expect("valid embedded migrations");
-        assert_eq!(migrations.len(), 6);
+        assert_eq!(migrations.len(), 7);
         for (index, migration) in migrations.iter().enumerate() {
             assert_eq!(migration.id, (index + 1) as u32);
         }
@@ -269,6 +269,7 @@ mod tests {
                     (4, false),
                     (5, true),
                     (6, false),
+                    (7, false),
                 ])
         );
     }
@@ -353,14 +354,29 @@ mod tests {
 
         apply_migrations(&mut connection).expect("v4 -> v5 upgrade");
 
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM bcsp_operational_migrations"), 6);
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM open_pull_attempts"), 1);
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM bcsp_operational_migrations"
+            ),
+            7
+        );
+        assert_eq!(
+            count(&connection, "SELECT COUNT(*) FROM open_pull_attempts"),
+            1
+        );
         // Cascade preservation: both child tables keep their rows.
         assert_eq!(
-            count(&connection, "SELECT COUNT(*) FROM open_attempt_catalog_sections"),
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM open_attempt_catalog_sections"
+            ),
             2
         );
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM open_batch_observations"), 1);
+        assert_eq!(
+            count(&connection, "SELECT COUNT(*) FROM open_batch_observations"),
+            1
+        );
         // Enforcement restored and the net is clean.
         let fk_on = connection
             .pragma_query_value(None, "foreign_keys", |row| row.get::<_, bool>(0))
@@ -405,7 +421,10 @@ mod tests {
             .execute("DELETE FROM open_pull_attempts WHERE attempt_id = 'a1'", [])
             .expect("delete parent");
         assert_eq!(
-            count(&connection, "SELECT COUNT(*) FROM open_attempt_catalog_sections"),
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM open_attempt_catalog_sections"
+            ),
             0,
             "cascade re-attached to the rebuilt parent",
         );
@@ -435,9 +454,18 @@ mod tests {
             "unexpected error: {error:?}",
         );
         // Failure is clean: no 0005 ledger row, data intact, enforcement back on.
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM bcsp_operational_migrations"), 4);
         assert_eq!(
-            count(&connection, "SELECT COUNT(*) FROM open_attempt_catalog_sections"),
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM bcsp_operational_migrations"
+            ),
+            4
+        );
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM open_attempt_catalog_sections"
+            ),
             3
         );
         let fk_on = connection
@@ -453,9 +481,18 @@ mod tests {
             )
             .expect("repair orphan");
         apply_migrations(&mut connection).expect("retry succeeds after repair");
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM bcsp_operational_migrations"), 6);
         assert_eq!(
-            count(&connection, "SELECT COUNT(*) FROM open_attempt_catalog_sections"),
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM bcsp_operational_migrations"
+            ),
+            7
+        );
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM open_attempt_catalog_sections"
+            ),
             2
         );
     }

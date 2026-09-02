@@ -222,8 +222,14 @@ impl Fixture {
         authority_generation: u64,
         mutation: u64,
     ) -> DesiredWatchOutcomeV1 {
-        self.submit_result(section, policy, based_on_revision, authority_generation, mutation)
-            .outcome
+        self.submit_result(
+            section,
+            policy,
+            based_on_revision,
+            authority_generation,
+            mutation,
+        )
+        .outcome
     }
 
     fn submit_result(
@@ -368,7 +374,10 @@ fn the_first_page_to_attach_materializes_the_stored_intent() {
     let fixture = Fixture::new();
     // Intent committed with nobody looking: nothing is running yet, because
     // an alert nobody can hear is a poll against Rutgers for nothing.
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     assert_eq!(fixture.watch.total_active_watch_count(), 0);
     assert!(!armed(&fixture.read(), &section(1)));
 
@@ -387,7 +396,10 @@ fn the_last_page_to_leave_tears_the_watch_down_and_keeps_the_intent() {
     let fixture = Fixture::new();
     let (first, _first_frames) = fixture.attach(100);
     let (second, _second_frames) = fixture.attach(101);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     assert_eq!(fixture.watch.total_active_watch_count(), 1);
 
     fixture.detach(first);
@@ -422,7 +434,10 @@ fn two_pages_share_one_physical_watch_and_both_receive_its_alerts() {
     let fixture = Fixture::new();
     let (_first, mut first_frames) = fixture.attach(100);
     let (_second, mut second_frames) = fixture.attach(101);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
 
     assert_eq!(
         fixture.watch.total_active_watch_count(),
@@ -436,7 +451,10 @@ fn two_pages_share_one_physical_watch_and_both_receive_its_alerts() {
     assert!(event_types(&drain(&mut first_frames)).contains(&"START_RESULT".to_owned()));
     assert!(event_types(&drain(&mut second_frames)).contains(&"START_RESULT".to_owned()));
 
-    fixture.watch.publish(open_observation(&section(1))).unwrap();
+    fixture
+        .watch
+        .publish(open_observation(&section(1)))
+        .unwrap();
     let first = event_types(&drain(&mut first_frames));
     let second = event_types(&drain(&mut second_frames));
     assert!(
@@ -460,7 +478,10 @@ fn a_committed_mutation_arms_and_disarms_before_it_answers() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
 
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     assert_eq!(fixture.watch.total_active_watch_count(), 1);
     let state = fixture.read();
     assert!(armed(&state, &section(1)));
@@ -489,19 +510,26 @@ fn a_committed_mutation_arms_and_disarms_before_it_answers() {
 fn a_policy_edit_adjusts_the_running_watch_and_a_stop_start_replaces_it() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let first = fixture.read();
     let first_id = entry(&first, &section(1))
         .unwrap()
         .materialized
         .as_ref()
         .unwrap()
-        .active_watch_id
-        .clone();
+        .active_watch_id;
     let first_epoch = entry(&first, &section(1)).unwrap().materialization_epoch;
 
     assert_eq!(
-        fixture.submit(&section(1), Some(loud_policy()), revision(&first, &section(1)), 2),
+        fixture.submit(
+            &section(1),
+            Some(loud_policy()),
+            revision(&first, &section(1)),
+            2
+        ),
         DesiredWatchOutcomeV1::Committed,
     );
     let edited = fixture.read();
@@ -535,7 +563,11 @@ fn a_policy_edit_adjusts_the_running_watch_and_a_stop_start_replaces_it() {
         "a desired-value change allocates a new epoch",
     );
     assert_ne!(
-        restarted_entry.materialized.as_ref().unwrap().active_watch_id,
+        restarted_entry
+            .materialized
+            .as_ref()
+            .unwrap()
+            .active_watch_id,
         first_id,
         "a cancelled watch is not adopted by the next start",
     );
@@ -567,9 +599,15 @@ fn a_section_the_catalog_will_not_publish_keeps_its_row_and_reports_why() {
     let state = fixture.read();
     let entry = entry(&state, &section(1)).expect("the row is kept");
     assert!(entry.policy.is_some(), "the intent is still recorded");
-    assert!(!armed(&state, &section(1)), "and it is not shown as watched");
+    assert!(
+        !armed(&state, &section(1)),
+        "and it is not shown as watched"
+    );
     let failure = entry.failure.expect("the reason must be reported");
-    assert_eq!(failure.classification, DesiredWatchFailureClassV1::Permanent);
+    assert_eq!(
+        failure.classification,
+        DesiredWatchFailureClassV1::Permanent
+    );
     assert_eq!(failure.reason, DesiredWatchFailureReasonV1::SectionNotFound);
     assert!(
         !failure.retry_scheduled,
@@ -598,11 +636,20 @@ fn a_transient_failure_backs_off_and_then_arms() {
         .admission
         .set("00001", WatchStartAdmission::TargetUnavailable);
 
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let state = fixture.read();
     let failure = entry(&state, &section(1)).unwrap().failure.unwrap();
-    assert_eq!(failure.classification, DesiredWatchFailureClassV1::Transient);
-    assert_eq!(failure.reason, DesiredWatchFailureReasonV1::TargetUnavailable);
+    assert_eq!(
+        failure.classification,
+        DesiredWatchFailureClassV1::Transient
+    );
+    assert_eq!(
+        failure.reason,
+        DesiredWatchFailureReasonV1::TargetUnavailable
+    );
     assert!(failure.retry_scheduled);
     assert!(!armed(&state, &section(1)));
     let intent_revision = revision(&state, &section(1));
@@ -638,7 +685,10 @@ fn a_retry_from_an_older_authority_stamp_neither_applies_nor_delays() {
     fixture
         .admission
         .set("00001", WatchStartAdmission::TargetUnavailable);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     assert!(
         entry(&fixture.read(), &section(1))
             .unwrap()
@@ -662,7 +712,12 @@ fn a_retry_from_an_older_authority_stamp_neither_applies_nor_delays() {
     // no longer relevant.
     let state = fixture.read();
     assert_eq!(
-        fixture.submit(&section(1), Some(loud_policy()), revision(&state, &section(1)), 2),
+        fixture.submit(
+            &section(1),
+            Some(loud_policy()),
+            revision(&state, &section(1)),
+            2
+        ),
         DesiredWatchOutcomeV1::Committed,
     );
     let state = fixture.read();
@@ -680,7 +735,10 @@ fn a_retry_from_an_older_authority_stamp_neither_applies_nor_delays() {
     fixture
         .admission
         .set("00002", WatchStartAdmission::TargetUnavailable);
-    assert_eq!(fixture.start(&section(2), 0, 3), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(2), 0, 3),
+        DesiredWatchOutcomeV1::Committed
+    );
     let state = fixture.read();
     assert_eq!(
         fixture.stop(&section(2), revision(&state, &section(2)), 4),
@@ -710,7 +768,10 @@ fn a_section_waiting_for_a_physical_slot_is_reported_as_blocked_not_failed() {
             DesiredWatchOutcomeV1::Committed,
         );
     }
-    assert_eq!(fixture.watch.total_active_watch_count(), MAX_DESIRED_WATCHES);
+    assert_eq!(
+        fixture.watch.total_active_watch_count(),
+        MAX_DESIRED_WATCHES
+    );
 
     // The authority refuses a tenth section, so the physical cap is never
     // even reached through the ordinary path.
@@ -738,13 +799,18 @@ fn a_section_waiting_for_a_physical_slot_is_reported_as_blocked_not_failed() {
 fn the_local_socket_refuses_legacy_mutations_and_routes_episode_control() {
     let fixture = Fixture::new();
     let (page, mut frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let _ = drain(&mut frames);
 
-    let items = bcsp_contracts::WatchStartItemsV1::try_from(vec![
-        bcsp_contracts::WatchStartItemV1::new(section(2), policy()),
-    ])
-    .unwrap();
+    let items =
+        bcsp_contracts::WatchStartItemsV1::try_from(vec![bcsp_contracts::WatchStartItemV1::new(
+            section(2),
+            policy(),
+        )])
+        .unwrap();
     fixture.route.receive_text(
         page,
         &frame(900, WatchClientCommandV1::StartWatch { items }),
@@ -765,15 +831,14 @@ fn the_local_socket_refuses_legacy_mutations_and_routes_episode_control() {
         .materialized
         .as_ref()
         .unwrap()
-        .active_watch_id
-        .clone();
+        .active_watch_id;
     fixture.route.receive_text(
         page,
         &frame(
             901,
             WatchClientCommandV1::StopWatch {
                 watch: bcsp_contracts::ActiveWatchTargetV1 {
-                    active_watch_id: armed_id.clone(),
+                    active_watch_id: armed_id,
                     section_key: section(1),
                 },
             },
@@ -787,7 +852,10 @@ fn the_local_socket_refuses_legacy_mutations_and_routes_episode_control() {
     assert!(armed(&fixture.read(), &section(1)));
 
     // Episode control still reaches the watch it names.
-    fixture.watch.publish(open_observation(&section(1))).unwrap();
+    fixture
+        .watch
+        .publish(open_observation(&section(1)))
+        .unwrap();
     let alerts = drain(&mut frames);
     let alert = alerts
         .iter()
@@ -829,15 +897,17 @@ fn the_local_socket_refuses_legacy_mutations_and_routes_episode_control() {
 fn rotation_renumbers_the_authority_without_restarting_a_healthy_watch() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let before = fixture.read();
     let watch_id = entry(&before, &section(1))
         .unwrap()
         .materialized
         .as_ref()
         .unwrap()
-        .active_watch_id
-        .clone();
+        .active_watch_id;
 
     seed_tombstones(&fixture.path, MAX_DESIRED_WATCH_TOMBSTONES);
     assert!(
@@ -895,7 +965,12 @@ fn the_largest_authority_read_fits_the_local_budget() {
     let (_page, _frames) = fixture.attach(100);
     for index in 1..=MAX_DESIRED_WATCHES as u16 {
         assert_eq!(
-            fixture.submit(&section(9_000 + index), Some(loud_policy()), 0, u64::from(index)),
+            fixture.submit(
+                &section(9_000 + index),
+                Some(loud_policy()),
+                0,
+                u64::from(index)
+            ),
             DesiredWatchOutcomeV1::Committed,
         );
     }
@@ -966,7 +1041,10 @@ fn the_production_retry_schedule_is_bounded_at_thirty_seconds() {
 fn a_section_that_leaves_the_catalog_after_arming_is_taken_down_and_reported() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     assert!(armed(&fixture.read(), &section(1)));
     let armed_revision = revision(&fixture.read(), &section(1));
 
@@ -982,11 +1060,17 @@ fn a_section_that_leaves_the_catalog_after_arming_is_taken_down_and_reported() {
         fixture.watch.owner_watched_sections().is_empty(),
         "the physical watch must be taken down, not left polling",
     );
-    assert!(entry.materialized.is_none(), "and never reported as running");
+    assert!(
+        entry.materialized.is_none(),
+        "and never reported as running"
+    );
     assert!(!armed(&state, &section(1)));
     assert!(entry.policy.is_some(), "the user's intent is not withdrawn");
     let failure = entry.failure.expect("the reason must be reported");
-    assert_eq!(failure.classification, DesiredWatchFailureClassV1::Permanent);
+    assert_eq!(
+        failure.classification,
+        DesiredWatchFailureClassV1::Permanent
+    );
     assert_eq!(failure.reason, DesiredWatchFailureReasonV1::SectionNotFound);
     assert!(!failure.retry_scheduled);
     assert_eq!(
@@ -1026,7 +1110,10 @@ fn a_target_that_stops_being_watchable_after_arming_is_taken_down_and_reported()
     ] {
         let fixture = Fixture::new();
         let (_page, _frames) = fixture.attach(100);
-        assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+        assert_eq!(
+            fixture.start(&section(1), 0, 1),
+            DesiredWatchOutcomeV1::Committed
+        );
         assert!(armed(&fixture.read(), &section(1)), "{label}");
 
         toggle(&fixture);
@@ -1044,7 +1131,11 @@ fn a_target_that_stops_being_watchable_after_arming_is_taken_down_and_reported()
         assert!(entry.materialized.is_none(), "{label}");
         assert!(entry.policy.is_some(), "{label}");
         let failure = entry.failure.expect("a reason is reported");
-        assert_eq!(failure.classification, DesiredWatchFailureClassV1::Permanent, "{label}");
+        assert_eq!(
+            failure.classification,
+            DesiredWatchFailureClassV1::Permanent,
+            "{label}"
+        );
         assert_eq!(failure.reason, reason, "{label}");
         assert!(!failure.retry_scheduled, "{label}");
     }
@@ -1071,7 +1162,10 @@ fn fixture_campus(fixture: &Fixture) {
 fn a_watch_that_ended_underneath_the_coordinator_is_never_reported_as_running() {
     let fixture = Fixture::with_settings(vec![Duration::ZERO], DESIRED_WATCH_REVALIDATE_INTERVAL);
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let first = fixture.armed_id(&section(1));
 
     // The watch ends without the coordinator being told.
@@ -1100,7 +1194,9 @@ fn a_watch_that_ended_underneath_the_coordinator_is_never_reported_as_running() 
         .expect("owner start")
         .first()
         .and_then(|result| match result {
-            WatchStartItemResultV1::Active { active_watch_id, .. } => Some(*active_watch_id),
+            WatchStartItemResultV1::Active {
+                active_watch_id, ..
+            } => Some(*active_watch_id),
             WatchStartItemResultV1::Rejected { .. } => None,
         })
         .expect("a fresh physical watch");
@@ -1147,7 +1243,10 @@ fn a_watch_that_ended_underneath_the_coordinator_is_never_reported_as_running() 
 fn a_transient_revocation_clears_the_green_light_and_recovers_by_itself() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let before = fixture.read();
     let intent_revision = revision(&before, &section(1));
     let intent_epoch = entry(&before, &section(1)).unwrap().materialization_epoch;
@@ -1160,7 +1259,10 @@ fn a_transient_revocation_clears_the_green_light_and_recovers_by_itself() {
     assert!(fixture.watch.owner_watched_sections().is_empty());
     assert!(!armed(&state, &section(1)));
     let failure = entry(&state, &section(1)).unwrap().failure.unwrap();
-    assert_eq!(failure.classification, DesiredWatchFailureClassV1::Transient);
+    assert_eq!(
+        failure.classification,
+        DesiredWatchFailureClassV1::Transient
+    );
     assert!(failure.retry_scheduled);
 
     fixture
@@ -1168,7 +1270,10 @@ fn a_transient_revocation_clears_the_green_light_and_recovers_by_itself() {
         .set("00001", WatchStartAdmission::admitted(None));
     fixture.coordinator.tick();
     let state = fixture.read();
-    assert!(armed(&state, &section(1)), "the intent comes back on its own");
+    assert!(
+        armed(&state, &section(1)),
+        "the intent comes back on its own"
+    );
     assert_eq!(revision(&state, &section(1)), intent_revision);
     assert_eq!(
         entry(&state, &section(1)).unwrap().materialization_epoch,
@@ -1183,7 +1288,10 @@ fn a_transient_revocation_clears_the_green_light_and_recovers_by_itself() {
 fn repeated_maintenance_never_restarts_a_healthy_watch() {
     let fixture = Fixture::new();
     let (_page, mut frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let first = fixture.armed_id(&section(1));
     let announcements = event_types(&drain(&mut frames))
         .into_iter()
@@ -1222,7 +1330,10 @@ fn repeated_maintenance_never_restarts_a_healthy_watch() {
 fn terminal_refusal_receipts_alone_rotate_the_authority_exactly_once() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let generation = fixture.read().authority_generation;
     seed_receipts(
         &fixture.path,
@@ -1256,7 +1367,10 @@ fn terminal_refusal_receipts_alone_rotate_the_authority_exactly_once() {
         generation + 1,
         "and asking again does not raise the generation for nothing",
     );
-    assert!(armed(&fixture.read(), &section(1)), "and nothing was restarted");
+    assert!(
+        armed(&fixture.read(), &section(1)),
+        "and nothing was restarted"
+    );
 }
 
 /// A database that comes back at the hard cap has to be recoverable by the
@@ -1270,7 +1384,10 @@ fn terminal_refusal_receipts_alone_rotate_the_authority_exactly_once() {
 fn a_restart_at_the_receipt_hard_cap_recovers_on_maintenance_alone() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let generation = fixture.read().authority_generation;
     seed_receipts(
         &fixture.path,
@@ -1305,7 +1422,10 @@ fn a_restart_at_the_receipt_hard_cap_recovers_on_maintenance_alone() {
 fn a_full_ledger_refuses_the_stop_and_the_next_attempt_commits() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let generation = fixture.read().authority_generation;
     seed_receipts(
         &fixture.path,
@@ -1367,8 +1487,14 @@ fn a_response_that_triggered_a_rotation_reports_one_authority_state() {
     let (_page, _frames) = fixture.attach(100);
     // Committed out of section order, so the pre-rotation revision and the
     // post-rotation renumbering genuinely differ.
-    assert_eq!(fixture.start(&section(3), 0, 1), DesiredWatchOutcomeV1::Committed);
-    assert_eq!(fixture.start(&section(1), 0, 2), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(3), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
+    assert_eq!(
+        fixture.start(&section(1), 0, 2),
+        DesiredWatchOutcomeV1::Committed
+    );
     let generation = fixture.read().authority_generation;
     seed_receipts(
         &fixture.path,
@@ -1391,7 +1517,8 @@ fn a_response_that_triggered_a_rotation_reports_one_authority_state() {
     assert_eq!(result.outcome, DesiredWatchOutcomeV1::Committed);
     let state = result.state.as_ref().expect("a commit returns its state");
     assert_eq!(
-        state.authority_generation, generation + 1,
+        state.authority_generation,
+        generation + 1,
         "the crossing did rotate",
     );
     assert_eq!(
@@ -1409,7 +1536,10 @@ fn a_response_that_triggered_a_rotation_reports_one_authority_state() {
         entry.revision, 2,
         "and the row really was renumbered by the rotation",
     );
-    assert!(committed.epoch_changed, "a new desired value is a new epoch");
+    assert!(
+        committed.epoch_changed,
+        "a new desired value is a new epoch"
+    );
 }
 
 /// A refusal that is replayed is still a refusal, with the status its
@@ -1420,7 +1550,10 @@ fn a_response_that_triggered_a_rotation_reports_one_authority_state() {
 fn a_replayed_terminal_refusal_is_still_the_refusal_it_was() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let generation = fixture.read().authority_generation;
     let stale = DesiredWatchMutationV1 {
         contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
@@ -1464,7 +1597,10 @@ fn the_reset_barrier_stops_every_physical_watch_including_one_it_never_armed() {
 
     // A page submits while the barrier is up. The authority accepts it --
     // the writer is not part of the barrier -- but nothing may arm.
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     assert_eq!(
         fixture.watch.total_active_watch_count(),
         0,
@@ -1492,7 +1628,12 @@ fn the_reset_barrier_stops_every_physical_watch_including_one_it_never_armed() {
     );
     assert_eq!(fixture.watch.total_active_watch_count(), 0);
     let state = fixture.read();
-    assert!(state.entries.iter().all(|entry| entry.materialized.is_none()));
+    assert!(
+        state
+            .entries
+            .iter()
+            .all(|entry| entry.materialized.is_none())
+    );
 
     // And materialization works again afterwards: the barrier is a moment,
     // not a mode.
@@ -1512,7 +1653,10 @@ fn the_reset_barrier_stops_every_physical_watch_including_one_it_never_armed() {
 fn a_failed_teardown_keeps_the_watch_addressable_and_a_later_tick_finishes_it() {
     let fixture = Fixture::with_settings(vec![Duration::ZERO], DESIRED_WATCH_REVALIDATE_INTERVAL);
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let armed_revision = revision(&fixture.read(), &section(1));
 
     fixture.faults.fail_stops(true);
@@ -1559,7 +1703,10 @@ fn a_failed_teardown_keeps_the_watch_addressable_and_a_later_tick_finishes_it() 
 fn a_failed_policy_edit_keeps_the_running_watch_addressable() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let armed_id = fixture.armed_id(&section(1));
     let armed_revision = revision(&fixture.read(), &section(1));
 
@@ -1570,7 +1717,11 @@ fn a_failed_policy_edit_keeps_the_running_watch_addressable() {
     );
     let state = fixture.read();
     let edited = entry(&state, &section(1)).expect("the row survives");
-    assert_eq!(edited.policy.as_ref(), Some(&loud_policy()), "the intent moved");
+    assert_eq!(
+        edited.policy.as_ref(),
+        Some(&loud_policy()),
+        "the intent moved"
+    );
     assert!(
         !armed(&state, &section(1)),
         "but the watch is not running the way the user asked",
@@ -1603,7 +1754,7 @@ fn a_failed_policy_edit_keeps_the_running_watch_addressable() {
     );
 }
 
-//// Every teardown the coordinator attempted against one Section, in order.
+/// Every teardown the coordinator attempted against one Section, in order.
 fn stops_for(fixture: &Fixture, section: &SectionKey) -> Vec<ActiveWatchId> {
     fixture
         .faults
@@ -1643,8 +1794,14 @@ fn a_revoked_watch_whose_teardown_fails_stays_addressable_and_is_stopped_by_id()
     ] {
         let fixture = Fixture::new();
         let (_page, _frames) = fixture.attach(100);
-        assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
-        assert_eq!(fixture.start(&section(2), 0, 2), DesiredWatchOutcomeV1::Committed);
+        assert_eq!(
+            fixture.start(&section(1), 0, 1),
+            DesiredWatchOutcomeV1::Committed
+        );
+        assert_eq!(
+            fixture.start(&section(2), 0, 2),
+            DesiredWatchOutcomeV1::Committed
+        );
         let revoked_id = fixture.armed_id(&section(1));
         let untouched_id = fixture.armed_id(&section(2));
 
@@ -1662,7 +1819,10 @@ fn a_revoked_watch_whose_teardown_fails_stays_addressable_and_is_stopped_by_id()
             row.pending_disarm,
             "{label}: and never reported as stopped either, because it is not",
         );
-        assert!(row.policy.is_some(), "{label}: the user's intent is not withdrawn");
+        assert!(
+            row.policy.is_some(),
+            "{label}: the user's intent is not withdrawn"
+        );
         let failure = row.failure.expect("the reason must be reported");
         assert_eq!(failure.classification, classification, "{label}");
         assert_eq!(failure.reason, reason, "{label}");
@@ -1704,7 +1864,10 @@ fn a_revoked_watch_whose_teardown_fails_stays_addressable_and_is_stopped_by_id()
         let row = entry(&state, &section(1)).expect("the row survives");
         assert!(!row.pending_disarm, "{label}: and now it really is stopped");
         assert!(row.materialized.is_none(), "{label}");
-        assert!(row.policy.is_some(), "{label}: the intent is still the user's");
+        assert!(
+            row.policy.is_some(),
+            "{label}: the intent is still the user's"
+        );
         assert!(
             stops_for(&fixture, &section(1))
                 .iter()
@@ -1730,7 +1893,10 @@ fn a_revoked_watch_whose_teardown_fails_stays_addressable_and_is_stopped_by_id()
 fn a_stop_pressed_while_a_teardown_is_stuck_still_stops_the_original_watch() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let original = fixture.armed_id(&section(1));
 
     fixture.faults.fail_stops(true);
@@ -1792,7 +1958,10 @@ fn a_stop_pressed_while_a_teardown_is_stuck_still_stops_the_original_watch() {
 fn a_full_reset_that_cannot_finish_its_teardown_is_not_a_reset() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let armed_id = fixture.armed_id(&section(1));
     fixture.coordinator.begin_authority_reset().unwrap();
 
@@ -1838,7 +2007,10 @@ fn a_full_reset_that_cannot_finish_its_teardown_is_not_a_reset() {
 
     // The barrier is still up, so nothing may arm behind it -- including a
     // row a page submitted while it was held.
-    assert_eq!(fixture.start(&section(2), 0, 2), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(2), 0, 2),
+        DesiredWatchOutcomeV1::Committed
+    );
     fixture.coordinator.reconcile().unwrap();
     fixture.coordinator.tick();
     let mut still_running = fixture.watch.owner_watched_sections();
@@ -1860,7 +2032,12 @@ fn a_full_reset_that_cannot_finish_its_teardown_is_not_a_reset() {
     );
     assert_eq!(fixture.watch.total_active_watch_count(), 0);
     let state = fixture.read();
-    assert!(state.entries.iter().all(|entry| entry.materialized.is_none()));
+    assert!(
+        state
+            .entries
+            .iter()
+            .all(|entry| entry.materialized.is_none())
+    );
     assert!(state.entries.iter().all(|entry| !entry.pending_disarm));
 
     // And the socket is a socket again: a barrier is a moment, not a mode.
@@ -1881,8 +2058,14 @@ fn a_terminal_refusal_that_crosses_the_threshold_answers_from_one_authority() {
     let (_page, _frames) = fixture.attach(100);
     // Committed out of Section order, so the pre-rotation revision and the
     // post-rotation renumbering genuinely differ.
-    assert_eq!(fixture.start(&section(3), 0, 1), DesiredWatchOutcomeV1::Committed);
-    assert_eq!(fixture.start(&section(1), 0, 2), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(3), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
+    assert_eq!(
+        fixture.start(&section(1), 0, 2),
+        DesiredWatchOutcomeV1::Committed
+    );
     let generation = fixture.read().authority_generation;
     let before = revision(&fixture.read(), &section(1));
     seed_receipts(
@@ -1972,7 +2155,10 @@ fn seed_receipts_to_one_before_rotation(fixture: &Fixture) {
 fn a_healthy_stop_that_rotates_its_own_tombstone_answers_the_frozen_absent_shape() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let before = fixture.read();
     seed_receipts_to_one_before_rotation(&fixture);
 
@@ -2025,7 +2211,10 @@ fn a_healthy_stop_that_rotates_its_own_tombstone_answers_the_frozen_absent_shape
             "epochChanged": true,
         }),
     );
-    assert_eq!(body["authorityGeneration"], body["state"]["authorityGeneration"]);
+    assert_eq!(
+        body["authorityGeneration"],
+        body["state"]["authorityGeneration"]
+    );
     assert_eq!(
         body["state"]["entries"],
         serde_json::json!([]),
@@ -2046,7 +2235,10 @@ fn a_healthy_stop_that_rotates_its_own_tombstone_answers_the_frozen_absent_shape
 fn a_stop_whose_teardown_is_stuck_survives_the_rotation_it_triggered() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let original = fixture.armed_id(&section(1));
     let before = fixture.read();
     fixture.faults.fail_stops(true);
@@ -2081,8 +2273,7 @@ fn a_stop_whose_teardown_is_stuck_survives_the_rotation_it_triggered() {
          answer describes it",
     );
     assert_ne!(
-        committed.revision,
-        DESIRED_WATCH_ABSENT_COMMITTED_NUMBER,
+        committed.revision, DESIRED_WATCH_ABSENT_COMMITTED_NUMBER,
         "a row that is still there is not absent",
     );
     assert_eq!(
@@ -2110,7 +2301,11 @@ fn a_stop_whose_teardown_is_stuck_survives_the_rotation_it_triggered() {
         "the teardown must only ever have named the watch it was meant to",
     );
     let settled = fixture.read();
-    assert!(!entry(&settled, &section(1)).expect("still history").pending_disarm);
+    assert!(
+        !entry(&settled, &section(1))
+            .expect("still history")
+            .pending_disarm
+    );
 
     // And a later rotation is free to collect it, because nothing needs it now.
     let generation = settled.authority_generation;
@@ -2142,7 +2337,10 @@ fn a_stop_whose_teardown_is_stuck_survives_the_rotation_it_triggered() {
 fn an_old_permanent_failure_does_not_survive_the_intent_that_earned_it() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
     let original = fixture.armed_id(&section(1));
 
     // The catalog stops publishing it AND the teardown will not run, so the
@@ -2157,7 +2355,10 @@ fn an_old_permanent_failure_does_not_survive_the_intent_that_earned_it() {
         .expect("the row survives")
         .failure
         .expect("and it says why");
-    assert_eq!(failure.classification, DesiredWatchFailureClassV1::Permanent);
+    assert_eq!(
+        failure.classification,
+        DesiredWatchFailureClassV1::Permanent
+    );
     assert_eq!(failure.reason, DesiredWatchFailureReasonV1::SectionNotFound);
     assert!(entry(&revoked, &section(1)).unwrap().pending_disarm);
 
@@ -2227,7 +2428,10 @@ fn an_old_permanent_failure_does_not_survive_the_intent_that_earned_it() {
 fn a_policy_edit_across_a_stuck_teardown_is_not_refused_by_the_old_failure() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
-    assert_eq!(fixture.start(&section(1), 0, 1), DesiredWatchOutcomeV1::Committed);
+    assert_eq!(
+        fixture.start(&section(1), 0, 1),
+        DesiredWatchOutcomeV1::Committed
+    );
 
     fixture.faults.fail_stops(true);
     fixture
@@ -2236,7 +2440,11 @@ fn a_policy_edit_across_a_stuck_teardown_is_not_refused_by_the_old_failure() {
     fixture.coordinator.tick();
     let revoked = fixture.read();
     assert_eq!(
-        entry(&revoked, &section(1)).unwrap().failure.unwrap().classification,
+        entry(&revoked, &section(1))
+            .unwrap()
+            .failure
+            .unwrap()
+            .classification,
         DesiredWatchFailureClassV1::Permanent,
     );
     let epoch = entry(&revoked, &section(1)).unwrap().materialization_epoch;
@@ -2270,12 +2478,16 @@ fn a_policy_edit_across_a_stuck_teardown_is_not_refused_by_the_old_failure() {
     let after = fixture.read();
     assert!(armed(&after, &section(1)));
     assert_eq!(
-        entry(&after, &section(1)).unwrap().materialized.as_ref().unwrap().policy,
+        entry(&after, &section(1))
+            .unwrap()
+            .materialized
+            .as_ref()
+            .unwrap()
+            .policy,
         loud_policy(),
         "and what is running is the policy the user last asked for",
     );
 }
-
 
 // Bulk-seeds receipts, because reaching the ledger budget through the writer
 /// would make the setup the slowest part of the test. The rows are exactly

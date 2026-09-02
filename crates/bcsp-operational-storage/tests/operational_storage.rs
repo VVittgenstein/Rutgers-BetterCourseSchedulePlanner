@@ -2,15 +2,15 @@ use std::path::Path;
 
 use bcsp_contracts::{CourseGroupKey, CourseVariantKey, SectionKey, TermCampusKey, TraceId};
 use bcsp_operational_storage::{
-    BeginDiscoveryAttemptCommand, BeginRefreshAttemptCommand, CatalogRefreshCommand,
-    CatalogSnapshot, CourseTextSearchTokens, DiscoveredCampus, DiscoveredSubject, DiscoveredTerm,
-    DiscoveryAvailability, DiscoveryPublishOutcome, DiscoveryRefreshCommand, DiscoverySnapshot,
-    DiscoverySourceKind, DiscoverySourceVersion, EmptySnapshotDecision,
-    FinishDiscoveryFailureCommand, FinishRefreshFailureCommand, InitialEmptyProof,
-    OperationalStorage, ProvenanceEntityKind, PublishOutcome, RawStagingPayload,
-    RefreshFailureStage, RefreshStatus, StorageError, StoredCourseGroup, StoredCourseVariant,
-    StoredOccurrence, StoredProvenance, StoredSection, catalog_content_sha256_v1,
-    discovery_content_sha256_v1,
+    BeginDiscoveryAttemptCommand, BeginRefreshAttemptCommand, CatalogDeliveryRewrite,
+    CatalogRefreshCommand, CatalogSnapshot, CatalogTargetVersion, CourseTextSearchTokens,
+    DiscoveredCampus, DiscoveredSubject, DiscoveredTerm, DiscoveryAvailability,
+    DiscoveryPublishOutcome, DiscoveryRefreshCommand, DiscoverySnapshot, DiscoverySourceKind,
+    DiscoverySourceVersion, EmptySnapshotDecision, FinishDiscoveryFailureCommand,
+    FinishRefreshFailureCommand, InitialEmptyProof, OccurrenceDeliveryRewrite, OperationalStorage,
+    ProvenanceEntityKind, PublishOutcome, RawStagingPayload, RefreshFailureStage, RefreshStatus,
+    SectionDeliveryRewrite, StorageError, StoredCourseGroup, StoredCourseVariant, StoredOccurrence,
+    StoredProvenance, StoredSection, catalog_content_sha256_v1, discovery_content_sha256_v1,
 };
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -240,7 +240,7 @@ fn fresh_schema_has_no_catalog_seed_and_migration_checksum_is_strict() {
     let temp = TempDir::new().expect("temp dir");
     let path = db_path(&temp);
     let storage = OperationalStorage::open(&path).expect("initialize schema");
-    assert_eq!(storage.migration_records().expect("migrations").len(), 6);
+    assert_eq!(storage.migration_records().expect("migrations").len(), 7);
     assert!(storage.discovered_targets().expect("targets").is_empty());
     let discovery = storage.discovery_state().expect("discovery state");
     assert_eq!((discovery.term_count, discovery.campus_count), (0, 0));
@@ -309,7 +309,7 @@ fn catalog_variant_fk_child_indexes_cover_fresh_and_v2_upgraded_databases() {
 
     let storage = OperationalStorage::open(&upgraded_path).expect("upgrade v2 database");
     let migrations = storage.migration_records().expect("upgraded migrations");
-    assert_eq!(migrations.len(), 6);
+    assert_eq!(migrations.len(), 7);
     assert_eq!(migrations[2].name, "catalog_variant_fk_indexes");
     drop(storage);
     assert_catalog_variant_fk_indexes(&upgraded_path);
@@ -400,7 +400,7 @@ fn v3_upgrade_closes_legacy_fatal_origin_without_deleting_online_history() {
     drop(connection);
 
     let storage = OperationalStorage::open(&path).expect("upgrade v3 database");
-    assert_eq!(storage.migration_records().expect("migrations").len(), 6);
+    assert_eq!(storage.migration_records().expect("migrations").len(), 7);
     let origin = storage
         .open_origin_state("rutgers")
         .expect("origin state")
@@ -466,7 +466,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
         .execute(
             "INSERT INTO bcsp_operational_migrations
                 (migration_id, name, sha256, applied_at)
-             VALUES (7, 'future', ?1, ?2)",
+             VALUES (8, 'future', ?1, ?2)",
             [HASH_A, COMPLETED],
         )
         .expect("future migration");
@@ -474,7 +474,7 @@ fn migration_prefix_name_future_and_transaction_rollback_are_fail_closed() {
     assert!(matches!(
         OperationalStorage::open(&future_path),
         Err(StorageError::UnknownMigration {
-            migration_id: 7,
+            migration_id: 8,
             ..
         })
     ));
@@ -545,6 +545,7 @@ fn catalog_content_v1_golden_and_forgery_guard_are_stable() {
         storage.apply_catalog_refresh(
             forged,
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         ),
         Err(StorageError::InvalidCommand {
             field: "semantic_content_sha256",
@@ -572,6 +573,7 @@ fn publication_preserves_presence_and_handles_unchanged_suspect_and_valid_empty(
                 b"synthetic-upstream-one",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("first publish");
     assert!(matches!(
@@ -631,6 +633,7 @@ fn publication_preserves_presence_and_handles_unchanged_suspect_and_valid_empty(
                 b"different-raw-body-same-normalized-content",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("unchanged publish");
     assert!(matches!(
@@ -650,6 +653,7 @@ fn publication_preserves_presence_and_handles_unchanged_suspect_and_valid_empty(
                 b"synthetic-empty-array",
             ),
             EmptySnapshotDecision::RetainLastKnownGood,
+            1,
         )
         .expect("suspect empty");
     assert!(matches!(
@@ -685,6 +689,7 @@ fn publication_preserves_presence_and_handles_unchanged_suspect_and_valid_empty(
                 b"independent-synthetic-empty-array",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("confirmed empty");
     assert!(matches!(
@@ -763,6 +768,7 @@ fn publication_preserves_presence_and_handles_unchanged_suspect_and_valid_empty(
             EmptySnapshotDecision::AcceptInitialSelectorConfirmedEmpty(
                 InitialEmptyProof::CurrentSelectorMembership,
             ),
+            1,
         ),
         Err(StorageError::InvalidCommand {
             field: "empty_decision",
@@ -796,6 +802,7 @@ fn publication_preserves_presence_and_handles_unchanged_suspect_and_valid_empty(
             EmptySnapshotDecision::AcceptInitialSelectorConfirmedEmpty(
                 InitialEmptyProof::CurrentSelectorMembership,
             ),
+            1,
         )
         .expect("first valid empty");
     assert!(matches!(
@@ -820,6 +827,7 @@ fn publication_preserves_presence_and_handles_unchanged_suspect_and_valid_empty(
                     b"same-normalized-empty",
                 ),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                1,
             )
             .expect("existing unchanged empty"),
         PublishOutcome::AppliedUnchanged {
@@ -839,6 +847,7 @@ fn publication_preserves_presence_and_handles_unchanged_suspect_and_valid_empty(
                     b"unproved-first-empty",
                 ),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                1,
             )
             .is_err()
     );
@@ -864,6 +873,7 @@ fn replacement_is_target_scoped_and_fts_version_matches_serving_version() {
                 b"alpha-1",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("target A");
     storage
@@ -875,6 +885,7 @@ fn replacement_is_target_scoped_and_fts_version_matches_serving_version() {
                 b"beta-1",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("target B");
     storage
@@ -886,6 +897,7 @@ fn replacement_is_target_scoped_and_fts_version_matches_serving_version() {
                 b"alpha-2",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("replace target A");
 
@@ -957,6 +969,7 @@ fn variants_in_one_group_retain_independent_course_facts() {
         .apply_catalog_refresh(
             refresh_command("variants.1", &scope, normalized, b"two-synthetic-variants"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish two variants");
     let variants = storage.course_variants(&scope).expect("variants");
@@ -1070,6 +1083,7 @@ fn fts_search_uses_literal_token_and_and_returns_stable_variant_rank() {
                 b"fts-literal-synthetic",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish FTS fixture");
 
@@ -1180,6 +1194,7 @@ fn fts_search_is_strictly_bound_to_target_and_published_content_version() {
                 b"fts-target-a-1",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish A v1");
     storage
@@ -1191,6 +1206,7 @@ fn fts_search_is_strictly_bound_to_target_and_published_content_version() {
                 b"fts-target-b-1",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish B v1");
     let a_v1 = storage
@@ -1215,6 +1231,7 @@ fn fts_search_is_strictly_bound_to_target_and_published_content_version() {
                 b"fts-target-a-2",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("replace A");
     assert!(matches!(
@@ -1276,6 +1293,7 @@ fn interrupted_staging_is_recovered_without_mutating_last_known_good() {
                 b"stable-body",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("stable publish");
     storage
@@ -1350,6 +1368,7 @@ fn pending_empty_and_safe_freshness_points_survive_restart() {
                 b"synthetic-nonempty",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish LKG");
     storage
@@ -1361,6 +1380,7 @@ fn pending_empty_and_safe_freshness_points_survive_restart() {
                 b"synthetic-suspect-empty",
             ),
             EmptySnapshotDecision::RetainLastKnownGood,
+            1,
         )
         .expect("retain LKG");
     drop(storage);
@@ -1402,6 +1422,7 @@ fn publish_fault_rolls_back_replacement_and_records_only_safe_failure_metadata()
                 b"stable-body",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("stable publish");
     storage
@@ -1427,6 +1448,7 @@ fn publish_fault_rolls_back_replacement_and_records_only_safe_failure_metadata()
             .publish_staged_refresh(
                 &trace("rollback.2"),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                1,
             )
             .is_err()
     );
@@ -1561,6 +1583,7 @@ fn catalog_attempt_sequence_is_idempotent_durable_monotonic_and_target_scoped() 
                 b"sequence-success",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("second successful attempt");
     assert_eq!(
@@ -2064,6 +2087,7 @@ fn catalog_storage_rejects_forged_delivery_and_occurrence_wire_values() {
         match storage.apply_catalog_refresh(
             refresh_command(observation_id, &scope, invalid, body.as_bytes()),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         ) {
             Err(StorageError::InvalidCommand { field, .. }) => {
                 assert_eq!(field, expected_field, "{observation_id}")
@@ -2081,6 +2105,7 @@ fn catalog_storage_rejects_forged_delivery_and_occurrence_wire_values() {
         .apply_catalog_refresh(
             refresh_command("wire.valid", &scope, known, b"valid-known-time"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("valid exact wire values and known range");
 
@@ -2094,6 +2119,7 @@ fn catalog_storage_rejects_forged_delivery_and_occurrence_wire_values() {
             .apply_catalog_refresh(
                 refresh_command(&observation_id, &scope, exact, observation_id.as_bytes()),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                1,
             )
             .unwrap_or_else(|error| panic!("{wire_value} must be accepted: {error:?}"));
 
@@ -2122,6 +2148,7 @@ fn catalog_storage_rejects_forged_delivery_and_occurrence_wire_values() {
             .apply_catalog_refresh(
                 refresh_command(&observation_id, &scope, exact, observation_id.as_bytes()),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                1,
             )
             .unwrap_or_else(|error| panic!("{wire_value} must be accepted: {error:?}"));
 
@@ -2142,6 +2169,7 @@ fn catalog_storage_rejects_forged_delivery_and_occurrence_wire_values() {
             .apply_catalog_refresh(
                 refresh_command(&observation_id, &scope, exact, observation_id.as_bytes()),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                1,
             )
             .unwrap_or_else(|error| panic!("{wire_value} must be accepted: {error:?}"));
 
@@ -2328,6 +2356,7 @@ fn published_catalog_snapshots_round_trip_after_restart_and_remain_target_scoped
                 b"reader-a",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish target A");
     storage
@@ -2339,6 +2368,7 @@ fn published_catalog_snapshots_round_trip_after_restart_and_remain_target_scoped
                 b"reader-b",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish target B");
     drop(storage);
@@ -2411,6 +2441,7 @@ fn published_initial_empty_catalog_survives_restart_without_seed_rows() {
             EmptySnapshotDecision::AcceptInitialSelectorConfirmedEmpty(
                 InitialEmptyProof::CurrentSelectorMembership,
             ),
+            1,
         )
         .expect("publish initial empty");
     drop(storage);
@@ -2533,6 +2564,7 @@ fn published_readers_fail_closed_on_corrupt_trace_source_and_provenance() {
                 b"trace",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish trace fixture");
     drop(storage);
@@ -2594,6 +2626,7 @@ fn published_readers_fail_closed_on_corrupt_trace_source_and_provenance() {
                 b"provenance",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish provenance fixture");
     drop(storage);
@@ -2630,6 +2663,7 @@ fn catalog_reader_rejects_corrupt_timestamp_version_and_enum() {
                 b"corrupt-rows",
             ),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
         )
         .expect("publish fixture");
     drop(storage);
@@ -2724,4 +2758,561 @@ fn no_database_artifact_is_part_of_the_test_source_tree() {
             Some("sqlite" | "sqlite3" | "db")
         )
     }));
+}
+
+/// The fixture snapshot plus the one `OCCURRENCE`/`canonicalFacts` provenance
+/// row the publication mapping writes per occurrence, keyed exactly the way
+/// `bcsp-catalog` keys it: SectionKey display form joined with the occurrence key.
+fn snapshot_with_occurrence_provenance(
+    target: &TermCampusKey,
+    index: &str,
+    title: &str,
+) -> CatalogSnapshot {
+    let mut snapshot = snapshot(target, index, title);
+    snapshot.provenance.push(StoredProvenance {
+        entity_kind: ProvenanceEntityKind::Occurrence,
+        entity_key: format!("{}/{}/{index}/meeting.0", target.term(), target.campus()),
+        field_name: "canonicalFacts".to_owned(),
+        source_sha256: HASH_B.to_owned(),
+        source_ordinal: 0,
+        detail: json!({
+            "rawSha256": HASH_B,
+            "normalizationReason": "SYNTHETIC_FIXTURE",
+            "evidence": "NONE",
+        }),
+    });
+    snapshot
+}
+
+fn section_rewrite(target: &TermCampusKey, index: &str) -> SectionDeliveryRewrite {
+    SectionDeliveryRewrite {
+        key: SectionKey::try_new(target.term().as_str(), target.campus().as_str(), index)
+            .expect("section key"),
+        delivery_modality: "ONLINE".to_owned(),
+        synchronicity: "ASYNC".to_owned(),
+    }
+}
+
+fn occurrence_rewrite(target: &TermCampusKey, index: &str) -> OccurrenceDeliveryRewrite {
+    OccurrenceDeliveryRewrite {
+        section_key: SectionKey::try_new(target.term().as_str(), target.campus().as_str(), index)
+            .expect("section key"),
+        occurrence_key: "meeting.0".to_owned(),
+        occurrence_kind: "BY_ARRANGEMENT".to_owned(),
+        modality: "ONLINE".to_owned(),
+        synchronicity: "ASYNC".to_owned(),
+        evidence: "REMOTE".to_owned(),
+        normalization_reason: "ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS".to_owned(),
+    }
+}
+
+fn delivery_rewrite(
+    derivation_version: u32,
+    sections: Vec<SectionDeliveryRewrite>,
+    occurrences: Vec<OccurrenceDeliveryRewrite>,
+) -> CatalogDeliveryRewrite {
+    CatalogDeliveryRewrite {
+        derivation_version,
+        stamped_at: "2026-09-01T00:00:00Z".to_owned(),
+        sections,
+        occurrences,
+    }
+}
+
+fn begin_and_fail_attempt(storage: &mut OperationalStorage, label: &str, target: &TermCampusKey) {
+    storage
+        .begin_refresh_attempt(&BeginRefreshAttemptCommand {
+            observation_id: trace(label),
+            target: target.clone(),
+            started_at: STARTED.to_owned(),
+            source_content_sha256: None,
+            source_bytes: None,
+        })
+        .expect("begin attempt");
+    storage
+        .finish_refresh_failure(&FinishRefreshFailureCommand {
+            observation_id: trace(label),
+            completed_at: COMPLETED.to_owned(),
+            stage: RefreshFailureStage::Transport,
+            source_content_sha256: None,
+            source_bytes: None,
+            error_code: "UPSTREAM_TIMEOUT".to_owned(),
+            diagnostic_token: None,
+        })
+        .expect("finish failure");
+}
+
+#[test]
+fn catalog_target_versions_enumerate_every_target_row_including_unpublished_and_selector_absent() {
+    let mut storage = OperationalStorage::open_in_memory().expect("storage");
+    assert!(storage.catalog_target_versions().expect("empty").is_empty());
+
+    let published = target("FALL_2026", "NB");
+    let unpublished = target("FALL_2026", "CM");
+    storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "versions.published",
+                &published,
+                snapshot(&published, "10001", "Published"),
+                b"versions-published",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
+        )
+        .expect("publish");
+    // A target row that only ever failed: content version 0, still enumerated.
+    begin_and_fail_attempt(&mut storage, "versions.failed", &unpublished);
+    // Neither target is a selector member; the enumeration must not depend on that.
+    assert!(storage.discovered_targets().expect("selector").is_empty());
+
+    assert_eq!(
+        storage.catalog_target_versions().expect("versions"),
+        vec![
+            CatalogTargetVersion {
+                target: unpublished,
+                current_content_version: 0,
+            },
+            CatalogTargetVersion {
+                target: published,
+                current_content_version: 1,
+            },
+        ]
+    );
+}
+
+#[test]
+fn publication_stamps_the_derivation_version_only_when_serving_rows_are_replaced() {
+    let temp = TempDir::new().expect("temp dir");
+    let path = db_path(&temp);
+    let mut storage = OperationalStorage::open(&path).expect("storage");
+    let scope = target("FALL_2026", "NB");
+    assert!(
+        storage
+            .catalog_derivation_versions()
+            .expect("no stamps")
+            .is_empty()
+    );
+
+    // AppliedChanged stamps the version that produced the new rows.
+    storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "stamp.1",
+                &scope,
+                snapshot(&scope, "10001", "One"),
+                b"stamp-one",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
+        )
+        .expect("first publish");
+    assert_eq!(
+        storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .get(&scope),
+        Some(&1)
+    );
+
+    // AppliedUnchanged leaves the rows alone, so it leaves the stamp alone even
+    // though the publishing binary carries a newer rule.
+    let unchanged = storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "stamp.2",
+                &scope,
+                snapshot(&scope, "10001", "One"),
+                b"stamp-one-different-body",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            2,
+        )
+        .expect("unchanged publish");
+    assert!(matches!(unchanged, PublishOutcome::AppliedUnchanged { .. }));
+    assert_eq!(
+        storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .get(&scope),
+        Some(&1)
+    );
+
+    // A changed publication under the newer rule moves the stamp.
+    let changed = storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "stamp.3",
+                &scope,
+                snapshot(&scope, "10002", "Two"),
+                b"stamp-two",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            2,
+        )
+        .expect("changed publish");
+    assert!(matches!(changed, PublishOutcome::AppliedChanged { .. }));
+    assert_eq!(
+        storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .get(&scope),
+        Some(&2)
+    );
+
+    // InitialValidEmpty replaces (zero) rows and stamps too.
+    storage
+        .apply_discovery_refresh(DiscoveryRefreshCommand {
+            observation_id: trace("stamp.discovery"),
+            started_at: STARTED.to_owned(),
+            completed_at: COMPLETED.to_owned(),
+            snapshot: discovery_snapshot(),
+        })
+        .expect("selector membership");
+    let empty_scope = target("SPRING_2028", "EMPTY_CAMPUS");
+    let first_empty = storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "stamp.empty",
+                &empty_scope,
+                CatalogSnapshot::default(),
+                b"stamp-empty",
+            ),
+            EmptySnapshotDecision::AcceptInitialSelectorConfirmedEmpty(
+                InitialEmptyProof::CurrentSelectorMembership,
+            ),
+            2,
+        )
+        .expect("first valid empty");
+    assert!(matches!(
+        first_empty,
+        PublishOutcome::InitialValidEmpty { content_version: 1 }
+    ));
+    assert_eq!(
+        storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .get(&empty_scope),
+        Some(&2)
+    );
+
+    // A target that never published has no stamp; so does a target whose row
+    // predates migration 0007 (simulated by deleting it): both read as absent.
+    let failed_scope = target("FALL_2026", "CM");
+    begin_and_fail_attempt(&mut storage, "stamp.failed", &failed_scope);
+    assert!(
+        !storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .contains_key(&failed_scope)
+    );
+    assert!(matches!(
+        storage.apply_catalog_refresh(
+            refresh_command(
+                "stamp.zero",
+                &failed_scope,
+                snapshot(&failed_scope, "10001", "Z"),
+                b"z"
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            0,
+        ),
+        Err(StorageError::InvalidCommand {
+            field: "derivation_version",
+            ..
+        })
+    ));
+    drop(storage);
+    let connection = Connection::open(&path).expect("raw connection");
+    connection
+        .execute("DELETE FROM catalog_derivation_state", [])
+        .expect("simulate a pre-0007 database");
+    drop(connection);
+    let storage = OperationalStorage::open(&path).expect("reopen");
+    assert!(
+        storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .is_empty()
+    );
+    assert_eq!(storage.catalog_target_versions().expect("targets").len(), 3);
+}
+
+#[test]
+fn rewrite_catalog_delivery_replaces_only_derived_columns_in_place_and_stamps_the_target() {
+    let temp = TempDir::new().expect("temp dir");
+    let path = db_path(&temp);
+    let mut storage = OperationalStorage::open(&path).expect("storage");
+    let scope = target("FALL_2026", "NB");
+    storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "rewrite.1",
+                &scope,
+                snapshot_with_occurrence_provenance(&scope, "10001", "Rewrite"),
+                b"rewrite-one",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
+        )
+        .expect("publish");
+    let before = storage
+        .published_catalog_snapshot(&scope)
+        .expect("read")
+        .expect("published");
+    let state_before = storage
+        .target_state(&scope)
+        .expect("state")
+        .expect("target");
+    let checkpoint_digest = |path: &Path| {
+        let connection = Connection::open(path).expect("raw connection");
+        let checkpoints: (i64, Option<i64>) = connection
+            .query_row(
+                "SELECT COUNT(*), MAX(content_version) FROM catalog_refresh_checkpoints
+                 WHERE target_id = 'FALL_2026/NB'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("checkpoints");
+        let fts: (i64, Option<i64>) = connection
+            .query_row(
+                "SELECT COUNT(*), MAX(content_version) FROM catalog_course_fts
+                 WHERE target_id = 'FALL_2026/NB'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("fts");
+        (checkpoints, fts)
+    };
+    let digest_before = checkpoint_digest(&path);
+
+    let report = storage
+        .rewrite_catalog_delivery(
+            &scope,
+            &delivery_rewrite(
+                2,
+                vec![section_rewrite(&scope, "10001")],
+                vec![occurrence_rewrite(&scope, "10001")],
+            ),
+        )
+        .expect("rewrite");
+    assert_eq!(report.target, scope);
+    assert_eq!(report.derivation_version, 2);
+    assert_eq!(
+        (report.sections_rewritten, report.occurrences_rewritten),
+        (1, 1)
+    );
+    assert_eq!(
+        storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .get(&scope),
+        Some(&2)
+    );
+
+    // Exactly the derived columns changed; everything else is byte-identical,
+    // including the identity and hash columns the projection checks.
+    let after = storage
+        .published_catalog_snapshot(&scope)
+        .expect("read")
+        .expect("published");
+    let mut expected = before.clone();
+    expected.snapshot.sections[0].delivery_modality = "ONLINE".to_owned();
+    expected.snapshot.sections[0].synchronicity = "ASYNC".to_owned();
+    expected.snapshot.occurrences[0].occurrence_kind = "BY_ARRANGEMENT".to_owned();
+    expected.snapshot.occurrences[0].modality = "ONLINE".to_owned();
+    expected.snapshot.occurrences[0].synchronicity = "ASYNC".to_owned();
+    expected.snapshot.occurrences[0].evidence = "REMOTE".to_owned();
+    expected.snapshot.occurrences[0].normalization_reason =
+        "ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS".to_owned();
+    let occurrence_provenance = expected
+        .snapshot
+        .provenance
+        .iter_mut()
+        .find(|row| row.entity_kind == ProvenanceEntityKind::Occurrence)
+        .expect("occurrence provenance row");
+    assert_eq!(
+        occurrence_provenance.entity_key, "FALL_2026/NB/10001/meeting.0",
+        "entity key is the SectionKey display form joined with the occurrence key"
+    );
+    occurrence_provenance.detail["normalizationReason"] =
+        json!("ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS");
+    occurrence_provenance.detail["evidence"] = json!("REMOTE");
+    assert_eq!(after, expected);
+    assert_eq!(after.content_version, 1);
+    assert_eq!(after.snapshot.sections[0].canonical_sha256, HASH_B);
+    assert_eq!(
+        storage
+            .target_state(&scope)
+            .expect("state")
+            .expect("target"),
+        state_before,
+        "content version, accepted semantic hash, counts and observations are untouched"
+    );
+    assert_eq!(checkpoint_digest(&path), digest_before);
+    assert!(
+        storage
+            .integrity_report(&scope)
+            .expect("integrity")
+            .is_clean()
+    );
+
+    // An empty rewrite only moves the stamp (the idempotent second pass).
+    let report = storage
+        .rewrite_catalog_delivery(&scope, &delivery_rewrite(3, Vec::new(), Vec::new()))
+        .expect("stamp only");
+    assert_eq!(
+        (report.sections_rewritten, report.occurrences_rewritten),
+        (0, 0)
+    );
+    assert_eq!(
+        storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .get(&scope),
+        Some(&3)
+    );
+    assert_eq!(
+        storage
+            .published_catalog_snapshot(&scope)
+            .expect("read")
+            .expect("published"),
+        after
+    );
+}
+
+#[test]
+fn rewrite_catalog_delivery_rejects_forged_tokens_and_unknown_rows_without_partial_writes() {
+    let mut storage = OperationalStorage::open_in_memory().expect("storage");
+    let scope = target("FALL_2026", "NB");
+    let other = target("FALL_2026", "CM");
+    storage
+        .apply_catalog_refresh(
+            refresh_command(
+                "reject.1",
+                &scope,
+                snapshot_with_occurrence_provenance(&scope, "10001", "Reject"),
+                b"reject-one",
+            ),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            1,
+        )
+        .expect("publish");
+    let published = storage
+        .published_catalog_snapshot(&scope)
+        .expect("read")
+        .expect("published");
+
+    let mut forged_section = section_rewrite(&scope, "10001");
+    forged_section.synchronicity = "async".to_owned();
+    assert!(matches!(
+        storage.rewrite_catalog_delivery(
+            &scope,
+            &delivery_rewrite(2, vec![forged_section], Vec::new())
+        ),
+        Err(StorageError::InvalidCommand {
+            field: "synchronicity",
+            ..
+        })
+    ));
+    let mut forged_reason = occurrence_rewrite(&scope, "10001");
+    forged_reason.normalization_reason = "not-a-code".to_owned();
+    assert!(matches!(
+        storage.rewrite_catalog_delivery(
+            &scope,
+            &delivery_rewrite(2, Vec::new(), vec![forged_reason])
+        ),
+        Err(StorageError::InvalidCommand {
+            field: "normalization_reason",
+            ..
+        })
+    ));
+    assert!(matches!(
+        storage.rewrite_catalog_delivery(
+            &scope,
+            &delivery_rewrite(2, vec![section_rewrite(&other, "10001")], Vec::new())
+        ),
+        Err(StorageError::InvalidCommand {
+            field: "sections",
+            ..
+        })
+    ));
+    assert!(matches!(
+        storage.rewrite_catalog_delivery(&scope, &delivery_rewrite(0, Vec::new(), Vec::new())),
+        Err(StorageError::InvalidCommand {
+            field: "derivation_version",
+            ..
+        })
+    ));
+
+    // A valid section row plus an unknown occurrence row: the whole rewrite
+    // rolls back, so neither the section nor the stamp moves.
+    let mut unknown_occurrence = occurrence_rewrite(&scope, "10001");
+    unknown_occurrence.occurrence_key = "meeting.9".to_owned();
+    assert!(matches!(
+        storage.rewrite_catalog_delivery(
+            &scope,
+            &delivery_rewrite(
+                2,
+                vec![section_rewrite(&scope, "10001")],
+                vec![unknown_occurrence]
+            )
+        ),
+        Err(StorageError::InvalidStoredProjection {
+            table: "catalog_occurrences",
+            ..
+        })
+    ));
+    assert!(matches!(
+        storage.rewrite_catalog_delivery(
+            &scope,
+            &delivery_rewrite(2, vec![section_rewrite(&scope, "99999")], Vec::new())
+        ),
+        Err(StorageError::InvalidStoredProjection {
+            table: "catalog_sections",
+            ..
+        })
+    ));
+    assert_eq!(
+        storage
+            .published_catalog_snapshot(&scope)
+            .expect("read")
+            .expect("published"),
+        published
+    );
+    assert_eq!(
+        storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .get(&scope),
+        Some(&1)
+    );
+
+    // Unknown or never-published targets accept only a stamp.
+    assert!(matches!(
+        storage.rewrite_catalog_delivery(&other, &delivery_rewrite(2, Vec::new(), Vec::new())),
+        Err(StorageError::CatalogTargetNotPublished)
+    ));
+    begin_and_fail_attempt(&mut storage, "reject.failed", &other);
+    assert!(matches!(
+        storage.rewrite_catalog_delivery(
+            &other,
+            &delivery_rewrite(2, vec![section_rewrite(&other, "10001")], Vec::new())
+        ),
+        Err(StorageError::CatalogTargetNotPublished)
+    ));
+    let report = storage
+        .rewrite_catalog_delivery(&other, &delivery_rewrite(2, Vec::new(), Vec::new()))
+        .expect("stamp an unpublished target");
+    assert_eq!(
+        (report.sections_rewritten, report.occurrences_rewritten),
+        (0, 0)
+    );
+    assert_eq!(
+        storage
+            .catalog_derivation_versions()
+            .expect("stamps")
+            .get(&other),
+        Some(&2)
+    );
 }

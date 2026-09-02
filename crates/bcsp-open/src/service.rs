@@ -415,6 +415,7 @@ where
         }
     }
 
+    #[allow(clippy::collapsible_if)]
     fn finish_success<W>(
         &mut self,
         command: OpenPullCommand,
@@ -476,65 +477,65 @@ where
             OpenGateRoute,
             GateDecision,
         )> = None;
-        if let Some(wiring) = command.gate.as_ref() {
-            if !is_hard_reject {
-                let identity = catalog_section_set_identity_v1(catalog.section_indexes());
-                let mut gates = wiring.gates.lock().expect("gate lock poisoned");
-                let decision = {
-                    let runtime = match wiring.route {
-                        OpenGateRoute::Serving => {
-                            if !gates.serving_installed() {
-                                // Lazy restart rebuild on first use (design
-                                // section 4, restart): seed from persisted
-                                // LKG and continue an interrupted quarantine
-                                // only per the contiguity/hash/gap rules.
-                                let reference = self
-                                    .persistence
-                                    .lkg_open_index_set(&target)?
-                                    .map(|set| lkg_reference_within(&set, &catalog));
-                                let summaries = gate_restart_summaries(
-                                    self.persistence
-                                        .recent_open_gate_attempt_summaries(&target, 32)?,
-                                );
-                                gates.install_serving(rebuild_after_restart(
-                                    identity.clone(),
-                                    reference,
-                                    &summaries,
-                                    completed_at,
-                                ));
-                            }
-                            let serving = gates.serving_mut();
-                            if serving
-                                .catalog_identity()
-                                .is_some_and(|current| current != &identity)
-                            {
-                                // Serving catalog changed: reset the epoch
-                                // with the LKG ∩ new-catalog transfer seed.
-                                let transferred = self
-                                    .persistence
-                                    .lkg_open_index_set(&target)?
-                                    .map(|set| lkg_reference_within(&set, &catalog));
-                                serving.reset_for_catalog_identity(identity.clone(), transferred);
-                            }
-                            gates.serving_mut()
-                        }
-                        OpenGateRoute::Candidate => {
-                            let seed = self
+        if let Some(wiring) = command.gate.as_ref()
+            && !is_hard_reject
+        {
+            let identity = catalog_section_set_identity_v1(catalog.section_indexes());
+            let mut gates = wiring.gates.lock().expect("gate lock poisoned");
+            let decision = {
+                let runtime = match wiring.route {
+                    OpenGateRoute::Serving => {
+                        if !gates.serving_installed() {
+                            // Lazy restart rebuild on first use (design
+                            // section 4, restart): seed from persisted
+                            // LKG and continue an interrupted quarantine
+                            // only per the contiguity/hash/gap rules.
+                            let reference = self
                                 .persistence
                                 .lkg_open_index_set(&target)?
                                 .map(|set| lkg_reference_within(&set, &catalog));
-                            gates.candidate_mut(&identity, || seed)
+                            let summaries = gate_restart_summaries(
+                                self.persistence
+                                    .recent_open_gate_attempt_summaries(&target, 32)?,
+                            );
+                            gates.install_serving(rebuild_after_restart(
+                                identity.clone(),
+                                reference,
+                                &summaries,
+                                completed_at,
+                            ));
                         }
-                    };
-                    runtime.evaluate(&GateSample {
-                        catalog_identity: &identity,
-                        observed: &observed_intersection,
-                        observed_at: completed_at,
-                    })
+                        let serving = gates.serving_mut();
+                        if serving
+                            .catalog_identity()
+                            .is_some_and(|current| current != &identity)
+                        {
+                            // Serving catalog changed: reset the epoch
+                            // with the LKG ∩ new-catalog transfer seed.
+                            let transferred = self
+                                .persistence
+                                .lkg_open_index_set(&target)?
+                                .map(|set| lkg_reference_within(&set, &catalog));
+                            serving.reset_for_catalog_identity(identity.clone(), transferred);
+                        }
+                        gates.serving_mut()
+                    }
+                    OpenGateRoute::Candidate => {
+                        let seed = self
+                            .persistence
+                            .lkg_open_index_set(&target)?
+                            .map(|set| lkg_reference_within(&set, &catalog));
+                        gates.candidate_mut(&identity, || seed)
+                    }
                 };
-                gate_hold = decision.disposition == GateDisposition::Hold;
-                gate_advance = Some((gates, identity, wiring.route, decision));
-            }
+                runtime.evaluate(&GateSample {
+                    catalog_identity: &identity,
+                    observed: &observed_intersection,
+                    observed_at: completed_at,
+                })
+            };
+            gate_hold = decision.disposition == GateDisposition::Hold;
+            gate_advance = Some((gates, identity, wiring.route, decision));
         }
         let reconcile = reconcile_open_set(
             CatalogContentVersion::try_from(captured_catalog_content_version)?,
@@ -588,56 +589,55 @@ where
         // cross-check agreed; a storage-side catalog race means the decision
         // was computed against a superseded catalog and is discarded (the
         // guard drops here either way, releasing the serial lock).
-        if let Some((mut gates, identity, route, decision)) = gate_advance.take() {
-            if outcome.classification != OpenAttemptClassification::StaleCatalogRace {
-                // The one place the gate decision is both final and named.
-                // A hold is a warning because it is a user-visible product
-                // event -- the live feed is being withheld and the last good
-                // data is still in use -- and the local console shows
-                // warnings without being asked. A recovery is the same event
-                // ending, and is reported at the same level so the pair reads
-                // as a pair.
-                // The target as a person writes it -- "92026 NB" -- because a
-                // console line built from this is read by one. A `?` here
-                // would put a Rust struct dump in front of the user.
-                let target_label =
-                    format!("{} {}", target.term().as_str(), target.campus().as_str());
-                match decision.disposition {
-                    GateDisposition::Hold => tracing::info!(
-                        code = "OPEN_SNAPSHOT_GATE_HOLD",
-                        kind = ?decision.kind,
-                        target = %target_label,
-                        "the snapshot integrity gate withheld a suspect open snapshot",
-                    ),
-                    GateDisposition::Apply => {
-                        if matches!(
-                            decision.kind,
-                            crate::gate::GateDecisionKind::QuarantineRecover
-                                | crate::gate::GateDecisionKind::QuarantineConfirm
-                        ) {
-                            // Both at INFO. The pair is one story, and the
-                            // local console layer -- not the level -- decides
-                            // that they reach the user.
-                            tracing::info!(
-                                code = "OPEN_SNAPSHOT_GATE_RELEASED",
-                                kind = ?decision.kind,
-                                target = %target_label,
-                                "the snapshot integrity gate released a quarantined target",
-                            );
-                        }
+        if let Some((mut gates, identity, route, decision)) = gate_advance.take()
+            && outcome.classification != OpenAttemptClassification::StaleCatalogRace
+        {
+            // The one place the gate decision is both final and named.
+            // A hold is a warning because it is a user-visible product
+            // event -- the live feed is being withheld and the last good
+            // data is still in use -- and the local console shows
+            // warnings without being asked. A recovery is the same event
+            // ending, and is reported at the same level so the pair reads
+            // as a pair.
+            // The target as a person writes it -- "92026 NB" -- because a
+            // console line built from this is read by one. A `?` here
+            // would put a Rust struct dump in front of the user.
+            let target_label = format!("{} {}", target.term().as_str(), target.campus().as_str());
+            match decision.disposition {
+                GateDisposition::Hold => tracing::info!(
+                    code = "OPEN_SNAPSHOT_GATE_HOLD",
+                    kind = ?decision.kind,
+                    target = %target_label,
+                    "the snapshot integrity gate withheld a suspect open snapshot",
+                ),
+                GateDisposition::Apply => {
+                    if matches!(
+                        decision.kind,
+                        crate::gate::GateDecisionKind::QuarantineRecover
+                            | crate::gate::GateDecisionKind::QuarantineConfirm
+                    ) {
+                        // Both at INFO. The pair is one story, and the
+                        // local console layer -- not the level -- decides
+                        // that they reach the user.
+                        tracing::info!(
+                            code = "OPEN_SNAPSHOT_GATE_RELEASED",
+                            kind = ?decision.kind,
+                            target = %target_label,
+                            "the snapshot integrity gate released a quarantined target",
+                        );
                     }
                 }
-                match route {
-                    OpenGateRoute::Serving => gates.serving_mut().advance(&decision),
-                    OpenGateRoute::Candidate => {
-                        gates.candidate_mut(&identity, || None).advance(&decision);
-                        if outcome.classification.is_success() {
-                            // A successful candidate finish is the atomic
-                            // catalog+open publish: promote the candidate
-                            // runtime to serving inside this same
-                            // serial-lock critical section (design v5).
-                            gates.promote_candidate(&identity);
-                        }
+            }
+            match route {
+                OpenGateRoute::Serving => gates.serving_mut().advance(&decision),
+                OpenGateRoute::Candidate => {
+                    gates.candidate_mut(&identity, || None).advance(&decision);
+                    if outcome.classification.is_success() {
+                        // A successful candidate finish is the atomic
+                        // catalog+open publish: promote the candidate
+                        // runtime to serving inside this same
+                        // serial-lock critical section (design v5).
+                        gates.promote_candidate(&identity);
                     }
                 }
             }
@@ -1658,6 +1658,7 @@ mod tests {
                     snapshot,
                 },
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                1,
             )
             .expect("publish Catalog");
         assert!(matches!(outcome, PublishOutcome::AppliedChanged { .. }));
@@ -2288,28 +2289,30 @@ mod tests {
                     body_changed: true,
                     state_changed: false,
                     retained_lkg_attempt_id: None,
-                    observation_commit: classification.is_success().then(|| OpenObservationCommit {
-                        rutgers_day: "2026-08-19".to_owned(),
-                        effective_interval_seconds: 10,
-                        run_counts: OpenAttemptCounters {
-                            attempted: 1,
-                            succeeded: 1,
-                            failed: 0,
-                            empty: 0,
-                        },
-                        target_day_counts: OpenAttemptCounters {
-                            attempted: 1,
-                            succeeded: 1,
-                            failed: 0,
-                            empty: 0,
-                        },
-                        service_day_counts: OpenAttemptCounters {
-                            attempted: 1,
-                            succeeded: 1,
-                            failed: 0,
-                            empty: 0,
-                        },
-                        section_events: Vec::new(),
+                    observation_commit: classification.is_success().then(|| {
+                        OpenObservationCommit {
+                            rutgers_day: "2026-08-19".to_owned(),
+                            effective_interval_seconds: 10,
+                            run_counts: OpenAttemptCounters {
+                                attempted: 1,
+                                succeeded: 1,
+                                failed: 0,
+                                empty: 0,
+                            },
+                            target_day_counts: OpenAttemptCounters {
+                                attempted: 1,
+                                succeeded: 1,
+                                failed: 0,
+                                empty: 0,
+                            },
+                            service_day_counts: OpenAttemptCounters {
+                                attempted: 1,
+                                succeeded: 1,
+                                failed: 0,
+                                empty: 0,
+                            },
+                            section_events: Vec::new(),
+                        }
                     }),
                 };
                 self.in_finish.store(false, Ordering::SeqCst);
@@ -2654,7 +2657,13 @@ mod tests {
             matches!(execution.terminal, OpenPullTerminal::Unsafe(_)),
             "persisted LKG floor must hold the partial (unseeded would apply it)",
         );
-        assert!(gates.lock().expect("gate set").serving_mut().is_quarantined());
+        assert!(
+            gates
+                .lock()
+                .expect("gate set")
+                .serving_mut()
+                .is_quarantined()
+        );
 
         // Pull 2 at 04:01:30 (gap 90s): same set -> count 5, span 360s ->
         // QuarantineConfirm applies. Ignored history would sit at count 2 and
@@ -2687,6 +2696,12 @@ mod tests {
                 OpenAttemptClassification::ValidApplied,
             ],
         );
-        assert!(!gates.lock().expect("gate set").serving_mut().is_quarantined());
+        assert!(
+            !gates
+                .lock()
+                .expect("gate set")
+                .serving_mut()
+                .is_quarantined()
+        );
     }
 }

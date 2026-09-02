@@ -1389,7 +1389,65 @@ fn course_number_band_zero_matches_every_actual_ascii_number_from_000_through_09
 }
 
 #[test]
-fn all_required_meeting_locations_preserve_match_no_match_and_uncertain() {
+fn availability_windows_exclude_scheduled_meetings_of_unknown_requiredness() {
+    fn outcome(
+        catalog: &bcsp_contracts::NormalizedCatalogV1,
+        section_key: &bcsp_contracts::SectionKey,
+        windows: Vec<AvailabilityWindowV1>,
+    ) -> MatchOutcome {
+        let section = catalog.sections[0].clone();
+        let open = open_evidence(section_key, LiveOpenStateV1::Open);
+        let mut input = neutral_input();
+        input.availability = windows;
+        let filters = normalized(input);
+        let occurrences = catalog.occurrences.iter().collect::<Vec<_>>();
+        let (evaluation, _) = evaluate_section_filters(
+            &section,
+            Some(&occurrences),
+            &open.evidence,
+            now(),
+            &filters,
+        );
+        evaluation.outcome()
+    }
+    let monday = || AvailabilityWindowV1::try_new(WeekdayV1::Monday, 540, 600).unwrap();
+    let tuesday = || AvailabilityWindowV1::try_new(WeekdayV1::Tuesday, 540, 600).unwrap();
+
+    let mut catalog = empty_catalog("NB", 1);
+    let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+    // The fixture meets Monday 09:00-10:00; the real feed never states
+    // requiredness, so this is the shape every stored occurrence has.
+    occurrence_mut(&mut catalog, &keys.section).requiredness =
+        CatalogRequiredness::UnknownRequiredness;
+    assert_eq!(
+        outcome(&catalog, &keys.section, vec![monday()]),
+        MatchOutcome::Match
+    );
+    assert_eq!(
+        outcome(&catalog, &keys.section, vec![tuesday()]),
+        MatchOutcome::NoMatch,
+        "a scheduled meeting of unknown requiredness outside every window excludes"
+    );
+
+    occurrence_mut(&mut catalog, &keys.section).requiredness = CatalogRequiredness::Optional;
+    assert_eq!(
+        outcome(&catalog, &keys.section, vec![tuesday()]),
+        MatchOutcome::Match,
+        "an explicitly optional meeting is not held against the section"
+    );
+
+    let occurrence = occurrence_mut(&mut catalog, &keys.section);
+    occurrence.requiredness = CatalogRequiredness::UnknownRequiredness;
+    occurrence.time = bcsp_contracts::CatalogTimeKnowledgeV1::Empty;
+    assert_eq!(
+        outcome(&catalog, &keys.section, vec![tuesday()]),
+        MatchOutcome::Uncertain,
+        "a meeting without usable times stays uncertain"
+    );
+}
+
+#[test]
+fn all_required_meeting_locations_treat_unknown_requiredness_as_required() {
     let mut catalog = empty_catalog("NB", 1);
     let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
     let section = catalog.sections[0].clone();
@@ -1425,6 +1483,9 @@ fn all_required_meeting_locations_preserve_match_no_match_and_uncertain() {
     );
     assert_eq!(no_match.outcome(), MatchOutcome::NoMatch);
 
+    // The feed never states requiredness, so an unknown-requiredness meeting
+    // is held to the location like a required one: it matches at BUSCH and
+    // excludes at NEWARK, instead of turning the whole section uncertain.
     let occurrence = occurrence_mut(&mut catalog, &keys.section);
     occurrence.campus = CatalogFieldKnowledge::present("BUSCH".to_owned());
     occurrence.requiredness = CatalogRequiredness::UnknownRequiredness;
@@ -1436,7 +1497,21 @@ fn all_required_meeting_locations_preserve_match_no_match_and_uncertain() {
         now(),
         &filters,
     );
-    assert_eq!(unknown.outcome(), MatchOutcome::Uncertain);
+    assert_eq!(unknown.outcome(), MatchOutcome::Match);
+
+    occurrence_mut(&mut catalog, &keys.section).campus =
+        CatalogFieldKnowledge::present("NEWARK".to_owned());
+    let occurrences = catalog.occurrences.iter().collect::<Vec<_>>();
+    let (unknown_elsewhere, _) = evaluate_section_filters(
+        &section,
+        Some(&occurrences),
+        &open.evidence,
+        now(),
+        &filters,
+    );
+    assert_eq!(unknown_elsewhere.outcome(), MatchOutcome::NoMatch);
+    occurrence_mut(&mut catalog, &keys.section).campus =
+        CatalogFieldKnowledge::present("BUSCH".to_owned());
 
     occurrence_mut(&mut catalog, &keys.section).requiredness = CatalogRequiredness::Optional;
     let occurrences = catalog.occurrences.iter().collect::<Vec<_>>();

@@ -99,15 +99,26 @@ pub fn create_local_watch_socket(
     runtime: LocalRuntimeCore,
     open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
 ) -> Result<Arc<SharedWatchSocket>, WatchManagerError> {
+    create_local_watch_socket_with_history(database, history_store, runtime, open_runtime)
+        .map(|(socket, _)| socket)
+}
+
+/// Like [`create_local_watch_socket`], also returning the history sink so
+/// the runtime can ask its worker thread about the connection it owns.
+pub(crate) fn create_local_watch_socket_with_history(
+    database: Arc<Mutex<LocalPrimaryDatabase>>,
+    history_store: PersonalStateStore,
+    runtime: LocalRuntimeCore,
+    open_runtime: Arc<OpenRuntimeSnapshotRegistry>,
+) -> Result<(Arc<SharedWatchSocket>, Arc<LocalWatchHistorySink>), WatchManagerError> {
     let admission: Arc<dyn WatchAdmissionSource> = Arc::new(LocalWatchAdmission {
         database: database.clone(),
         runtime,
         open_runtime,
     });
-    Ok(Arc::new(SharedWatchSocket::try_new(
-        admission,
-        Arc::new(LocalWatchHistorySink::new(history_store)),
-    )?))
+    let history = Arc::new(LocalWatchHistorySink::new(history_store));
+    let socket = Arc::new(SharedWatchSocket::try_new(admission, history.clone())?);
+    Ok((socket, history))
 }
 
 /// The local build's watch socket.
@@ -164,7 +175,10 @@ impl LocalWatchRoute {
 
     fn reconcile_audience(&self) {
         if let Err(error) = self.coordinator.audience_changed() {
-            tracing::warn!(?error, "desired-watch reconcile after an audience change failed");
+            tracing::warn!(
+                ?error,
+                "desired-watch reconcile after an audience change failed"
+            );
         }
     }
 }

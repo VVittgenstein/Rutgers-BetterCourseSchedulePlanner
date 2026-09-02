@@ -6,20 +6,20 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Request, State};
+use axum::http::header::RETRY_AFTER;
 use axum::http::header::{
     ACCEPT_LANGUAGE, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST, ORIGIN,
     REFERRER_POLICY, SEC_WEBSOCKET_PROTOCOL, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
-use axum::http::header::RETRY_AFTER;
 use axum::routing::{any, get, post};
 use bcsp_application::{
     ExtensionRequest, ExtensionResponse, ExtensionRoute, FixedRefreshPolicyProvider,
     OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError, OpenRuntimeSnapshotRegistry,
-    RefreshPolicyError, RequestMethod, RouteExtension, SHARED_WATCH_SUBPROTOCOL,
+    RederivationError, RefreshPolicyError, RequestMethod, RouteExtension, SHARED_WATCH_SUBPROTOCOL,
     SharedProductStorage, SharedWatchSocket, TargetRefreshDemand, WebSocketExtension,
-    serve_websocket_with_bounded_outbound, shared_websocket_upgrade,
+    rederive_stored_delivery_now, serve_websocket_with_bounded_outbound, shared_websocket_upgrade,
 };
 use bcsp_contracts::{
     ActiveWatchTargetV1, ApiErrorBody, ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope,
@@ -388,11 +388,16 @@ pub async fn build_production_runtime() -> Result<PublicRuntime, PublicRuntimeEr
         .map_err(PublicRuntimeError::Configuration)?;
     let store =
         PublicOperationalStore::open_production().map_err(PublicRuntimeError::OperationalState)?;
-    let serving_storage = Arc::new(Mutex::new(
+    let mut serving_storage =
         OperationalStorage::open(store.database_path()).map_err(|source| {
             PublicRuntimeError::OperationalState(PublicOperationsError::OpenDatabase { source })
-        })?,
-    ));
+        })?;
+    // Stored derived delivery columns must match this binary's derivation
+    // rule before product routes, prepared serving or the refresh runtime
+    // read them; the projection rejects rows written under another rule.
+    rederive_stored_delivery_now(&mut serving_storage)
+        .map_err(PublicRuntimeError::CatalogDerivation)?;
+    let serving_storage = Arc::new(Mutex::new(serving_storage));
     let store = Arc::new(Mutex::new(store));
     let open_runtime = Arc::new(OpenRuntimeSnapshotRegistry::default());
     let target_refresh_demand = TargetRefreshDemand::default();
@@ -487,7 +492,9 @@ fn register_builtin_route(
         (RequestMethod::Get, PUBLIC_READINESS_PATH) => {
             router.route(route.path(), get(handle_readiness))
         }
-        (RequestMethod::Get, PUBLIC_METRICS_PATH) => router.route(route.path(), get(handle_metrics)),
+        (RequestMethod::Get, PUBLIC_METRICS_PATH) => {
+            router.route(route.path(), get(handle_metrics))
+        }
         (RequestMethod::Get, PUBLIC_WATCH_PATH) => {
             router.route(route.path(), get(handle_watch_socket))
         }
@@ -717,14 +724,12 @@ async fn handle_session_validate(
                 &HttpSuccessEnvelope::new(SessionValidateResponseV1::renewed(nonce)),
             )
         }
-        Err(DocumentSessionError::CapacityExhausted) => api_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            ApiErrorCode::InternalError,
-        ),
-        Err(DocumentSessionError::Unavailable) => api_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            ApiErrorCode::InternalError,
-        ),
+        Err(DocumentSessionError::CapacityExhausted) => {
+            api_error_response(StatusCode::SERVICE_UNAVAILABLE, ApiErrorCode::InternalError)
+        }
+        Err(DocumentSessionError::Unavailable) => {
+            api_error_response(StatusCode::SERVICE_UNAVAILABLE, ApiErrorCode::InternalError)
+        }
     }
 }
 
@@ -1335,6 +1340,8 @@ pub enum PublicRuntimeError {
     Configuration(#[source] PublicHostConfigError),
     #[error("public operational state is unavailable")]
     OperationalState(#[source] PublicOperationsError),
+    #[error("stored catalog delivery columns could not be re-derived")]
+    CatalogDerivation(#[source] RederivationError),
     #[error("public product routes could not be composed")]
     ProductComposition(#[source] RefreshPolicyError),
     #[error("public service status could not be composed")]
@@ -1360,6 +1367,7 @@ impl PublicRuntimeError {
         match self {
             Self::Configuration(error) => error.code(),
             Self::OperationalState(error) => error.code(),
+            Self::CatalogDerivation(_) => "PUBLIC_CATALOG_DERIVATION_FAILED",
             Self::ProductComposition(_) => "PUBLIC_PRODUCT_COMPOSITION_FAILED",
             Self::StatusComposition => "PUBLIC_STATUS_COMPOSITION_FAILED",
             Self::WatchInitialization => "PUBLIC_WATCH_INITIALIZATION_FAILED",
@@ -3134,13 +3142,25 @@ mod tests {
             r#"{{"nonce":"{nonce}","locale":"{}"}}"#,
             "x".repeat(5 * 1024),
         );
-        let response =
-            post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), &oversized).await;
+        let response = post_validate(
+            &client,
+            &runtime,
+            TEST_AUTHORITY,
+            Some(TEST_ORIGIN),
+            &oversized,
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // 200 {valid:true}: the registered nonce validates and is touched.
-        let response =
-            post_validate(&client, &runtime, TEST_AUTHORITY, Some(TEST_ORIGIN), &valid_body).await;
+        let response = post_validate(
+            &client,
+            &runtime,
+            TEST_AUTHORITY,
+            Some(TEST_ORIGIN),
+            &valid_body,
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body: Value = response.json().await.expect("valid body");
         assert_eq!(body["data"]["valid"], Value::Bool(true));

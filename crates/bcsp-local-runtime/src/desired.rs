@@ -654,7 +654,11 @@ impl DesiredWatchCoordinator {
         // heartbeat sweep, a term rollover all end a watch without anyone
         // telling the coordinator -- and a read that trusted the record alone
         // would show a green light for a watch nobody is holding.
-        Ok(project(&authority, &materialization, &live_watches(self.owner.as_ref())))
+        Ok(project(
+            &authority,
+            &materialization,
+            &live_watches(self.owner.as_ref()),
+        ))
     }
 
     /// Submits one compare-and-swap and, if it committed, immediately brings
@@ -737,7 +741,10 @@ impl DesiredWatchCoordinator {
         // budget can be filled entirely by refusals, so a process whose
         // rotation only ran on a commit could sit permanently full.
         if let Err(error) = self.rotate_if_due() {
-            tracing::warn!(?error, "desired-watch rotation maintenance failed; will retry");
+            tracing::warn!(
+                ?error,
+                "desired-watch rotation maintenance failed; will retry"
+            );
         }
         let due = {
             let Ok(mut materialization) = self.lock_materialization() else {
@@ -765,10 +772,11 @@ impl DesiredWatchCoordinator {
                 .sections
                 .values()
                 .any(|section| section.retry.is_some_and(|retry| retry.due_at <= now));
-            let disarm_due = materialization
-                .sections
-                .values()
-                .any(|section| section.stopping.is_some_and(|stopping| stopping.due_at <= now));
+            let disarm_due = materialization.sections.values().any(|section| {
+                section
+                    .stopping
+                    .is_some_and(|stopping| stopping.due_at <= now)
+            });
             // A watch can end without anyone telling the coordinator. This is
             // the cheap half of noticing -- identity against the live set, no
             // storage touched -- and it is what turns a manager-side stop
@@ -1400,13 +1408,11 @@ impl DesiredWatchCoordinator {
                     state.blocked_on_slot = false;
                 }
                 Some(WatchStartItemResultV1::Rejected { reason, .. }) => {
-                    let reason = DesiredWatchFailureReasonV1::from_rejection(reason.clone());
+                    let reason = DesiredWatchFailureReasonV1::from_rejection(*reason);
                     let classification = reason.classification();
                     state.armed = None;
-                    state.blocked_on_slot =
-                        reason == DesiredWatchFailureReasonV1::MaxActiveWatches;
-                    let retry_scheduled =
-                        classification == DesiredWatchFailureClassV1::Transient;
+                    state.blocked_on_slot = reason == DesiredWatchFailureReasonV1::MaxActiveWatches;
+                    let retry_scheduled = classification == DesiredWatchFailureClassV1::Transient;
                     record_failure(
                         state,
                         entry,
@@ -1531,7 +1537,21 @@ impl DesiredWatchCoordinator {
         state.retry = None;
     }
 
-    fn lock_store(&self) -> Result<MutexGuard<'_, PersonalStateStore>, DesiredWatchCoordinatorError> {
+    /// The transaction state of the coordinator's own connection, for the
+    /// WAL starvation diagnostic. `None` when another owner holds the store
+    /// right now: the diagnostic must never wait behind a mutation.
+    pub fn store_transaction_state(
+        &self,
+    ) -> Option<Result<bcsp_local_user_state::PersonalTransactionState, PersonalStateError>> {
+        self.store
+            .try_lock()
+            .ok()
+            .map(|store| store.transaction_state())
+    }
+
+    fn lock_store(
+        &self,
+    ) -> Result<MutexGuard<'_, PersonalStateStore>, DesiredWatchCoordinatorError> {
         self.store
             .lock()
             .map_err(|_| DesiredWatchCoordinatorError::Poisoned)
@@ -1768,6 +1788,18 @@ fn project(
 // ---------------------------------------------------------------------------
 // Interleavings that only this module can stand inside
 // ---------------------------------------------------------------------------
+
+/// How a section reads on the console: term, campus and index, and nothing
+/// else. It is what the user typed into the desk, so it is what they can
+/// match a console line back to.
+fn section_label(section: &SectionKey) -> String {
+    format!(
+        "{} {} {}",
+        section.term().as_str(),
+        section.campus().as_str(),
+        section.index().as_str()
+    )
+}
 
 /// The coordinator's own unit tests.
 ///
@@ -2358,8 +2390,7 @@ mod tests {
              the answer describes it rather than the absent shape",
         );
         assert_ne!(
-            committed.revision,
-            DESIRED_WATCH_ABSENT_COMMITTED_NUMBER,
+            committed.revision, DESIRED_WATCH_ABSENT_COMMITTED_NUMBER,
             "a row that is still there was not legitimately collected",
         );
         assert_eq!(
@@ -2483,7 +2514,9 @@ mod tests {
                     "the budget was due",
                 );
                 let generation = coordinator.read().unwrap().authority_generation;
-                rotated_tx.send(generation).expect("the mutation is waiting");
+                rotated_tx
+                    .send(generation)
+                    .expect("the mutation is waiting");
             })
         }
     }
@@ -2521,17 +2554,4 @@ mod tests {
                 .expect("the other caller rotated");
         }
     }
-}
-
-
-/// How a section reads on the console: term, campus and index, and nothing
-/// else. It is what the user typed into the desk, so it is what they can
-/// match a console line back to.
-fn section_label(section: &SectionKey) -> String {
-    format!(
-        "{} {} {}",
-        section.term().as_str(),
-        section.campus().as_str(),
-        section.index().as_str()
-    )
 }

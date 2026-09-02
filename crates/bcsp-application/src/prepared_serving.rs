@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bcsp_catalog::{ProjectionError, to_catalog_discovery_response_v1, to_normalized_catalog_v1};
 use bcsp_contracts::{
@@ -53,6 +53,17 @@ struct PublicationLifecycleState {
 }
 
 const PREPARED_SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long a request path waits for a committed publication barrier to clear
+/// before it gives up with [`PreparedServingError::SnapshotRebuilding`].
+///
+/// The measured Committed window in the released local build is 3.5-4.5 s
+/// (the worker's own Open projection plus a few queued route projections),
+/// so five seconds covers today's worst case with margin while staying well
+/// under a user's "hung" perception. Once the rebuild window shrinks this is
+/// only the safety cap; the public runtime chooses a shorter wait because its
+/// request waiters and the rebuild share one blocking pool.
+pub const PREPARED_REQUEST_ADMISSION_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Default)]
 struct PreparedRebuildCancellation {
@@ -346,11 +357,19 @@ pub struct PreparedServingRebuildRuntime {
     task: Option<JoinHandle<()>>,
 }
 
-struct PublicationWorkerGuard(PublicationLifecycle);
+/// Marks the worker gone when its task ends for any reason (ordered shutdown,
+/// abort, or panic): new publications are refused, and request waiters parked
+/// on a committed ticket are released so they fail fast instead of sitting out
+/// their full admission wait behind a worker that will never clear it.
+struct PublicationWorkerGuard {
+    lifecycle: PublicationLifecycle,
+    registry: Arc<PreparedServingRegistry>,
+}
 
 impl Drop for PublicationWorkerGuard {
     fn drop(&mut self) {
-        self.0.stop_accepting();
+        self.lifecycle.stop_accepting();
+        self.registry.close();
     }
 }
 
@@ -375,8 +394,15 @@ impl PreparedServingRebuildRuntime {
         };
         let cancellation = PreparedRebuildCancellation::default();
         let worker_cancellation = cancellation.clone();
+        // A registry outlives its worker in tests and across restarts; a new
+        // worker re-arms request waiting that an earlier worker's exit closed.
+        registry.reopen();
+        let guard_registry = Arc::clone(&registry);
         let task = tokio::spawn(async move {
-            let _worker_guard = PublicationWorkerGuard(lifecycle);
+            let _worker_guard = PublicationWorkerGuard {
+                lifecycle,
+                registry: guard_registry,
+            };
             let service_runtime = match counter_audience {
                 bcsp_open::OpenCounterAudience::Local { .. } => ServiceRuntimeV1::Local,
                 bcsp_open::OpenCounterAudience::Public => ServiceRuntimeV1::Public,
@@ -575,6 +601,10 @@ impl PreparedServingRebuildRuntime {
 
     pub async fn shutdown(mut self) {
         self.cancellation.request();
+        // Release request waiters before draining: the HTTP surface is torn
+        // down after this worker, and a request parked on a ticket the
+        // worker will no longer clear must not delay exit by its full wait.
+        self.demand.registry.close();
         let _ = self.demand.sender.send(PreparedRebuildRequest::Shutdown);
         let drained = self
             .demand
@@ -603,6 +633,7 @@ impl Drop for PreparedServingRebuildRuntime {
     fn drop(&mut self) {
         self.cancellation.request();
         self.demand.lifecycle.stop_accepting();
+        self.demand.registry.close();
         let _ = self.demand.sender.send(PreparedRebuildRequest::Shutdown);
         if let Some(task) = self.task.take() {
             task.abort();
@@ -1289,9 +1320,17 @@ fn insert_prepared_option(
 
 fn normalize_dynamic_value(field: FilterFieldId, value: &str) -> String {
     match field {
-        // These two authoritative validators compare canonical contract values
-        // case-sensitively.
-        FilterFieldId::CourseSubject | FilterFieldId::CourseCoreCode => value.to_owned(),
+        // The authoritative subject validator compares canonical contract
+        // values case-sensitively; subject codes are digits, so nothing is
+        // lost.
+        FilterFieldId::CourseSubject => value.to_owned(),
+        // Core codes are mixed-case in the Rutgers feed ("AHo", "WCd"), while
+        // a request's codes are canonicalized to ASCII uppercase by
+        // `NormalizedFilterValuesV1::try_new` and the engine compares them
+        // case-insensitively. Both the dictionary and the lookup come through
+        // here, so both meet in uppercase; the discovery dictionary keeps the
+        // feed's spelling for display.
+        FilterFieldId::CourseCoreCode => value.to_ascii_uppercase(),
         // SQLite lower()/NOCASE and Course identifier eq_ignore_ascii_case are
         // ASCII-only; Rust Unicode lowercasing would accept values the
         // reference path rejects.
@@ -1392,8 +1431,18 @@ pub struct PreparedServingRegistry {
     current: RwLock<Option<Arc<PreparedServingSnapshot>>>,
     rebuild: Mutex<()>,
     dirty: Mutex<PreparedDirtyState>,
+    /// Signalled (under `dirty`) on every transition that can open admission
+    /// and when the registry closes, so [`Self::snapshot_within`] waiters wake
+    /// exactly when the answer may have changed. A std Condvar because every
+    /// request path is synchronous and already runs on tokio's blocking pool.
+    dirty_changed: Condvar,
+    /// Set once the rebuild worker is gone. Committed tickets then stay
+    /// fail-closed (nothing will clear them), so waiting is pointless:
+    /// waiters are released and fail fast instead of sitting out the timeout.
+    closed: AtomicBool,
     hits: AtomicU64,
     misses: AtomicU64,
+    wait_timeouts: AtomicU64,
     publishes: AtomicU64,
     replacements: AtomicU64,
     evictions: AtomicU64,
@@ -1419,29 +1468,78 @@ impl PreparedServingRegistry {
             .map_err(|_| PreparedServingError::RegistryUnavailable)
     }
 
+    /// Binds the current generation without waiting: a committed publication
+    /// barrier fails the call immediately with
+    /// [`PreparedServingError::SnapshotRebuilding`]. Request paths use
+    /// [`Self::snapshot_within`]; this zero-wait variant serves rebuilds,
+    /// tests and anything that must never park a thread.
     pub fn snapshot(&self) -> Result<PreparedServingBinding, PreparedServingError> {
+        self.snapshot_within(Duration::ZERO)
+    }
+
+    /// Binds the current generation, waiting up to `timeout` for admission to
+    /// open when a committed Full/Open ticket is blocking it.
+    ///
+    /// The invariant is unchanged: a request is never bound to an overlay a
+    /// committed authoritative transaction has superseded. The wait only
+    /// turns "fail now" into "fail after `timeout`" -- once the worker clears
+    /// the ticket the binding is to the NEW generation, exactly as
+    /// [`Self::snapshot`] would return it. A registry with no generation at
+    /// all never waits, and a closed registry (worker gone) releases waiters
+    /// immediately because nothing will clear the ticket.
+    ///
+    /// Callers must not hold any lock the rebuild worker needs while waiting.
+    pub fn snapshot_within(
+        &self,
+        timeout: Duration,
+    ) -> Result<PreparedServingBinding, PreparedServingError> {
         // Keep the admission guard through the Arc clone. This is the
         // linearization point shared with mark_full_dirty/mark_open_dirty;
         // checking dirty and then dropping it before reading current would
         // allow a new reference to cross a publication barrier.
-        let dirty = self
+        let mut dirty = self
             .dirty
             .lock()
             .map_err(|_| PreparedServingError::RegistryUnavailable)?;
-        if !dirty.full_epochs.is_empty() {
-            self.trace_snapshot_access(false);
-            return Err(PreparedServingError::SnapshotRebuilding);
+        let wait_started = Instant::now();
+        let mut timed_out = false;
+        if admission_blocked(&dirty) && !timeout.is_zero() {
+            if self
+                .current
+                .read()
+                .map_err(|_| PreparedServingError::RegistryUnavailable)?
+                .is_none()
+            {
+                // No generation has ever been published: waiting cannot
+                // produce one, and the caller's answer is "unavailable", not
+                // "rebuilding".
+                self.trace_snapshot_access(false, 0, false);
+                return Err(PreparedServingError::SnapshotUnavailable);
+            }
+            let deadline = wait_started + timeout;
+            while admission_blocked(&dirty) {
+                if self.closed.load(Ordering::Acquire) {
+                    break;
+                }
+                let now = Instant::now();
+                if now >= deadline {
+                    timed_out = true;
+                    break;
+                }
+                let (guard, _) = self
+                    .dirty_changed
+                    .wait_timeout(dirty, deadline - now)
+                    .map_err(|_| PreparedServingError::RegistryUnavailable)?;
+                dirty = guard;
+            }
         }
-        if dirty
-            .open_epochs
-            .values()
-            .any(|epochs| epochs.values().any(|phase| *phase == DirtyPhase::Committed))
-        {
-            // Once an authoritative Open transaction commits, the public
+        let waited_us = elapsed_micros_u64(wait_started);
+        if admission_blocked(&dirty) {
+            // Once an authoritative Full/Open transaction commits, the public
             // observation/attempt vector may have advanced. Never bind a new
             // request to the superseded overlay while the worker catches up.
             // Arcs pinned before the barrier remain valid for their request.
-            self.trace_snapshot_access(false);
+            self.trace_snapshot_access(false, waited_us, timed_out);
             return Err(PreparedServingError::SnapshotRebuilding);
         }
         let snapshot = self
@@ -1451,11 +1549,42 @@ impl PreparedServingRegistry {
             .clone()
             .ok_or(PreparedServingError::SnapshotUnavailable)?;
         let forced_open_unavailable = dirty.open_epochs.keys().cloned().collect();
-        self.trace_snapshot_access(true);
+        self.trace_snapshot_access(true, waited_us, false);
         Ok(PreparedServingBinding {
             snapshot,
             forced_open_unavailable,
         })
+    }
+
+    /// Releases every [`Self::snapshot_within`] waiter and makes later calls
+    /// fail fast while a committed ticket blocks admission. Called when the
+    /// rebuild worker stops; the last-good generation stays bound for
+    /// zero-wait callers. Idempotent.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        // Take the dirty lock before notifying so a waiter that has checked
+        // the flag but not yet parked cannot miss the wake-up.
+        if let Ok(dirty) = self.dirty.lock() {
+            self.dirty_changed.notify_all();
+            drop(dirty);
+        }
+    }
+
+    fn reopen(&self) {
+        self.closed.store(false, Ordering::Release);
+    }
+
+    /// Number of [`Self::snapshot_within`] calls that gave up after waiting
+    /// their full timeout. A rising count means the rebuild window is longer
+    /// than the request admission wait.
+    pub fn snapshot_wait_timeouts(&self) -> u64 {
+        self.wait_timeouts.load(Ordering::Relaxed)
+    }
+
+    /// Wakes waiters after a transition that may have opened admission. Must
+    /// be called while `dirty` is held so the wake-up cannot be lost.
+    fn notify_admission_changed(&self, _dirty: &PreparedDirtyState) {
+        self.dirty_changed.notify_all();
     }
 
     fn snapshot_for_rebuild(&self) -> Result<Arc<PreparedServingSnapshot>, PreparedServingError> {
@@ -1466,7 +1595,7 @@ impl PreparedServingRegistry {
             .ok_or(PreparedServingError::SnapshotUnavailable)
     }
 
-    fn trace_snapshot_access(&self, hit: bool) {
+    fn trace_snapshot_access(&self, hit: bool, waited_us: u64, wait_timed_out: bool) {
         let (hits, misses) = if hit {
             (
                 self.hits.fetch_add(1, Ordering::Relaxed).saturating_add(1),
@@ -1480,12 +1609,22 @@ impl PreparedServingRegistry {
                     .saturating_add(1),
             )
         };
+        let wait_timeouts = if wait_timed_out {
+            self.wait_timeouts
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1)
+        } else {
+            self.wait_timeouts.load(Ordering::Relaxed)
+        };
         tracing::debug!(
             target: "bcsp_prepared_serving",
             phase = "prepared_snapshot_access",
             hit,
             hits,
             misses,
+            waited_us,
+            wait_timed_out,
+            wait_timeouts,
             publishes = self.publishes.load(Ordering::Relaxed),
             replacements = self.replacements.load(Ordering::Relaxed),
             evictions = self.evictions.load(Ordering::Relaxed),
@@ -1521,6 +1660,7 @@ impl PreparedServingRegistry {
             && dirty.full_epochs.get(&epoch) == Some(&DirtyPhase::Precommit)
         {
             dirty.full_epochs.remove(&epoch);
+            self.notify_admission_changed(&dirty);
         }
     }
 
@@ -1582,6 +1722,9 @@ impl PreparedServingRegistry {
             .entry(target.clone())
             .or_default()
             .insert(open_epoch, DirtyPhase::Committed);
+        // Still blocked by the committed Open ticket; waking is harmless and
+        // keeps "every ticket removal notifies" a rule without exceptions.
+        self.notify_admission_changed(&dirty);
         Ok(open_epoch)
     }
 
@@ -1600,6 +1743,7 @@ impl PreparedServingRegistry {
             if epochs.is_empty() {
                 dirty.open_epochs.remove(target);
             }
+            self.notify_admission_changed(&dirty);
         }
     }
 
@@ -1608,6 +1752,7 @@ impl PreparedServingRegistry {
             dirty.full_epochs.retain(|epoch, phase| {
                 !completed.contains(epoch) || *phase == DirtyPhase::Precommit
             });
+            self.notify_admission_changed(&dirty);
         }
     }
 
@@ -1621,6 +1766,7 @@ impl PreparedServingRegistry {
             if epochs.is_empty() {
                 dirty.open_epochs.remove(target);
             }
+            self.notify_admission_changed(&dirty);
         }
     }
 
@@ -1654,6 +1800,9 @@ impl PreparedServingRegistry {
         }
         let epoch = next_dirty_epoch(&mut dirty);
         dirty.full_epochs.insert(epoch, DirtyPhase::Committed);
+        // Admission stays blocked behind the committed Full ticket; see
+        // convert_full_dirty_to_open for why every removal still notifies.
+        self.notify_admission_changed(&dirty);
         Ok(epoch)
     }
 
@@ -1722,6 +1871,21 @@ struct OpenDirtyAdmission {
 fn next_dirty_epoch(dirty: &mut PreparedDirtyState) -> u64 {
     dirty.next_epoch = dirty.next_epoch.saturating_add(1).max(1);
     dirty.next_epoch
+}
+
+/// The single admission predicate: any Full ticket, or any COMMITTED Open
+/// ticket, closes new bindings. Precommit Open tickets only mask their target
+/// as conservatively unavailable and never block.
+fn admission_blocked(dirty: &PreparedDirtyState) -> bool {
+    !dirty.full_epochs.is_empty()
+        || dirty
+            .open_epochs
+            .values()
+            .any(|epochs| epochs.values().any(|phase| *phase == DirtyPhase::Committed))
+}
+
+fn elapsed_micros_u64(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
 /// Serializes and publishes one full Catalog/FTS generation from an
@@ -2981,6 +3145,7 @@ mod tests {
                 )
                 .expect("map worker Catalog"),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("publish worker Catalog");
         assert!(matches!(outcome, PublishOutcome::AppliedChanged { .. }));
@@ -3034,6 +3199,88 @@ mod tests {
                 },
             })
             .expect("finish worker Open attempt");
+    }
+
+    #[test]
+    fn core_code_dictionary_and_lookup_meet_in_ascii_uppercase() {
+        let target = target("NB");
+        let mut storage = OperationalStorage::open_in_memory().expect("in-memory storage");
+        let body = serde_json::to_vec(&[json!({
+            "campusCode": target.campus().as_str(),
+            "courseString": "01:198:111",
+            "subject": "198",
+            "courseNumber": "111",
+            "title": "Mixed-case core code",
+            "level": "U",
+            "preReqNotes": "",
+            "coreCodes": [{
+                "coreCode": "AHo",
+                "coreCodeDescription": "Arts and Humanities (o)"
+            }],
+            "sections": [{
+                "campusCode": target.campus().as_str(),
+                "index": "10001",
+                "number": "01",
+                "sectionCourseType": "O",
+                "openStatus": true,
+                "meetingTimes": [{"meetingModeCode": "92", "campusLocation": "O"}],
+                "instructors": [{"name": "Pat Smith"}]
+            }]
+        })])
+        .expect("core Catalog body");
+        let normalized = normalize_target(
+            target.clone(),
+            decode_catalog_payload(&body).expect("decode core Catalog"),
+            SourceProvenance::from_body("SYNTHETIC_CORE_CASE", "2026-07-18T00:00:00Z", &body),
+        )
+        .expect("normalize core Catalog");
+        storage
+            .apply_catalog_refresh(
+                to_catalog_refresh_command(
+                    &normalized,
+                    trace(61),
+                    "2026-07-18T00:00:00Z",
+                    "2026-07-18T00:00:01Z",
+                )
+                .expect("map core Catalog"),
+                EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
+            )
+            .expect("publish core Catalog");
+        let published = storage
+            .published_catalog_snapshot(&target)
+            .expect("read published Catalog")
+            .expect("published Catalog");
+        let catalog = to_normalized_catalog_v1(&published).expect("normalized Catalog");
+        assert_eq!(
+            crate::query_service::known_value(&catalog.course_variants[0].core_codes),
+            Some(&vec!["AHo".to_owned()]),
+            "the stored variant keeps the feed's spelling"
+        );
+
+        let fts = PreparedFtsIndex::build(&[]).expect("empty FTS");
+        let catalogs = BTreeMap::from([(target.clone(), Arc::new(catalog))]);
+        let (dictionaries, _) =
+            build_prepared_dictionaries(&catalogs, &fts, 0, None).expect("dictionaries");
+        let core = &dictionaries[&target].dynamic_values[&FilterFieldId::CourseCoreCode];
+        assert_eq!(
+            core.iter().cloned().collect::<Vec<_>>(),
+            vec!["AHO".to_owned()],
+            "the dictionary holds the canonical uppercase form"
+        );
+        for requested in ["AHO", "AHo", "aho"] {
+            assert!(
+                core.contains(&normalize_dynamic_value(
+                    FilterFieldId::CourseCoreCode,
+                    requested
+                )),
+                "{requested} must validate against the AHo dictionary"
+            );
+        }
+        assert!(!core.contains(&normalize_dynamic_value(
+            FilterFieldId::CourseCoreCode,
+            "AHP"
+        )));
     }
 
     #[test]
@@ -3108,9 +3355,21 @@ mod tests {
             registry.snapshot(),
             Err(PreparedServingError::SnapshotRebuilding)
         ));
+        // The zero-wait entry points must never drift apart.
+        assert!(matches!(
+            registry.snapshot_within(StdDuration::ZERO),
+            Err(PreparedServingError::SnapshotRebuilding)
+        ));
         drop(full);
         assert!(Arc::ptr_eq(
             registry.snapshot().expect("restored").generation(),
+            &old
+        ));
+        assert!(Arc::ptr_eq(
+            registry
+                .snapshot_within(StdDuration::ZERO)
+                .expect("restored via zero wait")
+                .generation(),
             &old
         ));
 
@@ -3123,6 +3382,14 @@ mod tests {
             &BTreeSet::from([target.clone()])
         );
         assert!(Arc::ptr_eq(conservative.generation(), &old));
+        let conservative_zero_wait = registry
+            .snapshot_within(StdDuration::ZERO)
+            .expect("conservative generation via zero wait");
+        assert_eq!(
+            conservative_zero_wait.forced_open_unavailable(),
+            conservative.forced_open_unavailable()
+        );
+        assert!(Arc::ptr_eq(conservative_zero_wait.generation(), &old));
         drop(open);
         assert!(Arc::ptr_eq(
             registry.snapshot().expect("rolled back").generation(),
@@ -3204,6 +3471,15 @@ mod tests {
             registry.snapshot(),
             Err(PreparedServingError::SnapshotRebuilding)
         ));
+        assert!(matches!(
+            registry.snapshot_within(StdDuration::ZERO),
+            Err(PreparedServingError::SnapshotRebuilding)
+        ));
+        assert_eq!(
+            registry.snapshot_wait_timeouts(),
+            0,
+            "a zero wait is a miss, not a timed-out wait"
+        );
         let epoch = match receiver.try_recv().expect("committed rebuild demand") {
             PreparedRebuildRequest::Open(request_target, epoch) => {
                 assert_eq!(request_target, target);
@@ -3218,6 +3494,13 @@ mod tests {
         registry.clear_open_tickets(&target, &BTreeSet::from([epoch]));
         let admitted = registry.snapshot().expect("rebuilt snapshot admitted");
         assert!(Arc::ptr_eq(admitted.generation(), &published));
+        assert!(Arc::ptr_eq(
+            registry
+                .snapshot_within(StdDuration::ZERO)
+                .expect("rebuilt snapshot admitted via zero wait")
+                .generation(),
+            &published
+        ));
         assert_eq!(
             admitted
                 .open_vector(std::slice::from_ref(&target))
@@ -3231,6 +3514,272 @@ mod tests {
                 .observation_sequence,
             7
         );
+    }
+
+    fn dead_channel_demand(
+        registry: &Arc<PreparedServingRegistry>,
+    ) -> PreparedServingRebuildDemand {
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        PreparedServingRebuildDemand {
+            sender,
+            registry: Arc::clone(registry),
+            lifecycle: PublicationLifecycle::default(),
+        }
+    }
+
+    #[test]
+    fn snapshot_within_returns_immediately_when_admission_is_open() {
+        let target = target("NB");
+        let (registry, old) = published_registry(&target);
+        let started = Instant::now();
+        let binding = registry
+            .snapshot_within(StdDuration::from_secs(1))
+            .expect("open admission binds without waiting");
+        assert!(Arc::ptr_eq(binding.generation(), &old));
+        assert!(Arc::ptr_eq(
+            binding.generation(),
+            registry.snapshot().expect("zero-wait twin").generation()
+        ));
+        assert!(binding.forced_open_unavailable().is_empty());
+        assert!(
+            started.elapsed() < StdDuration::from_millis(200),
+            "an open registry must not park the caller"
+        );
+        assert_eq!(registry.snapshot_wait_timeouts(), 0);
+    }
+
+    #[test]
+    fn snapshot_within_waits_for_committed_open_ticket_to_clear() {
+        let target = target("NB");
+        let (registry, old) = published_registry(&target);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let demand = PreparedServingRebuildDemand {
+            sender,
+            registry: Arc::clone(&registry),
+            lifecycle: PublicationLifecycle::default(),
+        };
+        demand
+            .begin_open_publication(target.clone())
+            .expect("Open publication barrier")
+            .commit();
+        let epoch = match receiver.try_recv().expect("committed rebuild demand") {
+            PreparedRebuildRequest::Open(_, epoch) => epoch,
+            other => panic!("unexpected request: {other:?}"),
+        };
+        assert!(matches!(
+            registry.snapshot(),
+            Err(PreparedServingError::SnapshotRebuilding)
+        ));
+
+        let clearing_registry = Arc::clone(&registry);
+        let clearing_target = target.clone();
+        let clearing_old = Arc::clone(&old);
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(StdDuration::from_millis(50));
+            let published = clearing_registry
+                .publish_if_unchanged(
+                    Some(&clearing_old),
+                    dummy_snapshot(&clearing_target, 8, 9, None),
+                )
+                .expect("publish rebuilt Open overlay");
+            clearing_registry.clear_open_tickets(&clearing_target, &BTreeSet::from([epoch]));
+            published
+        });
+
+        let started = Instant::now();
+        let admitted = registry
+            .snapshot_within(StdDuration::from_secs(2))
+            .expect("the wait ends when the worker clears the ticket");
+        let waited = started.elapsed();
+        let published = worker.join().expect("clearing thread");
+        assert!(
+            Arc::ptr_eq(admitted.generation(), &published),
+            "the waiter binds the NEW generation"
+        );
+        assert!(!Arc::ptr_eq(admitted.generation(), &old));
+        assert_eq!(
+            admitted
+                .open_vector(std::slice::from_ref(&target))
+                .expect("vector")[0]
+                .observation_sequence,
+            8
+        );
+        assert!(
+            waited >= StdDuration::from_millis(40) && waited < StdDuration::from_secs(2),
+            "waited {waited:?}"
+        );
+        assert_eq!(registry.snapshot_wait_timeouts(), 0);
+    }
+
+    #[test]
+    fn snapshot_within_times_out_with_snapshot_rebuilding_when_ticket_persists() {
+        let target = target("NB");
+        let (registry, _old) = published_registry(&target);
+        let demand = dead_channel_demand(&registry);
+        demand
+            .begin_open_publication(target.clone())
+            .expect("Open publication barrier")
+            .commit();
+
+        let started = Instant::now();
+        let result = registry.snapshot_within(StdDuration::from_millis(50));
+        let waited = started.elapsed();
+        assert!(matches!(
+            result,
+            Err(PreparedServingError::SnapshotRebuilding)
+        ));
+        assert!(
+            waited >= StdDuration::from_millis(50) && waited < StdDuration::from_millis(500),
+            "waited {waited:?}"
+        );
+        assert_eq!(registry.snapshot_wait_timeouts(), 1);
+        assert!(matches!(
+            registry.snapshot(),
+            Err(PreparedServingError::SnapshotRebuilding)
+        ));
+        assert_eq!(
+            registry.snapshot_wait_timeouts(),
+            1,
+            "a zero-wait miss is not a timed-out wait"
+        );
+    }
+
+    #[test]
+    fn snapshot_within_waits_through_full_ticket_and_rollback_wakes_waiters() {
+        let target = target("NB");
+        let (registry, old) = published_registry(&target);
+        let full_epoch = registry.mark_full_dirty().expect("Precommit full ticket");
+        assert!(matches!(
+            registry.snapshot(),
+            Err(PreparedServingError::SnapshotRebuilding)
+        ));
+
+        let rollback_registry = Arc::clone(&registry);
+        let rollback = std::thread::spawn(move || {
+            std::thread::sleep(StdDuration::from_millis(50));
+            rollback_registry.rollback_full_dirty(full_epoch);
+        });
+        let started = Instant::now();
+        let restored = registry
+            .snapshot_within(StdDuration::from_secs(2))
+            .expect("rollback wakes the waiter");
+        let waited = started.elapsed();
+        rollback.join().expect("rollback thread");
+        assert!(Arc::ptr_eq(restored.generation(), &old));
+        assert!(
+            waited >= StdDuration::from_millis(40) && waited < StdDuration::from_secs(2),
+            "waited {waited:?}"
+        );
+
+        // A Precommit Open ticket never blocks: it only masks its target.
+        let admission = registry
+            .mark_open_dirty(&target)
+            .expect("Precommit open ticket");
+        let started = Instant::now();
+        let masked = registry
+            .snapshot_within(StdDuration::from_secs(2))
+            .expect("Precommit Open admits conservatively");
+        assert!(started.elapsed() < StdDuration::from_millis(200));
+        assert!(Arc::ptr_eq(masked.generation(), &old));
+        assert_eq!(
+            masked.forced_open_unavailable(),
+            &BTreeSet::from([target.clone()])
+        );
+        registry.rollback_open_dirty(&target, admission);
+        let unmasked = registry
+            .snapshot_within(StdDuration::from_secs(2))
+            .expect("rolled back");
+        assert!(unmasked.forced_open_unavailable().is_empty());
+        assert_eq!(registry.snapshot_wait_timeouts(), 0);
+    }
+
+    #[test]
+    fn snapshot_within_does_not_wait_when_no_generation_is_published() {
+        let registry = Arc::new(PreparedServingRegistry::default());
+        let started = Instant::now();
+        assert!(matches!(
+            registry.snapshot_within(StdDuration::from_secs(5)),
+            Err(PreparedServingError::SnapshotUnavailable)
+        ));
+        assert!(started.elapsed() < StdDuration::from_millis(200));
+
+        // Even behind a committed ticket: nothing can be waited for.
+        let target = target("NB");
+        let demand = dead_channel_demand(&registry);
+        demand
+            .begin_open_publication(target)
+            .expect("Open publication barrier")
+            .commit();
+        let started = Instant::now();
+        assert!(matches!(
+            registry.snapshot_within(StdDuration::from_secs(5)),
+            Err(PreparedServingError::SnapshotUnavailable)
+        ));
+        assert!(started.elapsed() < StdDuration::from_millis(200));
+        assert_eq!(registry.snapshot_wait_timeouts(), 0);
+    }
+
+    #[test]
+    fn closing_the_registry_wakes_waiters_and_fails_fast_afterwards() {
+        let target = target("NB");
+        let (registry, old) = published_registry(&target);
+        let demand = dead_channel_demand(&registry);
+        demand
+            .begin_open_publication(target.clone())
+            .expect("Open publication barrier")
+            .commit();
+
+        let closing_registry = Arc::clone(&registry);
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(StdDuration::from_millis(50));
+            closing_registry.close();
+        });
+        let started = Instant::now();
+        let result = registry.snapshot_within(StdDuration::from_secs(5));
+        let waited = started.elapsed();
+        closer.join().expect("closing thread");
+        assert!(matches!(
+            result,
+            Err(PreparedServingError::SnapshotRebuilding)
+        ));
+        assert!(
+            waited >= StdDuration::from_millis(40) && waited < StdDuration::from_secs(2),
+            "close must release the waiter well before its timeout; waited {waited:?}"
+        );
+        assert_eq!(
+            registry.snapshot_wait_timeouts(),
+            0,
+            "a close-released waiter did not time out"
+        );
+
+        // Closed and still blocked: fail fast, no wait at all.
+        let started = Instant::now();
+        assert!(matches!(
+            registry.snapshot_within(StdDuration::from_secs(5)),
+            Err(PreparedServingError::SnapshotRebuilding)
+        ));
+        assert!(started.elapsed() < StdDuration::from_millis(200));
+
+        // Closed only affects waiting: the last-good generation still binds
+        // once nothing blocks admission.
+        let dirty_epoch = registry
+            .dirty
+            .lock()
+            .expect("dirty state")
+            .open_epochs
+            .get(&target)
+            .and_then(|epochs| epochs.keys().next().copied())
+            .expect("committed epoch");
+        registry.clear_open_tickets(&target, &BTreeSet::from([dirty_epoch]));
+        assert!(Arc::ptr_eq(
+            registry
+                .snapshot_within(StdDuration::from_secs(1))
+                .expect("closed registry still serves its LKG")
+                .generation(),
+            &old
+        ));
+        registry.reopen();
+        assert!(!registry.closed.load(Ordering::Relaxed));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3328,18 +3877,25 @@ mod tests {
             Err(PreparedServingError::SnapshotRebuilding)
         ));
 
-        let new_binding = tokio::time::timeout(StdDuration::from_secs(5), async {
-            loop {
-                if let Ok(binding) = registry.snapshot()
-                    && !Arc::ptr_eq(binding.generation(), &old)
-                {
-                    break binding;
-                }
-                tokio::task::yield_now().await;
-            }
+        // A request path parks on the committed ticket exactly the way the
+        // HTTP surface does (a blocking-pool thread) and is released by the
+        // real worker's clear_open_tickets, bound to the generation it built.
+        let waiting_registry = Arc::clone(&registry);
+        let new_binding = tokio::task::spawn_blocking(move || {
+            waiting_registry.snapshot_within(StdDuration::from_secs(5))
         })
         .await
-        .expect("worker must publish without deadlock");
+        .expect("waiting task")
+        .expect("worker must clear the committed ticket within the admission wait");
+        assert!(!Arc::ptr_eq(new_binding.generation(), &old));
+        assert_eq!(registry.snapshot_wait_timeouts(), 0);
+        assert!(Arc::ptr_eq(
+            registry
+                .snapshot()
+                .expect("zero-wait binding after the worker cleared")
+                .generation(),
+            new_binding.generation()
+        ));
         let new = new_binding.generation();
         assert!(Arc::ptr_eq(&new.foundation, &old_foundation));
         let new_vector = new

@@ -16,6 +16,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::refresh_coordinator::{
     ConcurrentOpenExecution, ConcurrentOpenSchedule, TargetWorkflowControl,
 };
+use crate::refresh_maintenance::{WalMaintenanceReason, WalMaintenanceSignal, WalMaintenanceState};
 use crate::{
     CoordinatorDispatchOutcome, CoordinatorError, ManualTargetRetryRequest, ProductStorageAccess,
     RefreshPolicyProvider, RefreshUpstream, ScheduledRefreshTarget, SharedRefreshCoordinator,
@@ -77,6 +78,80 @@ enum RuntimeWorkflowCompletion<C> {
 struct PendingPrimary<C> {
     entry: TargetCoordinator<C>,
     outcome: CoordinatorOutcome,
+}
+
+/// The refresh runtime's WAL maintenance driver.
+///
+/// The commit path raises a flag; this consumes it on the supervisor's
+/// 250 ms tick and runs the checkpoint on the blocking pool, one run at a
+/// time, moving the policy state into the task and back. A checkpoint is
+/// never awaited inline: a RESTART that waits out a busy timeout must not
+/// stall target selection.
+struct WalMaintenance<S> {
+    signal: WalMaintenanceSignal,
+    storage: S,
+    state: Option<WalMaintenanceState>,
+    running: Option<JoinHandle<WalMaintenanceState>>,
+}
+
+impl<S> WalMaintenance<S>
+where
+    S: ProductStorageAccess + Clone + Send + 'static,
+{
+    fn new(signal: WalMaintenanceSignal, storage: S) -> Self {
+        Self {
+            signal,
+            storage,
+            state: Some(WalMaintenanceState::default()),
+            running: None,
+        }
+    }
+
+    async fn tick(&mut self) {
+        if let Some(task) = &self.running {
+            if !task.is_finished() {
+                return;
+            }
+            self.reclaim().await;
+        }
+        let Some(reason) = self.signal.take() else {
+            return;
+        };
+        let Some(mut state) = self.state.take() else {
+            return;
+        };
+        let storage = self.storage.clone();
+        self.running = Some(tokio::task::spawn_blocking(move || {
+            run_wal_maintenance(&mut state, &storage, reason);
+            state
+        }));
+    }
+
+    async fn reclaim(&mut self) {
+        if let Some(task) = self.running.take() {
+            match task.await {
+                Ok(state) => self.state = Some(state),
+                Err(_) => {
+                    tracing::error!(code = "WAL_MAINTENANCE_TASK_FAILED");
+                    self.state = Some(WalMaintenanceState::default());
+                }
+            }
+        }
+    }
+
+    async fn finish(&mut self) {
+        self.reclaim().await;
+    }
+}
+
+fn run_wal_maintenance<S>(
+    state: &mut WalMaintenanceState,
+    storage: &S,
+    reason: WalMaintenanceReason,
+) where
+    S: ProductStorageAccess,
+{
+    let _ = state.run(storage, reason);
 }
 
 /// Lifecycle handle for one process-wide, bounded target supervisor.
@@ -244,7 +319,10 @@ impl RefreshRuntime {
         let (command_sender, mut command_receiver) =
             mpsc::unbounded_channel::<RefreshRuntimeCommand>();
 
+        let maintenance_signal = template.maintenance_signal();
+        let maintenance_storage = template.storage_access();
         let task = tokio::spawn(async move {
+            let mut maintenance = WalMaintenance::new(maintenance_signal, maintenance_storage);
             let mut desired_product_demand = BTreeSet::new();
             let mut removed_targets = BTreeSet::new();
             let mut running: JoinSet<RuntimeWorkflowCompletion<SharedRefreshCoordinator<S, U, P>>> =
@@ -455,6 +533,7 @@ impl RefreshRuntime {
                         }
                     }
                     _ = interval.tick() => {
+                        maintenance.tick().await;
                         clear_expired_origin_pause(&mut origin_pause);
                         if origin_pause.is_some() {
                             continue;
@@ -597,6 +676,7 @@ impl RefreshRuntime {
             for entry in target_coordinators.values() {
                 entry.coordinator.stop();
             }
+            maintenance.finish().await;
         });
 
         Ok(Self {

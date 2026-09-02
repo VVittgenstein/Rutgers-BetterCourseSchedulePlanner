@@ -44,15 +44,19 @@ pub use model::{
     EpisodeHistorySummary, EpisodeSummaryInput, FilterAssociation, HistoryFilter, HistoryPage,
     HistoryWriteOutcome, LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest,
     PersonalMigrationRecord, PersonalResetResult, PersonalStateSnapshot, PersonalTableCounts,
-    SavedViewContent, SavedViewDefinition, SavedViewDeleteResult, SavedViewIncompatibility,
-    SavedViewMatch, SavedViewMutation, SavedViewReviewCode, SavedViewReviewReason,
-    SavedViewRevision, SavedViewsDeleteAllResult, SelectionMutation, SettingsRevision,
-    SqliteConfiguration, StoredCurrentFilters, StoredSettings, UnixMillis, UserStateRevision,
-    VolumePercent, WalCheckpoint, WatchFastLaneSeconds,
+    PersonalTransactionState, SavedViewContent, SavedViewDefinition, SavedViewDeleteResult,
+    SavedViewIncompatibility, SavedViewMatch, SavedViewMutation, SavedViewReviewCode,
+    SavedViewReviewReason, SavedViewRevision, SavedViewsDeleteAllResult, SelectionMutation,
+    SettingsRevision, SqliteConfiguration, StoredCurrentFilters, StoredSettings, UnixMillis,
+    UserStateRevision, VolumePercent, WalCheckpoint, WalCheckpointMode, WatchFastLaneSeconds,
 };
 pub use store::PersonalStateStore;
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-local-user-state";
+/// Upper bound SQLite keeps the `-wal` file at after a checkpoint that resets
+/// the log. Set on every writer connection this crate opens, because the
+/// connection that resets the log is the one that truncates the file.
+pub const WAL_JOURNAL_SIZE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 pub const PERSONAL_MIGRATION_ID_BASE: u32 = 10_000;
 pub const PERSONAL_MIGRATION_LEDGER_TABLE: &str = "personal_migration_ledger";
 pub const PERSONAL_DATA_TABLE_ALLOWLIST: &[&str] = &[

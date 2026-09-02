@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use bcsp_application::{RederivationError, rederive_stored_delivery_now};
 use bcsp_local_user_state::{PersonalStateError, PersonalStateStore};
 use bcsp_operational_storage::OperationalStorage;
 use thiserror::Error;
@@ -57,8 +58,13 @@ impl OperationalGate {
         let canonical_data = prepare_data_directory(&paths)?;
         verify_data_directory_writable(paths.data_directory())?;
         verify_database_target_before_open(paths.database(), &canonical_data)?;
-        let operational = OperationalStorage::open(paths.database())
+        let mut operational = OperationalStorage::open(paths.database())
             .map_err(LocalBootstrapError::OperationalStorage)?;
+        // Stored derived delivery columns must match this binary's derivation
+        // rule before any prepared-serving build or refresh runtime reads
+        // them; the projection rejects rows written under another rule.
+        rederive_stored_delivery_now(&mut operational)
+            .map_err(LocalBootstrapError::CatalogDerivation)?;
         let personal = PersonalStateStore::open(paths.database())
             .map_err(LocalBootstrapError::PersonalState)?;
         let refresh_storage = OperationalStorage::open(paths.database())
@@ -198,6 +204,8 @@ pub enum LocalBootstrapError {
     DatabaseEscapesDataDirectory { expected: PathBuf, actual: PathBuf },
     #[error("failed to open operational storage")]
     OperationalStorage(#[source] bcsp_operational_storage::StorageError),
+    #[error("failed to re-derive the stored catalog delivery columns")]
+    CatalogDerivation(#[source] RederivationError),
     #[error("failed to open personal state in the package-local database")]
     PersonalState(#[source] PersonalStateError),
 }

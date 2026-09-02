@@ -1,5 +1,6 @@
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bcsp_application::{
     ApplicationClock, CoordinatorStatusSink, ExtensionRequest, FixedRefreshPolicyProvider,
@@ -7,10 +8,11 @@ use bcsp_application::{
     PRODUCT_COURSE_DETAIL_PATH, PRODUCT_COURSE_SEARCH_PATH, PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH,
     PRODUCT_FILTER_OPTIONS_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
     PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
-    PRODUCT_SERVICE_STATUS_PATH, REFRESH_MAX_CONCURRENCY, RefreshPolicy, RefreshPolicyProvider,
-    RefreshPolicyReadError, RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY,
-    ServiceStatusRegistry, SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand,
-    TargetWorkActivity, TargetWorkflowKind, WorkflowOperationActivity, WorkflowOperationId,
+    PRODUCT_SERVICE_STATUS_PATH, PreparedServingError, PreparedServingRebuildRuntime,
+    REFRESH_MAX_CONCURRENCY, RefreshPolicy, RefreshPolicyProvider, RefreshPolicyReadError,
+    RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY, ServiceStatusRegistry,
+    SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand, TargetWorkActivity,
+    TargetWorkflowKind, WorkflowOperationActivity, WorkflowOperationId,
 };
 use bcsp_catalog::{normalize_target, to_catalog_refresh_command, to_discovery_refresh_command};
 use bcsp_contracts::{
@@ -65,6 +67,7 @@ struct Fixture {
     status: Arc<ServiceStatusRegistry>,
     target: TermCampusKey,
     section: SectionKey,
+    content_version: u64,
 }
 
 fn trace(suffix: u8) -> TraceId {
@@ -151,6 +154,26 @@ fn publish_catalog_subject(
     started_at: &str,
     completed_at: &str,
 ) -> u64 {
+    publish_catalog_subject_with_core(
+        storage,
+        target,
+        (subject, subject_description),
+        observation_suffix,
+        started_at,
+        completed_at,
+        ("CCO", "Communication"),
+    )
+}
+
+fn publish_catalog_subject_with_core(
+    storage: &mut OperationalStorage,
+    target: &TermCampusKey,
+    (subject, subject_description): (&str, &str),
+    observation_suffix: u8,
+    started_at: &str,
+    completed_at: &str,
+    (core_code, core_description): (&str, &str),
+) -> u64 {
     let body = serde_json::to_vec(&serde_json::json!([{
         "campusCode": target.campus().as_str(),
         "courseString": format!("01:{subject}:111"),
@@ -159,8 +182,8 @@ fn publish_catalog_subject(
         "courseNumber": "111",
         "title": "Introduction to a Synthetic Subject",
         "coreCodes": [{
-            "coreCode": "CCO",
-            "coreCodeDescription": "Communication"
+            "coreCode": core_code,
+            "coreCodeDescription": core_description
         }],
         "sections": [{
             "campusCode": target.campus().as_str(),
@@ -190,6 +213,7 @@ fn publish_catalog_subject(
             )
             .expect("Catalog command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("publish Catalog")
     {
@@ -220,6 +244,26 @@ fn publish_open_with_suffix(
     attempt_suffix: u8,
     run_suffix: u8,
 ) {
+    publish_open_state_with_suffix(
+        storage,
+        target,
+        section,
+        catalog_content_version,
+        attempt_suffix,
+        run_suffix,
+        true,
+    );
+}
+
+fn publish_open_state_with_suffix(
+    storage: &mut OperationalStorage,
+    target: &TermCampusKey,
+    section: &SectionKey,
+    catalog_content_version: u64,
+    attempt_suffix: u8,
+    run_suffix: u8,
+    open: bool,
+) {
     storage
         .begin_open_pull_attempt(&BeginOpenPullAttemptCommand {
             attempt_id: trace(attempt_suffix),
@@ -236,12 +280,12 @@ fn publish_open_with_suffix(
         .expect("begin synthetic Open pull");
     storage
         .finish_open_pull_success(FinishOpenPullSuccessCommand {
-                gate_hold: false,
-                gate_catalog_set_identity: None,
+            gate_hold: false,
+            gate_catalog_set_identity: None,
             attempt_id: trace(attempt_suffix),
             completed_at: COMPLETED.to_owned(),
-            open_sections: vec![section.clone()],
-            source_value_count: 1,
+            open_sections: open.then(|| section.clone()).into_iter().collect(),
+            source_value_count: u64::from(open),
             watched_sections: vec![section.clone()],
             http: OpenHttpAuditMetadata {
                 http_status: Some(200),
@@ -302,7 +346,206 @@ fn fixture() -> Fixture {
         status,
         target,
         section,
+        content_version,
     }
+}
+
+/// Holds a mutex on a helper thread until released, so a test can keep the
+/// rebuild worker parked on its storage lock without holding a std guard
+/// across an await.
+struct HeldMutex {
+    release: Option<mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HeldMutex {
+    fn hold<T: Send + 'static>(mutex: Arc<Mutex<T>>) -> Self {
+        let (held, held_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || {
+            let guard = mutex.lock().expect("hold the mutex");
+            held.send(()).expect("announce the hold");
+            let _ = release_rx.recv();
+            drop(guard);
+        });
+        held_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the holder thread acquires the mutex");
+        Self {
+            release: Some(release),
+            thread: Some(thread),
+        }
+    }
+
+    fn release(mut self) {
+        drop(self.release.take());
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("holder thread");
+        }
+    }
+}
+
+fn spawn_prepared_worker(
+    storage: &Arc<Mutex<OperationalStorage>>,
+    routes: &Routes,
+) -> PreparedServingRebuildRuntime {
+    let policy = RefreshPolicy::try_new(Duration::from_secs(600), GeneralOpenInterval::public())
+        .expect("fixed public refresh policy");
+    PreparedServingRebuildRuntime::spawn(
+        storage.clone(),
+        FixedRefreshPolicyProvider::new(policy),
+        OpenCounterAudience::Public,
+        routes.open_runtime(),
+        routes.prepared_serving_registry(),
+    )
+}
+
+async fn course_search_response(
+    routes: Arc<Routes>,
+) -> (bcsp_application::ExtensionResponse, Duration) {
+    tokio::task::spawn_blocking(move || {
+        let body = serde_json::to_vec(&HttpRequestEnvelope::new(CourseQueryRequestV1 {
+            filters: search_filters(),
+            page: PageRequestV1::default(),
+            sort: CourseSortV1::default(),
+        }))
+        .expect("request envelope");
+        let started = Instant::now();
+        let response = routes.handle(ExtensionRequest::new(
+            RequestMethod::Post,
+            PRODUCT_COURSE_SEARCH_PATH,
+            None,
+            body,
+        ));
+        (response, started.elapsed())
+    })
+    .await
+    .expect("request task")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn course_search_issued_during_committed_open_rebuild_succeeds_once_the_worker_clears() {
+    let fixture = fixture();
+    let routes = Arc::new(
+        fixture
+            .routes
+            .with_prepared_admission_wait(Duration::from_secs(5)),
+    );
+    let registry = routes.prepared_serving_registry();
+    let worker = spawn_prepared_worker(&fixture.storage, &routes);
+    let demand = worker.demand();
+    let old = Arc::clone(
+        registry
+            .snapshot()
+            .expect("initial generation")
+            .generation(),
+    );
+
+    // The authoritative Open attempt commits behind a publication barrier
+    // exactly as the refresh coordinator does it: begin, write, commit.
+    let barrier = demand
+        .begin_open_publication(fixture.target.clone())
+        .expect("Open publication barrier");
+    {
+        let mut storage = fixture.storage.lock().expect("authoritative writer lock");
+        publish_open_state_with_suffix(
+            &mut storage,
+            &fixture.target,
+            &fixture.section,
+            fixture.content_version,
+            5,
+            6,
+            false,
+        );
+    }
+    // Keep the worker from clearing the ticket until the request is parked.
+    let held = HeldMutex::hold(fixture.storage.clone());
+    barrier.commit();
+    assert!(matches!(
+        registry.snapshot(),
+        Err(PreparedServingError::SnapshotRebuilding)
+    ));
+
+    let request = tokio::spawn(course_search_response(routes.clone()));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        !request.is_finished(),
+        "the request must wait for the committed ticket instead of failing"
+    );
+    held.release();
+
+    let (response, elapsed) = request.await.expect("request task");
+    assert_eq!(
+        response.status(),
+        200,
+        "{}",
+        String::from_utf8_lossy(response.body())
+    );
+    assert!(elapsed >= Duration::from_millis(100), "elapsed {elapsed:?}");
+    let courses =
+        serde_json::from_slice::<HttpSuccessEnvelope<CourseQueryResponseV1>>(response.body())
+            .expect("success envelope")
+            .into_data();
+    assert_eq!(
+        courses.items[0].variants[0].sections[0].open.state,
+        LiveOpenStateV1::Closed,
+        "the response reflects the attempt that committed behind the barrier"
+    );
+    let admitted = registry.snapshot().expect("cleared ticket");
+    assert!(!Arc::ptr_eq(admitted.generation(), &old));
+    let vector = admitted
+        .open_vector(std::slice::from_ref(&fixture.target))
+        .expect("open vector");
+    let old_vector = old
+        .open_vector(std::slice::from_ref(&fixture.target))
+        .expect("old vector");
+    assert!(vector[0].attempt_sequence > old_vector[0].attempt_sequence);
+    assert_eq!(registry.snapshot_wait_timeouts(), 0);
+
+    worker.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn course_search_returns_503_after_admission_wait_timeout() {
+    let fixture = fixture();
+    let routes = Arc::new(
+        fixture
+            .routes
+            .with_prepared_admission_wait(Duration::from_millis(50)),
+    );
+    assert_eq!(routes.prepared_admission_wait(), Duration::from_millis(50));
+    let registry = routes.prepared_serving_registry();
+    let worker = spawn_prepared_worker(&fixture.storage, &routes);
+    let demand = worker.demand();
+
+    let barrier = demand
+        .begin_open_publication(fixture.target.clone())
+        .expect("Open publication barrier");
+    // The worker never gets its storage lock, so the ticket is never cleared.
+    let held = HeldMutex::hold(fixture.storage.clone());
+    barrier.commit();
+
+    let (response, elapsed) = course_search_response(routes.clone()).await;
+    assert_eq!(response.status(), 503);
+    let error: ApiErrorEnvelope = serde_json::from_slice(response.body()).expect("error envelope");
+    assert_eq!(error.error().code(), ApiErrorCode::UpstreamUnavailable);
+    assert!(
+        elapsed >= Duration::from_millis(50) && elapsed < Duration::from_secs(2),
+        "elapsed {elapsed:?}"
+    );
+    assert_eq!(registry.snapshot_wait_timeouts(), 1);
+
+    // Once the worker can run it clears the ticket and the same request succeeds.
+    held.release();
+    let waiting_registry = registry.clone();
+    tokio::task::spawn_blocking(move || waiting_registry.snapshot_within(Duration::from_secs(5)))
+        .await
+        .expect("waiting task")
+        .expect("the worker clears the ticket once it can rebuild");
+    let (response, _) = course_search_response(routes.clone()).await;
+    assert_eq!(response.status(), 200);
+
+    worker.shutdown().await;
 }
 
 fn post<Request, Response>(
@@ -1081,6 +1324,111 @@ fn exact_selected_target_gate_ignores_unselected_unready_targets() {
     let options: FilterOptionsResponseV2 =
         post(&fixture.routes, PRODUCT_FILTER_OPTIONS_PATH, options);
     assert_eq!(options.options[0].value, "Pat Smith");
+}
+
+#[test]
+fn mixed_case_core_codes_validate_and_match_in_their_canonical_uppercase_form() {
+    let directory = TempDir::new().expect("temporary directory");
+    let database = directory.path().join("mixed-case-core.sqlite");
+    let mut storage = OperationalStorage::open(database).expect("operational SQLite");
+    publish_discovery(&mut storage);
+    let target = TermCampusKey::try_new("72026", "NB").expect("synthetic target");
+    let section = SectionKey::try_new("72026", "NB", "10001").expect("synthetic section");
+    let content_version = publish_catalog_subject_with_core(
+        &mut storage,
+        &target,
+        ("198", "Computer Science"),
+        2,
+        STARTED,
+        COMPLETED,
+        ("AHo", "Arts and Humanities (o)"),
+    );
+    publish_open(&mut storage, &target, &section, content_version);
+    let now = OffsetDateTime::from_unix_timestamp(WINDOW_NOW_UNIX).expect("2026-07-17 timestamp");
+    let policy = RefreshPolicy::try_new(Duration::from_secs(600), GeneralOpenInterval::public())
+        .expect("fixed public refresh policy");
+    let runtime = SharedRuntimeContext::new(
+        OpenCounterAudience::Public,
+        FixedClock(now),
+        FixedRefreshPolicyProvider::new(policy),
+    );
+    let routes = SharedProductRoutes::new(
+        Arc::new(Mutex::new(storage)),
+        runtime,
+        Arc::new(OpenRuntimeSnapshotRegistry::default()),
+    )
+    .with_service_status(Arc::new(ServiceStatusRegistry::new(
+        ServiceRuntimeV1::Public,
+    )));
+
+    // Discovery keeps the feed's spelling: it is what the page displays.
+    let discovery: CatalogDiscoveryResponseV1 = post(
+        &routes,
+        PRODUCT_CATALOG_DISCOVERY_PATH,
+        CatalogDiscoveryRequestV1::new(),
+    );
+    assert_eq!(discovery.core_code_dictionaries.len(), 1);
+    assert_eq!(discovery.core_code_dictionaries[0].options[0].code, "AHo");
+
+    let filters_for = |code: &str| {
+        let mut input =
+            FilterValuesInputV1::for_term(TermId::try_from("72026").expect("synthetic term"));
+        input.campuses = vec![CampusCode::try_from("NB").expect("NB")];
+        input.core.codes = vec![FilterTokenV1::try_from(code).expect("core token")];
+        FilterRequestV1::new(
+            bcsp_contracts::NormalizedFilterValuesV1::try_new(input).expect("normalized filters"),
+        )
+    };
+    // Whatever case the page sends, the canonical request is uppercase and
+    // must validate and match against the mixed-case stored code.
+    for requested in ["AHo", "AHO", "aho"] {
+        let filters = filters_for(requested);
+        let validation: DynamicFilterValidationResponseV3 = post(
+            &routes,
+            PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH,
+            DynamicFilterValidationRequestV3::new(filters.clone()),
+        );
+        assert!(
+            validation.invalid_values.is_empty(),
+            "{requested}: {:?}",
+            validation.invalid_values
+        );
+        let courses: CourseQueryResponseV1 = post(
+            &routes,
+            PRODUCT_COURSE_SEARCH_PATH,
+            CourseQueryRequestV1 {
+                filters: filters.clone(),
+                page: PageRequestV1::default(),
+                sort: CourseSortV1::default(),
+            },
+        );
+        assert_eq!(courses.page.total, 1, "{requested}");
+        let sections: SectionQueryResponseV1 = post(
+            &routes,
+            PRODUCT_SECTION_SEARCH_PATH,
+            SectionQueryRequestV1 {
+                filters,
+                page: PageRequestV1::default(),
+                sort: SectionSortV1::default(),
+            },
+        );
+        assert_eq!(sections.page.total, 1, "{requested}");
+    }
+
+    // A code the target does not carry stays invalid in every case.
+    let validation: DynamicFilterValidationResponseV3 = post(
+        &routes,
+        PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH,
+        DynamicFilterValidationRequestV3::new(filters_for("AHp")),
+    );
+    assert_eq!(
+        validation
+            .invalid_values
+            .iter()
+            .map(|invalid| (invalid.field, invalid.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(FilterFieldId::CourseCoreCode, "AHP")]
+    );
 }
 
 #[test]

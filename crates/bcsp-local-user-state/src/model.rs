@@ -1080,10 +1080,70 @@ pub struct SqliteConfiguration {
     pub busy_timeout_ms: u64,
 }
 
+/// The WAL checkpoint modes SQLite offers, as a typed command so a caller
+/// never runs a `PRAGMA` against the store's connection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WalCheckpointMode {
+    /// Backfills what it can without waiting for anyone; a reader older than
+    /// the newest frame caps the progress.
+    Passive,
+    /// Waits for writers and backfills every frame.
+    Full,
+    /// `Full`, then waits for readers so the next writer restarts the log.
+    Restart,
+    /// `Restart`, then truncates the log file to zero bytes.
+    Truncate,
+}
+
+impl WalCheckpointMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Passive => "PASSIVE",
+            Self::Full => "FULL",
+            Self::Restart => "RESTART",
+            Self::Truncate => "TRUNCATE",
+        }
+    }
+}
+
+/// What `PRAGMA wal_checkpoint` reported: `busy` is non-zero when another
+/// connection kept the checkpoint from finishing, `log_frames` is the size
+/// of the log and `checkpointed_frames` how many of them are now in the main
+/// database. Equal counters after a small write prove no connection is
+/// holding a stale read transaction against the file.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WalCheckpoint {
     pub busy: u64,
     pub log_frames: u64,
     pub checkpointed_frames: u64,
+}
+
+impl WalCheckpoint {
+    /// Every frame of the log has been backfilled into the main database.
+    pub const fn is_complete(self) -> bool {
+        self.checkpointed_frames == self.log_frames
+    }
+}
+
+/// The transaction the store's connection is in right now.
+///
+/// Every public method of [`crate::PersonalStateStore`] leaves the
+/// connection in [`Self::None`]: a lingering `Read` pins the WAL read mark
+/// and stops every checkpoint from making progress.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PersonalTransactionState {
+    None,
+    Read,
+    Write,
+}
+
+impl PersonalTransactionState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::Read => "READ",
+            Self::Write => "WRITE",
+        }
+    }
 }

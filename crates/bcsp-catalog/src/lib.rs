@@ -15,6 +15,7 @@ mod mapping;
 mod model;
 mod normalize;
 mod projection;
+mod rederive;
 
 pub use delivery::{normalize_time, parse_weekdays};
 pub use empty::{
@@ -37,6 +38,11 @@ pub use projection::{
     ProjectionError, to_catalog_discovery_response_v1, to_catalog_refresh_checkpoint_v1,
     to_catalog_refresh_observation_v1, to_catalog_refresh_status_v1, to_normalized_catalog_v1,
 };
+pub use rederive::{
+    CATALOG_DERIVATION_VERSION, LEGACY_CATALOG_DERIVATION_VERSION, RederivationError,
+    RederivationReport, TargetRederivationReport, rederive_stored_delivery,
+    rederive_stored_delivery_now,
+};
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-catalog";
 
@@ -55,5 +61,4 @@ mod dependency_contract {
     use serde_json as _;
     use thiserror as _;
     use tokio as _;
-    use tracing as _;
 }

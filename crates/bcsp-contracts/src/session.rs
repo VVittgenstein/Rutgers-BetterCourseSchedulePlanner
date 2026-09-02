@@ -226,8 +226,7 @@ mod tests {
         let nonce = "00000000-0000-4000-8000-000000000001";
         let canonical = CanonicalSessionNonce::try_new(nonce.to_owned()).expect("canonical");
         assert_eq!(
-            serde_json::to_string(&SessionValidateResponseV1::renewed(canonical))
-                .expect("renewed"),
+            serde_json::to_string(&SessionValidateResponseV1::renewed(canonical)).expect("renewed"),
             format!(r#"{{"renewed":"{nonce}"}}"#),
         );
         assert!(
@@ -253,7 +252,7 @@ mod tests {
             format!(r#"{{"valid":true,"renewed":"{nonce}"}}"#),
             // Explicit null is NOT an omitted field: neither half of a
             // dual-key object may hide behind null (reviewer P1).
-            format!(r#"{{"valid":true,"renewed":null}}"#),
+            r#"{"valid":true,"renewed":null}"#.to_owned(),
             format!(r#"{{"valid":null,"renewed":"{nonce}"}}"#),
             r#"{"valid":null}"#.to_owned(),
             r#"{"renewed":null}"#.to_owned(),
@@ -280,13 +279,13 @@ mod tests {
         for rejected in [
             "",
             "abc",
-            "00000000-0000-1000-8000-000000000001",     // not v4
-            "00000000-0000-4000-c000-000000000001",     // bad variant
-            "00000000-0000-4000-8000-00000000000G",     // non-hex
-            "00000000-0000-4000-8000-0000000000012",    // too long
-            "00000000000040008000000000000001",         // no hyphens
-            "00000000-0000-4000-8000-00000000001",      // too short
-            "A0000000-0000-4000-8000-000000000001",     // uppercase
+            "00000000-0000-1000-8000-000000000001",  // not v4
+            "00000000-0000-4000-c000-000000000001",  // bad variant
+            "00000000-0000-4000-8000-00000000000G",  // non-hex
+            "00000000-0000-4000-8000-0000000000012", // too long
+            "00000000000040008000000000000001",      // no hyphens
+            "00000000-0000-4000-8000-00000000001",   // too short
+            "A0000000-0000-4000-8000-000000000001",  // uppercase
         ] {
             assert!(!is_canonical_session_nonce(rejected), "{rejected}");
         }

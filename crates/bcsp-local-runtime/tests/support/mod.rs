@@ -151,7 +151,6 @@ impl DesiredWatchOwner for FaultOwner {
     }
 }
 
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -273,6 +272,7 @@ pub fn seed_ready_query_scope(prepared: &PreparedLocalRuntime, terms: &[&str]) {
                 to_catalog_refresh_command(&normalized, observation, &started, &completed)
                     .expect("build synthetic Catalog command"),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("publish synthetic Catalog");
         let content_version = match outcome {

@@ -37,6 +37,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::refresh_generation::refresh_generation_interval;
+use crate::refresh_maintenance::WalMaintenanceSignal;
 use crate::{
     OpenRuntimeSnapshot, OpenRuntimeSnapshotRegistry, OpenRuntimeSnapshotRegistryError,
     PreparedOpenPublicationBarrier, PreparedServingError, PreparedServingRebuildDemand,
@@ -401,6 +402,9 @@ pub struct SharedRefreshCoordinator<S, U, P, C = SystemCoordinatorClock, I = Sys
     /// one target's catalog identity wipe another's quarantine.
     workflow_controls: BTreeMap<TermCampusKey, Arc<TargetWorkflowControl>>,
     prepared_rebuild: Option<PreparedServingRebuildDemand>,
+    /// Raised by every Open commit and Catalog publication; the refresh
+    /// runtime consumes it and runs the WAL checkpoint off the async threads.
+    maintenance: WalMaintenanceSignal,
     scheduler: OriginEdfScheduler,
     targets: BTreeMap<TermCampusKey, OpenSectionsRequest>,
     activated_targets: BTreeSet<TermCampusKey>,
@@ -457,6 +461,7 @@ where
             Arc::clone(&self.status),
         );
         fork.prepared_rebuild.clone_from(&self.prepared_rebuild);
+        fork.maintenance = self.maintenance.clone();
         fork
     }
 }
@@ -496,6 +501,7 @@ where
             attached_workflow_control: None,
             workflow_controls: BTreeMap::new(),
             prepared_rebuild: None,
+            maintenance: WalMaintenanceSignal::default(),
             scheduler: OriginEdfScheduler::new(),
             targets: BTreeMap::new(),
             activated_targets: BTreeSet::new(),
@@ -517,6 +523,17 @@ where
     pub fn with_prepared_rebuild_demand(mut self, demand: PreparedServingRebuildDemand) -> Self {
         self.prepared_rebuild = Some(demand);
         self
+    }
+
+    /// The shared "WAL maintenance due" flag this coordinator raises.
+    pub fn maintenance_signal(&self) -> WalMaintenanceSignal {
+        self.maintenance.clone()
+    }
+
+    /// The storage access the refresh writer runs on, for the runtime's
+    /// blocking maintenance step.
+    pub fn storage_access(&self) -> S {
+        self.storage.clone()
     }
 
     pub fn register_manual_target(
@@ -805,8 +822,11 @@ where
                 current_failure_streak,
                 counter_audience: self.counter_audience,
             };
-            let mut persistence =
-                ShortLockOpenPersistence::new(self.storage.clone(), self.prepared_rebuild.clone());
+            let mut persistence = ShortLockOpenPersistence::new(
+                self.storage.clone(),
+                self.prepared_rebuild.clone(),
+                self.maintenance.clone(),
+            );
             let mut clock = CoordinatorOpenPullClock(&self.clock);
             let upstream = &self.upstream;
             let watched = Arc::clone(&self.watch);
@@ -1258,6 +1278,7 @@ where
         );
         let storage_access = self.storage.clone();
         let prepared_rebuild = self.prepared_rebuild.clone();
+        let maintenance = self.maintenance.clone();
         let prepared = tokio::task::spawn_blocking(move || -> Result<_, CoordinatorError> {
             let mut storage = storage_access
                 .lock_operational()
@@ -1299,11 +1320,15 @@ where
                         .as_ref()
                         .map(PreparedServingRebuildDemand::begin_publication)
                         .transpose()?;
-                    let outcome =
-                        storage.publish_staged_refresh(&observation_id, empty_decision)?;
+                    let outcome = storage.publish_staged_refresh(
+                        &observation_id,
+                        empty_decision,
+                        bcsp_catalog::CATALOG_DERIVATION_VERSION,
+                    )?;
                     if let Some(barrier) = barrier {
                         barrier.commit();
                     }
+                    maintenance.mark_catalog_published();
                     Ok(PreparedCompleteSnapshot::Retained(outcome))
                 }
             }
@@ -1377,6 +1402,7 @@ where
             candidate,
             empty_decision,
             self.prepared_rebuild.clone(),
+            self.maintenance.clone(),
         );
         let mut clock = CoordinatorOpenPullClock(&self.clock);
         let upstream = &self.upstream;
@@ -1486,8 +1512,11 @@ where
             current_failure_streak: dispatch.failure_streak,
             counter_audience: self.counter_audience,
         };
-        let mut persistence =
-            ShortLockOpenPersistence::new(self.storage.clone(), self.prepared_rebuild.clone());
+        let mut persistence = ShortLockOpenPersistence::new(
+            self.storage.clone(),
+            self.prepared_rebuild.clone(),
+            self.maintenance.clone(),
+        );
         let mut clock = CoordinatorOpenPullClock(&self.clock);
         let upstream = &self.upstream;
         let watched = Arc::clone(&self.watch);
@@ -1685,6 +1714,7 @@ fn workflow_operation_id(key: &OriginJobKey) -> WorkflowOperationId {
 
 struct ShortLockOpenPersistence<S> {
     storage: S,
+    maintenance: WalMaintenanceSignal,
     catalog_candidate: Option<CatalogCandidateContext>,
     committed_catalog: Option<PublishOutcome>,
     prepared_rebuild: Option<PreparedServingRebuildDemand>,
@@ -1699,9 +1729,14 @@ struct CatalogCandidateContext {
 }
 
 impl<S> ShortLockOpenPersistence<S> {
-    fn new(storage: S, prepared_rebuild: Option<PreparedServingRebuildDemand>) -> Self {
+    fn new(
+        storage: S,
+        prepared_rebuild: Option<PreparedServingRebuildDemand>,
+        maintenance: WalMaintenanceSignal,
+    ) -> Self {
         Self {
             storage,
+            maintenance,
             catalog_candidate: None,
             committed_catalog: None,
             prepared_rebuild,
@@ -1715,9 +1750,11 @@ impl<S> ShortLockOpenPersistence<S> {
         candidate: CatalogCandidateOpenSnapshot,
         empty_decision: EmptySnapshotDecision,
         prepared_rebuild: Option<PreparedServingRebuildDemand>,
+        maintenance: WalMaintenanceSignal,
     ) -> Self {
         Self {
             storage,
+            maintenance,
             catalog_candidate: Some(CatalogCandidateContext {
                 candidate,
                 empty_decision,
@@ -1838,6 +1875,7 @@ where
                 context.candidate.observation_id,
                 context.empty_decision,
                 command,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             ),
             None => storage.finish_open_pull_success(command).map(|open| {
                 bcsp_operational_storage::CompleteSnapshotCommitOutcome {
@@ -1901,6 +1939,16 @@ where
             barrier.commit();
         }
         self.open_attempt_target = None;
+        // Maintenance is only SIGNALLED here. This runs synchronously inside
+        // the async Open service on a tokio worker thread, and a checkpoint
+        // that waits for readers has no business there; the refresh runtime
+        // picks the flag up on its next tick and checkpoints on the blocking
+        // pool.
+        if result.catalog.is_some() {
+            self.maintenance.mark_catalog_published();
+        } else {
+            self.maintenance.mark_open_commit();
+        }
         self.committed_catalog = result.catalog;
         Ok(result.open)
     }
@@ -1960,6 +2008,7 @@ where
         }
         if result.is_ok() {
             self.open_attempt_target = None;
+            self.maintenance.mark_open_commit();
         } else {
             self.open_publication_barrier.take();
         }

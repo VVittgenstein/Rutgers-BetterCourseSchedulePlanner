@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -14,15 +15,24 @@ use time::format_description::well_known::Rfc3339;
 use crate::migration::{apply_migrations, probe_fts5, read_migration_records, sha256_hex};
 use crate::open::recover_interrupted_open_attempts;
 use crate::{
-    BeginRefreshAttemptCommand, CatalogCandidateOpenSnapshot, CatalogCounts, CatalogFailureAudit,
-    CatalogRefreshCommand, CatalogSnapshot, CourseFtsCorpusSignature, CourseTextSearchTokens,
-    CourseVariantSearchHit, CourseVariantSearchResult, EmptySnapshotDecision,
-    FinishRefreshFailureCommand, MigrationRecord, ProvenanceEntityKind, PublishOutcome,
-    PublishedCatalogSnapshot, PublishedCourseFtsDocument, RefreshFailureStage, RefreshObservation,
-    RefreshStatus, StorageError, StorageIntegrityReport, StorageResult, StoredCanonicalFacts,
-    StoredCourseGroup, StoredCourseVariant, StoredOccurrence, StoredProvenance, StoredSection,
-    TargetState,
+    BeginRefreshAttemptCommand, CatalogCandidateOpenSnapshot, CatalogCounts,
+    CatalogDeliveryRewrite, CatalogDeliveryRewriteReport, CatalogFailureAudit,
+    CatalogRefreshCommand, CatalogSnapshot, CatalogTargetVersion, CourseFtsCorpusSignature,
+    CourseTextSearchTokens, CourseVariantSearchHit, CourseVariantSearchResult,
+    EmptySnapshotDecision, FinishRefreshFailureCommand, MigrationRecord, ProvenanceEntityKind,
+    PublishOutcome, PublishedCatalogSnapshot, PublishedCourseFtsDocument, RefreshFailureStage,
+    RefreshObservation, RefreshStatus, StorageError, StorageIntegrityReport, StorageResult,
+    StorageTransactionState, StoredCanonicalFacts, StoredCourseGroup, StoredCourseVariant,
+    StoredOccurrence, StoredProvenance, StoredSection, TargetState, WalCheckpointMode,
+    WalCheckpointReport,
 };
+
+/// Upper bound SQLite keeps the `-wal` file at after a checkpoint that resets
+/// the log (RESTART, TRUNCATE, or an automatic checkpoint that found no
+/// reader). Applied to every writer connection: the connection that resets
+/// the log is the one that truncates the file, so a read-only reader setting
+/// it would have no effect.
+pub const WAL_JOURNAL_SIZE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 
 pub struct OperationalStorage {
     pub(crate) connection: Connection,
@@ -72,7 +82,7 @@ impl OperationalStorage {
 
     pub fn open(path: impl AsRef<Path>) -> StorageResult<Self> {
         let path = path.as_ref();
-        let connection = Connection::open(path)?;
+        let connection = Connection::open(sqlite_open_path(path))?;
         let recovery_key = database_recovery_key(path);
         let mut active_databases = ACTIVE_DATABASES
             .get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -111,7 +121,7 @@ impl OperationalStorage {
             return Ok(None);
         };
         let connection = Connection::open_with_flags(
-            path,
+            sqlite_open_path(path),
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -140,6 +150,19 @@ impl OperationalStorage {
             if !journal_mode.eq_ignore_ascii_case("wal") {
                 return Err(StorageError::SqliteConfiguration("journal_mode"));
             }
+            // Bounds the log FILE, not the log: SQLite only truncates it back
+            // to this size after a checkpoint has reset the log, which is why
+            // the maintenance policy in bcsp-application exists as well.
+            let journal_size_limit = connection.pragma_update_and_check(
+                None,
+                "journal_size_limit",
+                i64::try_from(WAL_JOURNAL_SIZE_LIMIT_BYTES)
+                    .map_err(|_| StorageError::SqliteConfiguration("journal_size_limit"))?,
+                |row| row.get::<_, i64>(0),
+            )?;
+            if u64::try_from(journal_size_limit) != Ok(WAL_JOURNAL_SIZE_LIMIT_BYTES) {
+                return Err(StorageError::SqliteConfiguration("journal_size_limit"));
+            }
         }
         probe_fts5(&connection)?;
         apply_migrations(&mut connection)?;
@@ -155,6 +178,65 @@ impl OperationalStorage {
 
     pub fn migration_records(&self) -> StorageResult<Vec<MigrationRecord>> {
         read_migration_records(&self.connection)
+    }
+
+    /// The configured `journal_size_limit`, or `None` for in-memory fixtures.
+    pub fn wal_journal_size_limit_bytes(&self) -> StorageResult<Option<u64>> {
+        if self.recovery_key.is_none() {
+            return Ok(None);
+        }
+        let limit = self
+            .connection
+            .pragma_query_value(None, "journal_size_limit", |row| row.get::<_, i64>(0))?;
+        Ok(u64::try_from(limit).ok())
+    }
+
+    /// Runs one WAL checkpoint through this connection.
+    ///
+    /// Returns `None` for in-memory fixtures, which have no log. `Restart`
+    /// and `Truncate` take the WAL write lock and wait for other connections
+    /// up to this connection's busy timeout, so they belong on the refresh
+    /// writer, never on a serving connection while a route holds its mutex.
+    /// A report with `busy == true` is not an error: it says another
+    /// connection kept the checkpoint from finishing, which is exactly what
+    /// the maintenance policy needs to know.
+    pub fn checkpoint_wal(
+        &self,
+        mode: WalCheckpointMode,
+    ) -> StorageResult<Option<WalCheckpointReport>> {
+        if self.recovery_key.is_none() {
+            return Ok(None);
+        }
+        let sql = format!("PRAGMA wal_checkpoint({})", mode.as_str());
+        let (busy, log_frames, checkpointed_frames) =
+            self.connection.query_row(&sql, [], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?;
+        Ok(Some(WalCheckpointReport {
+            busy: busy != 0,
+            log_frames: u64::try_from(log_frames)
+                .map_err(|_| StorageError::StoredIntegerOutOfRange)?,
+            checkpointed_frames: u64::try_from(checkpointed_frames)
+                .map_err(|_| StorageError::StoredIntegerOutOfRange)?,
+        }))
+    }
+
+    /// The transaction this connection is holding right now.
+    ///
+    /// Every public method of this type is expected to leave the connection
+    /// in [`StorageTransactionState::None`]: a lingering `Read` pins the WAL
+    /// read mark and stops every checkpoint from making progress.
+    pub fn transaction_state(&self) -> StorageResult<StorageTransactionState> {
+        Ok(match self.connection.transaction_state(None::<&str>)? {
+            rusqlite::TransactionState::None => StorageTransactionState::None,
+            rusqlite::TransactionState::Read => StorageTransactionState::Read,
+            rusqlite::TransactionState::Write => StorageTransactionState::Write,
+            _ => return Err(StorageError::SqliteConfiguration("transaction_state")),
+        })
     }
 
     pub fn operational_table_names(&self) -> StorageResult<Vec<String>> {
@@ -326,11 +408,17 @@ impl OperationalStorage {
         Ok(Some(audit))
     }
 
+    /// Stages and publishes a normalized Catalog in one transaction.
+    ///
+    /// `derivation_version` identifies the derivation rule that produced the snapshot's
+    /// derived delivery columns; it is stamped only when serving rows are actually replaced.
     pub fn apply_catalog_refresh(
         &mut self,
         command: CatalogRefreshCommand,
         empty_decision: EmptySnapshotDecision,
+        derivation_version: u32,
     ) -> StorageResult<PublishOutcome> {
+        validate_derivation_version(derivation_version)?;
         self.ensure_catalog_attempt_started(&command)?;
         let completed_at = command.completed_at.clone();
         let observation_id = command.observation_id;
@@ -346,7 +434,12 @@ impl OperationalStorage {
                 return Err(error);
             }
         };
-        let result = self.stage_and_publish(prepared, empty_decision, PublishFaultPoint::None);
+        let result = self.stage_and_publish(
+            prepared,
+            empty_decision,
+            derivation_version,
+            PublishFaultPoint::None,
+        );
         if result.is_err() {
             self.record_failure_best_effort(
                 &observation_id,
@@ -393,11 +486,18 @@ impl OperationalStorage {
         result
     }
 
+    /// Publishes a previously staged Catalog.
+    ///
+    /// `derivation_version` identifies the derivation rule of the binary that staged the
+    /// snapshot (staging never survives a restart, so it is always the running binary's
+    /// rule); it is stamped only when serving rows are actually replaced.
     pub fn publish_staged_refresh(
         &mut self,
         observation_id: &TraceId,
         empty_decision: EmptySnapshotDecision,
+        derivation_version: u32,
     ) -> StorageResult<PublishOutcome> {
+        validate_derivation_version(derivation_version)?;
         let observation_id_text = observation_id.to_string();
         let completed_at = self
             .connection
@@ -413,6 +513,7 @@ impl OperationalStorage {
         let result = self.publish_staged_with_fault(
             *observation_id,
             empty_decision,
+            derivation_version,
             PublishFaultPoint::None,
         );
         if result.is_err() {
@@ -604,6 +705,229 @@ impl OperationalStorage {
         observation_id: &TraceId,
     ) -> StorageResult<Option<RefreshObservation>> {
         load_refresh_observation(&self.connection, observation_id)
+    }
+
+    /// Every `catalog_targets` row with its current content version.
+    ///
+    /// This covers targets that are absent from the current selector and targets that
+    /// have never published (`current_content_version == 0`), unlike the selector-derived
+    /// discovery enumeration.
+    pub fn catalog_target_versions(&self) -> StorageResult<Vec<CatalogTargetVersion>> {
+        let mut statement = self.connection.prepare(
+            "SELECT target_id, current_content_version FROM catalog_targets ORDER BY target_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.map(|row| {
+            let (target_id, content_version) = row?;
+            Ok(CatalogTargetVersion {
+                target: target_from_id(&target_id)?,
+                current_content_version: i64_to_u64(content_version)?,
+            })
+        })
+        .collect()
+    }
+
+    /// The derivation version stamped on each target, keyed by target.
+    ///
+    /// A target without a row was last written by the legacy v1 derivation rule.
+    pub fn catalog_derivation_versions(&self) -> StorageResult<BTreeMap<TermCampusKey, u32>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT target_id, derivation_version FROM catalog_derivation_state")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.map(|row| {
+            let (target_id, version) = row?;
+            let version =
+                u32::try_from(version).map_err(|_| StorageError::InvalidStoredProjection {
+                    table: "catalog_derivation_state",
+                    field: "derivation_version",
+                    reason: "is outside the supported range",
+                })?;
+            Ok((target_from_id(&target_id)?, version))
+        })
+        .collect()
+    }
+
+    /// Rewrites the derived delivery columns of a published target in place and stamps
+    /// its derivation version, in one IMMEDIATE transaction.
+    ///
+    /// Every listed row must match exactly one published serving row (section,
+    /// occurrence, and the occurrence's `canonicalFacts` provenance detail); otherwise
+    /// the whole rewrite is rolled back. Content versions, canonical hashes, the accepted
+    /// semantic hash, checkpoints, counts, FTS, staging and Open tables are never touched,
+    /// so `published_catalog_snapshot` and the Open gate identities stay valid.
+    pub fn rewrite_catalog_delivery(
+        &mut self,
+        target: &TermCampusKey,
+        rewrite: &CatalogDeliveryRewrite,
+    ) -> StorageResult<CatalogDeliveryRewriteReport> {
+        validate_derivation_version(rewrite.derivation_version)?;
+        if rewrite.stamped_at.is_empty() {
+            return Err(StorageError::InvalidCommand {
+                field: "stamped_at",
+                reason: "must be a non-empty timestamp",
+            });
+        }
+        for section in &rewrite.sections {
+            if section.key.target() != *target {
+                return Err(StorageError::InvalidCommand {
+                    field: "sections",
+                    reason: "section key must belong to the rewritten target",
+                });
+            }
+            validate_wire_token(
+                "delivery_modality",
+                &section.delivery_modality,
+                MODALITY_WIRE_VALUES,
+            )?;
+            validate_wire_token(
+                "synchronicity",
+                &section.synchronicity,
+                SYNCHRONICITY_WIRE_VALUES,
+            )?;
+        }
+        for occurrence in &rewrite.occurrences {
+            if occurrence.section_key.target() != *target {
+                return Err(StorageError::InvalidCommand {
+                    field: "occurrences",
+                    reason: "section key must belong to the rewritten target",
+                });
+            }
+            if occurrence.occurrence_key.is_empty() {
+                return Err(StorageError::InvalidCommand {
+                    field: "occurrence_key",
+                    reason: "must be non-empty",
+                });
+            }
+            validate_wire_token(
+                "occurrence_kind",
+                &occurrence.occurrence_kind,
+                OCCURRENCE_KIND_WIRE_VALUES,
+            )?;
+            validate_wire_token("modality", &occurrence.modality, MODALITY_WIRE_VALUES)?;
+            validate_wire_token(
+                "synchronicity",
+                &occurrence.synchronicity,
+                SYNCHRONICITY_WIRE_VALUES,
+            )?;
+            validate_wire_token(
+                "evidence",
+                &occurrence.evidence,
+                OCCURRENCE_EVIDENCE_WIRE_VALUES,
+            )?;
+            validate_safe_code("normalization_reason", &occurrence.normalization_reason)?;
+        }
+
+        let target_id = target_id(target);
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let target_row = transaction
+            .query_row(
+                "SELECT current_content_version, last_published_observation_id
+                 FROM catalog_targets WHERE target_id = ?1",
+                [&target_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?
+            .ok_or(StorageError::CatalogTargetNotPublished)?;
+        let content_version = i64_to_u64(target_row.0)?;
+        if content_version == 0 && !(rewrite.sections.is_empty() && rewrite.occurrences.is_empty())
+        {
+            return Err(StorageError::CatalogTargetNotPublished);
+        }
+        let version = u64_to_i64(content_version)?;
+
+        for section in &rewrite.sections {
+            let changed = transaction.execute(
+                "UPDATE catalog_sections
+                 SET delivery_modality = ?3, synchronicity = ?4
+                 WHERE target_id = ?1 AND section_index = ?2 AND content_version = ?5",
+                params![
+                    target_id,
+                    section.key.index().as_str(),
+                    section.delivery_modality,
+                    section.synchronicity,
+                    version,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(StorageError::InvalidStoredProjection {
+                    table: "catalog_sections",
+                    field: "delivery rewrite",
+                    reason: "did not match exactly one published section row",
+                });
+            }
+        }
+        for occurrence in &rewrite.occurrences {
+            let changed = transaction.execute(
+                "UPDATE catalog_occurrences
+                 SET occurrence_kind = ?4, modality = ?5, synchronicity = ?6,
+                     evidence = ?7, normalization_reason = ?8
+                 WHERE target_id = ?1 AND section_index = ?2 AND occurrence_key = ?3
+                   AND content_version = ?9",
+                params![
+                    target_id,
+                    occurrence.section_key.index().as_str(),
+                    occurrence.occurrence_key,
+                    occurrence.occurrence_kind,
+                    occurrence.modality,
+                    occurrence.synchronicity,
+                    occurrence.evidence,
+                    occurrence.normalization_reason,
+                    version,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(StorageError::InvalidStoredProjection {
+                    table: "catalog_occurrences",
+                    field: "delivery rewrite",
+                    reason: "did not match exactly one published occurrence row",
+                });
+            }
+            // The occurrence provenance entity key is the SectionKey display
+            // form ("{term}/{campus}/{index}") joined with the occurrence key.
+            let entity_key = format!("{}/{}", occurrence.section_key, occurrence.occurrence_key);
+            let changed = transaction.execute(
+                "UPDATE catalog_provenance
+                 SET detail_json = json_set(detail_json,
+                     '$.normalizationReason', ?3, '$.evidence', ?4)
+                 WHERE target_id = ?1 AND entity_kind = 'OCCURRENCE' AND entity_key = ?2
+                   AND field_name = 'canonicalFacts' AND content_version = ?5",
+                params![
+                    target_id,
+                    entity_key,
+                    occurrence.normalization_reason,
+                    occurrence.evidence,
+                    version,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(StorageError::InvalidStoredProjection {
+                    table: "catalog_provenance",
+                    field: "delivery rewrite",
+                    reason: "did not match exactly one published occurrence provenance row",
+                });
+            }
+        }
+        stamp_derivation_state(
+            &transaction,
+            &target_id,
+            rewrite.derivation_version,
+            &rewrite.stamped_at,
+            target_row.1.as_deref(),
+        )?;
+        transaction.commit()?;
+        Ok(CatalogDeliveryRewriteReport {
+            target: target.clone(),
+            derivation_version: rewrite.derivation_version,
+            sections_rewritten: rewrite.sections.len() as u64,
+            occurrences_rewritten: rewrite.occurrences.len() as u64,
+        })
     }
 
     pub fn serving_section_keys(&self, target: &TermCampusKey) -> StorageResult<Vec<SectionKey>> {
@@ -1221,6 +1545,7 @@ impl OperationalStorage {
         &mut self,
         prepared: PreparedCatalogRefresh,
         empty_decision: EmptySnapshotDecision,
+        derivation_version: u32,
         fault: PublishFaultPoint,
     ) -> StorageResult<PublishOutcome> {
         let observation_id = prepared.command.observation_id;
@@ -1228,7 +1553,13 @@ impl OperationalStorage {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         stage_prepared_catalog_refresh(&transaction, &prepared)?;
-        let outcome = publish_staged(&transaction, observation_id, empty_decision, fault)?;
+        let outcome = publish_staged(
+            &transaction,
+            observation_id,
+            empty_decision,
+            derivation_version,
+            fault,
+        )?;
         transaction.commit()?;
         Ok(outcome)
     }
@@ -1237,12 +1568,19 @@ impl OperationalStorage {
         &mut self,
         observation_id: TraceId,
         empty_decision: EmptySnapshotDecision,
+        derivation_version: u32,
         fault: PublishFaultPoint,
     ) -> StorageResult<PublishOutcome> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let outcome = publish_staged(&transaction, observation_id, empty_decision, fault)?;
+        let outcome = publish_staged(
+            &transaction,
+            observation_id,
+            empty_decision,
+            derivation_version,
+            fault,
+        )?;
         transaction.commit()?;
         Ok(outcome)
     }
@@ -1286,6 +1624,36 @@ impl Drop for OperationalStorage {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         unregister_active_database(&mut active_databases, recovery_key);
     }
+}
+
+/// The path SQLite is asked to open, as a plain drive path.
+///
+/// On Windows, `Path::canonicalize` yields a verbatim path (`\\?\C:\...`).
+/// SQLite's Windows VFS treats every path that starts with two backslashes as
+/// a UNC path and then locks the WAL-index through ONE file handle shared by
+/// every connection of the process, with per-connection bookkeeping of which
+/// shared locks are held. That bookkeeping races (SQLite 3.53 `winShmLock`
+/// takes the OS lock after leaving the node mutex): two readers taking the
+/// same read lock at once stack two OS locks and later release one, after
+/// which no checkpoint can backfill a single frame until the process exits.
+/// A plain drive path gets one lock handle per connection, which needs no
+/// such bookkeeping. `\\?\UNC\...` paths are left alone: a real share goes
+/// through the shared handle whatever the spelling.
+fn sqlite_open_path(path: &Path) -> Cow<'_, Path> {
+    #[cfg(windows)]
+    {
+        if let Some(rest) = path.to_str().and_then(|path| path.strip_prefix(r"\\?\")) {
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\'
+            {
+                return Cow::Owned(PathBuf::from(rest));
+            }
+        }
+    }
+    Cow::Borrowed(path)
 }
 
 fn database_recovery_key(path: &Path) -> PathBuf {
@@ -2605,11 +2973,13 @@ pub(crate) fn publish_staged_in_transaction(
     transaction: &Transaction<'_>,
     observation_id: TraceId,
     empty_decision: EmptySnapshotDecision,
+    derivation_version: u32,
 ) -> StorageResult<PublishOutcome> {
     publish_staged(
         transaction,
         observation_id,
         empty_decision,
+        derivation_version,
         PublishFaultPoint::None,
     )
 }
@@ -2618,8 +2988,10 @@ fn publish_staged(
     transaction: &Transaction<'_>,
     observation_id: TraceId,
     empty_decision: EmptySnapshotDecision,
+    derivation_version: u32,
     fault: PublishFaultPoint,
 ) -> StorageResult<PublishOutcome> {
+    validate_derivation_version(derivation_version)?;
     let observation_id_text = observation_id.to_string();
     let metadata = load_staged_metadata(transaction, observation_id)?;
     let target_row = transaction.query_row(
@@ -2778,6 +3150,16 @@ fn publish_staged(
         ],
     )?;
     update_target_after_publish(transaction, observation_id, &metadata, next_version)?;
+    // The serving rows were just replaced by rows derived under
+    // `derivation_version`; the unchanged branch above deliberately leaves
+    // the stamp alone because it leaves the rows alone.
+    stamp_derivation_state(
+        transaction,
+        &metadata.target_id,
+        derivation_version,
+        &metadata.completed_at,
+        Some(&observation_id_text),
+    )?;
     clear_staging(transaction, observation_id)?;
     if fault == PublishFaultPoint::BeforeCommit {
         return Err(StorageError::InjectedFault("BEFORE_COMMIT"));
@@ -3186,6 +3568,41 @@ fn validate_source_metadata_compatibility(
             reason: "must match immutable metadata already stored for this observation",
         });
     }
+    Ok(())
+}
+
+fn validate_derivation_version(version: u32) -> StorageResult<()> {
+    if version == 0 {
+        return Err(StorageError::InvalidCommand {
+            field: "derivation_version",
+            reason: "must be at least 1",
+        });
+    }
+    Ok(())
+}
+
+fn stamp_derivation_state(
+    transaction: &Transaction<'_>,
+    target_id: &str,
+    derivation_version: u32,
+    stamped_at: &str,
+    stamped_observation_id: Option<&str>,
+) -> StorageResult<()> {
+    transaction.execute(
+        "INSERT INTO catalog_derivation_state
+            (target_id, derivation_version, stamped_at, stamped_observation_id)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(target_id) DO UPDATE SET
+             derivation_version = excluded.derivation_version,
+             stamped_at = excluded.stamped_at,
+             stamped_observation_id = excluded.stamped_observation_id",
+        params![
+            target_id,
+            i64::from(derivation_version),
+            stamped_at,
+            stamped_observation_id,
+        ],
+    )?;
     Ok(())
 }
 

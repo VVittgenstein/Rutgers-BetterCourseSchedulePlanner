@@ -28,6 +28,13 @@
 //!     &storage.connection
 //! }
 //! ```
+//!
+//! WAL maintenance is no exception: a dependent checkpoints the log only
+//! through [`OperationalStorage::checkpoint_wal`] with a typed
+//! [`WalCheckpointMode`], and asks whether a connection is holding a
+//! transaction through [`OperationalStorage::transaction_state`]. Every
+//! writer connection this crate opens bounds its log file with
+//! `journal_size_limit` ([`WAL_JOURNAL_SIZE_LIMIT_BYTES`]).
 
 #![forbid(unsafe_code)]
 #![deny(warnings)]
@@ -43,30 +50,34 @@ mod storage;
 pub use discovery::discovery_content_sha256_v1;
 pub use error::{StorageError, StorageResult};
 pub use model::{
-    BeginDiscoveryAttemptCommand, BeginRefreshAttemptCommand, CatalogCounts, CatalogFailureAudit,
-    CatalogRefreshCommand, CatalogSnapshot, CourseFtsCorpusSignature, CourseTextSearchTokens,
-    CourseVariantSearchHit, CourseVariantSearchResult, DiscoveredCampus, DiscoveredSubject,
-    DiscoveredTerm, DiscoveryAvailability, DiscoveryCounts, DiscoveryObservation,
-    DiscoveryPublishOutcome, DiscoveryRefreshCommand, DiscoverySnapshot, DiscoverySourceKind,
-    DiscoverySourceVersion, DiscoveryState, DiscoveryStatus, EmptySnapshotDecision,
-    FinishDiscoveryFailureCommand, FinishRefreshFailureCommand, InitialEmptyProof, MigrationRecord,
-    ProvenanceEntityKind, PublishOutcome, PublishedCatalogSnapshot, PublishedCourseFtsDocument,
+    BeginDiscoveryAttemptCommand, BeginRefreshAttemptCommand, CatalogCounts,
+    CatalogDeliveryRewrite, CatalogDeliveryRewriteReport, CatalogFailureAudit,
+    CatalogRefreshCommand, CatalogSnapshot, CatalogTargetVersion, CourseFtsCorpusSignature,
+    CourseTextSearchTokens, CourseVariantSearchHit, CourseVariantSearchResult, DiscoveredCampus,
+    DiscoveredSubject, DiscoveredTerm, DiscoveryAvailability, DiscoveryCounts,
+    DiscoveryObservation, DiscoveryPublishOutcome, DiscoveryRefreshCommand, DiscoverySnapshot,
+    DiscoverySourceKind, DiscoverySourceVersion, DiscoveryState, DiscoveryStatus,
+    EmptySnapshotDecision, FinishDiscoveryFailureCommand, FinishRefreshFailureCommand,
+    InitialEmptyProof, MigrationRecord, OccurrenceDeliveryRewrite, ProvenanceEntityKind,
+    PublishOutcome, PublishedCatalogSnapshot, PublishedCourseFtsDocument,
     PublishedDiscoverySnapshot, RawStagingPayload, RefreshFailureStage, RefreshObservation,
-    RefreshStatus, StorageIntegrityReport, StoredCanonicalFacts, StoredCourseGroup,
-    StoredCourseVariant, StoredOccurrence, StoredProvenance, StoredSection, TargetState,
+    RefreshStatus, SectionDeliveryRewrite, StorageIntegrityReport, StorageTransactionState,
+    StoredCanonicalFacts, StoredCourseGroup, StoredCourseVariant, StoredOccurrence,
+    StoredProvenance, StoredSection, TargetState, WalCheckpointMode, WalCheckpointReport,
 };
 pub use open::{
     BeginOpenPullAttemptCommand, CatalogCandidateOpenSnapshot, CompleteSnapshotCommitOutcome,
     CompleteTargetSnapshotState, FinishOpenPullFailureCommand, FinishOpenPullSuccessCommand,
+    OPEN_DIAGNOSTIC_PRUNE_ATTEMPTS_PER_COMMIT, OPEN_DIAGNOSTIC_RETENTION_PER_TARGET,
     OpenAttemptClassification, OpenAttemptCounters, OpenAttemptRecord, OpenBatchObservation,
-    OpenGateAttemptSummary,
     OpenBatchState, OpenCacheStatus, OpenCatalogSnapshot, OpenCircuitState, OpenCommitOutcome,
-    OpenHttpAuditMetadata, OpenObservationCommit, OpenOriginState, OpenRequestLane,
-    OpenRetentionReport, OpenScheduleState, OpenSectionCurrent, OpenSectionEvent, OpenSectionState,
-    derive_open_refresh_observation_id, derive_open_section_observation_id,
+    OpenGateAttemptSummary, OpenHttpAuditMetadata, OpenObservationCommit, OpenOriginState,
+    OpenRequestLane, OpenRetentionReport, OpenScheduleState, OpenSectionCurrent, OpenSectionEvent,
+    OpenSectionState, derive_open_refresh_observation_id, derive_open_section_observation_id,
 };
 pub use storage::{
-    OperationalStorage, OperationalStorageInterruptHandle, catalog_content_sha256_v1,
+    OperationalStorage, OperationalStorageInterruptHandle, WAL_JOURNAL_SIZE_LIMIT_BYTES,
+    catalog_content_sha256_v1,
 };
 
 pub const PACKAGE_BOUNDARY: &str = "bcsp-operational-storage";

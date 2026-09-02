@@ -248,6 +248,7 @@ fn restart_projects_catalog_details_and_isolates_multiple_targets() {
                     to_catalog_refresh_command(&normalized, observation, STARTED, COMPLETED)
                         .expect("Catalog command"),
                     EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                    bcsp_catalog::CATALOG_DERIVATION_VERSION,
                 )
                 .expect("Catalog publication"),
             PublishOutcome::AppliedChanged {
@@ -545,6 +546,7 @@ fn core_objects_and_compatible_strings_project_into_target_scoped_dictionary() {
             to_catalog_refresh_command(&normalized, trace_id(41), STARTED, COMPLETED)
                 .expect("Catalog command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("Catalog publication");
     let published_catalog = storage
@@ -672,6 +674,7 @@ fn core_projection_preserves_empty_null_missing_and_malformed_knowledge() {
                 )
                 .expect("Catalog command"),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("Catalog publication");
         let projected = to_normalized_catalog_v1(
@@ -707,6 +710,7 @@ fn selector_scope_projects_payloads_with_a_different_upstream_campus() {
             to_catalog_refresh_command(&normalized, trace_id(40), STARTED, COMPLETED)
                 .expect("Catalog command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("Catalog publication");
     let published = storage
@@ -773,6 +777,7 @@ fn occurrence_key_knowledge_preserves_missing_null_malformed_and_empty_after_sto
                 )
                 .expect("command"),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("publish");
         let stored = storage
@@ -812,6 +817,7 @@ fn set_reordering_is_unchanged_and_matches_a_clean_rebuild_projection() {
             to_catalog_refresh_command(&baseline, trace_id(3), STARTED, COMPLETED)
                 .expect("baseline command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("baseline publication");
     assert!(matches!(
@@ -825,6 +831,7 @@ fn set_reordering_is_unchanged_and_matches_a_clean_rebuild_projection() {
                 )
                 .expect("reordered command"),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("unchanged publication"),
         PublishOutcome::AppliedUnchanged { .. }
@@ -848,6 +855,7 @@ fn set_reordering_is_unchanged_and_matches_a_clean_rebuild_projection() {
             )
             .expect("clean command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("clean publication");
     let rebuilt = to_normalized_catalog_v1(
@@ -884,6 +892,7 @@ fn meeting_order_is_content_and_public_ordinals_remain_source_ordinals() {
             to_catalog_refresh_command(&baseline, trace_id(6), STARTED, COMPLETED)
                 .expect("baseline command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("baseline publication");
     assert!(matches!(
@@ -897,6 +906,7 @@ fn meeting_order_is_content_and_public_ordinals_remain_source_ordinals() {
                 )
                 .expect("reversed command"),
                 EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("reversed publication"),
         PublishOutcome::AppliedChanged {
@@ -946,6 +956,7 @@ fn malformed_course_and_meeting_facts_survive_storage_projection() {
             to_catalog_refresh_command(&normalized, trace_id(8), STARTED, COMPLETED)
                 .expect("command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("publication");
     let projected = to_normalized_catalog_v1(
@@ -1044,6 +1055,7 @@ fn eligibility_projection_preserves_knowledge_states_and_validates_items() {
             to_catalog_refresh_command(&normalized, trace_id(9), STARTED, COMPLETED)
                 .expect("command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("publication");
     let projected = to_normalized_catalog_v1(
@@ -1349,6 +1361,7 @@ fn refresh_pending_chain_failure_mapping_and_incomplete_rules_are_strict() {
             to_catalog_refresh_command(&normalized, trace_id(30), STARTED, COMPLETED)
                 .expect("nonempty command"),
             EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
         )
         .expect("nonempty publication");
     assert!(matches!(
@@ -1362,6 +1375,7 @@ fn refresh_pending_chain_failure_mapping_and_incomplete_rules_are_strict() {
                 )
                 .expect("empty command"),
                 EmptySnapshotDecision::RetainLastKnownGood,
+                bcsp_catalog::CATALOG_DERIVATION_VERSION,
             )
             .expect("suspect empty result"),
         PublishOutcome::SuspectEmptyRetained { .. }
@@ -1479,4 +1493,116 @@ fn refresh_pending_chain_failure_mapping_and_incomplete_rules_are_strict() {
             .classification,
         CatalogRefreshClassification::Started
     );
+}
+
+#[test]
+fn mode_90_by_arrangement_round_trips_as_async_through_storage_projection() {
+    // The projection recomputes the derivation from stored canonical facts
+    // and rejects any stored row that disagrees; this proves the publication
+    // mapping and the projection agree on the v2 rule for the real mode-90
+    // shapes (and that publication stamps the derivation version).
+    let target = TermCampusKey::try_new("92026", "NB").expect("target");
+    let body = serde_json::to_vec(&serde_json::json!([{
+        "campusCode": "NB",
+        "courseString": "01:198:111",
+        "subject": "198",
+        "courseNumber": "111",
+        "title": "Synthetic Online Course",
+        "sections": [
+            {
+                "campusCode": "NB",
+                "index": "10001",
+                "number": "90",
+                "sectionCourseType": "O",
+                "meetingTimes": [{
+                    "meetingModeCode": "90",
+                    "meetingDay": "",
+                    "startTimeMilitary": "",
+                    "endTimeMilitary": "",
+                    "baClassHours": "B",
+                    "campusLocation": "O"
+                }]
+            },
+            {
+                "campusCode": "NB",
+                "index": "10002",
+                "number": "02",
+                "sectionCourseType": "H",
+                "meetingTimes": [
+                    {
+                        "meetingModeCode": "02",
+                        "meetingDay": "W",
+                        "startTimeMilitary": "1000",
+                        "endTimeMilitary": "1120",
+                        "campusLocation": "NB"
+                    },
+                    {
+                        "meetingModeCode": "90",
+                        "meetingDay": "",
+                        "startTimeMilitary": "",
+                        "endTimeMilitary": "",
+                        "baClassHours": "B",
+                        "campusLocation": "O"
+                    }
+                ]
+            }
+        ]
+    }]))
+    .expect("synthetic Catalog JSON");
+    let normalized = normalized_catalog(target.clone(), &body, "SYN_MODE_90", STARTED);
+    let mut storage = OperationalStorage::open_in_memory().expect("storage");
+    let outcome = storage
+        .apply_catalog_refresh(
+            to_catalog_refresh_command(&normalized, trace_id(60), STARTED, COMPLETED)
+                .expect("Catalog command"),
+            EmptySnapshotDecision::AcceptNonEmptyOrUnchangedEmpty,
+            bcsp_catalog::CATALOG_DERIVATION_VERSION,
+        )
+        .expect("Catalog publication");
+    assert!(matches!(outcome, PublishOutcome::AppliedChanged { .. }));
+    assert_eq!(
+        storage
+            .catalog_derivation_versions()
+            .expect("derivation stamps")
+            .get(&target),
+        Some(&bcsp_catalog::CATALOG_DERIVATION_VERSION)
+    );
+
+    let published = storage
+        .published_catalog_snapshot(&target)
+        .expect("read published Catalog")
+        .expect("published Catalog");
+    let stored = |index: &str| {
+        published
+            .snapshot
+            .sections
+            .iter()
+            .find(|section| section.key.index().as_str() == index)
+            .expect("stored section")
+    };
+    assert_eq!(stored("10001").synchronicity, "ASYNC");
+    assert_eq!(stored("10002").synchronicity, "MIXED");
+
+    let projected = to_normalized_catalog_v1(&published).expect("projection agrees with mapping");
+    let section = |index: &str| {
+        projected
+            .sections
+            .iter()
+            .find(|section| section.key.index().as_str() == index)
+            .expect("projected section")
+    };
+    assert_eq!(section("10001").delivery_modality, CatalogModality::Online);
+    assert_eq!(section("10001").synchronicity, CatalogSynchronicity::Async);
+    assert_eq!(section("10002").synchronicity, CatalogSynchronicity::Mixed);
+    let by_arrangement = projected
+        .occurrences
+        .iter()
+        .filter(|occurrence| {
+            occurrence.normalization_reason.as_str() == "ONLINE_BY_ARRANGEMENT_ASYNCHRONOUS"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(by_arrangement.len(), 2);
+    assert!(by_arrangement.iter().all(|occurrence| {
+        occurrence.synchronicity == CatalogFieldKnowledge::present(CatalogSynchronicity::Async)
+    }));
 }

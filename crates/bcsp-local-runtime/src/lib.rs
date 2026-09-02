@@ -23,6 +23,10 @@ mod watch;
 pub use bootstrap::{
     LocalBootstrapError, LocalPrimaryDatabase, LocalRuntimeState, OperationalGate,
 };
+pub use console::{
+    LocalConsole, LocalConsoleEvent, LocalConsoleLayer, LocalConsoleLocale, LocalConsoleSink,
+    LocalExitReason,
+};
 pub use desired::{
     DESIRED_WATCH_ABSENT_COMMITTED_NUMBER, DESIRED_WATCH_MATERIALIZE_BACKOFF,
     DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchCommittedV1, DesiredWatchCoordinator,
@@ -31,10 +35,6 @@ pub use desired::{
     DesiredWatchMutationResultV1, DesiredWatchMutationV1, DesiredWatchOutcomeV1, DesiredWatchOwner,
     DesiredWatchStateV1, LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_PATH,
     LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
-};
-pub use console::{
-    LocalConsole, LocalConsoleEvent, LocalConsoleLayer, LocalConsoleLocale, LocalConsoleSink,
-    LocalExitReason,
 };
 pub use diagnostic::StartupFailureReport;
 pub use extension::{
@@ -46,18 +46,19 @@ pub use instance::{
     LoopbackBrowserUrl, PrimaryInstanceLease,
 };
 pub use lifecycle::{
-    LocalRuntimeError, PreparedLocalRuntime, RunningLocalRuntime, prepare_and_start_with, run,
-    run_blocking,
+    LocalRuntimeError, PreparedLocalRuntime, RunningLocalRuntime, SKIP_BROWSER_LAUNCH_ENVIRONMENT,
+    browser_launch_skipped, prepare_and_start_with, run, run_blocking,
 };
 pub use path::{
     LOCAL_DATA_DIRECTORY_NAME, LOCAL_DATABASE_FILE_NAME, LocalPathError, LocalRuntimePaths,
 };
 pub use personal::PersonalSurface;
+pub use policy::{LocalRefreshPolicyProvider, LocalRuntimeCore, create_local_runtime_core};
 pub use presence::{
     LOCAL_IDLE_EXIT_COUNTDOWN, LOCAL_PRESENCE_HELLO_DEADLINE, LocalPresenceCommandV1,
     LocalPresenceEventV1, LocalPresencePhase, LocalPresenceRoute, LocalPresenceStateV1,
 };
-pub use policy::{LocalRefreshPolicyProvider, LocalRuntimeCore, create_local_runtime_core};
+pub use product::LOCAL_PREPARED_ADMISSION_WAIT;
 pub use watch::{LOCAL_PRESENCE_SOCKET_PATH, LocalWatchRoute, create_local_watch_socket};
 
 pub fn boundary_marker() -> &'static str {

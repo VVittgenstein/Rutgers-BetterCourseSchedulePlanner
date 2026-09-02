@@ -14,6 +14,7 @@ mod product_scope;
 mod query_service;
 mod refresh_coordinator;
 mod refresh_generation;
+mod refresh_maintenance;
 mod refresh_runtime;
 mod runtime_core;
 mod rutgers_refresh_upstream;
@@ -21,6 +22,13 @@ mod service_status;
 mod target_refresh_demand;
 mod watch_socket;
 
+// The startup re-derivation of stored delivery columns lives in bcsp-catalog;
+// the runtime adapters reach it through this crate so the dependency graph
+// (local/public runtime -> application -> catalog) stays as declared.
+pub use bcsp_catalog::{
+    CATALOG_DERIVATION_VERSION, RederivationError, RederivationReport, TargetRederivationReport,
+    rederive_stored_delivery, rederive_stored_delivery_now,
+};
 pub use discovery_runtime::{
     DiscoveryRuntimeError, PublishedRefreshTargets, publish_discovery_for_refresh,
     record_discovery_transport_failure, restore_refresh_targets,
@@ -38,11 +46,12 @@ pub use official_refresh_runtime::{
     DISCOVERY_RETRY_INTERVAL, OfficialRefreshRuntime, OfficialRefreshRuntimeBuildError,
 };
 pub use prepared_serving::{
-    PreparedCatalogVectorEntry, PreparedOpenOverlay, PreparedOpenPublicationBarrier,
-    PreparedOpenVectorEntry, PreparedServingBinding, PreparedServingError,
-    PreparedServingRebuildDemand, PreparedServingRebuildRuntime, PreparedServingRegistry,
-    PreparedServingSnapshot, build_prepared_serving_snapshot, rebuild_prepared_open_from_access,
-    rebuild_prepared_open_overlay, rebuild_prepared_serving_from_access,
+    PREPARED_REQUEST_ADMISSION_WAIT, PreparedCatalogVectorEntry, PreparedOpenOverlay,
+    PreparedOpenPublicationBarrier, PreparedOpenVectorEntry, PreparedServingBinding,
+    PreparedServingError, PreparedServingRebuildDemand, PreparedServingRebuildRuntime,
+    PreparedServingRegistry, PreparedServingSnapshot, build_prepared_serving_snapshot,
+    rebuild_prepared_open_from_access, rebuild_prepared_open_overlay,
+    rebuild_prepared_serving_from_access,
 };
 pub use product_routes::{
     PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_COURSE_DETAIL_PATH, PRODUCT_COURSE_SEARCH_PATH,
@@ -64,6 +73,12 @@ pub use refresh_coordinator::{
     WorkflowOperationActivity, WorkflowOperationId,
 };
 pub use refresh_generation::DISCOVERY_REFRESH_INTERVAL;
+pub use refresh_maintenance::{
+    StorageConnectionInventoryEntry, WAL_ESCALATION_MIN_INTERVAL, WAL_RESTART_LOG_FRAMES,
+    WAL_STARVATION_MIN_LOG_FRAMES, WAL_STARVATION_ZERO_PROGRESS_REPORTS, WAL_TRUNCATE_LOG_FRAMES,
+    WalMaintenanceOutcome, WalMaintenancePolicy, WalMaintenanceReason, WalMaintenanceSignal,
+    WalMaintenanceState, WalStarvationDetector,
+};
 pub use refresh_runtime::{
     REFRESH_MAX_CONCURRENCY, RefreshRuntime, RefreshRuntimeRegistrationError,
 };

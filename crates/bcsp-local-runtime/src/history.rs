@@ -10,7 +10,7 @@ use bcsp_contracts::{
 use bcsp_local_user_state::{
     EpisodeActionInput, EpisodeActionKind, EpisodeDisposition, EpisodeHistoryIdentity,
     EpisodeHistorySummary, EpisodeSummaryInput, HistoryFilter, PageRequest, PersonalStateError,
-    PersonalStateResult, PersonalStateStore, UnixMillis,
+    PersonalStateResult, PersonalStateStore, PersonalTransactionState, UnixMillis,
 };
 use bcsp_watch::{
     WatchAction, WatchActionKind, WatchCleanupReason, WatchCleanupReport, WatchDispatch,
@@ -26,7 +26,14 @@ enum LocalWatchHistoryWork {
     Dispatch(WatchDispatch),
     Cleanup(WatchCleanupReport),
     Flush(mpsc::SyncSender<()>),
+    /// Asks the worker what transaction its connection is in, for the
+    /// WAL starvation diagnostic. Answered in queue order like any other
+    /// work, which is also why the asker waits with a timeout.
+    Inspect(mpsc::SyncSender<PersonalTransactionState>),
 }
+
+/// How long the starvation diagnostic waits for the history worker's answer.
+const HISTORY_INSPECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
 struct LocalWatchHistoryWriter {
     store: PersonalStateStore,
@@ -112,6 +119,15 @@ impl LocalWatchHistorySink {
         }
     }
 
+    /// The transaction state of the worker's connection, or `None` when the
+    /// worker did not answer in time (it is busy writing, or gone).
+    pub(crate) fn transaction_state(&self) -> Option<PersonalTransactionState> {
+        let (answer, waiting) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref()?;
+        sender.send(LocalWatchHistoryWork::Inspect(answer)).ok()?;
+        waiting.recv_timeout(HISTORY_INSPECT_TIMEOUT).ok()
+    }
+
     fn flush_queue(&self) {
         let (completed, waiting) = mpsc::sync_channel(0);
         let Some(sender) = &self.sender else {
@@ -159,6 +175,13 @@ impl LocalWatchHistoryWriter {
                 }
                 LocalWatchHistoryWork::Flush(completed) => {
                     let _ = completed.send(());
+                }
+                LocalWatchHistoryWork::Inspect(answer) => {
+                    let state = self
+                        .store
+                        .transaction_state()
+                        .unwrap_or(PersonalTransactionState::None);
+                    let _ = answer.send(state);
                 }
             }
         }
