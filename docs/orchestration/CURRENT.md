@@ -335,9 +335,11 @@ PUT /api/v1/local/desired-watch
 记录日期：2026-09-02。
 
 ```text
-当前检出：main（v0.1.3 发布后的编排文档收口）
+当前检出：main（v0.1.4 发布后的编排文档收口）
+v0.1.4 产品源码与轻量 tag：379d262da288c0d947629f16e6dbc804c451a17c
+GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.4
 v0.1.3 产品源码与轻量 tag：f4117b521aff452717e1b9dde3534d4571b38b76
-GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.3
+v0.1.3 Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.3
 v0.1.2 产品源码与轻量 tag：76316dd2eedae844bd48fabc75c6b48e343c6d61
 v0.1.1 产品源码与轻量 tag：0988dadeeef2db16bbc2e64bc432125674c60325
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
@@ -348,8 +350,9 @@ Codex Stage 2 最终集成 head：6a35c74
 Stage 2/3/4/5：均已裁定、串行集成并随 v0.1.1 发布
 v0.1.2：真实使用暴露的筛选、可用性、存储与界面缺陷收口，迁移 0007 + derivation stamp 不可回滚
 v0.1.3：BY_ARRANGEMENT 同步性取值与上课地点单一语义，迁移 0008 不可回滚
+v0.1.4：本地桌面版监看上限 255、批量 desired/telemetry/revalidation 与选择持久化收口；公网/Linux 仍为 9
 当前产品源码工作树：无未提交源码；conversation 归档目录保持未跟踪
-v0.1.0/v0.1.1/v0.1.2：tag/Release/资产保持不可变；v0.1.3 为当前 Latest
+v0.1.0/v0.1.1/v0.1.2/v0.1.3：tag/Release/资产保持不可变；v0.1.4 为当前 Latest
 ```
 
 恢复时必须重新核实这些值，不得永久假设它们仍然成立。
@@ -420,7 +423,7 @@ v0.1.0/v0.1.1/v0.1.2：tag/Release/资产保持不可变；v0.1.3 为当前 Late
 
 ## 15. 发布和迁移硬门
 
-1. feature 包含本地迁移 10004；一旦数据库升级，旧二进制会因未知迁移拒绝启动；
+1. 本地个人状态迁移现已推进到 10006（含 10004/10005/10006）；一旦数据库升级，旧二进制会因未知迁移拒绝启动；
 2. 因此不能发布“只有迁移和地基、没有 writer/UI/E2E”的本地中间构建；
 3. 本地发布前必须完成 desired writer、materializer、UI、重启/reset E2E 和回滚说明；
 4. 公网发布前必须完成 P1 客户端和 H4 资源边界；
@@ -429,8 +432,8 @@ v0.1.0/v0.1.1/v0.1.2：tag/Release/资产保持不可变；v0.1.3 为当前 Late
 
 ## 16. 当前 Parallel Wave
 
-状态：**Parallel Wave 1、v0.1.1 与 v0.1.2 发布均已完成。v0.1.2 收口了真实使用暴露的筛选、
-可用性、存储与界面缺陷。Stage 2 → P2 → S4 → S3 evidence 已串行回收；
+状态：**Parallel Wave 1 与 v0.1.1–v0.1.4 发布均已完成。v0.1.4 收口了本地大批量监看时暴露的
+选择持久化、请求放大和服务锁竞争。Stage 2 → P2 → S4 → S3 evidence 已串行回收；
 Windows/Linux 同源归档、联合验证与 Linux 600 秒 CORE soak 全部通过。**
 
 Stage 2（已完成）：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
@@ -505,6 +508,42 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-09-02 — v0.1.4 已发布，本地 255 个监看与大批量请求放大收口
+
+- 用户在自行把本地可见上限改为 255 后选择 40 个课节，界面显示 40、实际始终无法监看并反复报告
+  服务中断。排查确认不是不可克服的机器性能上限，而是三处设计叠加：个人状态表仍以
+  `position BETWEEN 0 AND 8` 拒绝第十项以后写入，前端保留乐观状态并吞掉失败；连续 40 次选择形成
+  `1 + ... + 40 = 820` 个逐项状态请求；每个请求和周期 revalidation 都重复完整 target projection，
+  且 projection 占用 operational SQLite 全局互斥，已取消的浏览器请求仍在 blocking worker 中排队；
+- `dc78afb` 将**仅本地桌面版**的 selection/desired/active 上限推进到 255；共享/公网默认值、公共 API、
+  公网 UI 与 Linux runtime 的硬上限保持 9。个人迁移 10005 重建 selection 位置约束为 0..254；
+  10006 增加 batch receipt。`PUT /api/v1/local/desired-watch/batch` 把一个 1..255 项用户手势放进一个
+  `BEGIN IMMEDIATE` 事务，rows/revisions/tombstones/receipt 全成或全退，一次手势只占一条 receipt；
+- 新增共享 additive `POST /api/v1/open/batch-status`，前端对 settled gesture 做 300ms trailing debounce，
+  按 term/campus 顺序分组请求；materialization 与周期 revalidation 也按 target 批量 admission，一次 target
+  只 projection 一次。昂贵 admission 移到 WebSocket 状态锁之外，PING 不再被锁内 projection 卡住；
+  running/stopping authority 在 CLOSED/ERROR 时仍可信，只有明确 STOP 才移除；
+- selection 持久化改为 single-flight/latest-wins；失败回滚到最后确认状态并显示
+  `SELECTION_SAVE_FAILED`。声音次数与有限时长在 Rust 构造/反序列化及 UI 同时限制为 JavaScript safe
+  integer，避免“服务端写入成功、客户端永远无法 bootstrap”的毒化状态；最大合法 domain 的 authority
+  与 batch response 分别在 384 KiB / 512 KiB 预算内通过；
+- 独立门：`cargo test --workspace`、Clippy `-D warnings`、rustfmt、前端 31 文件 474 项 + typecheck +
+  local/public build、Rust graph 与 public zero-surface actual/self-test、release contract self-test 全绿。
+  Chrome 使用 0.1.3 数据库副本经迁移后从真实课程页选择 40 门，40/40 desired 全部 materialized，
+  failure/pending/blocked 均为 0；刷新后 527ms 恢复 40/40。40 门运行期间密集探测 `/service/status` 60 次，
+  0 失败，median 3.7ms、p95 897.9ms、max 1039.6ms，应用日志 0 条 error/panic/lock/timeout；
+- 首个 Linux iteration run `33711896240` 在 actual architecture gate 抓到
+  `bcsp-local-user-state` 新增的 dev dependency 未写入 graph spec；`379d262` 只补记
+  `internalDev: ['bcsp-operational-storage']`，`bcsp-server --edges all` 仍不含任何 local-only 包，公网闭包
+  仍为 12。新 run `33712248807` 构建/验证通过；
+- 正式 source/tag 为 `379d262da288c0d947629f16e6dbc804c451a17c`。Windows 12 文件，SHA-256
+  `005b1f5813f87dab4c9e4aa248ad4808c1a673915a9dc07208c6b7aed358f0fe`；Linux 22 文件，SHA-256
+  `104064baac82640e568a14d226014d3bf7fdd779ab5dec061472f5d3e7a4e2f9`；联合门核对 172 个共享组件、
+  10 个前端组件、12 项共享前端能力和相同 source epoch。GitHub 上传后重新下载，两份哈希保持一致；
+- v0.1.4 Release：`https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.4`。
+  本轮只发布 Linux 包，不连接/部署 Vultr，不改 DNS/UFW/SSH/Caddy/systemd，不重跑 600 秒公网 soak。
+  个人迁移 10005/10006 仍为单向；升级前必须停止 RBCSP 并备份完整 `data` 目录。
 
 ### 2026-09-02 — v0.1.3 已发布，按 Rutgers 口径命名"时间另行约定"并收紧上课地点
 
@@ -766,17 +805,20 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 Active wave: PARALLEL-WAVE-1 COMPLETE
 Accepted/integrated: Stage 2; STAGE-3-R3/P2; STAGE-4-R1/S4; STAGE-5-R3/S3 evidence
 Published v0.1.1 product source/tag: 0988dadeeef2db16bbc2e64bc432125674c60325
+Published v0.1.4 product source/tag: 379d262da288c0d947629f16e6dbc804c451a17c
 Integration order completed: P2 → S4 → S3 evidence
 Integration-only commits: 5efeaa5 (presence sender); 882f230 (architecture feature snapshot)
 Heavy gates: final source push/tag contracts, Windows verifier, Linux verifier, joint release-set and 600s CORE soak PASS
 Windows v0.1.1 release: 12 files; SHA256 a3a23bafdcc42dc3f88d6ad90a0775b92bbdf951e0af712648927e5219daaa73; NON_EMPTY_MATERIALIZED after two restarts
 Linux v0.1.1 release: 22 files; SHA256 77546e4615b148963d2de92f75a0628c3323ae679066b88edfd79ed756b7e2ac
+Windows v0.1.4 release: 12 files; SHA256 005b1f5813f87dab4c9e4aa248ad4808c1a673915a9dc07208c6b7aed358f0fe; Chrome 40/40 and packaged NON_EMPTY_MATERIALIZED PASS
+Linux v0.1.4 release: 22 files; SHA256 104064baac82640e568a14d226014d3bf7fdd779ab5dec061472f5d3e7a4e2f9; public watch limit remains 9
 External gates: P2 Linux/systemd/Caddy 600s CORE PASS; full Rutgers composition and real H8 deployment remain separately authorized
 S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT (CORE evidence PASS; deployment-only evidence pending); Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: NONE — v0.1.1 PUBLISHED; production deployment or Rutgers composition requires new explicit authorization
+Next authorized action: NONE — v0.1.4 PUBLISHED; production deployment or Rutgers composition requires new explicit authorization
 ```
 
 验收结论只允许使用：
