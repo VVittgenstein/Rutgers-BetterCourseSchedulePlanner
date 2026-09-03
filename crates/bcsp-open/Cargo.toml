@@ -10,10 +10,10 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-bcsp-contracts = { version = "=0.1.3", path = "../bcsp-contracts" }
-bcsp-domain = { version = "=0.1.3", path = "../bcsp-domain" }
-bcsp-operational-storage = { version = "=0.1.3", path = "../bcsp-operational-storage" }
-bcsp-rutgers-client = { version = "=0.1.3", path = "../bcsp-rutgers-client" }
+bcsp-contracts = { version = "=0.1.4", path = "../bcsp-contracts" }
+bcsp-domain = { version = "=0.1.4", path = "../bcsp-domain" }
+bcsp-operational-storage = { version = "=0.1.4", path = "../bcsp-operational-storage" }
+bcsp-rutgers-client = { version = "=0.1.4", path = "../bcsp-rutgers-client" }
 jiff.workspace = true
 serde.workspace = true
 thiserror.workspace = true

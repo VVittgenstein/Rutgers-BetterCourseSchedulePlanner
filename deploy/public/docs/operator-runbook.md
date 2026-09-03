@@ -31,7 +31,7 @@ Prepare an environment file containing the real test or deployment origin:
 
 ```bash
 printf '%s\n' 'BCSP_PUBLIC_ORIGIN=https://planner.invalid' > /tmp/bcsp.env
-sudo BCSP_ENV_SOURCE=/tmp/bcsp.env ./ops/install.sh 0.1.3 /path/to/package
+sudo BCSP_ENV_SOURCE=/tmp/bcsp.env ./ops/install.sh 0.1.4 /path/to/package
 sudo ./ops/verify.sh
 ```
 
@@ -75,13 +75,13 @@ the service, and requires `/health/live` to return 200. It automatically restore
 the previous symlink if the new binary fails that check:
 
 ```bash
-sudo ./ops/upgrade.sh 0.1.3 /path/to/new-package
+sudo ./ops/upgrade.sh 0.1.4 /path/to/new-package
 ```
 
 Roll back the last successful upgrade. This restores both the named previous
 release and the database snapshot paired with that upgrade; it never combines
 an old binary with a post-migration database. For example, after upgrading from
-0.1.1 to this 0.1.3 package:
+0.1.1 to this 0.1.4 package:
 
 ```bash
 sudo ./ops/rollback.sh 0.1.0

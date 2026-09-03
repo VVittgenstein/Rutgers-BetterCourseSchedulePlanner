@@ -10,8 +10,8 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-bcsp-contracts = { version = "=0.1.3", path = "../bcsp-contracts" }
-bcsp-domain = { version = "=0.1.3", path = "../bcsp-domain" }
+bcsp-contracts = { version = "=0.1.4", path = "../bcsp-contracts" }
+bcsp-domain = { version = "=0.1.4", path = "../bcsp-domain" }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -20,5 +20,5 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-bcsp-operational-storage = { version = "=0.1.3", path = "../bcsp-operational-storage" }
+bcsp-operational-storage = { version = "=0.1.4", path = "../bcsp-operational-storage" }
 tempfile.workspace = true

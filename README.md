@@ -17,10 +17,10 @@ one shared React frontend:
 
 Published packages are available from
 [GitHub Releases](https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases).
-Version `0.1.3` uses these two assets:
+Version `0.1.4` uses these two assets:
 
-- `rbcsp-windows-x86_64-0.1.3.zip`
-- `rbcsp-linux-x86_64-0.1.3.tar.gz`
+- `rbcsp-windows-x86_64-0.1.4.zip`
+- `rbcsp-linux-x86_64-0.1.4.tar.gz`
 
 Windows users can extract the archive and run `Start-RBCSP.bat`. The Linux
 archive includes deployment configuration and an operator runbook.
