@@ -15,17 +15,19 @@ use sha2::{Digest, Sha256};
 
 use crate::migration::{apply_migrations, read_migration_records};
 use crate::{
-    DesiredWatch, DesiredWatchAuthority, DesiredWatchBudget, DesiredWatchBudgetKind,
-    DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry,
-    DesiredWatchMutationOutcome, DesiredWatchReceipt, DesiredWatchReceiptOutcome,
-    DesiredWatchRotation, EpisodeActionInput, EpisodeActionKind, EpisodeActionRecord,
-    EpisodeDisposition, EpisodeHistoryIdentity, EpisodeHistorySummary, EpisodeSummaryInput,
-    HistoryFilter, HistoryPage, HistoryWriteOutcome, LocalSettings, MAX_DESIRED_WATCH_RECEIPTS,
-    MAX_DESIRED_WATCH_TOMBSTONES, MAX_DESIRED_WATCHES, MAX_SELECTED_SECTIONS, PageRequest,
-    PersonalMigrationRecord, PersonalResetResult, PersonalStateError, PersonalStateResult,
-    PersonalStateSnapshot, PersonalTableCounts, PersonalTransactionState, SelectionMutation,
-    SettingsRevision, SqliteConfiguration, StoredSettings, UnixMillis, UserStateRevision,
-    WAL_JOURNAL_SIZE_LIMIT_BYTES, WalCheckpoint, WalCheckpointMode,
+    DesiredWatch, DesiredWatchAuthority, DesiredWatchBatchCommand, DesiredWatchBatchCommitted,
+    DesiredWatchBatchDecision, DesiredWatchBatchOutcome, DesiredWatchBatchReceiptOutcome,
+    DesiredWatchBudget, DesiredWatchBudgetKind, DesiredWatchCommand, DesiredWatchCommitted,
+    DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome, DesiredWatchReceipt,
+    DesiredWatchReceiptOutcome, DesiredWatchRotation, EpisodeActionInput, EpisodeActionKind,
+    EpisodeActionRecord, EpisodeDisposition, EpisodeHistoryIdentity, EpisodeHistorySummary,
+    EpisodeSummaryInput, HistoryFilter, HistoryPage, HistoryWriteOutcome, LocalSettings,
+    MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES, MAX_DESIRED_WATCHES,
+    MAX_SELECTED_SECTIONS, PageRequest, PersonalMigrationRecord, PersonalResetResult,
+    PersonalStateError, PersonalStateResult, PersonalStateSnapshot, PersonalTableCounts,
+    PersonalTransactionState, SelectionMutation, SettingsRevision, SqliteConfiguration,
+    StoredSettings, UnixMillis, UserStateRevision, WAL_JOURNAL_SIZE_LIMIT_BYTES, WalCheckpoint,
+    WalCheckpointMode,
 };
 
 // A first-load Catalog publication can hold SQLite's single writer slot for
@@ -321,6 +323,16 @@ impl PersonalStateStore {
             });
         }
 
+        if load_desired_watch_batch_receipt(
+            &transaction,
+            counters.authority_generation,
+            command.mutation_id,
+        )?
+        .is_some()
+        {
+            return Ok(DesiredWatchMutationOutcome::BatchMutationIdConflict);
+        }
+
         // 2. Receipt. A repeated id replays what it decided the first time;
         //    a reused id carrying a different command is reported FROM the
         //    row that exists, never by inserting a second one.
@@ -372,8 +384,8 @@ impl PersonalStateStore {
         //    authority's own contents rather than about the world.
         //
         //    A POST-STATE test, deliberately: only 0 -> 1 consumes a slot, so
-        //    editing the policy of one of nine watched sections still
-        //    commits. Testing "count < 9" instead would refuse it.
+        //    editing the policy of an already-watched section still
+        //    commits. Testing "count < the cap" instead would refuse it.
         if command.desired() {
             let already_desired = existing.as_ref().is_some_and(|row| row.desired);
             if !already_desired && desired_watch_count(&transaction)? >= MAX_DESIRED_WATCHES as u64
@@ -422,6 +434,192 @@ impl PersonalStateStore {
         Ok(DesiredWatchMutationOutcome::Committed(committed))
     }
 
+    /// Commits one local gesture atomically and records one durable receipt.
+    ///
+    /// Every command is validated against the same pre-state. No authority
+    /// row is written until generation, ID ownership, revisions, product cap,
+    /// and tombstone/receipt budgets all pass. The row writes and the single
+    /// batch receipt then commit in one SQLite transaction, so a crash cannot
+    /// expose a prefix of the gesture.
+    pub fn commit_desired_watch_batch(
+        &mut self,
+        authority_generation: u64,
+        mutation_id: TraceId,
+        commands: &[DesiredWatchBatchCommand],
+    ) -> PersonalStateResult<DesiredWatchBatchDecision> {
+        let sections = commands
+            .iter()
+            .map(|command| command.section.clone())
+            .collect::<BTreeSet<_>>();
+        if commands.is_empty()
+            || commands.len() > MAX_DESIRED_WATCHES
+            || sections.len() != commands.len()
+        {
+            return Err(PersonalStateError::InvalidDesiredWatchBatch);
+        }
+
+        let policy_json = commands
+            .iter()
+            .map(|command| {
+                command
+                    .policy
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let fingerprint = batch_command_fingerprint(commands, &policy_json);
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let counters = load_desired_watch_counters(&transaction)?;
+        let generation = authority_generation;
+        if generation != counters.authority_generation {
+            return Ok(DesiredWatchBatchDecision {
+                replayed: false,
+                outcome: DesiredWatchBatchOutcome::StaleGeneration {
+                    current: counters.authority_generation,
+                },
+            });
+        }
+
+        if load_desired_watch_receipt(&transaction, generation, mutation_id)?.is_some() {
+            return Ok(DesiredWatchBatchDecision {
+                replayed: false,
+                outcome: DesiredWatchBatchOutcome::MutationIdConflict,
+            });
+        }
+        if let Some(receipt) =
+            load_desired_watch_batch_receipt(&transaction, generation, mutation_id)?
+        {
+            if receipt.fingerprint != fingerprint {
+                return Ok(DesiredWatchBatchDecision {
+                    replayed: false,
+                    outcome: DesiredWatchBatchOutcome::MutationIdConflict,
+                });
+            }
+            return Ok(batch_decision_from_receipt(receipt.outcome));
+        }
+
+        let budget = desired_watch_budget_within(&transaction)?;
+        if budget.receipts >= MAX_DESIRED_WATCH_RECEIPTS {
+            return Ok(DesiredWatchBatchDecision {
+                replayed: false,
+                outcome: DesiredWatchBatchOutcome::AuthorityFull(DesiredWatchBudgetKind::Receipts),
+            });
+        }
+
+        let existing = commands
+            .iter()
+            .map(|command| load_desired_watch_row(&transaction, &command.section))
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some(current) = commands
+            .iter()
+            .zip(&existing)
+            .find_map(|(command, existing)| {
+                let current = existing.as_ref().map_or(0, |row| row.revision);
+                (command.based_on_revision != current).then_some(current)
+            })
+        {
+            let outcome = DesiredWatchBatchReceiptOutcome::StaleRevision { current };
+            write_desired_watch_batch_receipt(
+                &transaction,
+                generation,
+                mutation_id,
+                &fingerprint,
+                &outcome,
+            )?;
+            transaction.commit()?;
+            return Ok(DesiredWatchBatchDecision {
+                replayed: false,
+                outcome: DesiredWatchBatchOutcome::StaleRevision { current },
+            });
+        }
+
+        let mut desired_after = desired_watch_count(&transaction)?;
+        for (command, existing) in commands.iter().zip(&existing) {
+            let was_desired = existing.as_ref().is_some_and(|row| row.desired);
+            match (was_desired, command.desired()) {
+                (false, true) => desired_after = desired_after.saturating_add(1),
+                (true, false) => desired_after = desired_after.saturating_sub(1),
+                _ => {}
+            }
+        }
+        if desired_after > MAX_DESIRED_WATCHES as u64 {
+            let outcome = DesiredWatchBatchReceiptOutcome::LimitExceeded {
+                maximum: MAX_DESIRED_WATCHES,
+            };
+            write_desired_watch_batch_receipt(
+                &transaction,
+                generation,
+                mutation_id,
+                &fingerprint,
+                &outcome,
+            )?;
+            transaction.commit()?;
+            return Ok(DesiredWatchBatchDecision {
+                replayed: false,
+                outcome: DesiredWatchBatchOutcome::LimitExceeded {
+                    maximum: MAX_DESIRED_WATCHES,
+                },
+            });
+        }
+
+        let mut tombstones_after = budget.tombstones;
+        for (command, existing) in commands.iter().zip(&existing) {
+            let was_tombstone = existing.as_ref().is_some_and(|row| !row.desired);
+            let will_be_tombstone = !command.desired();
+            match (was_tombstone, will_be_tombstone) {
+                (false, true) => tombstones_after = tombstones_after.saturating_add(1),
+                (true, false) => tombstones_after = tombstones_after.saturating_sub(1),
+                _ => {}
+            }
+        }
+        if tombstones_after > MAX_DESIRED_WATCH_TOMBSTONES {
+            return Ok(DesiredWatchBatchDecision {
+                replayed: false,
+                outcome: DesiredWatchBatchOutcome::AuthorityFull(
+                    DesiredWatchBudgetKind::Tombstones,
+                ),
+            });
+        }
+
+        let mut rolling_counters = counters;
+        let mut committed = Vec::with_capacity(commands.len());
+        for ((command, policy_json), existing) in commands.iter().zip(&policy_json).zip(&existing) {
+            let result = apply_desired_watch_write(
+                &transaction,
+                &command.section,
+                policy_json.as_deref(),
+                existing.as_ref(),
+                &rolling_counters,
+            )?;
+            rolling_counters.revision_counter = result.revision;
+            if result.epoch_changed {
+                rolling_counters.materialization_counter = result.materialization_epoch;
+            }
+            committed.push(DesiredWatchBatchCommitted::new(
+                command.section.clone(),
+                result,
+            ));
+        }
+        let receipt = DesiredWatchBatchReceiptOutcome::Committed {
+            committed: committed.clone(),
+        };
+        write_desired_watch_batch_receipt(
+            &transaction,
+            generation,
+            mutation_id,
+            &fingerprint,
+            &receipt,
+        )?;
+        transaction.commit()?;
+        Ok(DesiredWatchBatchDecision {
+            replayed: false,
+            outcome: DesiredWatchBatchOutcome::Committed(committed),
+        })
+    }
+
     /// How full the two rotation budgets are, read in one snapshot.
     ///
     /// Read separately they could straddle a rotation and report a pair that
@@ -431,7 +629,8 @@ impl PersonalStateStore {
         let counts = self.connection.query_row(
             "SELECT
                  (SELECT COUNT(*) FROM personal_desired_watches_v1 WHERE desired = 0),
-                 (SELECT COUNT(*) FROM personal_desired_watch_receipts_v1)",
+                 (SELECT COUNT(*) FROM personal_desired_watch_receipts_v1) +
+                 (SELECT COUNT(*) FROM personal_desired_watch_batch_receipts_v1)",
             [],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
         )?;
@@ -497,8 +696,14 @@ impl PersonalStateStore {
         }
         let deleted_tombstones = u64::try_from(dropped.len())
             .map_err(|_| PersonalStateError::StoredIntegerOutOfRange)?;
+        let deleted_single_receipts =
+            transaction.execute("DELETE FROM personal_desired_watch_receipts_v1", [])?;
+        let deleted_batch_receipts =
+            transaction.execute("DELETE FROM personal_desired_watch_batch_receipts_v1", [])?;
         let deleted_receipts = u64::try_from(
-            transaction.execute("DELETE FROM personal_desired_watch_receipts_v1", [])?,
+            deleted_single_receipts
+                .checked_add(deleted_batch_receipts)
+                .ok_or(PersonalStateError::StoredIntegerOutOfRange)?,
         )
         .map_err(|_| PersonalStateError::StoredIntegerOutOfRange)?;
 
@@ -835,7 +1040,8 @@ impl PersonalStateStore {
                  (SELECT COUNT(*) FROM personal_saved_views_v1),
                  (SELECT COUNT(*) FROM personal_selected_sections_v1),
                  (SELECT COUNT(*) FROM personal_desired_watches_v1),
-                 (SELECT COUNT(*) FROM personal_desired_watch_receipts_v1),
+                 (SELECT COUNT(*) FROM personal_desired_watch_receipts_v1) +
+                 (SELECT COUNT(*) FROM personal_desired_watch_batch_receipts_v1),
                  (SELECT COUNT(*) FROM personal_episode_summaries_v1),
                  (SELECT COUNT(*) FROM personal_episode_actions_v1)",
             [],
@@ -897,8 +1103,13 @@ impl PersonalStateStore {
             transaction.execute("DELETE FROM personal_selected_sections_v1", [])?;
         let deleted_desired_watches =
             transaction.execute("DELETE FROM personal_desired_watches_v1", [])?;
-        let deleted_desired_watch_receipts =
+        let deleted_single_desired_watch_receipts =
             transaction.execute("DELETE FROM personal_desired_watch_receipts_v1", [])?;
+        let deleted_batch_desired_watch_receipts =
+            transaction.execute("DELETE FROM personal_desired_watch_batch_receipts_v1", [])?;
+        let deleted_desired_watch_receipts = deleted_single_desired_watch_receipts
+            .checked_add(deleted_batch_desired_watch_receipts)
+            .ok_or(PersonalStateError::StoredIntegerOutOfRange)?;
         let deleted_settings = transaction.execute("DELETE FROM personal_settings_v1", [])?;
         // Full Reset is the authority's generation barrier: bump the
         // generation and zero the two counters in the SAME transaction that
@@ -1255,6 +1466,34 @@ fn load_desired_watch_receipt(
     .transpose()
 }
 
+struct DesiredWatchBatchReceipt {
+    fingerprint: String,
+    outcome: DesiredWatchBatchReceiptOutcome,
+}
+
+fn load_desired_watch_batch_receipt(
+    connection: &Connection,
+    authority_generation: u64,
+    mutation_id: TraceId,
+) -> PersonalStateResult<Option<DesiredWatchBatchReceipt>> {
+    let row = connection
+        .query_row(
+            "SELECT fingerprint, outcome_json
+             FROM personal_desired_watch_batch_receipts_v1
+             WHERE authority_generation = ?1 AND mutation_id = ?2",
+            params![u64_to_i64(authority_generation)?, mutation_id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    row.map(|(fingerprint, outcome_json)| {
+        Ok(DesiredWatchBatchReceipt {
+            fingerprint,
+            outcome: serde_json::from_str(&outcome_json)?,
+        })
+    })
+    .transpose()
+}
+
 /// True when writing `desired` over `existing` grows the removal history.
 /// Overwriting a tombstone with another tombstone does not, and neither does
 /// any write that leaves the section desired.
@@ -1266,7 +1505,8 @@ fn desired_watch_budget_within(connection: &Connection) -> PersonalStateResult<D
     let counts = connection.query_row(
         "SELECT
              (SELECT COUNT(*) FROM personal_desired_watches_v1 WHERE desired = 0),
-             (SELECT COUNT(*) FROM personal_desired_watch_receipts_v1)",
+             (SELECT COUNT(*) FROM personal_desired_watch_receipts_v1) +
+             (SELECT COUNT(*) FROM personal_desired_watch_batch_receipts_v1)",
         [],
         |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
     )?;
@@ -1318,6 +1558,27 @@ fn write_desired_watch_receipt(
             command.section.index().as_str(),
             fingerprint,
             serde_json::to_string(&outcome)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn write_desired_watch_batch_receipt(
+    transaction: &Transaction<'_>,
+    authority_generation: u64,
+    mutation_id: TraceId,
+    fingerprint: &str,
+    outcome: &DesiredWatchBatchReceiptOutcome,
+) -> PersonalStateResult<()> {
+    transaction.execute(
+        "INSERT INTO personal_desired_watch_batch_receipts_v1(
+             authority_generation, mutation_id, fingerprint, outcome_json
+         ) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            u64_to_i64(authority_generation)?,
+            mutation_id.to_string(),
+            fingerprint,
+            serde_json::to_string(outcome)?,
         ],
     )?;
     Ok(())
@@ -1400,6 +1661,47 @@ fn command_fingerprint(command: &DesiredWatchCommand, policy_json: Option<&str>)
     hasher.update([u8::from(command.desired())]);
     hasher.update(policy_json.unwrap_or("").as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn batch_command_fingerprint(
+    commands: &[DesiredWatchBatchCommand],
+    policy_json: &[Option<String>],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update((commands.len() as u64).to_be_bytes());
+    for (command, policy_json) in commands.iter().zip(policy_json) {
+        hasher.update(command.section.term().as_str().as_bytes());
+        hasher.update([0]);
+        hasher.update(command.section.campus().as_str().as_bytes());
+        hasher.update([0]);
+        hasher.update(command.section.index().as_str().as_bytes());
+        hasher.update([0]);
+        hasher.update(command.based_on_revision.to_be_bytes());
+        hasher.update([u8::from(command.desired())]);
+        hasher.update(policy_json.as_deref().unwrap_or("").as_bytes());
+        hasher.update([0xff]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn batch_decision_from_receipt(
+    outcome: DesiredWatchBatchReceiptOutcome,
+) -> DesiredWatchBatchDecision {
+    let outcome = match outcome {
+        DesiredWatchBatchReceiptOutcome::Committed { committed } => {
+            DesiredWatchBatchOutcome::Committed(committed)
+        }
+        DesiredWatchBatchReceiptOutcome::StaleRevision { current } => {
+            DesiredWatchBatchOutcome::StaleRevision { current }
+        }
+        DesiredWatchBatchReceiptOutcome::LimitExceeded { maximum } => {
+            DesiredWatchBatchOutcome::LimitExceeded { maximum }
+        }
+    };
+    DesiredWatchBatchDecision {
+        replayed: true,
+        outcome,
+    }
 }
 
 /// Advances one authority counter. Exhaustion is a real end state rather

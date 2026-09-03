@@ -1,12 +1,12 @@
 use std::str::FromStr;
 
 use bcsp_contracts::{
-    CatalogContentVersion, OPEN_CONTRACT_VERSION, OpenAppliedClassification, OpenBatchKey,
-    OpenCanonicalSetHash, OpenContractVersion, OpenCounterSnapshotV1, OpenDecodedBodySha256,
-    OpenHttpHeaderValue, OpenHttpMetadataV1, OpenObservationV1, OpenPullCountsV1,
-    OpenRefreshClassification, OpenRefreshObservationV1, OpenSectionStatusRequestV1, OpenSequence,
-    OpenStateHash, OpenStatusRequestV1, RutgersDay, RutgersDayTimezone, SectionKey, TermCampusKey,
-    TraceId,
+    CatalogContentVersion, MAX_OPEN_BATCH_STATUS_SECTIONS, OPEN_CONTRACT_VERSION,
+    OpenAppliedClassification, OpenBatchKey, OpenBatchStatusRequestV1, OpenCanonicalSetHash,
+    OpenContractVersion, OpenCounterSnapshotV1, OpenDecodedBodySha256, OpenHttpHeaderValue,
+    OpenHttpMetadataV1, OpenObservationV1, OpenPullCountsV1, OpenRefreshClassification,
+    OpenRefreshObservationV1, OpenSectionStatusRequestV1, OpenSequence, OpenStateHash,
+    OpenStatusRequestV1, RutgersDay, RutgersDayTimezone, SectionKey, TermCampusKey, TraceId,
 };
 use time::OffsetDateTime;
 
@@ -116,6 +116,51 @@ fn client_requests_reject_additions_but_server_projections_accept_them() {
     let mut encoded = serde_json::to_value(section_request).unwrap();
     encoded["futureClientField"] = serde_json::json!(true);
     assert!(serde_json::from_value::<OpenSectionStatusRequestV1>(encoded).is_err());
+
+    let section = SectionKey::try_new("T2026F", "CAMPUS_A", "00001").unwrap();
+    let batch_request = OpenBatchStatusRequestV1::new(
+        OpenBatchKey::try_new("T2026F", "CAMPUS_A").unwrap(),
+        vec![section.clone()],
+    );
+    assert!(batch_request.is_valid());
+    let mut encoded = serde_json::to_value(batch_request).unwrap();
+    encoded["futureClientField"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<OpenBatchStatusRequestV1>(encoded).is_err());
+
+    assert!(
+        !OpenBatchStatusRequestV1::new(
+            OpenBatchKey::try_new("T2026F", "CAMPUS_A").unwrap(),
+            Vec::new(),
+        )
+        .is_valid()
+    );
+    assert!(
+        !OpenBatchStatusRequestV1::new(
+            OpenBatchKey::try_new("T2026F", "CAMPUS_A").unwrap(),
+            vec![section.clone(), section],
+        )
+        .is_valid()
+    );
+    assert!(
+        !OpenBatchStatusRequestV1::new(
+            OpenBatchKey::try_new("T2026F", "CAMPUS_A").unwrap(),
+            vec![SectionKey::try_new("T2026F", "CAMPUS_B", "00001").unwrap()],
+        )
+        .is_valid()
+    );
+
+    let over_limit = (0..=MAX_OPEN_BATCH_STATUS_SECTIONS)
+        .map(|index| {
+            SectionKey::try_new("T2026F", "CAMPUS_A", &format!("{:05}", index + 1)).unwrap()
+        })
+        .collect();
+    assert!(
+        !OpenBatchStatusRequestV1::new(
+            OpenBatchKey::try_new("T2026F", "CAMPUS_A").unwrap(),
+            over_limit,
+        )
+        .is_valid()
+    );
 
     let counts: OpenPullCountsV1 = serde_json::from_value(serde_json::json!({
         "attempted":4,"succeeded":2,"failed":2,"empty":1,"futureServerField":true

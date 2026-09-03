@@ -838,6 +838,84 @@ pub struct DesiredWatchCommitted {
     pub epoch_changed: bool,
 }
 
+/// One item in an atomic local desired-watch gesture. Generation and
+/// idempotency identity belong to the whole batch, so they are intentionally
+/// absent here.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesiredWatchBatchCommand {
+    pub section: SectionKey,
+    pub policy: Option<WatchPolicyV1>,
+    pub based_on_revision: u64,
+}
+
+impl DesiredWatchBatchCommand {
+    pub const fn desired(&self) -> bool {
+        self.policy.is_some()
+    }
+}
+
+/// One Section written by an atomic desired-watch batch.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredWatchBatchCommitted {
+    pub section: SectionKey,
+    pub revision: u64,
+    pub materialization_epoch: u64,
+    pub epoch_changed: bool,
+}
+
+impl DesiredWatchBatchCommitted {
+    pub const fn new(section: SectionKey, committed: DesiredWatchCommitted) -> Self {
+        Self {
+            section,
+            revision: committed.revision,
+            materialization_epoch: committed.materialization_epoch,
+            epoch_changed: committed.epoch_changed,
+        }
+    }
+
+    pub const fn committed(&self) -> DesiredWatchCommitted {
+        DesiredWatchCommitted {
+            revision: self.revision,
+            materialization_epoch: self.materialization_epoch,
+            epoch_changed: self.epoch_changed,
+        }
+    }
+}
+
+/// Persisted result stored under one outer batch mutation ID.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DesiredWatchBatchReceiptOutcome {
+    #[serde(rename_all = "camelCase")]
+    Committed {
+        committed: Vec<DesiredWatchBatchCommitted>,
+    },
+    #[serde(rename_all = "camelCase")]
+    StaleRevision { current: u64 },
+    #[serde(rename_all = "camelCase")]
+    LimitExceeded { maximum: usize },
+}
+
+/// The authority decision for an atomic desired-watch batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DesiredWatchBatchOutcome {
+    Committed(Vec<DesiredWatchBatchCommitted>),
+    MutationIdConflict,
+    StaleGeneration { current: u64 },
+    StaleRevision { current: u64 },
+    LimitExceeded { maximum: usize },
+    AuthorityFull(DesiredWatchBudgetKind),
+}
+
+/// Whether an atomic desired-watch batch was decided now or replayed from
+/// its single complete batch receipt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesiredWatchBatchDecision {
+    pub replayed: bool,
+    pub outcome: DesiredWatchBatchOutcome,
+}
+
 /// What a receipt records, and therefore what a repeated mutation replays.
 ///
 /// This is a PERSISTED format: it is stored as the ledger's `outcome_json`
@@ -967,6 +1045,9 @@ pub enum DesiredWatchMutationOutcome {
     /// command. Derived from the row that exists -- never a second insert,
     /// which would defeat the ledger it is reported from. Not receipted.
     MutationIdConflict(DesiredWatchReceipt),
+    /// The ID is already bound to an atomic batch receipt. A single mutation
+    /// may not inherit or overwrite that decision.
+    BatchMutationIdConflict,
     /// Decided at step one, before the ledger is touched, so it is terminal
     /// but deliberately NOT receipted: the authority it named is gone.
     StaleGeneration {

@@ -25,6 +25,8 @@ import type {
   SectionQueryResponseV1,
 } from '../src/ui/shared/product/contracts/query';
 import type {
+  OpenBatchStatusRequestV1,
+  OpenBatchStatusV1,
   OpenRefreshStatusV1,
   OpenSectionStatusRequestV1,
   OpenSectionStatusV1,
@@ -152,6 +154,11 @@ describe('ProductApi', () => {
       contractVersion: 1,
       sectionKey: rustRequest.payload.sectionKey,
     };
+    const openBatchStatusRequest: OpenBatchStatusRequestV1 = {
+      contractVersion: 1,
+      batch: openStatusRequest.batch,
+      sectionKeys: [rustRequest.payload.sectionKey],
+    };
     const rustSuccess = readGolden<HttpSuccessEnvelope<unknown>>('http-success-v1.json');
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(rustSuccess));
     const api = new ProductApi(new ProductClient({
@@ -169,6 +176,9 @@ describe('ProductApi', () => {
     const courseDetail: Promise<CourseDetailResponseV1> = api.courseDetail(courseDetailRequest);
     const sectionDetail: Promise<SectionDetailResponseV1> = api.sectionDetail(sectionDetailRequest);
     const openStatus: Promise<OpenRefreshStatusV1> = api.openStatus(openStatusRequest);
+    const openBatchStatus: Promise<OpenBatchStatusV1> = api.openBatchStatus(
+      openBatchStatusRequest,
+    );
     const openSectionStatus: Promise<OpenSectionStatusV1> = api.openSectionStatus(
       openSectionStatusRequest,
     );
@@ -181,6 +191,7 @@ describe('ProductApi', () => {
       courseDetail,
       sectionDetail,
       openStatus,
+      openBatchStatus,
       openSectionStatus,
     ]);
 
@@ -236,6 +247,12 @@ describe('ProductApi', () => {
         envelope: { protocolVersion: 1, payload: openStatusRequest },
         method: 'POST',
         path: '/api/v1/open/status',
+        session: 'synthetic-session',
+      },
+      {
+        envelope: { protocolVersion: 1, payload: openBatchStatusRequest },
+        method: 'POST',
+        path: '/api/v1/open/batch-status',
         session: 'synthetic-session',
       },
       {

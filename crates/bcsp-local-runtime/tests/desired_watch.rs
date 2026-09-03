@@ -8,7 +8,8 @@
 //! behaviour here is about what happens when it does.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::num::NonZeroU8;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -23,15 +24,19 @@ use bcsp_contracts::{
 };
 use bcsp_local_runtime::{
     DESIRED_WATCH_ABSENT_COMMITTED_NUMBER, DESIRED_WATCH_MATERIALIZE_BACKOFF,
-    DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchCoordinator, DesiredWatchCoordinatorError,
-    DesiredWatchFailureClassV1, DesiredWatchFailureReasonV1, DesiredWatchMutationResultV1,
-    DesiredWatchMutationV1, DesiredWatchOutcomeV1, DesiredWatchOwner, DesiredWatchStateV1,
+    DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchBatchCommittedV1, DesiredWatchBatchItemV1,
+    DesiredWatchBatchMutationResultV1, DesiredWatchBatchMutationV1, DesiredWatchCoordinator,
+    DesiredWatchCoordinatorError, DesiredWatchEntryV1, DesiredWatchFailureClassV1,
+    DesiredWatchFailureReasonV1, DesiredWatchFailureV1, DesiredWatchMaterializedV1,
+    DesiredWatchMutationResultV1, DesiredWatchMutationV1, DesiredWatchOutcomeV1, DesiredWatchOwner,
+    DesiredWatchStateV1, LOCAL_DESIRED_WATCH_BATCH_RESPONSE_BUDGET_BYTES,
     LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
     LocalWatchRoute,
 };
 use bcsp_local_user_state::{
-    DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD, MAX_DESIRED_WATCH_RECEIPTS,
-    MAX_DESIRED_WATCH_TOMBSTONES, MAX_DESIRED_WATCHES, PersonalStateStore,
+    DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD, MAX_DESIRED_WATCH_AUTHORITY_ROWS,
+    MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES, MAX_DESIRED_WATCHES,
+    PersonalStateStore,
 };
 use bcsp_open::LOCAL_MINIMUM_WATCH_OPEN_INTERVAL_SECONDS;
 use bcsp_watch::WatchStartAdmission;
@@ -53,6 +58,7 @@ struct Admission {
     verdicts: Arc<Mutex<BTreeMap<String, WatchStartAdmission>>>,
     fallback: Arc<Mutex<Option<WatchStartAdmission>>>,
     consulted: Arc<Mutex<Vec<SectionKey>>>,
+    batch_consults: Arc<AtomicUsize>,
     supported: Arc<AtomicBool>,
     in_range: Arc<AtomicBool>,
 }
@@ -63,6 +69,7 @@ impl Default for Admission {
             verdicts: Arc::default(),
             fallback: Arc::default(),
             consulted: Arc::default(),
+            batch_consults: Arc::new(AtomicUsize::new(0)),
             supported: Arc::new(AtomicBool::new(true)),
             in_range: Arc::new(AtomicBool::new(true)),
         }
@@ -79,6 +86,14 @@ impl Admission {
 
     fn consulted(&self) -> Vec<SectionKey> {
         self.consulted.lock().unwrap().clone()
+    }
+
+    fn batch_consults(&self) -> usize {
+        self.batch_consults.load(Ordering::SeqCst)
+    }
+
+    fn reset_batch_consults(&self) {
+        self.batch_consults.store(0, Ordering::SeqCst);
     }
 }
 
@@ -98,6 +113,14 @@ impl WatchAdmissionSource for Admission {
             .cloned()
             .or_else(|| self.fallback.lock().unwrap().clone())
             .unwrap_or_else(|| WatchStartAdmission::admitted(None))
+    }
+
+    fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+        self.batch_consults.fetch_add(1, Ordering::SeqCst);
+        sections
+            .iter()
+            .map(|section| self.admission_for(section))
+            .collect()
     }
 
     fn target_supported(&self, _section: &SectionKey) -> bool {
@@ -137,9 +160,10 @@ impl Fixture {
         let path = directory.path().join("rbcsp.sqlite");
         let admission = Admission::default();
         let watch = Arc::new(
-            SharedWatchSocket::try_new(
+            SharedWatchSocket::try_new_with_max_active_watches(
                 Arc::new(admission.clone()),
                 Arc::new(NoopWatchDispatchSink),
+                NonZeroU8::new(u8::try_from(MAX_DESIRED_WATCHES).unwrap()).unwrap(),
             )
             .unwrap(),
         );
@@ -248,6 +272,21 @@ impl Fixture {
                 based_on_revision,
                 authority_generation,
                 mutation_id: trace(mutation),
+            })
+            .unwrap()
+    }
+
+    fn submit_batch_result(
+        &self,
+        items: Vec<DesiredWatchBatchItemV1>,
+        mutation: u64,
+    ) -> DesiredWatchBatchMutationResultV1 {
+        self.coordinator
+            .submit_batch(&DesiredWatchBatchMutationV1 {
+                contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+                authority_generation: self.read().authority_generation,
+                mutation_id: trace(mutation),
+                items,
             })
             .unwrap()
     }
@@ -773,13 +812,110 @@ fn a_section_waiting_for_a_physical_slot_is_reported_as_blocked_not_failed() {
         MAX_DESIRED_WATCHES
     );
 
-    // The authority refuses a tenth section, so the physical cap is never
+    // The authority refuses one section past the local cap, so the physical cap is never
     // even reached through the ordinary path.
+    let after_limit = section(u16::try_from(MAX_DESIRED_WATCHES + 1).unwrap());
     assert_eq!(
-        fixture.start(&section(10), 0, 10),
+        fixture.start(
+            &after_limit,
+            0,
+            u64::from(u16::try_from(MAX_DESIRED_WATCHES + 1).unwrap())
+        ),
         DesiredWatchOutcomeV1::LimitExceeded,
     );
-    assert!(entry(&fixture.read(), &section(10)).is_none());
+    assert!(entry(&fixture.read(), &after_limit).is_none());
+}
+
+fn assert_cold_materialization_batches_one_target(count: u16) {
+    let fixture = Fixture::new();
+    for index in 1..=count {
+        assert_eq!(
+            fixture.start(&section(index), 0, u64::from(index)),
+            DesiredWatchOutcomeV1::Committed,
+        );
+    }
+    assert_eq!(fixture.watch.total_active_watch_count(), 0);
+    fixture.admission.reset_batch_consults();
+
+    let (_page, _frames) = fixture.attach(100);
+    assert_eq!(fixture.watch.total_active_watch_count(), usize::from(count));
+    assert!(
+        fixture
+            .read()
+            .entries
+            .iter()
+            .filter(|entry| entry.policy.is_some())
+            .all(|entry| entry.materialized.is_some()),
+    );
+    assert_eq!(
+        fixture.admission.batch_consults(),
+        1,
+        "cold materialization must resolve the target once",
+    );
+
+    for round in 1..=3 {
+        fixture.coordinator.reconcile().unwrap();
+        assert_eq!(
+            fixture.admission.batch_consults(),
+            1 + round,
+            "each revalidation round must resolve the target once",
+        );
+        assert_eq!(fixture.watch.total_active_watch_count(), usize::from(count));
+    }
+}
+
+#[test]
+fn forty_cold_watches_and_revalidation_rounds_use_one_target_batch_each() {
+    assert_cold_materialization_batches_one_target(40);
+}
+
+#[test]
+fn maximum_local_cold_watches_and_revalidation_rounds_use_one_target_batch_each() {
+    assert_cold_materialization_batches_one_target(u16::from(u8::MAX));
+}
+
+#[test]
+fn forty_item_start_gesture_commits_then_materializes_with_one_target_projection() {
+    let fixture = Fixture::new();
+    let (_page, _frames) = fixture.attach(100);
+    fixture.admission.reset_batch_consults();
+    let items = (1..=40)
+        .map(|index| DesiredWatchBatchItemV1 {
+            section: section(index),
+            policy: Some(policy()),
+            based_on_revision: 0,
+        })
+        .collect::<Vec<_>>();
+
+    let result = fixture.submit_batch_result(items, 8_000);
+    assert_eq!(result.outcome, DesiredWatchOutcomeV1::Committed);
+    assert_eq!(result.committed.as_ref().unwrap().len(), 40);
+    let state = result
+        .state
+        .as_ref()
+        .expect("successful batch returns state");
+    assert_eq!(state.entries.len(), 40);
+    assert!(
+        state
+            .entries
+            .iter()
+            .all(|entry| entry.materialized.is_some())
+    );
+    assert_eq!(fixture.watch.total_active_watch_count(), 40);
+    assert_eq!(
+        fixture.admission.batch_consults(),
+        1,
+        "one local UI gesture must reconcile once and project its target once",
+    );
+    assert_eq!(
+        PersonalStateStore::open(&fixture.path)
+            .unwrap()
+            .desired_watch_budget()
+            .unwrap()
+            .receipts,
+        1,
+        "the whole gesture consumes one durable receipt",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -951,16 +1087,17 @@ fn rotation_renumbers_the_authority_without_restarting_a_healthy_watch() {
     );
 }
 
-/// The largest authority a user can legally reach has to fit in one
+/// The production-shaped fixture at the largest row count has to fit in one
 /// response, because there is no second page to ask for.
 ///
 /// A truncated read would be indistinguishable from a complete one: the
 /// missing tombstones would look like sections that never existed, and the
 /// next command against one of them would carry `basedOnRevision = 0` and be
-/// admitted -- resurrecting intent the user cancelled. So the bound is
-/// proven here rather than enforced at request time.
+/// admitted -- resurrecting intent the user cancelled. The separate
+/// maximum-domain test below proves the actual contract bound; this fixture
+/// keeps the normal Rutgers projection covered as well.
 #[test]
-fn the_largest_authority_read_fits_the_local_budget() {
+fn a_common_maximum_row_count_authority_fits_the_local_budget() {
     let fixture = Fixture::new();
     let (_page, _frames) = fixture.attach(100);
     for index in 1..=MAX_DESIRED_WATCHES as u16 {
@@ -985,7 +1122,7 @@ fn the_largest_authority_read_fits_the_local_budget() {
     assert_eq!(
         state.entries.len() as u64,
         MAX_DESIRED_WATCH_TOMBSTONES + MAX_DESIRED_WATCHES as u64,
-        "521 rows: every section a user may watch, plus a full removal history",
+        "every section a user may watch, plus a full removal history",
     );
     assert_eq!(
         state
@@ -1000,9 +1137,153 @@ fn the_largest_authority_read_fits_the_local_budget() {
     let encoded = serde_json::to_vec(&bcsp_contracts::HttpSuccessEnvelope::new(&state)).unwrap();
     assert!(
         encoded.len() <= LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
-        "the largest legal authority read is {} bytes, over the {} byte budget",
+        "the common maximum-row-count authority read is {} bytes, over the {} byte budget",
         encoded.len(),
         LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
+    );
+}
+
+const MAX_JAVASCRIPT_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+fn maximum_domain_policy(max_audible: u64) -> WatchPolicyV1 {
+    WatchPolicyV1::new(
+        WatchNotificationMode::Continuous,
+        WatchMaxAudible::try_from(max_audible).unwrap(),
+        WatchContinuousDurationV1::finite_seconds(MAX_JAVASCRIPT_SAFE_INTEGER).unwrap(),
+    )
+}
+
+fn maximum_domain_section(index: usize) -> SectionKey {
+    let term = "T123456789012345";
+    let campus = "C".repeat(32);
+    assert_eq!(term.len(), 16);
+    assert_eq!(campus.len(), 32);
+    SectionKey::try_new(term, &campus, &format!("{index:05}")).unwrap()
+}
+
+/// Exercises the complete local wire domain, not only the short identifiers
+/// and small policy values used by normal Rutgers fixtures. A materialized
+/// watch may legally coexist with a transient failure after an in-place
+/// policy update fails: the old physical watch remains addressable while the
+/// failure is stamped against the new authority row.
+fn maximum_domain_authority_state() -> DesiredWatchStateV1 {
+    let row_count = usize::try_from(MAX_DESIRED_WATCH_AUTHORITY_ROWS).unwrap();
+    let first_number = MAX_JAVASCRIPT_SAFE_INTEGER - u64::try_from(row_count).unwrap() + 1;
+    let desired_policy = maximum_domain_policy(MAX_JAVASCRIPT_SAFE_INTEGER);
+    let materialized_policy = maximum_domain_policy(MAX_JAVASCRIPT_SAFE_INTEGER - 1);
+    let entries = (0..row_count)
+        .map(|position| {
+            let revision = first_number + u64::try_from(position).unwrap();
+            let materialization_epoch = revision - 2;
+            let section = maximum_domain_section(position);
+            if position < MAX_DESIRED_WATCHES {
+                DesiredWatchEntryV1 {
+                    section,
+                    policy: Some(desired_policy.clone()),
+                    revision,
+                    materialization_epoch,
+                    materialized: Some(DesiredWatchMaterializedV1 {
+                        authority_generation: MAX_JAVASCRIPT_SAFE_INTEGER,
+                        revision: revision - 1,
+                        materialization_epoch,
+                        policy: materialized_policy.clone(),
+                        active_watch_id: ActiveWatchId::new(trace(
+                            50_000 + u64::try_from(position).unwrap(),
+                        )),
+                    }),
+                    pending_disarm: false,
+                    blocked_on_slot: false,
+                    failure: Some(DesiredWatchFailureV1 {
+                        classification: DesiredWatchFailureClassV1::Transient,
+                        reason: DesiredWatchFailureReasonV1::TargetUnavailable,
+                        retry_scheduled: true,
+                    }),
+                }
+            } else {
+                DesiredWatchEntryV1 {
+                    section,
+                    policy: None,
+                    revision,
+                    materialization_epoch,
+                    materialized: None,
+                    pending_disarm: false,
+                    blocked_on_slot: false,
+                    failure: None,
+                }
+            }
+        })
+        .collect();
+    DesiredWatchStateV1 {
+        contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+        authority_generation: MAX_JAVASCRIPT_SAFE_INTEGER,
+        entries,
+    }
+}
+
+#[test]
+fn maximum_wire_domain_authority_and_batch_fit_their_separate_budgets() {
+    assert_eq!(LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES, 384 * 1024);
+    assert_eq!(LOCAL_DESIRED_WATCH_BATCH_RESPONSE_BUDGET_BYTES, 512 * 1024);
+    let state = maximum_domain_authority_state();
+    assert_eq!(state.entries.len() as u64, MAX_DESIRED_WATCH_AUTHORITY_ROWS);
+    assert_eq!(
+        state
+            .entries
+            .iter()
+            .filter(|entry| entry.policy.is_some())
+            .count(),
+        MAX_DESIRED_WATCHES,
+    );
+
+    let authority = serde_json::to_vec(&bcsp_contracts::HttpSuccessEnvelope::new(&state)).unwrap();
+    assert!(
+        authority.len() > 256 * 1024,
+        "the maximum-domain fixture must guard against restoring the insufficient old budget",
+    );
+    assert!(
+        authority.len() <= LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
+        "the maximum-domain authority is {} bytes, over the {} byte budget",
+        authority.len(),
+        LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
+    );
+
+    let committed = state
+        .entries
+        .iter()
+        .filter(|entry| entry.policy.is_some())
+        .map(|entry| DesiredWatchBatchCommittedV1 {
+            section: entry.section.clone(),
+            revision: entry.revision,
+            materialization_epoch: entry.materialization_epoch,
+            // `false` is one byte longer than `true`, so it is the actual
+            // maximum legal representation for each committed stamp.
+            epoch_changed: false,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(committed.len(), MAX_DESIRED_WATCHES);
+    let maximum_batch_response = DesiredWatchBatchMutationResultV1 {
+        contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+        outcome: DesiredWatchOutcomeV1::Committed,
+        replayed: false,
+        authority_generation: state.authority_generation,
+        current_revision: None,
+        maximum: None,
+        committed: Some(committed),
+        state: Some(state),
+    };
+    let batch = serde_json::to_vec(&bcsp_contracts::HttpSuccessEnvelope::new(
+        &maximum_batch_response,
+    ))
+    .unwrap();
+    assert!(
+        batch.len() > authority.len(),
+        "the committed stamp set must be represented in the batch bound",
+    );
+    assert!(
+        batch.len() <= LOCAL_DESIRED_WATCH_BATCH_RESPONSE_BUDGET_BYTES,
+        "the maximum-domain batch response is {} bytes, over the {} byte budget",
+        batch.len(),
+        LOCAL_DESIRED_WATCH_BATCH_RESPONSE_BUDGET_BYTES,
     );
 }
 
@@ -1321,8 +1602,8 @@ fn repeated_maintenance_never_restarts_a_healthy_watch() {
 
 /// Refusals write receipts too.
 ///
-/// Nine watched sections and a user who keeps asking for a tenth produces a
-/// terminal refusal, and a receipt, every time -- without a single commit. A
+/// A full desired-watch list and a user who keeps asking past the capacity
+/// produces a terminal refusal, and a receipt, every time -- without a single commit. A
 /// process that only rotated after a commit would let that ledger fill to its
 /// hard cap, and every later write, including the STOP that would free a
 /// slot, would be refused for the rest of the database's life.

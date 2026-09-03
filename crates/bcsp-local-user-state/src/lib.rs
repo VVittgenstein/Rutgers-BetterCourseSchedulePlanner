@@ -13,7 +13,7 @@
 //! different ways.
 //!
 //! The writer enforces only rules about the AUTHORITY: the generation, the receipt ledger, the
-//! based-on revision, the nine-section product cap measured against the state a mutation leaves
+//! based-on revision, the product cap measured against the state a mutation leaves
 //! behind, and the two resource budgets. It never asks whether a section can be watched. Whether
 //! the campus is a product target, the term is in the window, the catalog publishes the section
 //! and the integrity gate has released it are all conditions of MATERIALIZING an intent, they are
@@ -37,18 +37,20 @@ mod store;
 pub use error::{PersonalStateError, PersonalStateResult, SettingValueError};
 pub use model::{
     CatalogRefreshMinutes, CurrentFilters, CurrentFiltersRevision, DesiredWatch,
-    DesiredWatchAuthority, DesiredWatchBudget, DesiredWatchBudgetKind, DesiredWatchCommand,
-    DesiredWatchCommitted, DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome,
-    DesiredWatchReceipt, DesiredWatchReceiptOutcome, DesiredWatchRotation, EpisodeActionInput,
-    EpisodeActionKind, EpisodeActionRecord, EpisodeDisposition, EpisodeHistoryIdentity,
-    EpisodeHistorySummary, EpisodeSummaryInput, FilterAssociation, HistoryFilter, HistoryPage,
-    HistoryWriteOutcome, LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest,
-    PersonalMigrationRecord, PersonalResetResult, PersonalStateSnapshot, PersonalTableCounts,
-    PersonalTransactionState, SavedViewContent, SavedViewDefinition, SavedViewDeleteResult,
-    SavedViewIncompatibility, SavedViewMatch, SavedViewMutation, SavedViewReviewCode,
-    SavedViewReviewReason, SavedViewRevision, SavedViewsDeleteAllResult, SelectionMutation,
-    SettingsRevision, SqliteConfiguration, StoredCurrentFilters, StoredSettings, UnixMillis,
-    UserStateRevision, VolumePercent, WalCheckpoint, WalCheckpointMode, WatchFastLaneSeconds,
+    DesiredWatchAuthority, DesiredWatchBatchCommand, DesiredWatchBatchCommitted,
+    DesiredWatchBatchDecision, DesiredWatchBatchOutcome, DesiredWatchBatchReceiptOutcome,
+    DesiredWatchBudget, DesiredWatchBudgetKind, DesiredWatchCommand, DesiredWatchCommitted,
+    DesiredWatchCounters, DesiredWatchEntry, DesiredWatchMutationOutcome, DesiredWatchReceipt,
+    DesiredWatchReceiptOutcome, DesiredWatchRotation, EpisodeActionInput, EpisodeActionKind,
+    EpisodeActionRecord, EpisodeDisposition, EpisodeHistoryIdentity, EpisodeHistorySummary,
+    EpisodeSummaryInput, FilterAssociation, HistoryFilter, HistoryPage, HistoryWriteOutcome,
+    LocalSettings, LocaleOverride, OpenRefreshSeconds, PageRequest, PersonalMigrationRecord,
+    PersonalResetResult, PersonalStateSnapshot, PersonalTableCounts, PersonalTransactionState,
+    SavedViewContent, SavedViewDefinition, SavedViewDeleteResult, SavedViewIncompatibility,
+    SavedViewMatch, SavedViewMutation, SavedViewReviewCode, SavedViewReviewReason,
+    SavedViewRevision, SavedViewsDeleteAllResult, SelectionMutation, SettingsRevision,
+    SqliteConfiguration, StoredCurrentFilters, StoredSettings, UnixMillis, UserStateRevision,
+    VolumePercent, WalCheckpoint, WalCheckpointMode, WatchFastLaneSeconds,
 };
 pub use store::PersonalStateStore;
 
@@ -66,6 +68,7 @@ pub const PERSONAL_DATA_TABLE_ALLOWLIST: &[&str] = &[
     "personal_selected_sections_v1",
     "personal_desired_watches_v1",
     "personal_desired_watch_receipts_v1",
+    "personal_desired_watch_batch_receipts_v1",
     "personal_episode_summaries_v1",
     "personal_episode_actions_v1",
 ];
@@ -78,13 +81,16 @@ pub const PERSONAL_TABLE_ALLOWLIST: &[&str] = &[
     "personal_selected_sections_v1",
     "personal_desired_watches_v1",
     "personal_desired_watch_receipts_v1",
+    "personal_desired_watch_batch_receipts_v1",
     "personal_episode_summaries_v1",
     "personal_episode_actions_v1",
 ];
-pub const MAX_SELECTED_SECTIONS: usize = bcsp_contracts::MAX_ACTIVE_WATCHES as usize;
+/// Desktop-only selection capacity. The public Linux service intentionally
+/// retains its separate nine-watch contract.
+pub const MAX_SELECTED_SECTIONS: usize = 255;
 /// The product admission cap on desired watches, tested against the state a
 /// mutation would LEAVE BEHIND rather than the state it found.
-pub const MAX_DESIRED_WATCHES: usize = bcsp_contracts::MAX_ACTIVE_WATCHES as usize;
+pub const MAX_DESIRED_WATCHES: usize = MAX_SELECTED_SECTIONS;
 /// Frozen hard cap on removal history. A tombstone holds a section's revision
 /// so a delayed command cannot be mistaken for a fresh one, so they can only
 /// be cleared by raising the generation -- which is what rotation does.
@@ -116,5 +122,6 @@ mod dependency_contract {
 
 #[cfg(test)]
 mod dev_dependency_contract {
+    use bcsp_operational_storage as _;
     use tempfile as _;
 }

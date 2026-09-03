@@ -3,15 +3,15 @@ use std::str::FromStr;
 
 use bcsp_contracts::{
     CatalogContentVersion, ContractSchema, OPEN_CONTRACT_VERSION, OpenAppliedClassification,
-    OpenAttemptPointV1, OpenAttemptScheduleV1, OpenBatchKey, OpenCanonicalSetHash,
-    OpenCircuitReason, OpenCircuitState, OpenCircuitStatusV1, OpenCounterSnapshotV1,
-    OpenDecodedBodySha256, OpenFailureClass, OpenFailurePointV1, OpenFreshnessState,
-    OpenFreshnessV1, OpenHttpHeaderValue, OpenHttpMetadataV1, OpenObservationPointV1,
-    OpenObservationV1, OpenPullAttemptV1, OpenPullCountsV1, OpenReconcileCountsV1,
-    OpenRefreshClassification, OpenRefreshObservationV1, OpenRefreshStatusV1, OpenSchedulerLane,
-    OpenSchedulerStatusV1, OpenSectionStatusRequestV1, OpenSectionStatusV1, OpenSequence,
-    OpenState, OpenStateHash, OpenStatusRequestV1, OpenUncertaintyReason, RutgersDay,
-    RutgersDayTimezone, SectionKey, TraceId, contract_manifest,
+    OpenAttemptPointV1, OpenAttemptScheduleV1, OpenBatchKey, OpenBatchStatusRequestV1,
+    OpenBatchStatusV1, OpenCanonicalSetHash, OpenCircuitReason, OpenCircuitState,
+    OpenCircuitStatusV1, OpenCounterSnapshotV1, OpenDecodedBodySha256, OpenFailureClass,
+    OpenFailurePointV1, OpenFreshnessState, OpenFreshnessV1, OpenHttpHeaderValue,
+    OpenHttpMetadataV1, OpenObservationPointV1, OpenObservationV1, OpenPullAttemptV1,
+    OpenPullCountsV1, OpenReconcileCountsV1, OpenRefreshClassification, OpenRefreshObservationV1,
+    OpenRefreshStatusV1, OpenSchedulerLane, OpenSchedulerStatusV1, OpenSectionStatusRequestV1,
+    OpenSectionStatusV1, OpenSequence, OpenState, OpenStateHash, OpenStatusRequestV1,
+    OpenUncertaintyReason, RutgersDay, RutgersDayTimezone, SectionKey, TraceId, contract_manifest,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -340,12 +340,20 @@ fn open_object_manifest_fields_bind_to_serde_shapes() {
     };
     assert_object_binding("bcsp.open.section-status.v1", &section_status);
     assert_object_binding(
+        "bcsp.open.batch-status.v1",
+        &OpenBatchStatusV1::new(status, vec![section_status.clone()]),
+    );
+    assert_object_binding(
         "bcsp.open.status-request.v1",
         &OpenStatusRequestV1::new(batch()),
     );
     assert_object_binding(
         "bcsp.open.section-status-request.v1",
         &OpenSectionStatusRequestV1::new(section_key()),
+    );
+    assert_object_binding(
+        "bcsp.open.batch-status-request.v1",
+        &OpenBatchStatusRequestV1::new(batch(), vec![section_key()]),
     );
 }
 

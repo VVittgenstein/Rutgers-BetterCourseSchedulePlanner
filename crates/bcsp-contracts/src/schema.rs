@@ -420,6 +420,16 @@ pub fn contract_manifest() -> ContractManifest {
                 semantic: Some("positive integer with no product upper limit".to_owned()),
             },
             ScalarConstraint {
+                id: "watch-positive-safe-u64".to_owned(),
+                wire_type: "u64".to_owned(),
+                exact_bytes: None,
+                max_bytes: None,
+                pattern: None,
+                semantic: Some(
+                    "integer from 1 through JavaScript Number.MAX_SAFE_INTEGER".to_owned(),
+                ),
+            },
+            ScalarConstraint {
                 id: "open-sequence".to_owned(),
                 wire_type: "u64".to_owned(),
                 exact_bytes: None,
@@ -1561,12 +1571,35 @@ pub fn contract_manifest() -> ContractManifest {
                 ],
             ),
             schema(
+                "bcsp.open.batch-status.v1",
+                SchemaDirection::ServerToClient,
+                UnknownFieldPolicy::Ignore,
+                &[
+                    ("contractVersion", "$scalar:open-contract-version"),
+                    ("refresh", "$schema:bcsp.open.refresh-status.v1"),
+                    ("sections", "$array:$schema:bcsp.open.section-status.v1"),
+                ],
+            ),
+            schema(
                 "bcsp.open.status-request.v1",
                 SchemaDirection::ClientToServer,
                 UnknownFieldPolicy::Reject,
                 &[
                     ("contractVersion", "$scalar:open-contract-version"),
                     ("batch", "$schema:bcsp.open.batch-key.v1"),
+                ],
+            ),
+            schema(
+                "bcsp.open.batch-status-request.v1",
+                SchemaDirection::ClientToServer,
+                UnknownFieldPolicy::Reject,
+                &[
+                    ("contractVersion", "$scalar:open-contract-version"),
+                    ("batch", "$schema:bcsp.open.batch-key.v1"),
+                    (
+                        "sectionKeys",
+                        "$array:$schema:bcsp.identity.section-key.v1",
+                    ),
                 ],
             ),
             schema(
@@ -2191,7 +2224,7 @@ pub fn contract_manifest() -> ContractManifest {
                 UnknownFieldPolicy::Reject,
                 "kind",
                 &[
-                    ("FINITE", &[("seconds", "$scalar:watch-positive-u64")]),
+                    ("FINITE", &[("seconds", "$scalar:watch-positive-safe-u64")]),
                     ("UNLIMITED", &[]),
                 ],
             ),
@@ -2204,7 +2237,7 @@ pub fn contract_manifest() -> ContractManifest {
                         "notificationMode",
                         "$schema:bcsp.watch.notification-mode.v1",
                     ),
-                    ("maxAudible", "$scalar:watch-positive-u64"),
+                    ("maxAudible", "$scalar:watch-positive-safe-u64"),
                     (
                         "continuousDuration",
                         "$schema:bcsp.watch.continuous-duration.v1",
@@ -2420,7 +2453,7 @@ pub fn contract_manifest() -> ContractManifest {
                         "continuousDuration",
                         "$schema:bcsp.watch.continuous-duration.v1",
                     ),
-                    ("maxAudible", "$scalar:watch-positive-u64"),
+                    ("maxAudible", "$scalar:watch-positive-safe-u64"),
                     ("audibleCount", "$primitive:u64"),
                     ("firstObservedAt", "$primitive:rfc3339-timestamp"),
                     ("lastObservedAt", "$primitive:rfc3339-timestamp"),
@@ -2534,7 +2567,7 @@ pub fn contract_manifest() -> ContractManifest {
                             ("sectionKey", "$schema:bcsp.identity.section-key.v1"),
                             ("observationId", "$scalar:trace-id"),
                             ("audibleCount", "$primitive:u64"),
-                            ("maxAudible", "$scalar:watch-positive-u64"),
+                            ("maxAudible", "$scalar:watch-positive-safe-u64"),
                             ("emittedAt", "$primitive:rfc3339-timestamp"),
                         ],
                     ),

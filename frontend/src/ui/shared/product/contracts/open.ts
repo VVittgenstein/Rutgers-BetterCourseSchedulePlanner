@@ -158,6 +158,18 @@ export interface OpenStatusRequestV1 {
   readonly batch: TermCampusKey;
 }
 
+export interface OpenBatchStatusRequestV1 {
+  readonly contractVersion: ContractVersionV1;
+  readonly batch: TermCampusKey;
+  readonly sectionKeys: readonly SectionKey[];
+}
+
+export interface OpenBatchStatusV1 {
+  readonly contractVersion: ContractVersionV1;
+  readonly refresh: OpenRefreshStatusV1;
+  readonly sections: readonly OpenSectionStatusV1[];
+}
+
 export interface OpenSectionStatusRequestV1 {
   readonly contractVersion: ContractVersionV1;
   readonly sectionKey: SectionKey;

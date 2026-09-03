@@ -25,7 +25,8 @@ use bcsp_contracts::{
     WatchStartItemV1, WatchStartItemsV1, WatchStartRejectionReason,
 };
 use bcsp_local_user_state::{
-    DesiredWatchAuthority, DesiredWatchBudgetKind, DesiredWatchCommand, DesiredWatchEntry,
+    DesiredWatchAuthority, DesiredWatchBatchCommand, DesiredWatchBatchDecision,
+    DesiredWatchBatchOutcome, DesiredWatchBudgetKind, DesiredWatchCommand, DesiredWatchEntry,
     DesiredWatchMutationOutcome, DesiredWatchReceiptOutcome, PersonalStateError,
     PersonalStateStore,
 };
@@ -38,6 +39,7 @@ use serde::{Deserialize, Serialize};
 /// local route extension. It is deliberately NOT a WebSocket route: a page
 /// that opens a socket here reaches the HTTP handler, never an upgrade.
 pub const LOCAL_DESIRED_WATCH_PATH: &str = "/api/v1/local/desired-watch";
+pub const LOCAL_DESIRED_WATCH_BATCH_PATH: &str = "/api/v1/local/desired-watch/batch";
 
 /// Version of the local desired-watch read/write contract.
 ///
@@ -48,20 +50,30 @@ pub const LOCAL_DESIRED_WATCH_CONTRACT_VERSION: u32 = 1;
 
 /// Explicit byte budget for the authority read.
 ///
-/// The largest legal authority state is nine desired rows plus a full
-/// removal history: 521 rows, a bound the writer enforces rather than a
+/// The largest legal authority state is 255 desired rows plus a full
+/// removal history: 767 rows, a bound the writer enforces rather than a
 /// reconciler's good intentions. This response is never paginated and never
 /// truncated -- a page that received part of the removal history would treat
 /// the missing tombstones as absent rows, and a delayed START would then be
 /// admitted against a revision of 0 and resurrect cancelled intent. So the
 /// budget exists to be PROVEN against the largest legal state, not to clip
-/// the response: `the_largest_authority_read_fits_the_local_budget` fails
+/// the response: `maximum_wire_domain_authority_and_batch_fit_their_separate_budgets` fails
 /// the build rather than the request.
 ///
-/// 256 KiB is the logical-state bound already frozen for this authority. The
-/// 32 KiB figure in the earlier design was a bootstrap FRAME budget and has
-/// no bearing here.
-pub const LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES: usize = 256 * 1024;
+/// 384 KiB covers the complete identity, policy, counter, materialization,
+/// and failure domains rather than only today's short Rutgers identifiers. The
+/// 32 KiB figure in the earlier design was a bootstrap FRAME budget and has no
+/// bearing here.
+pub const LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES: usize = 384 * 1024;
+
+/// Explicit byte budget for a successful maximum-size batch response.
+///
+/// A batch success carries both the final 767-row authority and up to 255
+/// committed stamps, so it is necessarily larger than the authority-only
+/// response. This separate 512 KiB bound leaves additive protocol headroom
+/// beyond the currently proven maximum-domain envelope; it is proven by the
+/// maximum-envelope test and is not a truncation limit.
+pub const LOCAL_DESIRED_WATCH_BATCH_RESPONSE_BUDGET_BYTES: usize = 512 * 1024;
 
 /// Bounded backoff for a materialization that failed for a reason that can
 /// stop being true. Capped, and re-derived from the authority every time, so
@@ -217,6 +229,49 @@ pub struct DesiredWatchMutationV1 {
     pub mutation_id: TraceId,
 }
 
+/// One item in a local-only atomic desired-watch gesture.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredWatchBatchItemV1 {
+    pub section: SectionKey,
+    pub policy: Option<WatchPolicyV1>,
+    pub based_on_revision: u64,
+}
+
+/// Several compare-and-swaps decided against one authority snapshot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredWatchBatchMutationV1 {
+    pub contract_version: u32,
+    pub authority_generation: u64,
+    pub mutation_id: TraceId,
+    pub items: Vec<DesiredWatchBatchItemV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredWatchBatchCommittedV1 {
+    pub section: SectionKey,
+    pub revision: u64,
+    pub materialization_epoch: u64,
+    pub epoch_changed: bool,
+}
+
+/// One atomic batch decision. Success carries one final authority snapshot;
+/// refusals require the caller to read, exactly like the single-item surface.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesiredWatchBatchMutationResultV1 {
+    pub contract_version: u32,
+    pub outcome: DesiredWatchOutcomeV1,
+    pub replayed: bool,
+    pub authority_generation: u64,
+    pub current_revision: Option<u64>,
+    pub maximum: Option<u32>,
+    pub committed: Option<Vec<DesiredWatchBatchCommittedV1>>,
+    pub state: Option<DesiredWatchStateV1>,
+}
+
 /// What the authority decided, and the state it left behind.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -346,6 +401,15 @@ pub trait DesiredWatchOwner: Send + Sync + 'static {
     /// authoritative view a START would consult.
     fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission;
 
+    /// Resolves one revalidation round in input order. Owners backed by a
+    /// target-wide projection override this so a target is projected once.
+    fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+        sections
+            .iter()
+            .map(|section| self.admission_for(section))
+            .collect()
+    }
+
     fn start(
         &self,
         items: WatchStartItemsV1,
@@ -371,6 +435,10 @@ impl DesiredWatchOwner for SharedWatchSocket {
 
     fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission {
         Self::admission_for(self, section)
+    }
+
+    fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+        Self::admissions_for(self, sections)
     }
 
     fn start(
@@ -559,6 +627,8 @@ pub enum DesiredWatchCoordinatorError {
     Storage(PersonalStateError),
     /// A coordinator lock was poisoned by a panic in another thread.
     Poisoned,
+    /// A batch was empty, too large, or named the same Section twice.
+    InvalidBatch,
     /// A Full Reset could not stop every physical watch the process holds.
     ///
     /// Reported rather than logged, because the alternative is the one answer
@@ -692,13 +762,53 @@ impl DesiredWatchCoordinator {
         }
         // Rotation maintenance runs after EVERY decision, not only after a
         // commit. Terminal refusals write receipts too, so a page repeatedly
-        // refused -- nine watched sections and a tenth the user keeps asking
-        // for -- grows the ledger without a single commit. If only commits
+        // refused at the local capacity grows the ledger without a single
+        // commit. If only commits
         // rotated, that ledger would reach its hard cap and every later
         // write, including the STOP that would fix it, would be refused
         // forever.
         self.rotate_if_due()?;
         self.stamp(&mut result, &mutation.section)?;
+        Ok(result)
+    }
+
+    /// Commits one multi-Section gesture and reconciles its final authority
+    /// exactly once.
+    pub fn submit_batch(
+        &self,
+        mutation: &DesiredWatchBatchMutationV1,
+    ) -> Result<DesiredWatchBatchMutationResultV1, DesiredWatchCoordinatorError> {
+        let unique = mutation
+            .items
+            .iter()
+            .map(|item| item.section.clone())
+            .collect::<BTreeSet<_>>();
+        if mutation.items.is_empty()
+            || mutation.items.len() > bcsp_local_user_state::MAX_DESIRED_WATCHES
+            || unique.len() != mutation.items.len()
+        {
+            return Err(DesiredWatchCoordinatorError::InvalidBatch);
+        }
+        let commands = mutation
+            .items
+            .iter()
+            .map(|item| DesiredWatchBatchCommand {
+                section: item.section.clone(),
+                policy: item.policy.clone(),
+                based_on_revision: item.based_on_revision,
+            })
+            .collect::<Vec<_>>();
+        let decision = self.lock_store()?.commit_desired_watch_batch(
+            mutation.authority_generation,
+            mutation.mutation_id,
+            &commands,
+        )?;
+        let mut result = describe_batch(decision);
+        if result.outcome == DesiredWatchOutcomeV1::Committed {
+            self.reconcile()?;
+        }
+        self.rotate_if_due()?;
+        self.stamp_batch(&mut result)?;
         Ok(result)
     }
 
@@ -1032,6 +1142,37 @@ impl DesiredWatchCoordinator {
         Ok(())
     }
 
+    fn stamp_batch(
+        &self,
+        result: &mut DesiredWatchBatchMutationResultV1,
+    ) -> Result<(), DesiredWatchCoordinatorError> {
+        let state = self.read()?;
+        result.authority_generation = state.authority_generation;
+        if result.outcome != DesiredWatchOutcomeV1::Committed {
+            return Ok(());
+        }
+        if let Some(committed) = result.committed.as_mut() {
+            for item in committed {
+                match state
+                    .entries
+                    .iter()
+                    .find(|entry| entry.section == item.section)
+                {
+                    Some(entry) => {
+                        item.revision = entry.revision;
+                        item.materialization_epoch = entry.materialization_epoch;
+                    }
+                    None => {
+                        item.revision = DESIRED_WATCH_ABSENT_COMMITTED_NUMBER;
+                        item.materialization_epoch = DESIRED_WATCH_ABSENT_COMMITTED_NUMBER;
+                    }
+                }
+            }
+        }
+        result.state = Some(state);
+        Ok(())
+    }
+
     /// Stands at a named point inside the coordinator, for a test that has
     /// installed somewhere to stand. A shipping build does not compile this
     /// at all.
@@ -1170,8 +1311,21 @@ impl DesiredWatchCoordinator {
                         .map(|armed| (section.clone(), armed.active_watch_id))
                 })
                 .collect::<Vec<_>>();
-            for (section, active_watch_id) in running {
-                let Some(reason) = revoked_reason(self.owner.admission_for(&section)) else {
+            let sections = running
+                .iter()
+                .map(|(section, _)| section.clone())
+                .collect::<Vec<_>>();
+            let admissions = if sections.is_empty() {
+                Vec::new()
+            } else {
+                self.owner.admissions_for(&sections)
+            };
+            for (position, (section, active_watch_id)) in running.into_iter().enumerate() {
+                let admission = admissions
+                    .get(position)
+                    .cloned()
+                    .unwrap_or(WatchStartAdmission::TargetUnavailable);
+                let Some(reason) = revoked_reason(admission) else {
                     continue;
                 };
                 tracing::info!(
@@ -1596,6 +1750,10 @@ fn describe(outcome: DesiredWatchMutationOutcome) -> DesiredWatchMutationResultV
             result.outcome = DesiredWatchOutcomeV1::MutationIdConflict;
             None
         }
+        DesiredWatchMutationOutcome::BatchMutationIdConflict => {
+            result.outcome = DesiredWatchOutcomeV1::MutationIdConflict;
+            None
+        }
         DesiredWatchMutationOutcome::StaleGeneration { current } => {
             result.outcome = DesiredWatchOutcomeV1::StaleGeneration;
             result.authority_generation = current;
@@ -1652,6 +1810,63 @@ fn describe(outcome: DesiredWatchMutationOutcome) -> DesiredWatchMutationResultV
                 result.outcome = DesiredWatchOutcomeV1::LimitExceeded;
                 result.maximum = Some(u32::try_from(maximum).unwrap_or(u32::MAX));
             }
+        }
+    }
+    result
+}
+
+fn describe_batch(decision: DesiredWatchBatchDecision) -> DesiredWatchBatchMutationResultV1 {
+    let mut result = DesiredWatchBatchMutationResultV1 {
+        contract_version: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+        outcome: DesiredWatchOutcomeV1::Committed,
+        replayed: decision.replayed,
+        authority_generation: 0,
+        current_revision: None,
+        maximum: None,
+        committed: None,
+        state: None,
+    };
+    match decision.outcome {
+        DesiredWatchBatchOutcome::Committed(committed) => {
+            result.committed = Some(
+                committed
+                    .into_iter()
+                    .map(|item| DesiredWatchBatchCommittedV1 {
+                        section: item.section,
+                        revision: item.revision,
+                        materialization_epoch: item.materialization_epoch,
+                        epoch_changed: item.epoch_changed,
+                    })
+                    .collect(),
+            );
+        }
+        DesiredWatchBatchOutcome::MutationIdConflict => {
+            result.outcome = DesiredWatchOutcomeV1::MutationIdConflict;
+        }
+        DesiredWatchBatchOutcome::StaleGeneration { current } => {
+            result.outcome = DesiredWatchOutcomeV1::StaleGeneration;
+            result.authority_generation = current;
+        }
+        DesiredWatchBatchOutcome::StaleRevision { current } => {
+            result.outcome = DesiredWatchOutcomeV1::StaleRevision;
+            result.current_revision = Some(current);
+        }
+        DesiredWatchBatchOutcome::LimitExceeded { maximum } => {
+            result.outcome = DesiredWatchOutcomeV1::LimitExceeded;
+            result.maximum = Some(u32::try_from(maximum).unwrap_or(u32::MAX));
+        }
+        DesiredWatchBatchOutcome::AuthorityFull(kind) => {
+            result.outcome = DesiredWatchOutcomeV1::AuthorityFull;
+            result.maximum = Some(match kind {
+                DesiredWatchBudgetKind::Tombstones => {
+                    u32::try_from(bcsp_local_user_state::MAX_DESIRED_WATCH_TOMBSTONES)
+                        .unwrap_or(u32::MAX)
+                }
+                DesiredWatchBudgetKind::Receipts => {
+                    u32::try_from(bcsp_local_user_state::MAX_DESIRED_WATCH_RECEIPTS)
+                        .unwrap_or(u32::MAX)
+                }
+            });
         }
     }
     result

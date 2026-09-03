@@ -26,9 +26,9 @@ use serde_json::Value as JsonValue;
 use time::OffsetDateTime;
 
 use crate::{
-    DesiredWatchCoordinator, DesiredWatchCoordinatorError, DesiredWatchMutationV1,
-    LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LocalApiErrorCode, LocalPrimaryDatabase,
-    LocalSurfaceFailure, LocalSurfaceOutcome, LocalSurfaceState,
+    DesiredWatchBatchMutationV1, DesiredWatchCoordinator, DesiredWatchCoordinatorError,
+    DesiredWatchMutationV1, LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LocalApiErrorCode,
+    LocalPrimaryDatabase, LocalSurfaceFailure, LocalSurfaceOutcome, LocalSurfaceState,
 };
 
 const LOCAL_USER_DATA_RESET_TOKEN_TTL: Duration = Duration::from_secs(60);
@@ -231,7 +231,7 @@ impl LocalSurfaceState for PersonalSurface {
             drop(database);
         }
         state.active_watch_count = u8::try_from(self.watch.total_active_watch_count())
-            .unwrap_or(bcsp_contracts::MAX_ACTIVE_WATCHES);
+            .unwrap_or(crate::LOCAL_MAX_ACTIVE_WATCHES);
         encode(&Bootstrap {
             mode: "LOCAL",
             session_nonce: nonce.as_str(),
@@ -241,8 +241,8 @@ impl LocalSurfaceState for PersonalSurface {
 
     /// The desired-watch authority read.
     ///
-    /// One response, one snapshot, every row: the nine sections a user may
-    /// desire plus the full removal history is 521 rows, and the whole point
+    /// One response, one snapshot, every row: the 255 sections a user may
+    /// desire plus the full removal history is 767 rows, and the whole point
     /// of a tombstone is that a page can tell "removed at revision N" from
     /// "never existed". Paginating would hand a page a partial view it could
     /// not distinguish from the complete one, so the response is bounded by
@@ -265,6 +265,26 @@ impl LocalSurfaceState for PersonalSurface {
         let result = self
             .coordinator()?
             .submit(&mutation)
+            .map_err(map_coordinator_error)?;
+        Ok(LocalSurfaceOutcome {
+            status: result.outcome.http_status(),
+            body: encode(&result)?,
+        })
+    }
+
+    fn put_desired_watch_batch(
+        &self,
+        body: &[u8],
+    ) -> Result<LocalSurfaceOutcome, LocalSurfaceFailure> {
+        let mutation: DesiredWatchBatchMutationV1 = decode_payload(body)?;
+        if mutation.contract_version != LOCAL_DESIRED_WATCH_CONTRACT_VERSION {
+            return Err(LocalSurfaceFailure::bad_request(
+                LocalApiErrorCode::UnsupportedProtocolVersion,
+            ));
+        }
+        let result = self
+            .coordinator()?
+            .submit_batch(&mutation)
             .map_err(map_coordinator_error)?;
         Ok(LocalSurfaceOutcome {
             status: result.outcome.http_status(),
@@ -1389,6 +1409,9 @@ fn map_coordinator_error(error: DesiredWatchCoordinatorError) -> LocalSurfaceFai
         DesiredWatchCoordinatorError::Poisoned => {
             LocalSurfaceFailure::internal(LocalApiErrorCode::InternalError)
         }
+        DesiredWatchCoordinatorError::InvalidBatch => {
+            LocalSurfaceFailure::bad_request(LocalApiErrorCode::MalformedRequest)
+        }
         // Retryable, and deliberately not an internal error: nothing is
         // broken, the process is still trying, and the honest instruction to
         // the caller is to ask again rather than to assume either outcome.
@@ -1445,6 +1468,7 @@ fn map_personal_error(error: PersonalStateError) -> LocalSurfaceFailure {
         PersonalStateError::InvalidSetting(_)
         | PersonalStateError::DuplicateSelection(_)
         | PersonalStateError::SelectionLimitExceeded { .. }
+        | PersonalStateError::InvalidDesiredWatchBatch
         | PersonalStateError::InvalidPageLimit
         | PersonalStateError::InvalidPageOffset
         | PersonalStateError::InvalidEpisodeSummary => {

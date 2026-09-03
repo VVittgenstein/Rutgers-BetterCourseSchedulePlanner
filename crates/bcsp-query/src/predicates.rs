@@ -2,10 +2,9 @@ use bcsp_contracts::{
     CatalogFieldKnowledge, CatalogFieldPresence, CatalogModality, CatalogPrerequisiteState,
     CatalogRequiredness, CatalogSynchronicity, CourseGroupKey, CreditRangeV1, FilterFieldId,
     FilterMatchV1, FilterSetModeV1, FilterTokenV1, LiveOpenEvidenceV1, LiveOpenStateV1,
-    MatchExplanation, MatchOutcome, MatchReasonCode,
-    NormalizedCourseVariantV1, NormalizedFilterValuesV1, NormalizedOccurrenceV1,
-    NormalizedSectionV1, PermissionFilterV1, PrerequisiteFilterV1, UserModalityV3,
-    UserSynchronicityV3, course_number_band,
+    MatchExplanation, MatchOutcome, MatchReasonCode, NormalizedCourseVariantV1,
+    NormalizedFilterValuesV1, NormalizedOccurrenceV1, NormalizedSectionV1, PermissionFilterV1,
+    PrerequisiteFilterV1, UserModalityV3, UserSynchronicityV3, course_number_band,
 };
 use time::OffsetDateTime;
 
@@ -510,14 +509,18 @@ fn evaluate_meeting_location(
     // Where the student has to be decides it. Only when nothing requires
     // travel does the Section's own location speak: a wholly online Section
     // matches a reader who selected ONLINE and no one else.
-    let decisive = if travelled.is_empty() { remote } else { travelled };
+    let decisive = if travelled.is_empty() {
+        remote
+    } else {
+        travelled
+    };
     if decisive.is_empty() {
         return PredicateEvaluation::uncertain(
             FilterFieldId::SectionMeetingLocation.wire_name(),
             MatchReasonCode::MissingReliableData,
         );
     }
-    and_all(decisive.into_iter().map(|occurrence| evaluate_occurrence(occurrence)))
+    and_all(decisive.into_iter().map(evaluate_occurrence))
 }
 
 /// Whether a meeting can be attended from anywhere, and so says nothing about

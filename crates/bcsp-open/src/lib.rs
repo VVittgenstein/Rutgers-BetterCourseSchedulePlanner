@@ -35,7 +35,8 @@ pub use policy::{
 };
 pub use projection::{
     OpenCounterAudience, OpenProjectionError, OpenProjectionRuntime, OpenStatusReadStore,
-    ProjectedOpenStatusV1, project_current_open_observation, project_open_status,
+    ProjectedOpenStatusV1, project_current_open_observation, project_current_open_observations,
+    project_open_status,
 };
 pub use reconcile::{
     CatalogOpenBatch, OpenReconcileClassification, OpenReconcilePlan, OpenSetEvidence,

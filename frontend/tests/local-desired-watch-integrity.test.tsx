@@ -777,7 +777,7 @@ describe('physical proof withdraws the green light immediately', () => {
 describe('one press of a batch button is one basis', () => {
   it('starts every selected section against the revisions the click was made on', async () => {
     const server = authority();
-    // The state another tab leaves behind while the first item is in flight:
+    // The state another tab leaves behind before the atomic compare:
     // SECTION started, and OTHER moved on to revision 5 by somebody else.
     const moved = () => snapshot([
       entry(SECTION, { revision: 2, epoch: 2 }),
@@ -788,20 +788,7 @@ describe('one press of a batch button is one basis', () => {
         entry(SECTION, { policy: null }),
         entry(OTHER, { policy: null }),
       ])),
-      async (call) => {
-        if (call.method === 'GET') return ok(moved());
-        const payload = (call.body as {
-          readonly payload: { readonly section: SectionKey; readonly basedOnRevision: number };
-        }).payload;
-        if (payload.section.index === SECTION.index) return ok(committed(moved(), 2));
-        // A real authority: the compare-and-swap decides here rather than
-        // being asserted here, so a re-based second item is not merely
-        // detected -- it is applied, overwriting a change the user never saw.
-        if (payload.basedOnRevision !== 1) return ok(committed(snapshot([
-          entry(SECTION, { revision: 2, epoch: 2 }),
-          entry(OTHER, { revision: 6, epoch: 6 }),
-        ]), 6));
-        return ok({
+      async (call) => call.method === 'GET' ? ok(moved()) : ok({
           contractVersion: 1,
           outcome: 'STALE_REVISION',
           replayed: false,
@@ -810,31 +797,33 @@ describe('one press of a batch button is one basis', () => {
           maximum: null,
           committed: null,
           state: null,
-        }, 409);
-      },
+        }, 409),
     );
     const view = desk(server.fetchImplementation, { selected: [SECTION, OTHER] });
     await waitFor(() => expect(view.value().intentStatus).toBe('READY'));
 
     const start = screen.getByRole('button', { name: 'Start selected · 2' });
     await act(async () => { start.click(); });
-    await waitFor(() => expect(server.writes()).toHaveLength(2));
+    await waitFor(() => expect(server.writes()).toHaveLength(1));
 
-    const second = (server.writes()[1]?.body as {
-      readonly payload: { readonly basedOnRevision: number; readonly authorityGeneration: number };
+    const batch = (server.writes()[0]?.body as {
+      readonly payload: {
+        readonly authorityGeneration: number;
+        readonly items: readonly { readonly basedOnRevision: number }[];
+      };
     }).payload;
-    expect(second.basedOnRevision).toBe(1);
-    expect(second.authorityGeneration).toBe(1);
-    // Refused, re-read, and never resubmitted: two writes for two Sections.
+    expect(batch.items.map(({ basedOnRevision }) => basedOnRevision)).toEqual([1, 1]);
+    expect(batch.authorityGeneration).toBe(1);
+    // Refused atomically, re-read, and never resubmitted.
     await waitFor(() => expect(server.reads().length).toBeGreaterThan(1));
-    expect(server.writes()).toHaveLength(2);
+    expect(server.writes()).toHaveLength(1);
     await waitFor(() => expect(view.value().intentStateFor(OTHER)).toBe('NOT_WATCHING'));
   });
 
   it('applies a policy against the generation the click was made on', async () => {
     const server = authority();
-    // The first item's own commit crosses the rotation threshold: generation
-    // 2, every row renumbered.
+    // The authority rotated before the atomic compare: generation 2, every
+    // row renumbered.
     const rotated = {
       contractVersion: 1,
       authorityGeneration: 2,
@@ -848,38 +837,7 @@ describe('one press of a batch button is one basis', () => {
         entry(SECTION, { running: true }),
         entry(OTHER, { running: true, revision: 2, epoch: 2 }),
       ])),
-      async (call) => {
-        if (call.method === 'GET') return ok(rotated);
-        const payload = (call.body as {
-          readonly payload: { readonly section: SectionKey; readonly authorityGeneration: number };
-        }).payload;
-        if (payload.section.index === SECTION.index) {
-          return ok({
-            contractVersion: 1,
-            outcome: 'COMMITTED',
-            replayed: false,
-            authorityGeneration: 2,
-            currentRevision: null,
-            maximum: null,
-            committed: { revision: 1, materializationEpoch: 1, epochChanged: false },
-            state: rotated,
-          });
-        }
-        // Whatever generation this item presents is what the authority
-        // answers: presenting the one the rotation produced is admitted.
-        if (payload.authorityGeneration !== 1) {
-          return ok({
-            contractVersion: 1,
-            outcome: 'COMMITTED',
-            replayed: false,
-            authorityGeneration: 2,
-            currentRevision: null,
-            maximum: null,
-            committed: { revision: 2, materializationEpoch: 2, epochChanged: false },
-            state: rotated,
-          });
-        }
-        return ok({
+      async (call) => call.method === 'GET' ? ok(rotated) : ok({
           contractVersion: 1,
           outcome: 'STALE_GENERATION',
           replayed: false,
@@ -888,24 +846,22 @@ describe('one press of a batch button is one basis', () => {
           maximum: null,
           committed: null,
           state: null,
-        }, 409);
-      },
+        }, 409),
     );
     const view = desk(server.fetchImplementation, { selected: [SECTION, OTHER] });
     await waitFor(() => expect(view.value().intentStateFor(SECTION)).toBe('WATCHING'));
 
     const apply = screen.getByRole('button', { name: 'Apply policy to active' });
     await act(async () => { apply.click(); });
-    await waitFor(() => expect(server.writes()).toHaveLength(2));
+    await waitFor(() => expect(server.writes()).toHaveLength(1));
 
     const generations = server.writes().map((write) => (write.body as {
       readonly payload: { readonly authorityGeneration: number };
     }).payload.authorityGeneration);
-    expect(generations).toEqual([1, 1]);
-    // The second item was refused and re-read. It was not rebased onto the
-    // authority the first item's answer happened to carry.
+    expect(generations).toEqual([1]);
+    // The batch was refused and re-read. It was not rebased onto generation 2.
     await waitFor(() => expect(server.reads().length).toBeGreaterThan(1));
-    expect(server.writes()).toHaveLength(2);
+    expect(server.writes()).toHaveLength(1);
   });
 });
 
@@ -1482,6 +1438,25 @@ describe('the mutation answer is decoded as strictly as the read', () => {
       () => ok(committed(snapshot([entry(OTHER, { revision: 2, epoch: 2 })]))),
     ],
     [
+      'a commit whose policy has no positive JavaScript-safe audible limit',
+      () => ok(committed(snapshot([entry(SECTION, {
+        policy: { ...POLICY, maxAudible: 0 },
+        revision: 2,
+        epoch: 2,
+      })]))),
+    ],
+    [
+      'a commit whose finite duration exceeds the JavaScript-safe wire domain',
+      () => ok(committed(snapshot([entry(SECTION, {
+        policy: {
+          ...POLICY,
+          continuousDuration: { kind: 'FINITE', seconds: 9_007_199_254_740_992 },
+        },
+        revision: 2,
+        epoch: 2,
+      })]))),
+    ],
+    [
       'a commit whose row is gone but which reports the numbers it used to hold',
       () => ok(committed(snapshot([entry(OTHER, { revision: 1, epoch: 1 })]), 2)),
     ],
@@ -1550,5 +1525,30 @@ describe('the mutation answer is decoded as strictly as the read', () => {
     expect(result.outcome).toBe('COMMITTED');
     expect(result.snapshot?.generation).toBe(2);
     expect(result.snapshot?.entries).toEqual([]);
+  });
+
+  it('rejects a batch commit that does not account for every submitted Section', async () => {
+    const state = snapshot([
+      entry(SECTION, { revision: 2, epoch: 2 }),
+      entry(OTHER, { revision: 3, epoch: 3 }),
+    ]);
+    await expect(port(() => ok({
+      contractVersion: 1,
+      outcome: 'COMMITTED',
+      replayed: false,
+      authorityGeneration: 1,
+      currentRevision: null,
+      maximum: null,
+      committed: [{
+        section: SECTION,
+        revision: 2,
+        materializationEpoch: 2,
+        epochChanged: true,
+      }],
+      state,
+    })).submitBatch?.([
+      { section: SECTION, policy: POLICY },
+      { section: OTHER, policy: POLICY },
+    ], snapshot([entry(SECTION), entry(OTHER)]) as never)).rejects.toThrow();
   });
 });

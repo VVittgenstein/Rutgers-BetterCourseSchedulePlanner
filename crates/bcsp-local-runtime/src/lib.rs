@@ -29,12 +29,14 @@ pub use console::{
 };
 pub use desired::{
     DESIRED_WATCH_ABSENT_COMMITTED_NUMBER, DESIRED_WATCH_MATERIALIZE_BACKOFF,
-    DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchCommittedV1, DesiredWatchCoordinator,
-    DesiredWatchCoordinatorError, DesiredWatchEntryV1, DesiredWatchFailureClassV1,
-    DesiredWatchFailureReasonV1, DesiredWatchFailureV1, DesiredWatchMaterializedV1,
-    DesiredWatchMutationResultV1, DesiredWatchMutationV1, DesiredWatchOutcomeV1, DesiredWatchOwner,
-    DesiredWatchStateV1, LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_PATH,
-    LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
+    DESIRED_WATCH_REVALIDATE_INTERVAL, DesiredWatchBatchCommittedV1, DesiredWatchBatchItemV1,
+    DesiredWatchBatchMutationResultV1, DesiredWatchBatchMutationV1, DesiredWatchCommittedV1,
+    DesiredWatchCoordinator, DesiredWatchCoordinatorError, DesiredWatchEntryV1,
+    DesiredWatchFailureClassV1, DesiredWatchFailureReasonV1, DesiredWatchFailureV1,
+    DesiredWatchMaterializedV1, DesiredWatchMutationResultV1, DesiredWatchMutationV1,
+    DesiredWatchOutcomeV1, DesiredWatchOwner, DesiredWatchStateV1, LOCAL_DESIRED_WATCH_BATCH_PATH,
+    LOCAL_DESIRED_WATCH_BATCH_RESPONSE_BUDGET_BYTES, LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+    LOCAL_DESIRED_WATCH_PATH, LOCAL_DESIRED_WATCH_RESPONSE_BUDGET_BYTES,
 };
 pub use diagnostic::StartupFailureReport;
 pub use extension::{
@@ -59,7 +61,10 @@ pub use presence::{
     LocalPresenceEventV1, LocalPresencePhase, LocalPresenceRoute, LocalPresenceStateV1,
 };
 pub use product::LOCAL_PREPARED_ADMISSION_WAIT;
-pub use watch::{LOCAL_PRESENCE_SOCKET_PATH, LocalWatchRoute, create_local_watch_socket};
+pub use watch::{
+    LOCAL_MAX_ACTIVE_WATCHES, LOCAL_PRESENCE_SOCKET_PATH, LocalWatchRoute,
+    create_local_watch_socket,
+};
 
 pub fn boundary_marker() -> &'static str {
     let _ = (

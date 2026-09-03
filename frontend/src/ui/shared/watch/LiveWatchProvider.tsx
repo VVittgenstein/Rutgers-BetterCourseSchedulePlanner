@@ -11,6 +11,7 @@ import {
 
 import type {
   ActiveWatchId,
+  OpenBatchStatusV1,
   OpenEpisodeV1,
   OpenFreshnessV1,
   OpenObservationV1,
@@ -67,7 +68,11 @@ export interface WatchIntentBatchItem {
   readonly policy: WatchPolicyV1 | null;
 }
 
+/** Shared/public default. The local composition explicitly injects 255. */
 export const MAX_SELECTED_SECTIONS = 9;
+export const MAX_CONFIGURABLE_SELECTED_SECTIONS = 255;
+/** A rapid add/remove gesture settles before telemetry touches the server. */
+export const SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS = 300;
 export const DEFAULT_WATCH_POLICY: WatchPolicyV1 = {
   notificationMode: 'ONE_SHOT',
   maxAudible: 3,
@@ -123,6 +128,7 @@ export interface WatchTelemetryResourceState {
 
 export type WatchNoticeCode =
   | 'SELECTION_LIMIT'
+  | 'SELECTION_SAVE_FAILED'
   | 'TERM_OUT_OF_RANGE'
   | 'START_REJECTED'
   | 'COMMAND_FAILED'
@@ -146,6 +152,7 @@ export interface WatchNotice {
 
 export interface LiveWatchValue {
   readonly selected: readonly SectionKey[];
+  readonly maximumSelectedSections: number;
   readonly pending: readonly SectionKey[];
   readonly active: readonly ActiveWatchView[];
   readonly observations: readonly OpenObservationV1[];
@@ -299,6 +306,16 @@ function sectionIdentity(sectionKey: SectionKey): string {
 
 function sameSection(left: SectionKey, right: SectionKey): boolean {
   return sectionIdentity(left) === sectionIdentity(right);
+}
+
+function sameSelection(left: readonly SectionKey[], right: readonly SectionKey[]): boolean {
+  return left.length === right.length
+    && left.every((section, index) => sameSection(section, right[index]!));
+}
+
+function normalizeSelectionLimit(value: number): number {
+  if (!Number.isFinite(value)) return MAX_SELECTED_SECTIONS;
+  return Math.min(MAX_CONFIGURABLE_SELECTED_SECTIONS, Math.max(1, Math.trunc(value)));
 }
 
 /**
@@ -515,6 +532,14 @@ function normalizeBatchStatus(status: OpenRefreshStatusV1, now = Date.now()): Op
   return { ...status, freshness: expireFreshness(status.freshness, now) };
 }
 
+function normalizeOpenBatchStatus(status: OpenBatchStatusV1, now = Date.now()): OpenBatchStatusV1 {
+  return {
+    ...status,
+    refresh: normalizeBatchStatus(status.refresh, now),
+    sections: status.sections.map((section) => normalizeSectionStatus(section, now)),
+  };
+}
+
 function futureFreshnessExpiry(freshness: OpenFreshnessV1, now: number): number | null {
   if (freshness.state !== 'FRESH' || freshness.freshUntil === null) return null;
   const expiry = Date.parse(freshness.freshUntil);
@@ -569,6 +594,8 @@ export interface LiveWatchProviderProps {
    */
   readonly intent?: WatchIntentPort | undefined;
   readonly initialSelected?: readonly SectionKey[] | undefined;
+  /** Target-owned cap: shared/public defaults to 9; local injects 255. */
+  readonly maximumSelectedSections?: number | undefined;
   readonly initialWatchableTerms?: readonly string[] | undefined;
   readonly initialVolume?: number | undefined;
   /**
@@ -585,7 +612,9 @@ export interface LiveWatchProviderProps {
   /** Reads the page's visibility. Injected for the same reason as the clock. */
   readonly pageVisibility?: (() => boolean) | undefined;
   readonly clock?: (() => number) | undefined;
-  readonly onSelectedChange?: ((selected: readonly SectionKey[]) => void) | undefined;
+  readonly onSelectedChange?: (
+    (selected: readonly SectionKey[]) => void | Promise<void>
+  ) | undefined;
   readonly onVolumeChange?: ((volume: number) => void) | undefined;
 }
 
@@ -598,6 +627,7 @@ export function LiveWatchProvider({
   initialWatchableTerms,
   initialVolume = 70,
   initialNotificationsEnabled = true,
+  maximumSelectedSections = MAX_SELECTED_SECTIONS,
   notifications,
   onNotificationsEnabledChange,
   onSelectedChange,
@@ -605,6 +635,7 @@ export function LiveWatchProvider({
   pageVisibility,
   runtime,
 }: LiveWatchProviderProps) {
+  const selectionLimit = normalizeSelectionLimit(maximumSelectedSections);
   const [audioController] = useState(() => audio ?? new WatchAudioController());
   const [notificationPort] = useState<WatchNotificationPort>(
     () => notifications ?? createBrowserNotificationPort(),
@@ -615,7 +646,7 @@ export function LiveWatchProvider({
     [pageVisibility],
   );
   const [selected, setSelected] = useState<readonly SectionKey[]>(() =>
-    initialSelected.slice(0, MAX_SELECTED_SECTIONS));
+    initialSelected.slice(0, selectionLimit));
   const [pending, setPending] = useState<readonly SectionKey[]>([]);
   const [active, setActive] = useState<readonly ActiveWatchView[]>([]);
   const [observations, setObservations] = useState<readonly OpenObservationV1[]>([]);
@@ -683,6 +714,19 @@ export function LiveWatchProvider({
    * so a STOP fault followed by a failed read must not be able to hide one.
    */
   const [trustedIdentities, setTrustedIdentities] = useState<readonly SectionKey[]>([]);
+  /**
+   * Sections the last trusted authority answer said still named a physical
+   * watch, including one whose teardown had not finished.
+   *
+   * Kept separately from `effectiveActive`: a socket cutoff correctly removes
+   * every green light, but does not turn the Section that may still be
+   * running into an irrelevant telemetry target. Unlike `trustedIdentities`,
+   * this excludes merely desired/preparing rows, keeping the worst-case
+   * telemetry union at 255 selected plus 255 physical watches.
+   */
+  const [trustedTelemetryIdentities, setTrustedTelemetryIdentities] = useState<
+    readonly SectionKey[]
+  >([]);
   /**
    * Sections with a mutation whose outcome this page does not know.
    *
@@ -777,6 +821,9 @@ export function LiveWatchProvider({
     }
     return rows;
   }, [trustedIdentities, uncertain]);
+  const authorityTelemetryIdentities = useMemo<readonly SectionKey[]>(() =>
+    trustedTelemetryIdentities.filter((section) => !disproved.has(sectionIdentity(section))),
+  [disproved, trustedTelemetryIdentities]);
   const intentActive = useMemo<readonly ActiveWatchView[]>(() => {
     if (intent === undefined || disprovedSnapshot === null) return [];
     return disprovedSnapshot.entries.flatMap((entry) => entry.running === null ? [] : [{
@@ -788,7 +835,14 @@ export function LiveWatchProvider({
   }, [disprovedSnapshot, intent]);
   const effectiveActive = intent === undefined ? active : intentActive;
   const selectedRef = useRef(selected);
+  /** Last selection the target's persistence callback confirmed. */
+  const confirmedSelection = useRef(selected);
+  /** Latest optimistic selection; intermediate drafts may be coalesced. */
+  const desiredSelection = useRef(selected);
+  const selectionPersistenceRunning = useRef(false);
+  const onSelectedChangeRef = useRef(onSelectedChange);
   const activeRef = useRef(active);
+  const authorityTelemetryRef = useRef(authorityTelemetryIdentities);
   const pendingRef = useRef(pending);
   const audioStateRef = useRef<WatchAudioState>(audioState);
   const mutedRef = useRef(muted);
@@ -799,6 +853,7 @@ export function LiveWatchProvider({
   const queuedStart = useRef<readonly WatchStartItemV1[] | null>(null);
   const noticeId = useRef(0);
   const telemetryAbort = useRef<AbortController | null>(null);
+  const selectionTelemetryTimer = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   /**
    * The generation of the desk's telemetry. Bumped by a reset -- the last
    * Section leaving, a removal, unmount -- so a read that was out across one
@@ -904,7 +959,11 @@ export function LiveWatchProvider({
   useEffect(() => { intentSnapshotRef.current = intentSnapshot; }, [intentSnapshot]);
   useEffect(() => { intentStatusRef.current = intentStatus; }, [intentStatus]);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { onSelectedChangeRef.current = onSelectedChange; }, [onSelectedChange]);
   useEffect(() => { activeRef.current = effectiveActive; }, [effectiveActive]);
+  useEffect(() => {
+    authorityTelemetryRef.current = authorityTelemetryIdentities;
+  }, [authorityTelemetryIdentities]);
   useEffect(() => { pendingRef.current = pending; }, [pending]);
   useEffect(() => { audioStateRef.current = audioState; }, [audioState]);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
@@ -1116,6 +1175,8 @@ export function LiveWatchProvider({
       entry.policy === null && !entry.stopping && entry.running === null
         ? []
         : [entry.section]));
+    setTrustedTelemetryIdentities(snapshot.entries.flatMap((entry) =>
+      entry.running === null && !entry.stopping ? [] : [entry.section]));
   }, []);
 
   /**
@@ -1301,10 +1362,55 @@ export function LiveWatchProvider({
     basis: WatchIntentSnapshot,
     items: readonly WatchIntentBatchItem[],
   ) => {
+    if (intent?.submitBatch !== undefined && items.length > 1) {
+      const blocked = items.find((item) => isUncertain(item.sectionKey));
+      if (blocked !== undefined) {
+        addNotice('COMMAND_FAILED', 'ALERT', blocked.sectionKey);
+        return;
+      }
+      const settled = await runAuthority(async (sequence) => {
+        for (const item of items) markUncertain(item.sectionKey, sequence);
+        try {
+          const result = await intent.submitBatch!(
+            items.map(({ sectionKey, policy }) => ({ section: sectionKey, policy })),
+            basis,
+          );
+          if (result.snapshot !== null) {
+            applyAuthority(sequence, result.snapshot, 'READY', 'MUTATION');
+          }
+          if (result.outcome === 'COMMITTED') return 'COMMITTED' as const;
+          addNotice(
+            result.outcome === 'AT_CAPACITY'
+              ? 'SELECTION_LIMIT'
+              : result.outcome === 'CONFLICT'
+                ? 'START_REJECTED'
+                : 'COMMAND_FAILED',
+            'ALERT',
+            undefined,
+            result.maximum === null ? undefined : String(result.maximum),
+          );
+          return result.snapshot === null ? 'REREAD' as const : 'REFUSED' as const;
+        } catch {
+          addNotice('COMMAND_FAILED', 'ALERT');
+          return 'REREAD' as const;
+        }
+      });
+      if (settled === 'REREAD') await refreshIntent();
+      return;
+    }
     for (const item of items) {
       if (!await submitAgainst(item.sectionKey, item.policy, basis)) break;
     }
-  }, [submitAgainst]);
+  }, [
+    addNotice,
+    applyAuthority,
+    intent,
+    isUncertain,
+    markUncertain,
+    refreshIntent,
+    runAuthority,
+    submitAgainst,
+  ]);
 
   const submitIntentBatch = useCallback(async (
     plan: (basis: WatchIntentSnapshot) => readonly WatchIntentBatchItem[],
@@ -1345,7 +1451,8 @@ export function LiveWatchProvider({
 
   const isBatchRelevant = useCallback((batch: TermCampusKey): boolean =>
     selectedRef.current.some((section) => sameBatch(section, batch))
-      || activeRef.current.some((watch) => sameBatch(watch.sectionKey, batch)), []);
+      || activeRef.current.some((watch) => sameBatch(watch.sectionKey, batch))
+      || authorityTelemetryRef.current.some((section) => sameBatch(section, batch)), []);
 
   const cancelScheduledBatchStatus = useCallback((identity: string) => {
     const timer = batchStatusTimers.current.get(identity);
@@ -1356,7 +1463,8 @@ export function LiveWatchProvider({
 
   const isSectionRelevant = useCallback((sectionKey: SectionKey): boolean =>
     selectedRef.current.some((section) => sameSection(section, sectionKey))
-      || activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey)), []);
+      || activeRef.current.some((watch) => sameSection(watch.sectionKey, sectionKey))
+      || authorityTelemetryRef.current.some((section) => sameSection(section, sectionKey)), []);
 
   /**
    * Books one finished Section read against its resource.
@@ -1511,6 +1619,12 @@ export function LiveWatchProvider({
     for (const timer of batchStatusTimers.current.values()) globalThis.clearTimeout(timer);
     batchStatusTimers.current.clear();
     batchStatusFollowUps.current.clear();
+  }, []);
+
+  const clearSelectionTelemetryTimer = useCallback(() => {
+    if (selectionTelemetryTimer.current === null) return;
+    globalThis.clearTimeout(selectionTelemetryTimer.current);
+    selectionTelemetryTimer.current = null;
   }, []);
 
   const loadSectionStatus = useCallback(async (sectionKey: SectionKey) => {
@@ -1953,6 +2067,7 @@ export function LiveWatchProvider({
       telemetryAbort.current?.abort();
       telemetryEpoch.current += 1;
       clearScheduledBatchStatuses();
+      clearSelectionTelemetryTimer();
       announcedAudioCaps.current.clear();
       startAttempt.current += 1;
       audioProviderMounted.current = false;
@@ -1960,7 +2075,7 @@ export function LiveWatchProvider({
         if (!audioProviderMounted.current) audioController.dispose();
       });
     };
-  }, [audioController, clearScheduledBatchStatuses]);
+  }, [audioController, clearScheduledBatchStatuses, clearSelectionTelemetryTimer]);
 
   /**
    * Whether a section may be taken off the managed list.
@@ -1989,21 +2104,78 @@ export function LiveWatchProvider({
     return entry.policy === null && !entry.stopping && entry.running === null;
   }, [intent, isUncertain]);
 
+  /**
+   * Persists selection snapshots through one latest-wins worker.
+   *
+   * A burst does not enqueue one database replacement per click: the first
+   * write already in flight finishes, then the worker jumps directly to the
+   * newest draft. On a terminal failure the desk returns to the last snapshot
+   * the target actually confirmed. That confirmed base, rather than the
+   * immediately preceding optimistic draft, is what prevents 40 rejected
+   * writes from leaving 39 phantom rows on screen.
+   */
+  const persistSelection = useCallback((next: readonly SectionKey[]) => {
+    desiredSelection.current = next;
+    if (onSelectedChangeRef.current === undefined) {
+      confirmedSelection.current = next;
+      return;
+    }
+    if (selectionPersistenceRunning.current) return;
+    selectionPersistenceRunning.current = true;
+    void (async () => {
+      try {
+        while (!sameSelection(confirmedSelection.current, desiredSelection.current)) {
+          const candidate = desiredSelection.current;
+          const persist = onSelectedChangeRef.current;
+          if (persist === undefined) {
+            confirmedSelection.current = candidate;
+            continue;
+          }
+          try {
+            await persist(candidate);
+            confirmedSelection.current = candidate;
+          } catch (error) {
+            if (audioProviderMounted.current) {
+              addNotice(
+                'SELECTION_SAVE_FAILED',
+                'ALERT',
+                undefined,
+                error instanceof Error ? error.message : undefined,
+              );
+            }
+            // A newer draft can replace a failed whole-snapshot write. Only
+            // roll back when the failed candidate is still what the user sees.
+            if (sameSelection(desiredSelection.current, candidate)) {
+              const rollback = confirmedSelection.current;
+              desiredSelection.current = rollback;
+              selectedRef.current = rollback;
+              telemetryEpoch.current += 1;
+              telemetryAbort.current?.abort();
+              if (audioProviderMounted.current) setSelected(rollback);
+            }
+          }
+        }
+      } finally {
+        selectionPersistenceRunning.current = false;
+      }
+    })();
+  }, [addNotice]);
+
   const select = useCallback((sectionKey: SectionKey) => {
     if (watchableTermsRef.current?.has(sectionKey.term) === false) {
       addNotice('TERM_OUT_OF_RANGE', 'ALERT', sectionKey);
       return;
     }
     if (selectedRef.current.some((value) => sameSection(value, sectionKey))) return;
-    if (selectedRef.current.length >= MAX_SELECTED_SECTIONS) {
-      addNotice('SELECTION_LIMIT', 'ALERT', sectionKey, String(MAX_SELECTED_SECTIONS));
+    if (selectedRef.current.length >= selectionLimit) {
+      addNotice('SELECTION_LIMIT', 'ALERT', sectionKey, String(selectionLimit));
       return;
     }
     const next = [...selectedRef.current, sectionKey];
     selectedRef.current = next;
     setSelected(next);
-    onSelectedChange?.(next);
-  }, [addNotice, onSelectedChange]);
+    persistSelection(next);
+  }, [addNotice, persistSelection, selectionLimit]);
 
   const updateWatchableTerms = useCallback((terms: readonly string[]) => {
     const next = new Set(terms);
@@ -2032,8 +2204,8 @@ export function LiveWatchProvider({
     telemetryEpoch.current += 1;
     telemetryAbort.current?.abort();
     setSelected(next);
-    onSelectedChange?.(next);
-  }, [addNotice, bumpConnectionPlan, intent, isRemovable, onSelectedChange]);
+    persistSelection(next);
+  }, [addNotice, bumpConnectionPlan, intent, isRemovable, persistSelection]);
 
   const enableSound = useCallback(async () => {
     audioStateRef.current = 'UNLOCKING';
@@ -2340,6 +2512,7 @@ export function LiveWatchProvider({
    * retried: an outage is exactly what the timer is for.
    */
   const refreshTelemetryWith = useCallback(async (automatic: boolean) => {
+    clearSelectionTelemetryTimer();
     telemetryAbort.current?.abort();
     const epoch = telemetryEpoch.current;
     // Every relevant batch is being read now; a read scheduled for a burst
@@ -2349,6 +2522,9 @@ export function LiveWatchProvider({
     const keys = [...selectedRef.current];
     for (const watch of activeRef.current) {
       if (!keys.some((key) => sameSection(key, watch.sectionKey))) keys.push(watch.sectionKey);
+    }
+    for (const section of authorityTelemetryRef.current) {
+      if (!keys.some((key) => sameSection(key, section))) keys.push(section);
     }
     if (keys.length === 0) {
       setBatchStatuses([]);
@@ -2411,32 +2587,122 @@ export function LiveWatchProvider({
       relevantSections.has(sectionIdentity(status.sectionKey))));
     setBatchStatuses((current) => current.filter((status) =>
       relevantBatches.has(batchIdentity(status.batch))));
-    // Each answer settles its own resource as it lands. Waiting for the
-    // slowest read of the pass would keep a Section row "loading" long after
-    // it was answered, and a follow-up started on one answer could then
-    // outrank another answer of the same pass before it was even booked.
-    await Promise.all([
-      ...sectionTickets.map(async ({ sectionKey, revision }) => {
-        const answer = await readTelemetry(
-          () => runtime.product.openSectionStatus({ contractVersion: 1, sectionKey }, abort.signal),
-          normalizeSectionStatus,
-        );
-        applySectionRead(sectionKey, revision, epoch, answer, abort.signal.aborted);
-      }),
-      ...batchTickets.map(async ({ batch, revision }) => {
-        const answer = await readTelemetry(
-          () => runtime.product.openStatus({ contractVersion: 1, batch }, abort.signal),
-          normalizeBatchStatus,
-        );
-        applyBatchRead(batch, revision, epoch, answer, abort.signal.aborted);
-        if (abort.signal.aborted || telemetryEpoch.current !== epoch) return;
-        // An observation that landed while this read was out asked for one
-        // more read of its batch; honour it now that the batch is free.
-        if (batchStatusFollowUps.current.delete(batchIdentity(batch)) && isBatchRelevant(batch)) {
+    const openBatchStatus = runtime.product.openBatchStatus?.bind(runtime.product);
+    if (openBatchStatus === undefined) {
+      // Compatibility with a previous server. The selection trigger is still
+      // debounced, so this is O(N) once per settled gesture rather than the
+      // former 1+...+N storm. Current servers take the batched branch below.
+      await Promise.all([
+        ...sectionTickets.map(async ({ sectionKey, revision }) => {
+          const answer = await readTelemetry(
+            () => runtime.product.openSectionStatus(
+              { contractVersion: 1, sectionKey },
+              abort.signal,
+            ),
+            normalizeSectionStatus,
+          );
+          applySectionRead(sectionKey, revision, epoch, answer, abort.signal.aborted);
+        }),
+        ...batchTickets.map(async ({ batch, revision }) => {
+          const answer = await readTelemetry(
+            () => runtime.product.openStatus({ contractVersion: 1, batch }, abort.signal),
+            normalizeBatchStatus,
+          );
+          applyBatchRead(batch, revision, epoch, answer, abort.signal.aborted);
+          if (abort.signal.aborted || telemetryEpoch.current !== epoch) return;
+          if (batchStatusFollowUps.current.delete(batchIdentity(batch))
+            && isBatchRelevant(batch)) {
+            void loadBatchStatus(batch);
+          }
+        }),
+      ]);
+    } else {
+      // Current server: one HTTP request and one full projection per target.
+      // Requests are deliberately sequential. The projection holds the
+      // operational-store mutex, so browser-side parallelism cannot make it
+      // finish sooner and merely parks `/service/status` behind a convoy.
+      const sectionsByBatch = new Map<string, typeof sectionTickets>();
+      for (const ticket of sectionTickets) {
+        const identity = batchIdentity(ticket.sectionKey);
+        const current = sectionsByBatch.get(identity) ?? [];
+        sectionsByBatch.set(identity, [...current, ticket]);
+      }
+      const batchByIdentity = new Map(batchTickets.map((ticket) => [
+        batchIdentity(ticket.batch),
+        ticket,
+      ]));
+
+      for (const [identity, tickets] of sectionsByBatch) {
+        const batch = batchOf(tickets[0]!.sectionKey);
+        const batchTicket = batchByIdentity.get(identity);
+        batchByIdentity.delete(identity);
+        const answer: TelemetryAnswer<OpenBatchStatusV1> = abort.signal.aborted
+          ? { kind: 'FAILED', error: new Error('Telemetry request superseded') }
+          : await readTelemetry(
+            () => openBatchStatus({
+              contractVersion: 1,
+              batch,
+              sectionKeys: tickets.map(({ sectionKey }) => sectionKey),
+            }, abort.signal),
+            normalizeOpenBatchStatus,
+          );
+        if (batchTicket !== undefined) {
+          applyBatchRead(
+            batch,
+            batchTicket.revision,
+            epoch,
+            answer.kind === 'ANSWERED'
+              ? { kind: 'ANSWERED', status: answer.status.refresh }
+              : answer,
+            abort.signal.aborted,
+          );
+        }
+        const answeredSections = answer.kind === 'ANSWERED'
+          ? new Map(answer.status.sections.map((status) => [
+            sectionIdentity(status.sectionKey),
+            status,
+          ]))
+          : null;
+        for (const ticket of tickets) {
+          const status = answeredSections?.get(sectionIdentity(ticket.sectionKey));
+          const sectionAnswer: TelemetryAnswer<OpenSectionStatusV1> = answer.kind === 'FAILED'
+            ? answer
+            : status === undefined
+              // Omission is the batch route's item-level equivalent of the
+              // legacy Section route's 404: the saved identity is no longer
+              // published. Keep its valid peers and do not auto-retry this
+              // immutable question on every freshness timer.
+              ? { kind: 'FAILED', error: new ProductClientError(404, null) }
+              : { kind: 'ANSWERED', status };
+          applySectionRead(
+            ticket.sectionKey,
+            ticket.revision,
+            epoch,
+            sectionAnswer,
+            abort.signal.aborted,
+          );
+        }
+        if (!abort.signal.aborted
+          && telemetryEpoch.current === epoch
+          && batchStatusFollowUps.current.delete(identity)
+          && isBatchRelevant(batch)) {
           void loadBatchStatus(batch);
         }
-      }),
-    ]);
+      }
+
+      // A non-retryable Section resource may be held while the batch card is
+      // explicitly refreshed. Such a batch has no Section payload to send,
+      // so retain the narrow legacy target read for that exceptional case.
+      for (const { batch, revision } of batchByIdentity.values()) {
+        const answer = abort.signal.aborted
+          ? { kind: 'FAILED' as const, error: new Error('Telemetry request superseded') }
+          : await readTelemetry(
+            () => runtime.product.openStatus({ contractVersion: 1, batch }, abort.signal),
+            normalizeBatchStatus,
+          );
+        applyBatchRead(batch, revision, epoch, answer, abort.signal.aborted);
+      }
+    }
     // Only the pass the desk is still waiting on may say the desk is done.
     // A pass a newer one took over from leaves that to its successor -- but
     // one that nothing replaced has to put the flag down however it ended.
@@ -2450,6 +2716,7 @@ export function LiveWatchProvider({
     applyBatchRead,
     applySectionRead,
     clearScheduledBatchStatuses,
+    clearSelectionTelemetryTimer,
     isBatchRelevant,
     loadBatchStatus,
     runtime,
@@ -2645,11 +2912,17 @@ export function LiveWatchProvider({
     };
   }, [nextFreshnessExpiry, refreshTelemetryWith]);
 
-  const telemetryKey = useMemo(() => selected.map(sectionIdentity).sort().join('|'), [selected]);
+  const telemetryKey = useMemo(() => {
+    const identities = new Set(selected.map(sectionIdentity));
+    for (const watch of effectiveActive) identities.add(sectionIdentity(watch.sectionKey));
+    for (const section of authorityTelemetryIdentities) identities.add(sectionIdentity(section));
+    return [...identities].sort().join('|');
+  }, [authorityTelemetryIdentities, effectiveActive, selected]);
   useEffect(() => {
+    clearSelectionTelemetryTimer();
+    telemetryAbort.current?.abort();
+    telemetryEpoch.current += 1;
     if (telemetryKey.length === 0) {
-      telemetryAbort.current?.abort();
-      telemetryEpoch.current += 1;
       setBatchStatuses([]);
       setSectionStatuses([]);
       telemetryResourcesRef.current = [];
@@ -2657,17 +2930,25 @@ export function LiveWatchProvider({
       setTelemetryLoading(false);
       return;
     }
-    void refreshTelemetry();
-  }, [refreshTelemetry, telemetryKey]);
+    selectionTelemetryTimer.current = globalThis.setTimeout(() => {
+      selectionTelemetryTimer.current = null;
+      void refreshTelemetry();
+    }, SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS);
+    return clearSelectionTelemetryTimer;
+  }, [clearSelectionTelemetryTimer, refreshTelemetry, telemetryKey]);
 
   useEffect(() => {
-    if ((connection === 'CLOSED' || connection === 'ERROR') && selectedRef.current.length > 0) {
+    if ((connection === 'CLOSED' || connection === 'ERROR')
+      && (selectedRef.current.length > 0
+        || activeRef.current.length > 0
+        || authorityTelemetryRef.current.length > 0)) {
       void refreshTelemetryWith(true);
     }
   }, [connection, refreshTelemetryWith]);
 
   const value = useMemo<LiveWatchValue>(() => ({
     selected,
+    maximumSelectedSections: selectionLimit,
     pending,
     active: effectiveActive,
     observations,
@@ -2774,6 +3055,7 @@ export function LiveWatchProvider({
     sectionStatuses,
     select,
     selected,
+    selectionLimit,
     setMuted,
     setVolume,
     startSelected,

@@ -228,6 +228,7 @@ version = "0.1.3"
 dependencies = [
  "bcsp-contracts",
  "bcsp-domain",
+ "bcsp-operational-storage",
  "rusqlite",
  "serde",
  "serde_json",

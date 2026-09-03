@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::num::NonZeroU8;
 use std::time::Duration;
 
 use bcsp_contracts::{
@@ -101,6 +102,7 @@ pub(crate) struct CoreWatchManager<C, I> {
     clock: C,
     ids: I,
     heartbeat_timeout: Duration,
+    max_active_watches: NonZeroU8,
     connections: BTreeMap<TraceId, CoreConnection>,
     connections_by_section: BTreeMap<SectionKey, BTreeSet<TraceId>>,
     observation_cursors: BTreeMap<SectionKey, SectionObservationWatermark>,
@@ -117,6 +119,20 @@ where
         ids: I,
         heartbeat_timeout: Duration,
     ) -> Result<Self, CoreManagerError> {
+        Self::try_new_with_max_active_watches(
+            clock,
+            ids,
+            heartbeat_timeout,
+            NonZeroU8::new(MAX_ACTIVE_WATCHES).expect("the default watch limit is nonzero"),
+        )
+    }
+
+    pub(crate) fn try_new_with_max_active_watches(
+        clock: C,
+        ids: I,
+        heartbeat_timeout: Duration,
+        max_active_watches: NonZeroU8,
+    ) -> Result<Self, CoreManagerError> {
         if heartbeat_timeout.is_zero() {
             return Err(CoreManagerError::InvalidHeartbeatTimeout);
         }
@@ -124,6 +140,7 @@ where
             clock,
             ids,
             heartbeat_timeout,
+            max_active_watches,
             connections: BTreeMap::new(),
             connections_by_section: BTreeMap::new(),
             observation_cursors: BTreeMap::new(),
@@ -244,7 +261,7 @@ where
             let previous = connection.watches.remove(&section);
             let disposition = if previous.is_some() {
                 CoreStartDisposition::Restarted
-            } else if connection.watches.len() == usize::from(MAX_ACTIVE_WATCHES) {
+            } else if connection.watches.len() >= usize::from(self.max_active_watches.get()) {
                 events.push(CoreEvent::StartResult(CoreStartResult {
                     section,
                     disposition: CoreStartDisposition::RejectedLimit,
@@ -321,7 +338,7 @@ where
             &mut events,
         );
         let active_watch_count = u8::try_from(connection.watches.len())
-            .expect("connection watch count is capped at nine");
+            .expect("connection watch count is capped at the configured u8 limit");
         let dispatch = CoreDispatch {
             connection_id,
             emitted_at,

@@ -262,6 +262,8 @@ export interface PersonalResetResult {
 const CANONICAL_V4_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
+const LOCAL_MAX_WATCHES = 255;
+
 function invalidBootstrap(): never {
   throw new ProductBootstrapError('BOOTSTRAP_INVALID');
 }
@@ -522,13 +524,14 @@ function isPersonalStateSnapshot(value: unknown): value is PersonalStateSnapshot
     && Array.isArray(value.savedViews)
     && value.savedViews.every(isSavedViewDefinition)
     && Array.isArray(value.selectedSections)
+    && value.selectedSections.length <= LOCAL_MAX_WATCHES
     && value.selectedSections.every(isSectionKey)
     && Array.isArray(value.desiredWatches)
-    && value.desiredWatches.length <= 9
+    && value.desiredWatches.length <= LOCAL_MAX_WATCHES
     && value.desiredWatches.every(isDesiredWatch)
     && isHistoryPage(value.episodeHistory)
     && isNonnegativeInteger(value.activeWatchCount)
-    && value.activeWatchCount <= 9;
+    && value.activeWatchCount <= LOCAL_MAX_WATCHES;
 }
 
 export function parseLocalBootstrapData(value: unknown): LocalBootstrapData {

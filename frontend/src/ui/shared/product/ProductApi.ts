@@ -16,6 +16,8 @@ import type {
   SectionQueryResponseV1,
 } from './contracts/query';
 import type {
+  OpenBatchStatusRequestV1,
+  OpenBatchStatusV1,
   OpenRefreshStatusV1,
   OpenSectionStatusRequestV1,
   OpenSectionStatusV1,
@@ -35,6 +37,7 @@ export const PRODUCT_API_ROUTES = {
   courseDetail: { method: 'POST', path: '/api/v1/query/course-detail' },
   sectionDetail: { method: 'POST', path: '/api/v1/query/section-detail' },
   openStatus: { method: 'POST', path: '/api/v1/open/status' },
+  openBatchStatus: { method: 'POST', path: '/api/v1/open/batch-status' },
   openSectionStatus: { method: 'POST', path: '/api/v1/open/section-status' },
 } as const;
 
@@ -78,6 +81,15 @@ export interface ProductApiPort {
     request: OpenStatusRequestV1,
     signal?: AbortSignal,
   ): Promise<OpenRefreshStatusV1>;
+  /**
+   * Additive capability used by current watch desks. Optional so a shared
+   * client can roll forward against an older server without losing status;
+   * callers fall back to the individual V1 routes when it is absent.
+   */
+  openBatchStatus?(
+    request: OpenBatchStatusRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OpenBatchStatusV1>;
   openSectionStatus(
     request: OpenSectionStatusRequestV1,
     signal?: AbortSignal,
@@ -195,6 +207,18 @@ export class ProductApi implements ProductApiPort {
     return this.#client.post<OpenStatusRequestV1, OpenRefreshStatusV1>(
       PRODUCT_API_ROUTES.openStatus.path,
       { contractVersion: request.contractVersion, batch },
+      signal,
+    );
+  }
+
+  openBatchStatus(
+    request: OpenBatchStatusRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OpenBatchStatusV1> {
+    const batch: TermCampusKey = { term: request.batch.term, campus: request.batch.campus };
+    return this.#client.post<OpenBatchStatusRequestV1, OpenBatchStatusV1>(
+      PRODUCT_API_ROUTES.openBatchStatus.path,
+      { contractVersion: request.contractVersion, batch, sectionKeys: request.sectionKeys },
       signal,
     );
   }

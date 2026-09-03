@@ -48,6 +48,18 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         sql: include_str!("../migrations/0004_desired_watch_authority.sql"),
         after_sql: None,
     },
+    EmbeddedMigration {
+        id: PERSONAL_MIGRATION_ID_BASE + 5,
+        name: "expand_selected_sections",
+        sql: include_str!("../migrations/0005_expand_selected_sections.sql"),
+        after_sql: None,
+    },
+    EmbeddedMigration {
+        id: PERSONAL_MIGRATION_ID_BASE + 6,
+        name: "desired_watch_batch_receipts",
+        sql: include_str!("../migrations/0006_desired_watch_batch_receipts.sql"),
+        after_sql: None,
+    },
 ];
 
 /// Test-only rendezvous placed between the unlocked ledger read and
@@ -190,7 +202,7 @@ mod tests {
     /// Both openers are held at the rendezvous until each has finished the
     /// UNLOCKED ledger read, so both provably enter the window this fix
     /// exists for. Against the pre-fix code -- which skipped by the count it
-    /// read outside the lock -- the loser re-runs 10004 and its ledger insert
+    /// read outside the lock -- the loser re-runs 10006 and its ledger insert
     /// collides, so one opener fails. Against the fix, both start.
     #[test]
     fn two_openers_that_both_read_a_stale_prefix_still_both_start() {
@@ -198,30 +210,14 @@ mod tests {
         let path = directory.path().join("rbcsp.sqlite");
         drop(crate::PersonalStateStore::open(&path).expect("initial open"));
 
-        // Rewind one migration so there is something pending to race on.
+        // Rewind the final migration so there is something pending to race on.
         let connection = Connection::open(&path).expect("rewind connection");
         connection
             .execute_batch(
-                "DELETE FROM personal_migration_ledger WHERE migration_id = 10004;
-                 DROP TABLE personal_desired_watch_receipts_v1;
-                 DROP TABLE personal_desired_watches_v1;
-                 CREATE TABLE personal_desired_watches_v1 (
-                     term_id TEXT NOT NULL,
-                     campus_code TEXT NOT NULL,
-                     section_index TEXT NOT NULL,
-                     policy_json TEXT NOT NULL CHECK (json_valid(policy_json)),
-                     PRIMARY KEY (term_id, campus_code, section_index)
-                 ) STRICT;
-                 ALTER TABLE personal_state_metadata_v1 RENAME TO personal_state_metadata_post;
-                 CREATE TABLE personal_state_metadata_v1 (
-                     singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-                     state_revision INTEGER NOT NULL CHECK (state_revision > 0)
-                 ) STRICT;
-                 INSERT INTO personal_state_metadata_v1(singleton_id, state_revision)
-                     SELECT singleton_id, state_revision FROM personal_state_metadata_post;
-                 DROP TABLE personal_state_metadata_post;",
+                "DELETE FROM personal_migration_ledger WHERE migration_id = 10006;
+                 DROP TABLE personal_desired_watch_batch_receipts_v1;",
             )
-            .expect("rewind to 10003");
+            .expect("rewind to 10005");
         drop(connection);
 
         *PRE_LOCK_RENDEZVOUS.lock().expect("rendezvous mutex") = Some(Arc::new(Barrier::new(2)));
@@ -245,7 +241,7 @@ mod tests {
 
         let store = crate::PersonalStateStore::open(&path).expect("final open");
         let migrations = store.migration_records().expect("ledger");
-        assert_eq!(migrations.len(), 4, "10004 applied exactly once");
-        assert_eq!(migrations[3].migration_id, 10_004);
+        assert_eq!(migrations.len(), 6, "10006 applied exactly once");
+        assert_eq!(migrations[5].migration_id, 10_006);
     }
 }

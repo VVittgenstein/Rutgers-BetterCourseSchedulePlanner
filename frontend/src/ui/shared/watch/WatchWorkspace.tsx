@@ -23,7 +23,6 @@ import { findIntentEntry } from './intent';
 import { intentStateMessageKeys } from './intentLabels';
 import {
   DEFAULT_WATCH_POLICY,
-  MAX_SELECTED_SECTIONS,
   useLiveWatch,
   type ActiveWatchView,
   type WatchTelemetryResourceState,
@@ -373,9 +372,9 @@ function SelectedSectionManager({
         <h3 className="watch-workspace__section-title" id="watch-selected-title">{i18n.t('watch.selected_title')}</h3>
         <span className="watch-workspace__count" aria-label={i18n.t('watch.selected_count', {
           count: i18n.formatNumber(watch.selected.length),
-          max: i18n.formatNumber(MAX_SELECTED_SECTIONS),
+          max: i18n.formatNumber(watch.maximumSelectedSections),
         })}>
-          {i18n.formatNumber(watch.selected.length)}/{i18n.formatNumber(MAX_SELECTED_SECTIONS)}
+          {i18n.formatNumber(watch.selected.length)}/{i18n.formatNumber(watch.maximumSelectedSections)}
         </span>
       </header>
       {intentUnavailable ? (
@@ -658,7 +657,7 @@ export function WatchWorkspace({
   const initialPolicyRender = useRef(true);
   const onPolicyChangeRef = useRef(onPolicyChange);
   onPolicyChangeRef.current = onPolicyChange;
-  const validMaximum = Number.isInteger(maxAudible) && maxAudible > 0;
+  const validMaximum = Number.isSafeInteger(maxAudible) && maxAudible > 0;
   const policy = useMemo<WatchPolicyV1>(() => ({
     notificationMode,
     maxAudible: validMaximum ? maxAudible : DEFAULT_WATCH_POLICY.maxAudible,
@@ -689,7 +688,9 @@ export function WatchWorkspace({
       <section className="watch-workspace__command-grid">
         <div className="watch-workspace__panel">
           <h3 className="watch-workspace__title">{i18n.t('watch.console_title')}</h3>
-          <p className="watch-workspace__lede">{i18n.t('watch.desk_lede')}</p>
+          <p className="watch-workspace__lede">{i18n.t('watch.desk_lede', {
+            max: i18n.formatNumber(watch.maximumSelectedSections),
+          })}</p>
           <div className="watch-workspace__status-strip" aria-label={i18n.t('watch.session_status')}>
             <StatusSignal
               detail={i18n.t('watch.connection.user_label')}
@@ -731,6 +732,7 @@ export function WatchWorkspace({
                 aria-invalid={!validMaximum || undefined}
                 className="watch-workspace__input"
                 id="watch-max-audible"
+                max={Number.MAX_SAFE_INTEGER}
                 min="1"
                 onChange={(event) => setMaxAudible(Number(event.currentTarget.value))}
                 step="1"

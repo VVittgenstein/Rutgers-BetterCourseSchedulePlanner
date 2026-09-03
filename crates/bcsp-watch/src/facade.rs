@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU8, NonZeroU64};
 use std::time::Duration;
 
 use bcsp_contracts::{
@@ -183,6 +183,27 @@ where
     ) -> Result<Self, WatchManagerError> {
         Ok(Self {
             core: CoreWatchManager::try_new(clock, ids, heartbeat_timeout)?,
+        })
+    }
+
+    /// Creates a manager with a target-specific per-connection watch limit.
+    ///
+    /// The shared/public policy remains [`bcsp_contracts::MAX_ACTIVE_WATCHES`].
+    /// A local composition can opt into the wider `u8` wire domain without
+    /// changing the public service's admission policy.
+    pub fn try_new_with_max_active_watches(
+        clock: C,
+        ids: I,
+        heartbeat_timeout: Duration,
+        max_active_watches: NonZeroU8,
+    ) -> Result<Self, WatchManagerError> {
+        Ok(Self {
+            core: CoreWatchManager::try_new_with_max_active_watches(
+                clock,
+                ids,
+                heartbeat_timeout,
+                max_active_watches,
+            )?,
         })
     }
 

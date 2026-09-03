@@ -6,13 +6,13 @@ use bcsp_application::{
     ApplicationClock, CoordinatorStatusSink, ExtensionRequest, FixedRefreshPolicyProvider,
     OpenRuntimeSnapshot, OpenRuntimeSnapshotRegistry, PRODUCT_CATALOG_DISCOVERY_PATH,
     PRODUCT_COURSE_DETAIL_PATH, PRODUCT_COURSE_SEARCH_PATH, PRODUCT_DYNAMIC_FILTER_VALIDATION_PATH,
-    PRODUCT_FILTER_OPTIONS_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_SECTION_STATUS_PATH,
-    PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH, PRODUCT_SECTION_SEARCH_PATH,
-    PRODUCT_SERVICE_STATUS_PATH, PreparedServingError, PreparedServingRebuildRuntime,
-    REFRESH_MAX_CONCURRENCY, RefreshPolicy, RefreshPolicyProvider, RefreshPolicyReadError,
-    RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY, ServiceStatusRegistry,
-    SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand, TargetWorkActivity,
-    TargetWorkflowKind, WorkflowOperationActivity, WorkflowOperationId,
+    PRODUCT_FILTER_OPTIONS_PATH, PRODUCT_FILTER_SCHEMA_PATH, PRODUCT_OPEN_BATCH_STATUS_PATH,
+    PRODUCT_OPEN_SECTION_STATUS_PATH, PRODUCT_OPEN_STATUS_PATH, PRODUCT_SECTION_DETAIL_PATH,
+    PRODUCT_SECTION_SEARCH_PATH, PRODUCT_SERVICE_STATUS_PATH, PreparedServingError,
+    PreparedServingRebuildRuntime, REFRESH_MAX_CONCURRENCY, RefreshPolicy, RefreshPolicyProvider,
+    RefreshPolicyReadError, RequestMethod, RouteExtension, SHARED_PRODUCT_ROUTE_INVENTORY,
+    ServiceStatusRegistry, SharedProductRoutes, SharedRuntimeContext, TargetRefreshDemand,
+    TargetWorkActivity, TargetWorkflowKind, WorkflowOperationActivity, WorkflowOperationId,
 };
 use bcsp_catalog::{normalize_target, to_catalog_refresh_command, to_discovery_refresh_command};
 use bcsp_contracts::{
@@ -22,13 +22,14 @@ use bcsp_contracts::{
     CourseSortV1, DynamicFilterValidationRequestV3, DynamicFilterValidationResponseV3,
     FilterFieldId, FilterOptionsFieldV2, FilterOptionsRequestV2, FilterOptionsResponseV2,
     FilterRequestV1, FilterSchemaV1, FilterSearchTextV1, FilterTokenV1, FilterValuesInputV1,
-    HttpRequestEnvelope, HttpSuccessEnvelope, LiveOpenStateV1, OpenBatchKey, OpenRefreshStatusV1,
-    OpenSchedulerLane, OpenSectionStatusRequestV1, OpenSectionStatusV1, OpenState,
-    OpenStatusRequestV1, PageRequestV1, QUERY_CONTRACT_VERSION, SectionDetailRequestV1,
-    SectionDetailResponseV1, SectionKey, SectionQueryRequestV1, SectionQueryResponseV1,
-    SectionSortV1, ServiceLevelV1, ServiceOperationStageV2, ServiceRuntimeV1,
-    ServiceSnapshotAvailabilityV2, ServiceStatusV2, ServiceTargetErrorV2, ServiceTermPublicationV2,
-    ServiceWorkStateV2, TermCampusKey, TermId, TraceId,
+    HttpRequestEnvelope, HttpSuccessEnvelope, LiveOpenStateV1, OpenBatchKey,
+    OpenBatchStatusRequestV1, OpenBatchStatusV1, OpenRefreshStatusV1, OpenSchedulerLane,
+    OpenSectionStatusRequestV1, OpenSectionStatusV1, OpenState, OpenStatusRequestV1, PageRequestV1,
+    QUERY_CONTRACT_VERSION, SectionDetailRequestV1, SectionDetailResponseV1, SectionKey,
+    SectionQueryRequestV1, SectionQueryResponseV1, SectionSortV1, ServiceLevelV1,
+    ServiceOperationStageV2, ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceStatusV2,
+    ServiceTargetErrorV2, ServiceTermPublicationV2, ServiceWorkStateV2, TermCampusKey, TermId,
+    TraceId,
 };
 use bcsp_open::{GeneralOpenInterval, OpenCounterAudience};
 use bcsp_operational_storage::{
@@ -620,7 +621,7 @@ fn search_filters() -> FilterRequestV1 {
 #[test]
 fn shared_inventory_serves_real_sqlite_catalog_query_detail_and_open_projections() {
     let fixture = fixture();
-    assert_eq!(SHARED_PRODUCT_ROUTE_INVENTORY.len(), 11);
+    assert_eq!(SHARED_PRODUCT_ROUTE_INVENTORY.len(), 12);
     assert!(SHARED_PRODUCT_ROUTE_INVENTORY.iter().all(|route| {
         route.path().starts_with("/api/v1/")
             && matches!(route.method(), RequestMethod::Get | RequestMethod::Post)
@@ -772,6 +773,31 @@ fn shared_inventory_serves_real_sqlite_catalog_query_detail_and_open_projections
     );
     assert_eq!(open_section.section_key, fixture.section);
     assert_eq!(open_section.state, OpenState::Open);
+}
+
+#[test]
+fn batch_status_projects_once_and_keeps_valid_sections_when_one_saved_key_is_missing() {
+    let fixture = fixture();
+    let missing = SectionKey::try_new(
+        fixture.target.term().as_str(),
+        fixture.target.campus().as_str(),
+        "99999",
+    )
+    .expect("valid stale Section identity");
+
+    let status: OpenBatchStatusV1 = post(
+        &fixture.routes,
+        PRODUCT_OPEN_BATCH_STATUS_PATH,
+        OpenBatchStatusRequestV1::new(
+            OpenBatchKey::from(fixture.target.clone()),
+            vec![fixture.section.clone(), missing],
+        ),
+    );
+
+    assert_eq!(status.refresh.batch.target(), fixture.target);
+    assert_eq!(status.sections.len(), 1);
+    assert_eq!(status.sections[0].section_key, fixture.section);
+    assert_eq!(status.sections[0].state, OpenState::Open);
 }
 
 #[test]

@@ -24,6 +24,7 @@ import type {
  */
 
 export const LOCAL_DESIRED_WATCH_PATH = '/api/v1/local/desired-watch';
+export const LOCAL_DESIRED_WATCH_BATCH_PATH = '/api/v1/local/desired-watch/batch';
 export const LOCAL_DESIRED_WATCH_CONTRACT_VERSION = 1;
 
 export interface LocalDesiredWatchApiOptions {
@@ -125,6 +126,42 @@ export class LocalDesiredWatchApi implements WatchIntentPort {
     // the body alone does not say which one was written.
     return parseMutationResult(body, response.status, submission.section);
   }
+
+  async submitBatch(
+    submissions: readonly WatchIntentSubmission[],
+    snapshot: WatchIntentSnapshot,
+    signal?: AbortSignal,
+  ): Promise<WatchIntentResult> {
+    const session = this.#session();
+    const headers = new Headers({
+      accept: 'application/json',
+      'content-type': 'application/json',
+    });
+    if (session !== null) headers.set('x-bcsp-session', session);
+    const response = await this.#fetch(`${this.#baseUrl}${LOCAL_DESIRED_WATCH_BATCH_PATH}`, {
+      body: JSON.stringify({
+        protocolVersion: 1,
+        payload: {
+          contractVersion: LOCAL_DESIRED_WATCH_CONTRACT_VERSION,
+          authorityGeneration: snapshot.generation,
+          mutationId: this.#mutationId(),
+          items: submissions.map((submission) => ({
+            section: submission.section,
+            policy: submission.policy,
+            basedOnRevision: snapshot.entries.find((candidate) =>
+              sameSection(candidate.section, submission.section))?.revision ?? 0,
+          })),
+        },
+      }),
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers,
+      method: 'PUT',
+      ...(signal === undefined ? {} : { signal }),
+    });
+    const body = await decodeJson(response);
+    return parseBatchMutationResult(body, response.status, submissions);
+  }
 }
 
 export function createLocalDesiredWatchApi(
@@ -170,6 +207,12 @@ const MUTATION_RESULT_KEYS = [
 ] as const;
 
 const COMMITTED_KEYS = ['revision', 'materializationEpoch', 'epochChanged'] as const;
+const BATCH_COMMITTED_KEYS = [
+  'section',
+  'revision',
+  'materializationEpoch',
+  'epochChanged',
+] as const;
 
 /**
  * The `revision` and `materializationEpoch` a commit reports when the row it
@@ -307,6 +350,95 @@ function parseMutationResult(
   return { outcome: known.outcome, snapshot: null, maximum: data.maximum };
 }
 
+function parseBatchMutationResult(
+  value: unknown,
+  status: number,
+  submissions: readonly WatchIntentSubmission[],
+): WatchIntentResult {
+  if (
+    !isRecord(value)
+    || !hasExactKeys(value, ENVELOPE_KEYS)
+    || value.protocolVersion !== 1
+    || !isRecord(value.data)
+    || !hasExactKeys(value.data, MUTATION_RESULT_KEYS)
+  ) {
+    throw new LocalDesiredWatchError(status);
+  }
+  const data = value.data;
+  const known = typeof data.outcome === 'string' ? OUTCOMES[data.outcome] : undefined;
+  if (
+    known === undefined
+    || known.status !== status
+    || data.contractVersion !== LOCAL_DESIRED_WATCH_CONTRACT_VERSION
+    || typeof data.replayed !== 'boolean'
+    || !isSafeCount(data.authorityGeneration)
+    || !(data.currentRevision === null || isSafeCount(data.currentRevision))
+    || !(data.maximum === null || isSafeCount(data.maximum))
+  ) {
+    throw new LocalDesiredWatchError(status);
+  }
+  if (known.outcome !== 'COMMITTED') {
+    const shape = REFUSAL_SHAPES[data.outcome as string];
+    if (
+      shape === undefined
+      || data.committed !== null
+      || data.state !== null
+      || (data.currentRevision !== null) !== shape.currentRevision
+      || (data.maximum !== null) !== shape.maximum
+    ) {
+      throw new LocalDesiredWatchError(status);
+    }
+    return { outcome: known.outcome, snapshot: null, maximum: data.maximum };
+  }
+  if (
+    data.currentRevision !== null
+    || data.maximum !== null
+    || !Array.isArray(data.committed)
+    || data.committed.length !== submissions.length
+  ) {
+    throw new LocalDesiredWatchError(status);
+  }
+  const snapshot = parseSnapshotData(data.state);
+  if (data.authorityGeneration !== snapshot.generation) {
+    throw new LocalDesiredWatchError(status);
+  }
+  const submitted = new Map(submissions.map((submission) => [
+    sectionKey(submission.section),
+    submission.section,
+  ]));
+  if (submitted.size !== submissions.length) throw new LocalDesiredWatchError(status);
+  const answered = new Set<string>();
+  for (const committed of data.committed) {
+    if (
+      !isRecord(committed)
+      || !hasExactKeys(committed, BATCH_COMMITTED_KEYS)
+      || !isSectionKey(committed.section)
+      || !isSafeCount(committed.revision)
+      || !isSafeCount(committed.materializationEpoch)
+      || typeof committed.epochChanged !== 'boolean'
+    ) {
+      throw new LocalDesiredWatchError(status);
+    }
+    const key = sectionKey(committed.section);
+    if (!submitted.has(key) || answered.has(key)) throw new LocalDesiredWatchError(status);
+    answered.add(key);
+    const entry = snapshot.entries.find((candidate) => sameSection(
+      candidate.section,
+      committed.section as SectionKey,
+    ));
+    const expected = entry === undefined
+      ? { revision: ABSENT_COMMITTED_NUMBER, epoch: ABSENT_COMMITTED_NUMBER }
+      : { revision: entry.revision, epoch: entry.epoch };
+    if (
+      expected.revision !== committed.revision
+      || expected.epoch !== committed.materializationEpoch
+    ) {
+      throw new LocalDesiredWatchError(status);
+    }
+  }
+  return { outcome: 'COMMITTED', snapshot, maximum: null };
+}
+
 async function decodeJson(response: Response): Promise<unknown> {
   try {
     return await response.json() as unknown;
@@ -321,6 +453,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function sameSection(left: SectionKey, right: SectionKey): boolean {
   return left.term === right.term && left.campus === right.campus && left.index === right.index;
+}
+
+function sectionKey(section: SectionKey): string {
+  return `${section.term}\u0000${section.campus}\u0000${section.index}`;
 }
 
 /**
@@ -443,7 +579,7 @@ function parsePolicy(value: unknown): WatchPolicyV1 {
     !isRecord(value)
     || !hasExactKeys(value, ['notificationMode', 'maxAudible', 'continuousDuration'])
     || (value.notificationMode !== 'ONE_SHOT' && value.notificationMode !== 'CONTINUOUS')
-    || !isSafeCount(value.maxAudible)
+    || !isPositiveSafeCount(value.maxAudible)
     || !isRecord(value.continuousDuration)
   ) {
     throw new LocalDesiredWatchError(200);
@@ -459,7 +595,7 @@ function parsePolicy(value: unknown): WatchPolicyV1 {
   if (
     duration.kind === 'FINITE'
     && hasExactKeys(duration, ['kind', 'seconds'])
-    && isSafeCount(duration.seconds)
+    && isPositiveSafeCount(duration.seconds)
   ) {
     return {
       notificationMode: value.notificationMode,
@@ -480,6 +616,10 @@ function isSectionKey(value: unknown): value is SectionKey {
 
 function isSafeCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isPositiveSafeCount(value: unknown): value is number {
+  return isSafeCount(value) && value > 0;
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

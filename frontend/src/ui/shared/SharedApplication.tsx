@@ -44,6 +44,7 @@ import {
 } from './shell';
 import {
   LiveWatchProvider,
+  MAX_SELECTED_SECTIONS,
   useLiveWatch,
   WatchNotificationRegion,
   WatchReadinessRegion,
@@ -102,10 +103,14 @@ export interface SharedExperienceConfiguration {
   readonly watchIntent?: WatchIntentPort | undefined;
   readonly initialFilters?: FilterStateV1 | undefined;
   readonly initialSelectedSections?: readonly SectionKey[] | undefined;
+  /** Target-specific desk capacity. Shared/public leaves this at nine. */
+  readonly maximumSelectedSections?: number | undefined;
   readonly initialVolume?: number | undefined;
   readonly initialWatchPolicy?: WatchPolicyV1 | undefined;
   readonly onFiltersChange?: ((filters: FilterStateV1) => void) | undefined;
-  readonly onSelectedSectionsChange?: ((selected: readonly SectionKey[]) => void) | undefined;
+  readonly onSelectedSectionsChange?: (
+    (selected: readonly SectionKey[]) => void | Promise<void>
+  ) | undefined;
   readonly onVolumeChange?: ((volume: number) => void) | undefined;
   readonly onWatchPolicyChange?: ((policy: WatchPolicyV1) => void) | undefined;
   readonly renderUnavailableScopeAction?: QueryScopeUnavailableActionRenderer | undefined;
@@ -160,11 +165,13 @@ function LanguageControl({
 function ShellFrame({
   children,
   i18n,
+  maximumSelectedSections,
   onLocaleChange,
   workspaceExtensions,
 }: {
   readonly children: ReactNode;
   readonly i18n: BcspI18nRuntime;
+  readonly maximumSelectedSections: number;
   readonly onLocaleChange?: ((locale: SupportedLocale) => void) | undefined;
   readonly workspaceExtensions: readonly SharedWorkspaceExtension[];
 }) {
@@ -186,7 +193,7 @@ function ShellFrame({
     ? i18n.t('search.section_detail_title')
     : i18n.t('search.course_workspace'));
   const workspaceIntro = extension?.intro ?? (watchWorkspace
-    ? i18n.t('watch.desk_lede')
+    ? i18n.t('watch.desk_lede', { max: i18n.formatNumber(maximumSelectedSections) })
     : i18n.t('search.course_intro'));
 
   useEffect(() => {
@@ -600,6 +607,7 @@ function ReadyProduct({
         initialWatchableTerms={[]}
         initialVolume={experience.initialVolume}
         intent={experience.watchIntent}
+        maximumSelectedSections={experience.maximumSelectedSections}
         onSelectedChange={experience.onSelectedSectionsChange}
         onVolumeChange={experience.onVolumeChange}
         runtime={runtime}
@@ -638,6 +646,7 @@ export function SharedApplication({
       >
         <ShellFrame
           i18n={i18n}
+          maximumSelectedSections={experience.maximumSelectedSections ?? MAX_SELECTED_SECTIONS}
           onLocaleChange={onLocaleChange}
           workspaceExtensions={workspaceExtensions}
         >

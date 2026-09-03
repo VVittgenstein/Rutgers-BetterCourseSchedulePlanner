@@ -20,4 +20,5 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+bcsp-operational-storage = { version = "=0.1.3", path = "../bcsp-operational-storage" }
 tempfile.workspace = true

@@ -34,6 +34,7 @@ import {
   type SavedViewDefinition,
 } from './personal';
 
+const LOCAL_MAX_SELECTED_SECTIONS = 255;
 const PERSIST_DELAY_MS = 300;
 /** How long the "back in sync" confirmation stays on screen before the pill
  * goes quiet again. */
@@ -162,8 +163,10 @@ export function LocalApplication() {
   }, [persistSettings]);
 
   const persistSelection = useCallback((sections: SharedExperienceConfiguration['initialSelectedSections']) => {
-    if (sections === undefined) return;
-    void personalRef.current.replaceSelection(sections).catch(() => undefined);
+    if (sections === undefined) return Promise.resolve();
+    // The watch provider owns the optimistic draft and must observe a
+    // terminal failure so it can return to the last confirmed snapshot.
+    return personalRef.current.replaceSelection(sections);
   }, []);
 
   const persistVolume = useCallback((volumePercent: number) => {
@@ -275,6 +278,7 @@ export function LocalApplication() {
     ...(watchIntent === null ? {} : { watchIntent }),
     initialFilters,
     initialSelectedSections: selectedSections,
+    maximumSelectedSections: LOCAL_MAX_SELECTED_SECTIONS,
     initialVolume: volumePercent,
     initialWatchPolicy: soundPolicy,
     onFiltersChange: persistFilters,

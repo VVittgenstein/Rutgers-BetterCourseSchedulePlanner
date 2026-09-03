@@ -31,6 +31,11 @@ pub trait LocalSurfaceState: Send + Sync + 'static {
     fn desired_watch(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
     /// One desired-watch compare-and-swap.
     fn put_desired_watch(&self, body: &[u8]) -> Result<LocalSurfaceOutcome, LocalSurfaceFailure>;
+    /// One atomic multi-Section desired-watch gesture.
+    fn put_desired_watch_batch(
+        &self,
+        body: &[u8],
+    ) -> Result<LocalSurfaceOutcome, LocalSurfaceFailure>;
     fn settings(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
     fn put_settings(&self, body: &[u8]) -> Result<Vec<u8>, LocalSurfaceFailure>;
     fn selection(&self) -> Result<Vec<u8>, LocalSurfaceFailure>;
@@ -323,6 +328,12 @@ impl RouteExtension for LocalRouteExtension {
                     Err(error) => failure_response(error),
                 }
             }
+            (RequestMethod::Put, crate::LOCAL_DESIRED_WATCH_BATCH_PATH) => {
+                match self.surface.put_desired_watch_batch(request.body()) {
+                    Ok(outcome) => ExtensionResponse::json_bytes(outcome.status, outcome.body),
+                    Err(error) => failure_response(error),
+                }
+            }
             (RequestMethod::Get, "/api/v1/local/settings") => {
                 self.surface_response(|surface| surface.settings())
             }
@@ -387,6 +398,7 @@ impl RouteExtension for LocalRouteExtension {
             | (_, "/api/v1/local/bootstrap")
             | (_, "/api/v1/local/settings")
             | (_, crate::LOCAL_DESIRED_WATCH_PATH)
+            | (_, crate::LOCAL_DESIRED_WATCH_BATCH_PATH)
             | (_, "/api/v1/local/selection")
             | (_, "/api/v1/local/history")
             | (_, "/api/v1/local/current-filters")

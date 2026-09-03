@@ -214,7 +214,11 @@ function Probe({ publish }: { readonly publish: (value: LiveWatchValue) => void 
   return null;
 }
 
-function harness(responses: readonly (() => Response)[], selected: readonly SectionKey[] = [SECTION]): Harness {
+function harness(
+  responses: readonly (() => Response)[],
+  selected: readonly SectionKey[] = [SECTION],
+  maximumSelectedSections = 9,
+): Harness {
   const requests: { method: string; body: unknown }[] = [];
   const queue = [...responses];
   const fetchImplementation = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -257,6 +261,7 @@ function harness(responses: readonly (() => Response)[], selected: readonly Sect
       })() as unknown as WatchAudioController}
       initialSelected={selected}
       intent={intent}
+      maximumSelectedSections={maximumSelectedSections}
       runtime={runtime}
     >
       <Probe publish={(value) => { current = value; }} />
@@ -278,6 +283,88 @@ afterEach(() => {
 });
 
 describe('local desired-watch intent', () => {
+  it('starts 40 selected Sections with one atomic local batch mutation', async () => {
+    const sections = Array.from({ length: 40 }, (_, index): SectionKey => ({
+      term: SECTION.term,
+      campus: SECTION.campus,
+      index: String(index + 1).padStart(5, '0'),
+    }));
+    const committedEntries = sections.map((section) => entry(section, {
+      revision: 1,
+      epoch: 1,
+    }));
+    const view = harness([
+      () => ok(state([])),
+      () => ok({
+        contractVersion: 1,
+        outcome: 'COMMITTED',
+        replayed: false,
+        authorityGeneration: 1,
+        currentRevision: null,
+        maximum: null,
+        committed: sections.map((section) => ({
+          section,
+          revision: 1,
+          materializationEpoch: 1,
+          epochChanged: true,
+        })),
+        state: state(committedEntries),
+      }),
+    ], sections, 255);
+    await waitFor(() => expect(view.value().intentStatus).toBe('READY'));
+
+    await act(async () => { await view.value().startSelected(POLICY); });
+
+    const writes = view.requests.filter((request) => request.method === 'PUT');
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.body).toMatchObject({
+      protocolVersion: 1,
+      payload: {
+        contractVersion: 1,
+        authorityGeneration: 1,
+        items: sections.map((section) => ({
+          section,
+          policy: POLICY,
+          basedOnRevision: 0,
+        })),
+      },
+    });
+    expect((writes[0]!.body as { payload: { mutationId: string } }).payload.mutationId)
+      .toMatch(UUID_V4);
+    expect(view.value().intent?.entries).toHaveLength(40);
+    expect(view.value().notices).toEqual([]);
+  });
+
+  it('re-reads an atomically refused batch once without replaying the gesture', async () => {
+    const selected = [SECTION, OTHER];
+    const view = harness([
+      () => ok(state([])),
+      () => ok({
+        contractVersion: 1,
+        outcome: 'STALE_GENERATION',
+        replayed: false,
+        authorityGeneration: 2,
+        currentRevision: null,
+        maximum: null,
+        committed: null,
+        state: null,
+      }, 409),
+      () => ok(state([entry(OTHER, { revision: 7, epoch: 7 })], 2)),
+    ], selected);
+    await waitFor(() => expect(view.value().intentStatus).toBe('READY'));
+
+    await act(async () => { await view.value().startSelected(POLICY); });
+
+    expect(view.requests.filter((request) => request.method === 'PUT')).toHaveLength(1);
+    expect(view.requests.filter((request) => request.method === 'GET')).toHaveLength(2);
+    expect(view.requests.at(-1)?.method).toBe('GET');
+    expect(view.value().intent?.generation).toBe(2);
+    expect(view.value().notices).toContainEqual(expect.objectContaining({
+      code: 'START_REJECTED',
+    }));
+  });
+
+
   it('shows a section as watched only when the whole server stamp matches', async () => {
     const view = harness([() => ok(state([
       entry(SECTION, { running: {} }),

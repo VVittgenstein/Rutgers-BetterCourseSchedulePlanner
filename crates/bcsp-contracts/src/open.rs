@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt;
 use std::num::NonZeroU64;
 
@@ -11,6 +12,14 @@ use crate::{
 };
 
 pub const OPEN_CONTRACT_VERSION: OpenContractVersion = OpenContractVersion::V1;
+
+/// Maximum number of Section identities accepted by one status projection.
+///
+/// This is a transport/work bound, not a product entitlement. Public watch
+/// selection remains capped independently. The bound covers the local
+/// target's worst-case union of 255 selected and 255 still-active Sections
+/// without turning one Section into one full projection.
+pub const MAX_OPEN_BATCH_STATUS_SECTIONS: usize = 510;
 
 const SHA256_HEX_BYTES: usize = 64;
 const OPEN_HTTP_HEADER_VALUE_MAX_BYTES: usize = 4_096;
@@ -1033,6 +1042,30 @@ pub struct OpenSectionStatusV1 {
     pub counter_snapshot: OpenCounterSnapshotV1,
 }
 
+/// One target projection carrying the target status and only the Section
+/// statuses the client asked for.
+///
+/// The server still performs exactly one internally consistent target
+/// projection. Filtering the result before serialization avoids returning the
+/// entire Catalog merely because a watch desk holds a small subset of it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenBatchStatusV1 {
+    pub contract_version: OpenContractVersion,
+    pub refresh: OpenRefreshStatusV1,
+    pub sections: Vec<OpenSectionStatusV1>,
+}
+
+impl OpenBatchStatusV1 {
+    pub fn new(refresh: OpenRefreshStatusV1, sections: Vec<OpenSectionStatusV1>) -> Self {
+        Self {
+            contract_version: OPEN_CONTRACT_VERSION,
+            refresh,
+            sections,
+        }
+    }
+}
+
 /// Shared status request. Client input remains strict while the response types
 /// deliberately remain additive.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1048,6 +1081,39 @@ impl OpenStatusRequestV1 {
             contract_version: OPEN_CONTRACT_VERSION,
             batch,
         }
+    }
+}
+
+/// Requests several Section statuses from one `(term, campus)` projection.
+/// Client input is strict and bounded; [`Self::is_valid`] additionally binds
+/// every Section to `batch` and rejects duplicates.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenBatchStatusRequestV1 {
+    pub contract_version: OpenContractVersion,
+    pub batch: OpenBatchKey,
+    pub section_keys: Vec<SectionKey>,
+}
+
+impl OpenBatchStatusRequestV1 {
+    pub fn new(batch: OpenBatchKey, section_keys: Vec<SectionKey>) -> Self {
+        Self {
+            contract_version: OPEN_CONTRACT_VERSION,
+            batch,
+            section_keys,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        if self.section_keys.is_empty() || self.section_keys.len() > MAX_OPEN_BATCH_STATUS_SECTIONS
+        {
+            return false;
+        }
+        let target = self.batch.target();
+        let mut unique = BTreeSet::new();
+        self.section_keys
+            .iter()
+            .all(|section| section.target() == target && unique.insert(section))
     }
 }
 

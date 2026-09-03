@@ -7,9 +7,10 @@ use bcsp_contracts::{
     ApiErrorBody, ApiErrorCode, ApiErrorDetail, ApiErrorEnvelope, CatalogDiscoveryRequestV1,
     CourseDetailRequestV1, CourseQueryRequestV1, DynamicFilterValidationRequestV3,
     FilterOptionsRequestV2, HttpRequestEnvelope, HttpSuccessEnvelope, NormalizedFilterValuesV1,
-    OpenSectionStatusRequestV1, OpenStatusRequestV1, QueryContractVersion, SectionDetailRequestV1,
-    SectionQueryRequestV1, ServiceIssueComponentV1, ServiceOperationV1, ServiceRuntimeV1,
-    SystemTraceIdSource, TermCampusKey, TraceIdSource, decode_versioned_envelope_json,
+    OpenBatchStatusRequestV1, OpenBatchStatusV1, OpenSectionStatusRequestV1, OpenStatusRequestV1,
+    QueryContractVersion, SectionDetailRequestV1, SectionQueryRequestV1, ServiceIssueComponentV1,
+    ServiceOperationV1, ServiceRuntimeV1, SystemTraceIdSource, TermCampusKey, TraceIdSource,
+    decode_versioned_envelope_json,
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_operational_storage::{OperationalStorage, OperationalStorageInterruptHandle};
@@ -37,6 +38,7 @@ pub const PRODUCT_SECTION_SEARCH_PATH: &str = "/api/v1/query/sections";
 pub const PRODUCT_COURSE_DETAIL_PATH: &str = "/api/v1/query/course-detail";
 pub const PRODUCT_SECTION_DETAIL_PATH: &str = "/api/v1/query/section-detail";
 pub const PRODUCT_OPEN_STATUS_PATH: &str = "/api/v1/open/status";
+pub const PRODUCT_OPEN_BATCH_STATUS_PATH: &str = "/api/v1/open/batch-status";
 pub const PRODUCT_OPEN_SECTION_STATUS_PATH: &str = "/api/v1/open/section-status";
 pub const PRODUCT_SERVICE_STATUS_PATH: &str = "/api/v1/service/status";
 
@@ -50,6 +52,7 @@ pub static SHARED_PRODUCT_ROUTE_INVENTORY: &[ExtensionRoute] = &[
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_COURSE_DETAIL_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_SECTION_DETAIL_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_OPEN_STATUS_PATH),
+    ExtensionRoute::new(RequestMethod::Post, PRODUCT_OPEN_BATCH_STATUS_PATH),
     ExtensionRoute::new(RequestMethod::Post, PRODUCT_OPEN_SECTION_STATUS_PATH),
     ExtensionRoute::new(RequestMethod::Get, PRODUCT_SERVICE_STATUS_PATH),
 ];
@@ -457,6 +460,44 @@ where
         })
     }
 
+    fn open_batch_status(&self, request: &ExtensionRequest) -> ExtensionResponse {
+        let request: OpenBatchStatusRequestV1 = match decode_payload(request.body()) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+        if !request.is_valid() {
+            return api_error_response(400, ApiErrorCode::InvalidFilter);
+        }
+        let target = request.batch.target();
+        let requested = request.section_keys.into_iter().collect::<BTreeSet<_>>();
+        let policy = match self.runtime.refresh_policy() {
+            Ok(policy) => policy,
+            Err(error) => {
+                return product_failure_response(ProductRouteFailure::Runtime(error));
+            }
+        };
+        self.with_storage(|storage| {
+            self.validate_targets(storage, std::slice::from_ref(&target))?;
+            self.request_target_refresh(storage, std::slice::from_ref(&target))?;
+            self.require_targets_ready(storage, std::slice::from_ref(&target))?;
+            let snapshot = self.open_runtime.snapshot(&target)?;
+            let projected = self
+                .runtime
+                .open_status_with_policy(storage, &target, &snapshot, policy)
+                .map_err(ProductRouteFailure::Runtime)?;
+            let sections = projected
+                .sections
+                .into_iter()
+                .filter(|status| requested.contains(&status.section_key))
+                .collect::<Vec<_>>();
+            // A stale saved selection may name a Section removed by a newer
+            // Catalog. Return the valid peers from this one projection; the
+            // omitted identity is an item-level no-data answer and must not
+            // take the other (up to 509) resources down with it.
+            Ok(OpenBatchStatusV1::new(projected.refresh, sections))
+        })
+    }
+
     fn open_section_status(&self, request: &ExtensionRequest) -> ExtensionResponse {
         let request: OpenSectionStatusRequestV1 = match decode_payload(request.body()) {
             Ok(request) => request,
@@ -791,6 +832,9 @@ where
             (RequestMethod::Post, PRODUCT_COURSE_DETAIL_PATH) => self.course_detail(&request),
             (RequestMethod::Post, PRODUCT_SECTION_DETAIL_PATH) => self.section_detail(&request),
             (RequestMethod::Post, PRODUCT_OPEN_STATUS_PATH) => self.open_status(&request),
+            (RequestMethod::Post, PRODUCT_OPEN_BATCH_STATUS_PATH) => {
+                self.open_batch_status(&request)
+            }
             (RequestMethod::Post, PRODUCT_OPEN_SECTION_STATUS_PATH) => {
                 self.open_section_status(&request)
             }

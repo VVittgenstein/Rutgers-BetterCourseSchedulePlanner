@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bcsp_application::{
@@ -5,9 +6,12 @@ use bcsp_application::{
     SharedProductStorage, SharedRuntimeContext, SharedWatchSocket, SystemApplicationClock,
     WatchAdmissionSource, is_product_campus,
 };
-use bcsp_contracts::SectionKey;
+use bcsp_contracts::{SectionKey, TermCampusKey};
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
-use bcsp_open::{OpenCounterAudience, OpenProjectionError, project_current_open_observation};
+use bcsp_open::{
+    OpenCounterAudience, OpenProjectionError, project_current_open_observation,
+    project_current_open_observations,
+};
 use bcsp_watch::{WatchManagerError, WatchStartAdmission};
 use time::OffsetDateTime;
 
@@ -42,6 +46,47 @@ impl WatchAdmissionSource for PublicWatchAdmission {
             section,
             &runtime,
         ))
+    }
+
+    fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+        let mut admissions = vec![WatchStartAdmission::TargetUnavailable; sections.len()];
+        let mut targets = BTreeMap::<TermCampusKey, Vec<(usize, SectionKey)>>::new();
+        for (position, section) in sections.iter().enumerate() {
+            if !self.target_supported(section) {
+                admissions[position] = WatchStartAdmission::UnsupportedTarget;
+            } else if !self.term_in_range(section) {
+                admissions[position] = WatchStartAdmission::TermOutOfRange;
+            } else {
+                targets
+                    .entry(section.target())
+                    .or_default()
+                    .push((position, section.clone()));
+            }
+        }
+
+        for (target, members) in targets {
+            let projection = (|| {
+                let snapshot = self.open_runtime.snapshot(&target).ok()?;
+                let runtime = self.runtime.projection_runtime(&snapshot).ok()?;
+                let mut storage = self.storage.lock().ok()?;
+                let sections = members
+                    .iter()
+                    .map(|(_, section)| section.clone())
+                    .collect::<Vec<_>>();
+                project_current_open_observations(&mut *storage, &target, &sections, &runtime).ok()
+            })();
+
+            let Some(projection) = projection else {
+                continue;
+            };
+            for (position, section) in members {
+                admissions[position] = match projection.get(&section) {
+                    Some(observation) => WatchStartAdmission::admitted(observation.clone()),
+                    None => WatchStartAdmission::SectionNotFound,
+                };
+            }
+        }
+        admissions
     }
 
     fn target_supported(&self, section: &SectionKey) -> bool {

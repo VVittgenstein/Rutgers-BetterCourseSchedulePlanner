@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroU8;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -37,6 +38,18 @@ pub const WATCH_APP_PING_INTERVAL: Duration = Duration::from_secs(10);
 /// roots must inject their authoritative shared storage view here.
 pub trait WatchAdmissionSource: Send + Sync + 'static {
     fn admission_for(&self, section: &SectionKey) -> WatchStartAdmission;
+
+    /// Resolves one start/revalidation round as a batch.
+    ///
+    /// The default preserves the original per-Section behavior. Admission
+    /// sources backed by a target-wide projection can override this to build
+    /// each target once and return decisions in the same order as `sections`.
+    fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+        sections
+            .iter()
+            .map(|section| self.admission_for(section))
+            .collect()
+    }
 
     fn target_supported(&self, _section: &SectionKey) -> bool {
         true
@@ -171,6 +184,27 @@ impl SharedWatchSocket {
             sink,
         )
     }
+
+    /// Creates a socket with a target-specific owner/browser watch limit.
+    ///
+    /// The ordinary constructor retains the shared/public limit. The local
+    /// composition uses this explicit seam to opt into the full `u8` wire
+    /// domain without widening the public service.
+    pub fn try_new_with_max_active_watches(
+        admission: Arc<dyn WatchAdmissionSource>,
+        sink: Arc<dyn WatchDispatchSink>,
+        max_active_watches: NonZeroU8,
+    ) -> Result<Self, WatchManagerError> {
+        Self::try_new_with_parts_and_max_active_watches(
+            SystemWatchClock::default(),
+            SystemTraceIdSource,
+            SystemTraceIdSource,
+            DEFAULT_HEARTBEAT_TIMEOUT,
+            admission,
+            sink,
+            max_active_watches,
+        )
+    }
 }
 
 impl<C, I, E> SharedWatchSocket<C, I, E>
@@ -186,9 +220,35 @@ where
         admission: Arc<dyn WatchAdmissionSource>,
         sink: Arc<dyn WatchDispatchSink>,
     ) -> Result<Self, WatchManagerError> {
+        Self::try_new_with_parts_and_max_active_watches(
+            clock,
+            manager_ids,
+            envelope_ids,
+            heartbeat_timeout,
+            admission,
+            sink,
+            NonZeroU8::new(bcsp_contracts::MAX_ACTIVE_WATCHES)
+                .expect("the default watch limit is nonzero"),
+        )
+    }
+
+    pub fn try_new_with_parts_and_max_active_watches(
+        clock: C,
+        manager_ids: I,
+        envelope_ids: E,
+        heartbeat_timeout: Duration,
+        admission: Arc<dyn WatchAdmissionSource>,
+        sink: Arc<dyn WatchDispatchSink>,
+        max_active_watches: NonZeroU8,
+    ) -> Result<Self, WatchManagerError> {
         Ok(Self {
             state: Mutex::new(SocketState {
-                manager: WatchManager::try_new(clock, manager_ids, heartbeat_timeout)?,
+                manager: WatchManager::try_new_with_max_active_watches(
+                    clock,
+                    manager_ids,
+                    heartbeat_timeout,
+                    max_active_watches,
+                )?,
                 connections: BTreeMap::new(),
                 envelope_ids,
                 sealed: false,
@@ -482,6 +542,12 @@ where
         self.admission.admission_for(section)
     }
 
+    /// Batched counterpart to [`Self::admission_for`]. Expensive projection
+    /// work happens before the socket state lock is taken.
+    pub fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+        self.admission.admissions_for(sections)
+    }
+
     /// Starts watches on the owner connection and reports the per-item
     /// outcome, so the caller can tell "armed" from "the catalog does not
     /// publish this" without parsing a fanned-out event.
@@ -492,18 +558,21 @@ where
     where
         E: TraceIdSource,
     {
+        let admissions = self.admissions_for_items(&items)?;
         let owner = self.ensure_owner_connection()?;
         let (message_id, dispatch, record) = {
             let mut state = self
                 .lock_state()
                 .ok_or(WatchManagerError::InvalidContractProjection)?;
             let message_id = state.envelope_ids.next_trace_id();
-            let outcome =
-                state
-                    .manager
-                    .start_with_admission(owner, message_id, items, |section| {
-                        self.admission.admission_for(section)
-                    })?;
+            let mut admissions = admissions.into_iter();
+            let outcome = state
+                .manager
+                .start_with_admission(owner, message_id, items, |_| {
+                    admissions
+                        .next()
+                        .unwrap_or(WatchStartAdmission::TargetUnavailable)
+                })?;
             (message_id, outcome.dispatch, !outcome.replayed)
         };
         let results = start_item_results(&dispatch);
@@ -647,18 +716,27 @@ where
         message_id: TraceId,
         command: WatchClientCommandV1,
     ) -> Result<(WatchDispatch, bool), WatchManagerError> {
+        let admissions = match &command {
+            WatchClientCommandV1::StartWatch { items } => Some(self.admissions_for_items(items)?),
+            _ => None,
+        };
         let mut state = self
             .lock_state()
             .ok_or(WatchManagerError::InvalidContractProjection)?;
         state.manager.touch(connection_id)?;
         match command {
             WatchClientCommandV1::StartWatch { items } => {
-                let outcome = state.manager.start_with_admission(
-                    connection_id,
-                    message_id,
-                    items,
-                    |section| self.admission.admission_for(section),
-                )?;
+                let mut admissions = admissions
+                    .expect("START_WATCH admission was prepared")
+                    .into_iter();
+                let outcome =
+                    state
+                        .manager
+                        .start_with_admission(connection_id, message_id, items, |_| {
+                            admissions
+                                .next()
+                                .unwrap_or(WatchStartAdmission::TargetUnavailable)
+                        })?;
                 Ok((outcome.dispatch, !outcome.replayed))
             }
             WatchClientCommandV1::StopWatch { watch } => {
@@ -727,6 +805,22 @@ where
                 ))
             }
         }
+    }
+
+    fn admissions_for_items(
+        &self,
+        items: &WatchStartItemsV1,
+    ) -> Result<Vec<WatchStartAdmission>, WatchManagerError> {
+        let sections = items
+            .as_slice()
+            .iter()
+            .map(|item| item.section_key.clone())
+            .collect::<Vec<_>>();
+        let admissions = self.admission.admissions_for(&sections);
+        if admissions.len() != sections.len() {
+            return Err(WatchManagerError::InvalidContractProjection);
+        }
+        Ok(admissions)
     }
 
     /// Sends one dispatch's events to whoever should see them.
@@ -895,8 +989,8 @@ where
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{Barrier, Mutex};
 
     use bcsp_contracts::{
         ActiveWatchTargetV1, OpenEpisodeState, OpenObservationV1, ProtocolVersion,
@@ -974,6 +1068,43 @@ mod tests {
 
     struct MutableSupportAdmission {
         supported: Arc<AtomicBool>,
+    }
+
+    #[derive(Default)]
+    struct CountingBatchAdmission {
+        batches: AtomicUsize,
+        singles: AtomicUsize,
+        last_batch_len: AtomicUsize,
+    }
+
+    impl WatchAdmissionSource for CountingBatchAdmission {
+        fn admission_for(&self, _section: &SectionKey) -> WatchStartAdmission {
+            self.singles.fetch_add(1, Ordering::SeqCst);
+            WatchStartAdmission::admitted(None)
+        }
+
+        fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+            self.batches.fetch_add(1, Ordering::SeqCst);
+            self.last_batch_len.store(sections.len(), Ordering::SeqCst);
+            vec![WatchStartAdmission::admitted(None); sections.len()]
+        }
+    }
+
+    struct BlockingBatchAdmission {
+        entered: Barrier,
+        release: Barrier,
+    }
+
+    impl WatchAdmissionSource for BlockingBatchAdmission {
+        fn admission_for(&self, _section: &SectionKey) -> WatchStartAdmission {
+            WatchStartAdmission::admitted(None)
+        }
+
+        fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+            self.entered.wait();
+            self.release.wait();
+            vec![WatchStartAdmission::admitted(None); sections.len()]
+        }
     }
 
     impl WatchAdmissionSource for MutableSupportAdmission {
@@ -1465,6 +1596,135 @@ mod tests {
         let cleanups = sink.cleanups.lock().unwrap();
         assert_eq!(cleanups.len(), 1);
         assert_eq!(cleanups[0].sections.len(), 9);
+    }
+
+    #[test]
+    fn oversized_start_uses_one_batch_admission_and_keeps_the_public_cap() {
+        let admission = Arc::new(CountingBatchAdmission::default());
+        let socket = socket(admission.clone(), Arc::new(NoopWatchDispatchSink));
+        let connection_id = trace(1);
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
+        assert!(socket.connect(connection_id, outbound));
+
+        send(
+            &socket,
+            connection_id,
+            trace(2),
+            WatchClientCommandV1::StartWatch {
+                items: items((1..=usize::from(u8::MAX)).map(section)),
+            },
+        );
+
+        let WatchServerEventV1::StartResult { result } = receive(&mut receiver).into_payload()
+        else {
+            panic!("START must produce START_RESULT");
+        };
+        assert_eq!(
+            result.active_watch_count(),
+            bcsp_contracts::MAX_ACTIVE_WATCHES
+        );
+        assert_eq!(
+            result
+                .items()
+                .iter()
+                .filter(|item| item.is_active())
+                .count(),
+            usize::from(bcsp_contracts::MAX_ACTIVE_WATCHES),
+        );
+        assert!(
+            result.items()[usize::from(bcsp_contracts::MAX_ACTIVE_WATCHES)..]
+                .iter()
+                .all(|item| matches!(
+                    item,
+                    WatchStartItemResultV1::Rejected {
+                        reason: WatchStartRejectionReason::MaxActiveWatches,
+                        ..
+                    }
+                ))
+        );
+        assert_eq!(admission.batches.load(Ordering::SeqCst), 1);
+        assert_eq!(admission.singles.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            admission.last_batch_len.load(Ordering::SeqCst),
+            usize::from(u8::MAX),
+        );
+    }
+
+    #[test]
+    fn explicit_local_capacity_arms_255_items_with_one_batch_admission() {
+        let admission = Arc::new(CountingBatchAdmission::default());
+        let socket = SharedWatchSocket::try_new_with_parts_and_max_active_watches(
+            FakeClock::default(),
+            FakeIds(0x100),
+            FakeIds(0x900),
+            Duration::from_secs(60),
+            admission.clone(),
+            Arc::new(NoopWatchDispatchSink),
+            NonZeroU8::new(u8::MAX).unwrap(),
+        )
+        .unwrap();
+
+        let results = socket
+            .owner_start(items((1..=usize::from(u8::MAX)).map(section)))
+            .expect("local owner start");
+        assert_eq!(results.len(), usize::from(u8::MAX));
+        assert!(results.iter().all(WatchStartItemResultV1::is_active));
+        assert_eq!(socket.owner_watched_sections().len(), usize::from(u8::MAX));
+        assert_eq!(admission.batches.load(Ordering::SeqCst), 1);
+        assert_eq!(admission.singles.load(Ordering::SeqCst), 0);
+
+        let overflow = socket
+            .owner_start(items([section(256)]))
+            .expect("per-item capacity result");
+        assert_eq!(
+            overflow,
+            vec![WatchStartItemResultV1::Rejected {
+                section_key: section(256),
+                reason: WatchStartRejectionReason::MaxActiveWatches,
+            }]
+        );
+    }
+
+    #[test]
+    fn batch_admission_does_not_hold_the_socket_lock_away_from_ping_maintenance() {
+        let admission = Arc::new(BlockingBatchAdmission {
+            entered: Barrier::new(2),
+            release: Barrier::new(2),
+        });
+        let (socket, clock) = socket_with_clock(admission.clone(), Arc::new(NoopWatchDispatchSink));
+        let socket = Arc::new(socket);
+        let (outbound, mut receiver) = OutboundSender::unbounded_pair();
+        assert!(socket.connect(trace(1), outbound));
+        clock.advance(WATCH_APP_PING_INTERVAL);
+
+        let starting = {
+            let socket = socket.clone();
+            std::thread::spawn(move || socket.owner_start(items([section(1)])))
+        };
+        admission.entered.wait();
+
+        let (finished, observed) = std::sync::mpsc::sync_channel(1);
+        let ticking = {
+            let socket = socket.clone();
+            std::thread::spawn(move || {
+                socket.tick();
+                let _ = finished.send(());
+            })
+        };
+        let ping_was_not_blocked = observed.recv_timeout(Duration::from_millis(250)).is_ok();
+        let ping = receiver.try_recv().ok();
+
+        admission.release.wait();
+        ticking.join().unwrap();
+        starting.join().unwrap().expect("owner start");
+
+        assert!(ping_was_not_blocked, "PING maintenance waited on admission");
+        let ping = ping.expect("PING was emitted while admission was blocked");
+        let envelope: WsServerEnvelope<WatchServerEventV1> = serde_json::from_str(&ping).unwrap();
+        assert!(matches!(
+            envelope.payload(),
+            WatchServerEventV1::Ping { .. }
+        ));
     }
 
     #[test]

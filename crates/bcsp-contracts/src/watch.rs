@@ -10,9 +10,13 @@ use crate::{OpenObservationV1, SectionKey, TraceId};
 
 pub const WATCH_CONTRACT_VERSION: WatchContractVersion = WatchContractVersion::V1;
 pub const MAX_ACTIVE_WATCHES: u8 = 9;
+/// Largest START list representable by the v1 `activeWatchCount` domain.
+/// Runtime policy may admit fewer (the public policy admits nine).
+pub const MAX_WATCH_START_ITEMS: usize = u8::MAX as usize;
 pub const DEFAULT_MAX_AUDIBLE: u64 = 3;
 pub const DEFAULT_CONTINUOUS_DURATION_SECONDS: u64 = 600;
 pub const ACTIVE_WATCH_STATE_PERSISTENT: bool = false;
+const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum WatchContractVersion {
@@ -118,14 +122,17 @@ impl WatchNotificationMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-#[error("watch value must be a positive integer")]
+#[error("watch value must be an integer between 1 and 9007199254740991")]
 pub struct WatchPositiveValueError;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct WatchMaxAudible(NonZeroU64);
 
 impl WatchMaxAudible {
+    /// Largest exact integer shared by the Rust wire and JavaScript clients.
+    pub const MAX: u64 = JAVASCRIPT_MAX_SAFE_INTEGER;
+
     pub const fn get(self) -> u64 {
         self.0.get()
     }
@@ -142,12 +149,22 @@ impl TryFrom<u64> for WatchMaxAudible {
 
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         NonZeroU64::new(value)
+            .filter(|value| value.get() <= Self::MAX)
             .map(Self)
             .ok_or(WatchPositiveValueError)
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+impl<'de> Deserialize<'de> for WatchMaxAudible {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::try_from(u64::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(
     tag = "kind",
     rename_all = "SCREAMING_SNAKE_CASE",
@@ -160,8 +177,12 @@ pub enum WatchContinuousDurationV1 {
 }
 
 impl WatchContinuousDurationV1 {
+    /// Largest exact finite duration shared by the Rust wire and JavaScript clients.
+    pub const MAX_FINITE_SECONDS: u64 = JAVASCRIPT_MAX_SAFE_INTEGER;
+
     pub fn finite_seconds(seconds: u64) -> Result<Self, WatchPositiveValueError> {
         NonZeroU64::new(seconds)
+            .filter(|seconds| seconds.get() <= Self::MAX_FINITE_SECONDS)
             .map(|seconds| Self::Finite { seconds })
             .ok_or(WatchPositiveValueError)
     }
@@ -170,6 +191,32 @@ impl WatchContinuousDurationV1 {
         match self {
             Self::Finite { seconds } => Some(seconds.get()),
             Self::Unlimited => None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum WatchContinuousDurationWireV1 {
+    Finite { seconds: u64 },
+    Unlimited,
+}
+
+impl<'de> Deserialize<'de> for WatchContinuousDurationV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match WatchContinuousDurationWireV1::deserialize(deserializer)? {
+            WatchContinuousDurationWireV1::Finite { seconds } => {
+                Self::finite_seconds(seconds).map_err(D::Error::custom)
+            }
+            WatchContinuousDurationWireV1::Unlimited => Ok(Self::Unlimited),
         }
     }
 }
@@ -233,6 +280,8 @@ impl WatchStartItemV1 {
 pub enum WatchStartItemsError {
     #[error("watch start must contain at least one Section")]
     Empty,
+    #[error("watch start cannot contain more than {maximum} Sections")]
+    TooMany { maximum: usize },
     #[error("watch start Section identities must be unique")]
     DuplicateSection,
 }
@@ -257,6 +306,11 @@ impl TryFrom<Vec<WatchStartItemV1>> for WatchStartItemsV1 {
     fn try_from(value: Vec<WatchStartItemV1>) -> Result<Self, Self::Error> {
         if value.is_empty() {
             return Err(WatchStartItemsError::Empty);
+        }
+        if value.len() > MAX_WATCH_START_ITEMS {
+            return Err(WatchStartItemsError::TooMany {
+                maximum: MAX_WATCH_START_ITEMS,
+            });
         }
         let unique = value
             .iter()
@@ -435,8 +489,6 @@ pub enum WatchStartResultError {
     Empty,
     #[error("watch start result Section identities must be unique")]
     DuplicateSection,
-    #[error("active watch count cannot exceed nine")]
-    TooManyActive,
     #[error("active result items cannot exceed the reported connection active count")]
     InconsistentActiveCount,
 }
@@ -463,9 +515,6 @@ impl WatchStartResultV1 {
             .collect::<BTreeSet<_>>();
         if unique.len() != items.len() {
             return Err(WatchStartResultError::DuplicateSection);
-        }
-        if active_watch_count > MAX_ACTIVE_WATCHES {
-            return Err(WatchStartResultError::TooManyActive);
         }
         if items.iter().filter(|item| item.is_active()).count() > usize::from(active_watch_count) {
             return Err(WatchStartResultError::InconsistentActiveCount);

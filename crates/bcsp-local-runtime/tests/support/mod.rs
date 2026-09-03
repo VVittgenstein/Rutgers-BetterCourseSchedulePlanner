@@ -113,6 +113,10 @@ impl DesiredWatchOwner for FaultOwner {
         self.inner.admission_for(section)
     }
 
+    fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+        self.inner.admissions_for(sections)
+    }
+
     fn start(
         &self,
         items: WatchStartItemsV1,

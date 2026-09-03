@@ -663,6 +663,26 @@ describe('Watch workspace product flow', () => {
     });
   });
 
+  it('rejects an audible limit outside the JavaScript-safe wire domain', () => {
+    const sectionKey = section(1);
+    const { watch } = renderWatch([sectionKey]);
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Add Section 00001 to the watch list',
+    }));
+    const maximum = screen.getByRole('spinbutton', {
+      name: 'Maximum audible cues per Section',
+    }) as HTMLInputElement;
+
+    expect(maximum.max).toBe(String(Number.MAX_SAFE_INTEGER));
+    fireEvent.change(maximum, { target: { value: '9007199254740992' } });
+
+    expect(maximum.getAttribute('aria-invalid')).toBe('true');
+    const start = screen.getByRole('button', { name: /Start selected/u }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    fireEvent.click(start);
+    expect(watch.commands).toEqual([]);
+  });
+
   it('keeps the empty Watch path compact until a Section or alert needs batch actions', () => {
     renderWatch([]);
 

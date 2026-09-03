@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::num::NonZeroU8;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use bcsp_application::{
     OutboundSender, PRODUCT_CATALOG_DISCOVERY_PATH, PRODUCT_FILTER_SCHEMA_PATH,
     PRODUCT_SERVICE_STATUS_PATH, PreparedServingError, PreparedServingRebuildRuntime,
     RequestMethod, RouteExtension, ServiceStatusRegistry, SessionNonce, SharedWatchSocket,
-    TargetRefreshDemand, TargetWorkActivity, WebSocketExtension,
+    TargetRefreshDemand, TargetWorkActivity, WatchAdmissionSource, WebSocketExtension,
     rebuild_prepared_serving_from_access,
 };
 use bcsp_catalog::{
@@ -30,13 +31,14 @@ use bcsp_contracts::{
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_runtime::{
     DesiredWatchCoordinator, DesiredWatchMutationV1, DesiredWatchOwner,
-    LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_PATH, LOCAL_PRESENCE_SOCKET_PATH,
-    LocalRouteExtension, LocalRuntimeError, LocalRuntimePaths, LocalSurfaceState, LocalWatchRoute,
-    PersonalSurface, PreparedLocalRuntime, prepare_and_start_with,
+    LOCAL_DESIRED_WATCH_BATCH_PATH, LOCAL_DESIRED_WATCH_CONTRACT_VERSION, LOCAL_DESIRED_WATCH_PATH,
+    LOCAL_MAX_ACTIVE_WATCHES, LOCAL_PRESENCE_SOCKET_PATH, LocalRouteExtension, LocalRuntimeError,
+    LocalRuntimePaths, LocalSurfaceState, LocalWatchRoute, PersonalSurface, PreparedLocalRuntime,
+    prepare_and_start_with,
 };
 use bcsp_local_user_state::{
-    CatalogRefreshMinutes, LocalSettings, OpenRefreshSeconds, PersonalStateStore, SettingsRevision,
-    UserStateRevision, WatchFastLaneSeconds,
+    CatalogRefreshMinutes, LocalSettings, MAX_DESIRED_WATCHES, OpenRefreshSeconds,
+    PersonalStateStore, SettingsRevision, UserStateRevision, WatchFastLaneSeconds,
 };
 use bcsp_open::OpenCounterAudience;
 use bcsp_operational_storage::{
@@ -58,6 +60,24 @@ use time::format_description::well_known::Rfc3339;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CURRENT_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Default)]
+struct CountingBatchAdmission {
+    batches: AtomicUsize,
+    singles: AtomicUsize,
+}
+
+impl WatchAdmissionSource for CountingBatchAdmission {
+    fn admission_for(&self, _section: &SectionKey) -> WatchStartAdmission {
+        self.singles.fetch_add(1, Ordering::SeqCst);
+        WatchStartAdmission::admitted(None)
+    }
+
+    fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+        self.batches.fetch_add(1, Ordering::SeqCst);
+        vec![WatchStartAdmission::admitted(None); sections.len()]
+    }
+}
 
 struct TestDirectory(PathBuf);
 
@@ -1308,10 +1328,188 @@ async fn every_desired_watch_outcome_is_reported_with_the_status_it_earned() {
     running.shutdown().await.unwrap();
 }
 
-/// The nine-section product cap, over HTTP, including the shape of the
+#[test]
+fn desired_watch_batch_route_is_atomic_bounded_and_replayable() {
+    let temp = TestDirectory::new("desired-watch-batch-route");
+    let (_root, executable) = package(&temp);
+    let prepared = PreparedLocalRuntime::from_executable(executable).unwrap();
+    let database_path = prepared.paths().database().to_path_buf();
+    let admission = Arc::new(CountingBatchAdmission::default());
+    let watch = Arc::new(
+        SharedWatchSocket::try_new_with_max_active_watches(
+            admission.clone(),
+            Arc::new(NoopWatchDispatchSink),
+            NonZeroU8::new(LOCAL_MAX_ACTIVE_WATCHES).unwrap(),
+        )
+        .unwrap(),
+    );
+    let coordinator = Arc::new(DesiredWatchCoordinator::new(
+        PersonalStateStore::open(&database_path).unwrap(),
+        watch.clone(),
+    ));
+    let watch_route = LocalWatchRoute::new(watch.clone(), coordinator.clone());
+    let (outbound, _frames) = OutboundSender::unbounded_pair();
+    assert!(watch_route.connect(trace(7_000), outbound));
+    let surface = PersonalSurface::new(
+        prepared.operational().database(),
+        PersonalStateStore::open(&database_path).unwrap(),
+        watch.clone(),
+    )
+    .with_desired_watch(coordinator);
+    let routes = LocalRouteExtension::new(SessionNonce::generate(), Box::new(surface), || {});
+
+    let items = (1..=40_u16)
+        .map(|index| {
+            serde_json::json!({
+                "section": {
+                    "term": "T2026F",
+                    "campus": "CAMPUS_A",
+                    "index": format!("{index:05}"),
+                },
+                "policy": watch_policy(),
+                "basedOnRevision": 0,
+            })
+        })
+        .collect::<Vec<_>>();
+    let valid = serde_json::to_vec(&serde_json::json!({
+        "protocolVersion": 1,
+        "payload": {
+            "contractVersion": 1,
+            "authorityGeneration": 1,
+            "mutationId": trace(7_001).to_string(),
+            "items": items,
+        },
+    }))
+    .unwrap();
+    let put = |body: Vec<u8>| {
+        routes.handle(ExtensionRequest::new(
+            RequestMethod::Put,
+            LOCAL_DESIRED_WATCH_BATCH_PATH,
+            None,
+            body,
+        ))
+    };
+
+    let committed = put(valid.clone());
+    assert_eq!(committed.status(), 200);
+    let committed: serde_json::Value = serde_json::from_slice(committed.body()).unwrap();
+    assert_eq!(committed["data"]["outcome"], "COMMITTED");
+    assert_eq!(committed["data"]["replayed"], false);
+    assert_eq!(committed["data"]["committed"].as_array().unwrap().len(), 40);
+    assert_eq!(
+        committed["data"]["state"]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        40,
+    );
+    assert_eq!(watch.total_active_watch_count(), 40);
+    assert_eq!(admission.batches.load(Ordering::SeqCst), 1);
+    assert_eq!(admission.singles.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        PersonalStateStore::open(&database_path)
+            .unwrap()
+            .desired_watch_budget()
+            .unwrap()
+            .receipts,
+        1,
+    );
+
+    let replayed = put(valid);
+    assert_eq!(replayed.status(), 200);
+    let replayed: serde_json::Value = serde_json::from_slice(replayed.body()).unwrap();
+    assert_eq!(replayed["data"]["outcome"], "COMMITTED");
+    assert_eq!(replayed["data"]["replayed"], true);
+    assert_eq!(watch.total_active_watch_count(), 40);
+    assert_eq!(
+        PersonalStateStore::open(&database_path)
+            .unwrap()
+            .desired_watch_budget()
+            .unwrap()
+            .receipts,
+        1,
+        "a replay must not consume another receipt",
+    );
+
+    let one_item = serde_json::json!({
+        "section": {"term":"T2026F", "campus":"CAMPUS_A", "index":"01000"},
+        "policy": watch_policy(),
+        "basedOnRevision": 0,
+    });
+    let over_limit = (1..=256_u16)
+        .map(|index| {
+            serde_json::json!({
+                "section": {
+                    "term":"T2026F",
+                    "campus":"CAMPUS_A",
+                    "index":format!("{index:05}"),
+                },
+                "policy": watch_policy(),
+                "basedOnRevision": 0,
+            })
+        })
+        .collect::<Vec<_>>();
+    let malformed_payloads = [
+        serde_json::json!({
+            "contractVersion":1,
+            "authorityGeneration":1,
+            "mutationId":trace(7_010).to_string(),
+            "items":[],
+        }),
+        serde_json::json!({
+            "contractVersion":1,
+            "authorityGeneration":1,
+            "mutationId":trace(7_011).to_string(),
+            "items":[one_item.clone(), one_item.clone()],
+        }),
+        serde_json::json!({
+            "contractVersion":1,
+            "authorityGeneration":1,
+            "mutationId":trace(7_012).to_string(),
+            "items":over_limit,
+        }),
+        serde_json::json!({
+            "contractVersion":1,
+            "authorityGeneration":1,
+            "mutationId":trace(7_013).to_string(),
+            "items":[one_item.clone()],
+            "future":true,
+        }),
+        serde_json::json!({
+            "contractVersion":2,
+            "authorityGeneration":1,
+            "mutationId":trace(7_014).to_string(),
+            "items":[one_item],
+        }),
+    ];
+    for payload in malformed_payloads {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "protocolVersion":1,
+            "payload":payload,
+        }))
+        .unwrap();
+        let response = put(body);
+        assert_eq!(
+            response.status(),
+            400,
+            "{}",
+            String::from_utf8_lossy(response.body())
+        );
+    }
+
+    let wrong_method = routes.handle(ExtensionRequest::new(
+        RequestMethod::Post,
+        LOCAL_DESIRED_WATCH_BATCH_PATH,
+        None,
+        Vec::new(),
+    ));
+    assert_eq!(wrong_method.status(), 405);
+}
+
+/// The desktop-only 255-section product cap, over HTTP, including the shape of the
 /// refusal a page has to render.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_desired_watch_cap_refuses_a_tenth_section_with_the_maximum() {
+async fn the_desired_watch_cap_refuses_the_256th_section_with_the_maximum() {
     let temp = TestDirectory::new("desired-watch-cap");
     let (_root, executable) = package(&temp);
     let running = PreparedLocalRuntime::from_executable(executable)
@@ -1325,7 +1523,7 @@ async fn the_desired_watch_cap_refuses_a_tenth_section_with_the_maximum() {
     let nonce = nonce.as_str();
 
     let mut revisions = Vec::new();
-    for index in 1..=9_u16 {
+    for index in 1..=MAX_DESIRED_WATCHES as u16 {
         let section = SectionKey::try_new("T2026F", "CAMPUS_A", &format!("{index:05}")).unwrap();
         let (status_code, committed) = put_desired_watch(
             authority,
@@ -1341,23 +1539,28 @@ async fn the_desired_watch_cap_refuses_a_tenth_section_with_the_maximum() {
         revisions.push(committed["committed"]["revision"].as_u64().unwrap());
     }
 
-    let tenth = SectionKey::try_new("T2026F", "CAMPUS_A", "00010").unwrap();
+    let after_limit = SectionKey::try_new(
+        "T2026F",
+        "CAMPUS_A",
+        &format!("{:05}", MAX_DESIRED_WATCHES + 1),
+    )
+    .unwrap();
     let (status_code, capped) = put_desired_watch(
         authority,
         &origin,
         nonce,
-        &tenth,
+        &after_limit,
         Some(watch_policy()),
         0,
         1,
-        trace(10),
+        trace(u64::try_from(MAX_DESIRED_WATCHES + 1).unwrap()),
     );
     assert_eq!(status_code, 409, "{capped}");
     assert_eq!(capped["outcome"], "LIMIT_EXCEEDED");
-    assert_eq!(capped["maximum"], 9);
+    assert_eq!(capped["maximum"], MAX_DESIRED_WATCHES);
 
-    // A policy edit on one of the nine still commits: the cap is measured
-    // against the state a mutation LEAVES, and this one leaves nine.
+    // A policy edit on one of the 255 still commits: the cap is measured
+    // against the state a mutation LEAVES, and this one leaves 255.
     let first = SectionKey::try_new("T2026F", "CAMPUS_A", "00001").unwrap();
     let (status_code, edited) = put_desired_watch(
         authority,
@@ -1367,7 +1570,7 @@ async fn the_desired_watch_cap_refuses_a_tenth_section_with_the_maximum() {
         Some(watch_policy()),
         revisions[0],
         1,
-        trace(20),
+        trace(10_000),
     );
     assert_eq!(status_code, 200, "a policy-only edit at the cap: {edited}");
     assert_eq!(edited["committed"]["epochChanged"], false);

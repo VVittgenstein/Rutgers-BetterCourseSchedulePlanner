@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   OpenEpisodeV1,
+  OpenBatchStatusV1,
   OpenRefreshStatusV1,
   OpenSectionStatusV1,
   ProductApiPort,
@@ -26,9 +27,14 @@ import {
   BATCH_STATUS_COALESCE_MILLISECONDS,
   DEFAULT_WATCH_POLICY,
   LiveWatchProvider,
+  SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS,
   useLiveWatch,
   type LiveWatchValue,
 } from '../src/ui/shared/watch/LiveWatchProvider';
+import type {
+  WatchIntentPort,
+  WatchIntentSnapshot,
+} from '../src/ui/shared/watch/intent';
 import {
   WatchAudioController,
   type WatchAudioUnlockResult,
@@ -152,6 +158,14 @@ interface Harness {
   value(): LiveWatchValue;
 }
 
+interface HarnessOptions {
+  readonly intent?: WatchIntentPort | undefined;
+  readonly maximumSelectedSections?: number | undefined;
+  readonly onSelectedChange?: (
+    (selected: readonly SectionKey[]) => void | Promise<void>
+  ) | undefined;
+}
+
 function Probe({ publish }: { readonly publish: (value: LiveWatchValue) => void }) {
   publish(useLiveWatch());
   return null;
@@ -225,6 +239,46 @@ function sectionStatus(sectionKey: SectionKey): OpenSectionStatusV1 {
   };
 }
 
+function batchStatus(sectionKeys: readonly SectionKey[]): OpenBatchStatusV1 {
+  const first = sectionKeys[0];
+  if (first === undefined) throw new Error('batch status fixture needs one Section');
+  return {
+    contractVersion: 1,
+    refresh: refreshStatus({ term: first.term, campus: first.campus }),
+    sections: sectionKeys.map(sectionStatus),
+  };
+}
+
+function restoredActiveIntentSnapshot(): WatchIntentSnapshot {
+  return {
+    generation: 7,
+    entries: [{
+      section: SECTION_A,
+      policy: DEFAULT_WATCH_POLICY,
+      revision: 3,
+      epoch: 5,
+      running: {
+        generation: 7,
+        revision: 3,
+        epoch: 5,
+        policy: DEFAULT_WATCH_POLICY,
+        activeWatchId: ACTIVE_A,
+      },
+      stopping: false,
+      waitingForSlot: false,
+      problem: null,
+    }],
+  };
+}
+
+function sectionRange(count: number, campus = SECTION_A.campus, firstIndex = 1): SectionKey[] {
+  return Array.from({ length: count }, (_, index) => ({
+    term: SECTION_A.term,
+    campus,
+    index: String(index + firstIndex).padStart(5, '0'),
+  }));
+}
+
 function unexpected(): never {
   throw new Error('unexpected product API call');
 }
@@ -234,6 +288,7 @@ function createHarness(
   strictMode = false,
   productOverrides: Partial<ProductApiPort> = {},
   initialVolume = 70,
+  options: HarnessOptions = {},
 ): Harness {
   const watch = new FakeWatch();
   watch.state = initialState;
@@ -260,6 +315,9 @@ function createHarness(
     <LiveWatchProvider
       audio={audio as unknown as WatchAudioController}
       initialVolume={volume}
+      intent={options.intent}
+      maximumSelectedSections={options.maximumSelectedSections}
+      onSelectedChange={options.onSelectedChange}
       onVolumeChange={onVolumeChange}
       runtime={runtime}
     >
@@ -489,6 +547,280 @@ describe('LiveWatchProvider', () => {
     expect(harness.onVolumeChange).not.toHaveBeenCalled();
   });
 
+  it('keeps the shared/public cap at 9 while an explicitly local desk accepts 255', async () => {
+    const publicDesk = createHarness();
+    const publicSections = sectionRange(10);
+    await act(async () => publicSections.forEach((section) => publicDesk.value().select(section)));
+    expect(publicDesk.value().maximumSelectedSections).toBe(9);
+    expect(publicDesk.value().selected).toHaveLength(9);
+    expect(publicDesk.value().notices).toContainEqual(expect.objectContaining({
+      code: 'SELECTION_LIMIT',
+      detail: '9',
+    }));
+
+    cleanup();
+    const localDesk = createHarness('OPEN', false, {}, 70, {
+      maximumSelectedSections: 255,
+    });
+    const localSections = sectionRange(256);
+    await act(async () => localSections.forEach((section) => localDesk.value().select(section)));
+    expect(localDesk.value().maximumSelectedSections).toBe(255);
+    expect(localDesk.value().selected).toHaveLength(255);
+    expect(localDesk.value().notices).toContainEqual(expect.objectContaining({
+      code: 'SELECTION_LIMIT',
+      detail: '255',
+    }));
+  });
+
+  it('coalesces selection persistence and rolls back to the last confirmed snapshot on failure', async () => {
+    const writes: ReturnType<typeof deferred<void>>[] = [];
+    const onSelectedChange = vi.fn((_sections: readonly SectionKey[]) => {
+      const write = deferred<void>();
+      writes.push(write);
+      return write.promise;
+    });
+    const harness = createHarness('OPEN', false, {}, 70, {
+      maximumSelectedSections: 255,
+      onSelectedChange,
+    });
+
+    await act(async () => harness.value().select(SECTION_A));
+    expect(onSelectedChange).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      harness.value().select(SECTION_C);
+      harness.value().select(SECTION_D);
+    });
+    expect(onSelectedChange).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      writes[0]!.reject(new Error('selection store unavailable'));
+      await Promise.resolve();
+    });
+    expect(onSelectedChange).toHaveBeenCalledTimes(2);
+    expect(onSelectedChange.mock.calls[1]![0]).toEqual([SECTION_A, SECTION_C, SECTION_D]);
+
+    await act(async () => {
+      writes[1]!.reject(new Error('selection store unavailable'));
+      await Promise.resolve();
+    });
+    expect(harness.value().selected).toEqual([]);
+    expect(harness.value().notices).toContainEqual(expect.objectContaining({
+      code: 'SELECTION_SAVE_FAILED',
+      detail: 'selection store unavailable',
+    }));
+  });
+
+  it('automatically loads telemetry for an authority-restored active watch outside selection', async () => {
+    vi.useFakeTimers();
+    const snapshot = restoredActiveIntentSnapshot();
+    const intent: WatchIntentPort = {
+      read: vi.fn(async () => snapshot),
+      submit: vi.fn(async () => { throw new Error('unexpected intent submission'); }),
+    };
+    const openBatchStatus = vi.fn<NonNullable<ProductApiPort['openBatchStatus']>>(
+      async ({ sectionKeys }) => batchStatus(sectionKeys),
+    );
+    const harness = createHarness('OPEN', false, { openBatchStatus }, 70, { intent });
+
+    await act(async () => { await Promise.resolve(); });
+    expect(harness.value().selected).toEqual([]);
+    expect(harness.value().active).toEqual([expect.objectContaining({
+      activeWatchId: ACTIVE_A,
+      sectionKey: SECTION_A,
+    })]);
+    expect(openBatchStatus).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS);
+    });
+
+    expect(openBatchStatus).toHaveBeenCalledOnce();
+    expect(openBatchStatus.mock.calls[0]![0]).toEqual({
+      contractVersion: 1,
+      batch: BATCH_A,
+      sectionKeys: [SECTION_A],
+    });
+    expect(harness.value().sectionStatuses.map(({ sectionKey }) => sectionKey)).toEqual([SECTION_A]);
+    expect(harness.value().batchStatuses.map(({ batch }) => batch)).toEqual([BATCH_A]);
+    expect(harness.value().telemetryLoading).toBe(false);
+  });
+
+  it.each(['CLOSED', 'ERROR'] as const)(
+    'keeps and refreshes authority-active telemetry when an empty selection transitions to %s',
+    async (connection) => {
+      vi.useFakeTimers();
+      const snapshot = restoredActiveIntentSnapshot();
+      const intent: WatchIntentPort = {
+        read: vi.fn(async () => snapshot),
+        submit: vi.fn(async () => { throw new Error('unexpected intent submission'); }),
+      };
+      const openBatchStatus = vi.fn<NonNullable<ProductApiPort['openBatchStatus']>>(
+        async ({ sectionKeys }) => batchStatus(sectionKeys),
+      );
+      const harness = createHarness('OPEN', false, { openBatchStatus }, 70, { intent });
+
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS);
+      });
+      expect(openBatchStatus).toHaveBeenCalledOnce();
+      expect(harness.value().selected).toEqual([]);
+      expect(harness.value().sectionStatuses.map(({ sectionKey }) => sectionKey))
+        .toEqual([SECTION_A]);
+
+      await act(async () => {
+        harness.watch.transition(connection);
+        await Promise.resolve();
+      });
+
+      expect(harness.value().active).toEqual([]);
+      expect(openBatchStatus).toHaveBeenCalledTimes(2);
+      expect(openBatchStatus.mock.calls[1]![0]).toEqual({
+        contractVersion: 1,
+        batch: BATCH_A,
+        sectionKeys: [SECTION_A],
+      });
+      expect(harness.value().sectionStatuses.map(({ sectionKey }) => sectionKey))
+        .toEqual([SECTION_A]);
+      expect(harness.value().batchStatuses.map(({ batch }) => batch)).toEqual([BATCH_A]);
+      expect(harness.value().telemetryLoading).toBe(false);
+    },
+  );
+
+  it('settles a rapid 40-Section gesture into one target projection', async () => {
+    vi.useFakeTimers();
+    const sections = sectionRange(40);
+    const openBatchStatus = vi.fn<NonNullable<ProductApiPort['openBatchStatus']>>(
+      async ({ sectionKeys }) => batchStatus(sectionKeys),
+    );
+    const openSectionStatus = vi.fn<ProductApiPort['openSectionStatus']>(async ({ sectionKey }) =>
+      sectionStatus(sectionKey));
+    const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) =>
+      refreshStatus(batch));
+    const harness = createHarness('OPEN', false, {
+      openBatchStatus,
+      openSectionStatus,
+      openStatus,
+    }, 70, { maximumSelectedSections: 255 });
+
+    await act(async () => sections.forEach((section) => harness.value().select(section)));
+    expect(openBatchStatus).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS - 1);
+    });
+    expect(openBatchStatus).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+
+    expect(openBatchStatus).toHaveBeenCalledOnce();
+    expect(openBatchStatus.mock.calls[0]![0]).toEqual({
+      contractVersion: 1,
+      batch: BATCH_A,
+      sectionKeys: sections,
+    });
+    expect(openSectionStatus).not.toHaveBeenCalled();
+    expect(openStatus).not.toHaveBeenCalled();
+    expect(harness.value().sectionStatuses).toHaveLength(40);
+    expect(harness.value().batchStatuses).toHaveLength(1);
+    expect(harness.value().telemetryLoading).toBe(false);
+  });
+
+  it('projects a disjoint 255 selected plus 255 active union in one target request', async () => {
+    const selected = sectionRange(255);
+    const active = sectionRange(255, SECTION_A.campus, 256);
+    const openBatchStatus = vi.fn<NonNullable<ProductApiPort['openBatchStatus']>>(
+      async ({ sectionKeys }) => batchStatus(sectionKeys),
+    );
+    const harness = createHarness('OPEN', false, { openBatchStatus }, 70, {
+      maximumSelectedSections: 255,
+    });
+
+    await act(async () => selected.forEach((section) => harness.value().select(section)));
+    await emit(harness, startResult(active.map((section, index) => [
+      section,
+      `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    ] as const)));
+    await act(async () => harness.value().refreshTelemetry());
+
+    expect(openBatchStatus).toHaveBeenCalledOnce();
+    expect(openBatchStatus.mock.calls[0]![0].sectionKeys).toHaveLength(510);
+    expect(new Set(openBatchStatus.mock.calls[0]![0].sectionKeys.map(({ index }) => index)).size)
+      .toBe(510);
+    expect(JSON.stringify(openBatchStatus.mock.calls[0]![0]).length).toBeLessThan(64 * 1024);
+    expect(JSON.stringify(batchStatus(openBatchStatus.mock.calls[0]![0].sectionKeys)).length)
+      .toBeLessThan(1024 * 1024);
+    expect(harness.value().sectionStatuses).toHaveLength(510);
+    expect(harness.value().batchStatuses).toHaveLength(1);
+  });
+
+  it('keeps valid peers when a batch response omits one stale saved Section', async () => {
+    vi.useFakeTimers();
+    const stale = sectionRange(1, SECTION_A.campus, 500)[0]!;
+    const openBatchStatus = vi.fn<NonNullable<ProductApiPort['openBatchStatus']>>(
+      async () => batchStatus([SECTION_A]),
+    );
+    const harness = createHarness('OPEN', false, { openBatchStatus }, 70, {
+      maximumSelectedSections: 255,
+    });
+    await act(async () => {
+      harness.value().select(SECTION_A);
+      harness.value().select(stale);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS);
+    });
+
+    expect(harness.value().sectionStatuses.map(({ sectionKey }) => sectionKey)).toEqual([SECTION_A]);
+    expect(harness.value().batchStatuses).toHaveLength(1);
+    expect(harness.value().telemetryResources.find((resource) =>
+      resource.sectionKey?.index === SECTION_A.index)).toMatchObject({ error: null });
+    expect(harness.value().telemetryResources.find((resource) =>
+      resource.sectionKey?.index === stale.index)).toMatchObject({
+      availability: 'ERROR_NO_DATA',
+      error: { httpStatus: 404, retryable: false },
+    });
+  });
+
+  it('aborts a superseded batch pass and applies only the settled selection', async () => {
+    vi.useFakeTimers();
+    const first = deferred<OpenBatchStatusV1>();
+    const signals: (AbortSignal | undefined)[] = [];
+    const openBatchStatus = vi.fn<NonNullable<ProductApiPort['openBatchStatus']>>(
+      async ({ sectionKeys }, signal) => {
+        signals.push(signal);
+        if (signals.length === 1) {
+          signal?.addEventListener('abort', () => first.reject(new ProductClientError(null, null)));
+          return first.promise;
+        }
+        return batchStatus(sectionKeys);
+      },
+    );
+    const harness = createHarness('OPEN', false, { openBatchStatus }, 70, {
+      maximumSelectedSections: 255,
+    });
+
+    await act(async () => harness.value().select(SECTION_A));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS);
+    });
+    expect(openBatchStatus).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      harness.value().select(SECTION_C);
+      await Promise.resolve();
+    });
+    expect(signals[0]?.aborted).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS);
+    });
+
+    expect(openBatchStatus).toHaveBeenCalledTimes(2);
+    expect(openBatchStatus.mock.calls[1]![0].sectionKeys).toEqual([SECTION_A, SECTION_C]);
+    expect(harness.value().sectionStatuses.map(({ sectionKey }) => sectionKey))
+      .toEqual([SECTION_A, SECTION_C]);
+    expect(harness.value().telemetryResources.every(({ error }) => error === null)).toBe(true);
+    expect(harness.value().telemetryLoading).toBe(false);
+  });
+
   it('keeps browser audio usable through React StrictMode effect replay', async () => {
     const harness = createHarness('OPEN', true);
     await selectAndStart(harness, [SECTION_A]);
@@ -621,6 +953,7 @@ describe('LiveWatchProvider', () => {
   it('keeps successful UNKNOWN telemetry as no-data without inventing a success time', async () => {
     const harness = createHarness();
     await act(async () => harness.value().select(SECTION_A));
+    await waitFor(() => expect(harness.value().telemetryResources).toHaveLength(2));
     await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
 
     expect(harness.value().telemetryResources).toHaveLength(2);
@@ -654,6 +987,8 @@ describe('LiveWatchProvider', () => {
       harness.value().select(SECTION_A);
       harness.value().select(SECTION_C);
     });
+    await waitFor(() => expect(openSectionStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
     expect(harness.value().telemetryResources.filter((resource) => resource.error !== null))
       .toHaveLength(2);
@@ -692,6 +1027,8 @@ describe('LiveWatchProvider', () => {
       harness.value().select(SECTION_A);
       harness.value().select(SECTION_D);
     });
+    await waitFor(() => expect(openSectionStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
     expect(harness.value().telemetryResources.filter((resource) => resource.error !== null))
       .toHaveLength(2);
@@ -711,6 +1048,7 @@ describe('LiveWatchProvider', () => {
     const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => refreshStatus(batch));
     const harness = createHarness('OPEN', false, { openStatus });
     await act(async () => harness.value().select(SECTION_A));
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
 
     openStatus.mockImplementationOnce(async () => slow.promise);
@@ -736,7 +1074,9 @@ describe('LiveWatchProvider', () => {
       .mockImplementation(async () => authoritative.promise);
     const harness = createHarness('OPEN', false, { openSectionStatus });
     await act(async () => harness.value().select(SECTION_A));
-    await act(async () => Promise.resolve());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS + 1);
+    });
     expect(openSectionStatus).toHaveBeenCalledOnce();
 
     const freshUntil = '2030-01-01T00:00:01Z';
@@ -802,6 +1142,8 @@ describe('LiveWatchProvider', () => {
       harness.value().select(SECTION_A);
       harness.value().select(SECTION_C);
     });
+    await waitFor(() => expect(openSectionStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(openStatus).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(harness.value().telemetryLoading).toBe(false));
 
     expect(openSectionStatus).toHaveBeenCalledTimes(2);
@@ -815,7 +1157,9 @@ describe('LiveWatchProvider', () => {
     const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => refreshStatus(batch));
     const harness = createHarness('OPEN', false, { openStatus });
     await act(async () => harness.value().select(SECTION_A));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS + 1);
+    });
     expect(openStatus).toHaveBeenCalledTimes(1);
 
     await emit(harness, observationEvent());
@@ -843,7 +1187,9 @@ describe('LiveWatchProvider', () => {
     const openStatus = vi.fn<ProductApiPort['openStatus']>(async ({ batch }) => refreshStatus(batch));
     const harness = createHarness('OPEN', false, { openStatus });
     await act(async () => harness.value().select(SECTION_A));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS + 1);
+    });
     expect(openStatus).toHaveBeenCalledTimes(1);
 
     openStatus.mockImplementationOnce(async () => slow.promise);
@@ -897,7 +1243,9 @@ describe('LiveWatchProvider', () => {
       harness.value().telemetryResources.find((resource) => resource.kind === 'BATCH');
 
     await act(async () => harness.value().select(SECTION_A));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS + 1);
+    });
     expect(openSectionStatus).toHaveBeenCalledTimes(1);
     expect(openStatus).toHaveBeenCalledTimes(1);
     expect(batchResource()).toMatchObject({
@@ -971,7 +1319,9 @@ describe('LiveWatchProvider', () => {
       harness.value().select(SECTION_A);
       harness.value().select(SECTION_C);
     });
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS + 1);
+    });
     expect(openSectionStatus).toHaveBeenCalledTimes(2);
     expect(openStatus).toHaveBeenCalledTimes(1);
     expect(batchResource()).toMatchObject({ loading: true });
@@ -1148,7 +1498,7 @@ describe('LiveWatchProvider', () => {
     });
     const harness = createHarness('OPEN', false, { openSectionStatus, openStatus });
     await act(async () => harness.value().select(SECTION_A));
-    expect(harness.value().telemetryLoading).toBe(true);
+    await waitFor(() => expect(harness.value().telemetryLoading).toBe(true));
 
     // Removing a Section the desk was not reading for cancels the pass -- and
     // leaves the selection, so no new pass follows to finish the sentence.
@@ -1188,7 +1538,9 @@ describe('LiveWatchProvider', () => {
       harness.value().telemetryResources.find((resource) => resource.key === BATCH_A_RESOURCE_KEY);
 
     await act(async () => harness.value().select(SECTION_A));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SELECTION_TELEMETRY_DEBOUNCE_MILLISECONDS + 1);
+    });
     expect(openStatus).toHaveBeenCalledTimes(1);
     batchCalls[0]!.resolve(refreshStatus(BATCH_A));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });

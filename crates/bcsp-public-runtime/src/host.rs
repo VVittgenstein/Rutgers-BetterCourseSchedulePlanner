@@ -1806,6 +1806,12 @@ mod tests {
                 .send()
                 .await
                 .expect("local mutation probe"),
+            client
+                .put(request_url(&runtime, "/api/v1/local/desired-watch/batch"))
+                .header(HOST.as_str(), TEST_AUTHORITY)
+                .send()
+                .await
+                .expect("local desired-watch batch probe"),
         ] {
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
         }

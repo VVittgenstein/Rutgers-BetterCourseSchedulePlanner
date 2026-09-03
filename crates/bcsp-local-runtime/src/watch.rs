@@ -9,6 +9,8 @@
 //! it is an ordinary local HTTP resource (see `crate::desired`), and a page
 //! that tries to open a socket on it reaches the HTTP handler.
 
+use std::collections::BTreeMap;
+use std::num::NonZeroU8;
 use std::sync::{Arc, Mutex};
 
 use bcsp_application::{
@@ -16,11 +18,14 @@ use bcsp_application::{
     WebSocketExtension, is_product_campus,
 };
 use bcsp_contracts::{
-    SectionKey, TraceId, WatchClientCommandV1, WsClientEnvelope, decode_versioned_envelope_json,
+    SectionKey, TermCampusKey, TraceId, WatchClientCommandV1, WsClientEnvelope,
+    decode_versioned_envelope_json,
 };
 use bcsp_domain::{RutgersTermWindow, RutgersTermWindowScope};
 use bcsp_local_user_state::PersonalStateStore;
-use bcsp_open::{OpenProjectionError, project_current_open_observation};
+use bcsp_open::{
+    OpenProjectionError, project_current_open_observation, project_current_open_observations,
+};
 use bcsp_watch::{WatchManagerError, WatchStartAdmission};
 use time::OffsetDateTime;
 
@@ -31,6 +36,13 @@ use crate::{
 
 /// Frozen path of the local presence route.
 pub const LOCAL_PRESENCE_SOCKET_PATH: &str = "/api/v1/local/presence";
+
+/// The local process opts into the complete count domain carried by the v1
+/// watch wire. Public/default compositions intentionally retain their cap of
+/// nine.
+pub const LOCAL_MAX_ACTIVE_WATCHES: u8 = u8::MAX;
+const _: () =
+    assert!(bcsp_local_user_state::MAX_DESIRED_WATCHES == LOCAL_MAX_ACTIVE_WATCHES as usize);
 
 struct LocalWatchAdmission {
     database: Arc<Mutex<LocalPrimaryDatabase>>,
@@ -61,6 +73,53 @@ impl WatchAdmissionSource for LocalWatchAdmission {
             section,
             &runtime,
         ))
+    }
+
+    fn admissions_for(&self, sections: &[SectionKey]) -> Vec<WatchStartAdmission> {
+        let mut admissions = vec![WatchStartAdmission::TargetUnavailable; sections.len()];
+        let mut targets = BTreeMap::<TermCampusKey, Vec<(usize, SectionKey)>>::new();
+        for (position, section) in sections.iter().enumerate() {
+            if !self.target_supported(section) {
+                admissions[position] = WatchStartAdmission::UnsupportedTarget;
+            } else if !self.term_in_range(section) {
+                admissions[position] = WatchStartAdmission::TermOutOfRange;
+            } else {
+                targets
+                    .entry(section.target())
+                    .or_default()
+                    .push((position, section.clone()));
+            }
+        }
+
+        for (target, members) in targets {
+            let projection = (|| {
+                let snapshot = self.open_runtime.snapshot(&target).ok()?;
+                let runtime = self.runtime.projection_runtime(&snapshot).ok()?;
+                let mut database = self.database.lock().ok()?;
+                let sections = members
+                    .iter()
+                    .map(|(_, section)| section.clone())
+                    .collect::<Vec<_>>();
+                project_current_open_observations(
+                    database.operational_mut(),
+                    &target,
+                    &sections,
+                    &runtime,
+                )
+                .ok()
+            })();
+
+            let Some(projection) = projection else {
+                continue;
+            };
+            for (position, section) in members {
+                admissions[position] = match projection.get(&section) {
+                    Some(observation) => WatchStartAdmission::admitted(observation.clone()),
+                    None => WatchStartAdmission::SectionNotFound,
+                };
+            }
+        }
+        admissions
     }
 
     fn target_supported(&self, section: &SectionKey) -> bool {
@@ -117,7 +176,11 @@ pub(crate) fn create_local_watch_socket_with_history(
         open_runtime,
     });
     let history = Arc::new(LocalWatchHistorySink::new(history_store));
-    let socket = Arc::new(SharedWatchSocket::try_new(admission, history.clone())?);
+    let socket = Arc::new(SharedWatchSocket::try_new_with_max_active_watches(
+        admission,
+        history.clone(),
+        NonZeroU8::new(LOCAL_MAX_ACTIVE_WATCHES).expect("the local watch limit is nonzero"),
+    )?);
     Ok((socket, history))
 }
 

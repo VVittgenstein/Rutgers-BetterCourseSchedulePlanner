@@ -422,7 +422,7 @@ describe('P7.2-004 local personal state', () => {
     });
   });
 
-  it('parses persisted desired watches and rejects legacy, live-watch, or overfull payloads', () => {
+  it('parses up to 255 local watches and rejects legacy, live-watch, or 256-item payloads', () => {
     const policy = {
       notificationMode: 'CONTINUOUS',
       maxAudible: 5,
@@ -447,6 +447,27 @@ describe('P7.2-004 local personal state', () => {
 
     expect(parseLocalBootstrapData(withDesired).state.desiredWatches).toEqual(desiredWatches);
 
+    for (const count of [10, 255]) {
+      const withinLocalLimit = {
+        ...bootstrap,
+        state: {
+          ...bootstrap.state,
+          selectedSections: Array.from({ length: count }, (_, ordinal) => ({
+            term: '92026', campus: 'NB', index: String(10_000 + ordinal),
+          })),
+          desiredWatches: Array.from({ length: count }, (_, ordinal) => ({
+            section: { term: '92026', campus: 'NB', index: String(10_000 + ordinal) },
+            policy,
+          })),
+          activeWatchCount: count,
+        },
+      };
+      const parsed = parseLocalBootstrapData(withinLocalLimit);
+      expect(parsed.state.selectedSections).toHaveLength(count);
+      expect(parsed.state.desiredWatches).toHaveLength(count);
+      expect(parsed.state.activeWatchCount).toBe(count);
+    }
+
     const legacyPayload = structuredClone(bootstrap) as unknown as { state: Record<string, unknown> };
     delete legacyPayload.state.desiredWatches;
     const liveWatchLeak = {
@@ -467,14 +488,34 @@ describe('P7.2-004 local personal state', () => {
       ...bootstrap,
       state: {
         ...bootstrap.state,
-        desiredWatches: Array.from({ length: 10 }, (_, ordinal) => ({
+        desiredWatches: Array.from({ length: 256 }, (_, ordinal) => ({
           section: { term: '92026', campus: 'NB', index: String(10_000 + ordinal) },
           policy,
         })),
       },
     };
+    const overfullActiveCount = {
+      ...bootstrap,
+      state: { ...bootstrap.state, activeWatchCount: 256 },
+    };
+    const overfullSelection = {
+      ...bootstrap,
+      state: {
+        ...bootstrap.state,
+        selectedSections: Array.from({ length: 256 }, (_, ordinal) => ({
+          term: '92026', campus: 'NB', index: String(10_000 + ordinal),
+        })),
+      },
+    };
 
-    for (const rejected of [legacyPayload, liveWatchLeak, invalidPolicy, overfull]) {
+    for (const rejected of [
+      legacyPayload,
+      liveWatchLeak,
+      invalidPolicy,
+      overfull,
+      overfullActiveCount,
+      overfullSelection,
+    ]) {
       expect(() => parseLocalBootstrapData(rejected)).toThrow(ProductBootstrapError);
     }
   });
@@ -552,7 +593,7 @@ describe('P7.2-004 local personal state', () => {
       { protocolVersion: 1, data: { mode: 'LOCAL', sessionNonce: SESSION } },
       localEnvelope({
         ...invalidState,
-        state: { ...invalidState.state, activeWatchCount: 10 },
+        state: { ...invalidState.state, activeWatchCount: 256 },
       }),
     ];
 

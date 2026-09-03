@@ -2,11 +2,11 @@ use std::num::NonZeroU64;
 use std::str::FromStr;
 
 use bcsp_contracts::{
-    ACTIVE_WATCH_STATE_PERSISTENT, ActiveWatchId, MAX_ACTIVE_WATCHES, OpenEpisodeId,
-    OpenEpisodeState, OpenEpisodeV1, SectionKey, TraceId, WATCH_CONTRACT_VERSION,
+    ACTIVE_WATCH_STATE_PERSISTENT, ActiveWatchId, MAX_ACTIVE_WATCHES, MAX_WATCH_START_ITEMS,
+    OpenEpisodeId, OpenEpisodeState, OpenEpisodeV1, SectionKey, TraceId, WATCH_CONTRACT_VERSION,
     WatchContinuousDurationV1, WatchMaxAudible, WatchNotificationMode, WatchPolicyV1,
-    WatchStartItemResultV1, WatchStartItemV1, WatchStartItemsV1, WatchStartRejectionReason,
-    WatchStartResultV1,
+    WatchServerEventV1, WatchStartItemResultV1, WatchStartItemV1, WatchStartItemsV1,
+    WatchStartRejectionReason, WatchStartResultV1, WsServerEnvelope,
 };
 use time::OffsetDateTime;
 
@@ -32,6 +32,15 @@ fn watch_contract_is_v1_connection_bound_and_nonpersistent() {
 fn positive_and_unlimited_audio_policy_values_are_exact() {
     assert!(WatchMaxAudible::try_from(0).is_err());
     assert_eq!(WatchMaxAudible::try_from(11).unwrap().get(), 11);
+    assert_eq!(
+        WatchMaxAudible::try_from(WatchMaxAudible::MAX)
+            .unwrap()
+            .get(),
+        WatchMaxAudible::MAX
+    );
+    assert!(WatchMaxAudible::try_from(WatchMaxAudible::MAX + 1).is_err());
+    assert!(serde_json::from_str::<WatchMaxAudible>("0").is_err());
+    assert!(serde_json::from_str::<WatchMaxAudible>("9007199254740992").is_err());
     assert!(WatchContinuousDurationV1::finite_seconds(0).is_err());
     assert_eq!(
         WatchContinuousDurationV1::finite_seconds(600)
@@ -39,15 +48,33 @@ fn positive_and_unlimited_audio_policy_values_are_exact() {
             .seconds(),
         Some(600)
     );
+    assert_eq!(
+        WatchContinuousDurationV1::finite_seconds(WatchContinuousDurationV1::MAX_FINITE_SECONDS,)
+            .unwrap()
+            .seconds(),
+        Some(WatchContinuousDurationV1::MAX_FINITE_SECONDS)
+    );
+    assert!(
+        WatchContinuousDurationV1::finite_seconds(
+            WatchContinuousDurationV1::MAX_FINITE_SECONDS + 1,
+        )
+        .is_err()
+    );
     assert_eq!(WatchContinuousDurationV1::Unlimited.seconds(), None);
     assert!(
         serde_json::from_str::<WatchContinuousDurationV1>(r#"{"kind":"FINITE","seconds":0}"#)
             .is_err()
     );
+    assert!(
+        serde_json::from_str::<WatchContinuousDurationV1>(
+            r#"{"kind":"FINITE","seconds":9007199254740992}"#,
+        )
+        .is_err()
+    );
 }
 
 #[test]
-fn start_input_is_nonempty_and_identity_unique_but_tenth_item_reaches_per_item_result() {
+fn start_input_is_nonempty_identity_unique_and_wire_count_spans_u8() {
     assert!(WatchStartItemsV1::try_from(Vec::new()).is_err());
     let policy = WatchPolicyV1::default();
     assert!(
@@ -65,6 +92,10 @@ fn start_input_is_nonempty_and_identity_unique_but_tenth_item_reaches_per_item_r
         WatchStartItemsV1::try_from(ten).unwrap().as_slice().len(),
         10
     );
+    let over_wire_limit = (1..=u16::try_from(MAX_WATCH_START_ITEMS + 1).unwrap())
+        .map(|index| WatchStartItemV1::new(section(index), policy.clone()))
+        .collect::<Vec<_>>();
+    assert!(WatchStartItemsV1::try_from(over_wire_limit).is_err());
 
     let mut results = (1..=9)
         .map(|index| WatchStartItemResultV1::Active {
@@ -80,7 +111,31 @@ fn start_input_is_nonempty_and_identity_unique_but_tenth_item_reaches_per_item_r
     let result = WatchStartResultV1::try_new(results, 9).unwrap();
     assert_eq!(result.items().len(), 10);
     assert_eq!(result.active_watch_count(), 9);
-    assert!(WatchStartResultV1::try_new(result.items().to_vec(), 10).is_err());
+
+    let maximum = (1..=u16::from(u8::MAX))
+        .map(|index| WatchStartItemResultV1::Active {
+            section_key: section(index),
+            active_watch_id: ActiveWatchId::new(trace(index as u8)),
+            started_at: OffsetDateTime::UNIX_EPOCH,
+        })
+        .collect::<Vec<_>>();
+    let maximum = WatchStartResultV1::try_new(maximum, u8::MAX).unwrap();
+    let encoded = serde_json::to_vec(&maximum).unwrap();
+    let decoded: WatchStartResultV1 = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded, maximum);
+    assert_eq!(decoded.active_watch_count(), u8::MAX);
+
+    let envelope = WsServerEnvelope::new(
+        trace(1),
+        WatchServerEventV1::StartResult { result: maximum },
+    );
+    let encoded = serde_json::to_vec(&envelope).unwrap();
+    assert!(
+        encoded.len() <= 64 * 1024,
+        "the largest local START_RESULT is {} bytes",
+        encoded.len(),
+    );
+    let _: WsServerEnvelope<WatchServerEventV1> = serde_json::from_slice(&encoded).unwrap();
 }
 
 #[test]

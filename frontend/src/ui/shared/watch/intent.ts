@@ -111,6 +111,16 @@ export interface WatchIntentPort {
     snapshot: WatchIntentSnapshot,
     signal?: AbortSignal,
   ): Promise<WatchIntentResult>;
+  /**
+   * Optional atomic whole-gesture submission. Local implements this so a
+   * 255-row action is one authority commit and one reconciliation; targets
+   * without it retain the ordered single-item compatibility path.
+   */
+  submitBatch?(
+    submissions: readonly WatchIntentSubmission[],
+    snapshot: WatchIntentSnapshot,
+    signal?: AbortSignal,
+  ): Promise<WatchIntentResult>;
 }
 
 export type WatchIntentStatus = 'DISABLED' | 'LOADING' | 'READY' | 'FAILED';

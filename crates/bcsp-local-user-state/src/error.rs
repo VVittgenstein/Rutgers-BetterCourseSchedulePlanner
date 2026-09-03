@@ -75,6 +75,8 @@ pub enum PersonalStateError {
     DuplicateSelection(bcsp_contracts::SectionKey),
     #[error("selection limit exceeded; maximum is {maximum}")]
     SelectionLimitExceeded { maximum: usize },
+    #[error("desired-watch batch must be nonempty, unique, and fit the local limit")]
+    InvalidDesiredWatchBatch,
     #[error("a desired-watch authority counter is exhausted")]
     DesiredWatchCounterExhausted,
     #[error("history page limit must be between 1 and 100")]

@@ -10,16 +10,16 @@ use bcsp_contracts::{
 };
 use bcsp_local_user_state::{
     CatalogRefreshMinutes, CurrentFiltersRevision, DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD,
-    DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD, DesiredWatch, DesiredWatchBudgetKind,
-    DesiredWatchCommand, DesiredWatchCommitted, DesiredWatchMutationOutcome,
-    DesiredWatchReceiptOutcome, EpisodeActionInput, EpisodeActionKind, EpisodeDisposition,
-    EpisodeHistoryIdentity, EpisodeSummaryInput, FilterAssociation, HistoryFilter,
-    HistoryWriteOutcome, LocalSettings, LocaleOverride, MAX_DESIRED_WATCH_AUTHORITY_ROWS,
-    MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES, MAX_DESIRED_WATCHES,
-    MAX_SELECTED_SECTIONS, OpenRefreshSeconds, PageRequest, PersonalStateError, PersonalStateStore,
-    SavedViewContent, SavedViewIncompatibility, SavedViewMatch, SavedViewRevision,
-    SelectionMutation, SettingsRevision, UnixMillis, UserStateRevision, VolumePercent,
-    WalCheckpointMode, WatchFastLaneSeconds,
+    DESIRED_WATCH_TOMBSTONE_ROTATION_THRESHOLD, DesiredWatch, DesiredWatchBatchCommand,
+    DesiredWatchBatchOutcome, DesiredWatchBudgetKind, DesiredWatchCommand, DesiredWatchCommitted,
+    DesiredWatchMutationOutcome, DesiredWatchReceiptOutcome, EpisodeActionInput, EpisodeActionKind,
+    EpisodeDisposition, EpisodeHistoryIdentity, EpisodeSummaryInput, FilterAssociation,
+    HistoryFilter, HistoryWriteOutcome, LocalSettings, LocaleOverride,
+    MAX_DESIRED_WATCH_AUTHORITY_ROWS, MAX_DESIRED_WATCH_RECEIPTS, MAX_DESIRED_WATCH_TOMBSTONES,
+    MAX_DESIRED_WATCHES, MAX_SELECTED_SECTIONS, OpenRefreshSeconds, PageRequest,
+    PersonalStateError, PersonalStateStore, SavedViewContent, SavedViewIncompatibility,
+    SavedViewMatch, SavedViewRevision, SelectionMutation, SettingsRevision, UnixMillis,
+    UserStateRevision, VolumePercent, WalCheckpointMode, WatchFastLaneSeconds,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -211,11 +211,13 @@ fn first_start_is_schema_only_and_enforces_sqlite_and_migration_contracts() {
     assert!(configuration.busy_timeout_ms >= 5_000);
     assert_eq!(store.personal_table_counts().unwrap(), Default::default());
     let migrations = store.migration_records().unwrap();
-    assert_eq!(migrations.len(), 4);
+    assert_eq!(migrations.len(), 6);
     assert_eq!(migrations[0].migration_id, 10_001);
     assert_eq!(migrations[1].migration_id, 10_002);
     assert_eq!(migrations[2].migration_id, 10_003);
     assert_eq!(migrations[3].migration_id, 10_004);
+    assert_eq!(migrations[4].migration_id, 10_005);
+    assert_eq!(migrations[5].migration_id, 10_006);
     assert_eq!(migrations[0].checksum.len(), 64);
     let _ = store.checkpoint_wal(WalCheckpointMode::Truncate).unwrap();
     drop(store);
@@ -231,6 +233,26 @@ fn first_start_is_schema_only_and_enforces_sqlite_and_migration_contracts() {
         .unwrap();
     assert!(!schema.to_ascii_lowercase().contains("connection"));
     assert!(!schema.to_ascii_lowercase().contains("active_watch"));
+    let selection_schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema
+             WHERE type = 'table' AND name = 'personal_selected_sections_v1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(selection_schema.contains("position BETWEEN 0 AND 254"));
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO personal_selected_sections_v1(
+                     position, term_id, campus_code, section_index
+                 ) VALUES (255, 'T2026F', 'CAMPUS_A', '99999')",
+                [],
+            )
+            .is_err(),
+        "the persisted position domain must stop at the 255th item",
+    );
 }
 
 #[test]
@@ -639,7 +661,8 @@ fn legacy_settings_current_filters_migrate_to_the_dedicated_snapshot_table() {
     connection
         .execute_batch(
             "DELETE FROM personal_migration_ledger
-                 WHERE migration_id IN (10002, 10003, 10004);
+                 WHERE migration_id IN (10002, 10003, 10004, 10005, 10006);
+             DROP TABLE personal_desired_watch_batch_receipts_v1;
              DROP TABLE personal_desired_watch_receipts_v1;
              DROP TABLE personal_desired_watches_v1;
              DROP TABLE personal_saved_views_v1;
@@ -662,7 +685,7 @@ fn legacy_settings_current_filters_migrate_to_the_dedicated_snapshot_table() {
     drop(connection);
 
     let store = PersonalStateStore::open(&path).unwrap();
-    assert_eq!(store.migration_records().unwrap().len(), 4);
+    assert_eq!(store.migration_records().unwrap().len(), 6);
     assert_eq!(store.settings().unwrap().value, LocalSettings::default());
     let migrated = store.current_filters().unwrap();
     assert_eq!(migrated.revision.get(), 1);
@@ -670,7 +693,118 @@ fn legacy_settings_current_filters_migrate_to_the_dedicated_snapshot_table() {
 }
 
 #[test]
-fn selection_persists_order_and_the_tenth_section_is_explicitly_rejected() {
+fn migration_10005_preserves_v10004_selection_beside_operational_v8() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+
+    let operational = bcsp_operational_storage::OperationalStorage::open(&path).unwrap();
+    assert_eq!(operational.migration_records().unwrap().len(), 8);
+    let mut personal = PersonalStateStore::open(&path).unwrap();
+    let legacy_selection = (1..=9).map(section).collect::<Vec<_>>();
+    personal
+        .replace_selected_sections(state_one(), &legacy_selection)
+        .unwrap();
+    drop(personal);
+    drop(operational);
+
+    // Recreate the exact released 10004 selection-table shape while retaining
+    // its rows and every operational migration. Reopening must apply only the
+    // new personal migration and leave both sets of state intact.
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "DELETE FROM personal_migration_ledger WHERE migration_id IN (10005, 10006);
+             DROP TABLE personal_desired_watch_batch_receipts_v1;
+             ALTER TABLE personal_selected_sections_v1
+                 RENAME TO personal_selected_sections_post10005;
+             CREATE TABLE personal_selected_sections_v1 (
+                 position INTEGER PRIMARY KEY CHECK (position BETWEEN 0 AND 8),
+                 term_id TEXT NOT NULL,
+                 campus_code TEXT NOT NULL,
+                 section_index TEXT NOT NULL,
+                 UNIQUE (term_id, campus_code, section_index)
+             ) STRICT;
+             INSERT INTO personal_selected_sections_v1(
+                 position, term_id, campus_code, section_index
+             )
+             SELECT position, term_id, campus_code, section_index
+             FROM personal_selected_sections_post10005
+             ORDER BY position;
+             DROP TABLE personal_selected_sections_post10005;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let operational = bcsp_operational_storage::OperationalStorage::open(&path).unwrap();
+    assert_eq!(operational.migration_records().unwrap().len(), 8);
+    let personal = PersonalStateStore::open(&path).unwrap();
+    assert_eq!(personal.migration_records().unwrap().len(), 6);
+    assert_eq!(personal.selected_sections().unwrap(), legacy_selection);
+    assert_eq!(operational.migration_records().unwrap().len(), 8);
+    drop(personal);
+    drop(operational);
+
+    let connection = Connection::open(&path).unwrap();
+    let selection_schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema
+             WHERE type = 'table' AND name = 'personal_selected_sections_v1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(selection_schema.contains("position BETWEEN 0 AND 254"));
+    assert_eq!(
+        connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok",
+    );
+}
+
+#[test]
+fn replacing_255_sections_survives_restart_and_the_256th_is_rejected() {
+    assert_eq!(bcsp_contracts::MAX_ACTIVE_WATCHES, 9);
+    assert_eq!(MAX_SELECTED_SECTIONS, 255);
+    assert_eq!(MAX_DESIRED_WATCHES, 255);
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let expected = (1..=255).map(section).collect::<Vec<_>>();
+
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    let state_revision = store.user_state_revision().unwrap();
+    store
+        .replace_selected_sections(state_revision, &expected)
+        .unwrap();
+    assert_eq!(store.selected_sections().unwrap(), expected);
+    drop(store);
+
+    let mut reopened = PersonalStateStore::open(&path).unwrap();
+    assert_eq!(reopened.selected_sections().unwrap(), expected);
+    assert!(matches!(
+        reopened.add_selected_section(state_revision, section(256)),
+        Err(PersonalStateError::SelectionLimitExceeded { maximum: 255 })
+    ));
+    let too_many = (1..=256).map(section).collect::<Vec<_>>();
+    assert!(matches!(
+        reopened.replace_selected_sections(state_revision, &too_many),
+        Err(PersonalStateError::SelectionLimitExceeded { maximum: 255 })
+    ));
+    assert_eq!(reopened.selected_sections().unwrap(), expected);
+    drop(reopened);
+
+    assert_eq!(
+        PersonalStateStore::open(&path)
+            .unwrap()
+            .selected_sections()
+            .unwrap(),
+        expected,
+        "a rejected 256-item replacement must not disturb durable state",
+    );
+}
+
+#[test]
+fn selection_persists_order_and_the_section_after_the_limit_is_explicitly_rejected() {
     let directory = TempDir::new().unwrap();
     let path = database_path(&directory);
     let mut store = PersonalStateStore::open(&path).unwrap();
@@ -685,9 +819,11 @@ fn selection_persists_order_and_the_tenth_section_is_explicitly_rejected() {
             }
         );
     }
+    let section_after_limit = section((MAX_SELECTED_SECTIONS + 1) as u16);
     assert!(matches!(
-        store.add_selected_section(state_revision, section(10)),
-        Err(PersonalStateError::SelectionLimitExceeded { maximum: 9 })
+        store.add_selected_section(state_revision, section_after_limit),
+        Err(PersonalStateError::SelectionLimitExceeded { maximum })
+            if maximum == MAX_SELECTED_SECTIONS
     ));
     assert!(matches!(
         store
@@ -695,7 +831,9 @@ fn selection_persists_order_and_the_tenth_section_is_explicitly_rejected() {
             .unwrap(),
         SelectionMutation::AlreadySelected { position: 0 }
     ));
-    let expected = (1..=9).map(section).collect::<Vec<_>>();
+    let expected = (1..=MAX_SELECTED_SECTIONS as u16)
+        .map(section)
+        .collect::<Vec<_>>();
     drop(store);
     assert_eq!(
         PersonalStateStore::open(&path)
@@ -946,7 +1084,7 @@ fn restart_snapshot_never_restores_active_watch_and_reset_preserves_operational_
                 |row| row.get::<_, i64>(0)
             )
             .unwrap(),
-        4
+        6
     );
     let serialized = serde_json::to_value(snapshot).unwrap();
     assert_eq!(serialized["activeWatchCount"], json!(0));
@@ -964,7 +1102,9 @@ fn migration_10004_upgrades_intent_rows_and_separates_authority_from_the_wire() 
     let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
-            "DELETE FROM personal_migration_ledger WHERE migration_id = 10004;
+            "DELETE FROM personal_migration_ledger
+                 WHERE migration_id IN (10004, 10005, 10006);
+             DROP TABLE personal_desired_watch_batch_receipts_v1;
              DROP TABLE personal_desired_watch_receipts_v1;
              DROP TABLE personal_desired_watches_v1;
              CREATE TABLE personal_desired_watches_v1 (
@@ -1005,7 +1145,7 @@ fn migration_10004_upgrades_intent_rows_and_separates_authority_from_the_wire() 
     drop(connection);
 
     let store = PersonalStateStore::open(&path).unwrap();
-    assert_eq!(store.migration_records().unwrap().len(), 4);
+    assert_eq!(store.migration_records().unwrap().len(), 6);
 
     let authority = store.desired_watch_authority().unwrap();
     assert_eq!(authority.counters.authority_generation, 1);
@@ -1118,6 +1258,14 @@ fn full_reset_is_the_authority_generation_barrier() {
             ],
         )
         .unwrap();
+    connection
+        .execute(
+            "INSERT INTO personal_desired_watch_batch_receipts_v1
+                 (authority_generation, mutation_id, fingerprint, outcome_json)
+             VALUES (1, ?1, ?2, '{\"outcome\":\"STALE_REVISION\",\"current\":0}')",
+            rusqlite::params![trace(99).to_string(), "b".repeat(64)],
+        )
+        .unwrap();
     drop(connection);
 
     let before = store.desired_watch_authority().unwrap();
@@ -1128,12 +1276,12 @@ fn full_reset_is_the_authority_generation_barrier() {
             .personal_table_counts()
             .unwrap()
             .desired_watch_receipts,
-        1
+        2
     );
 
     let reset = store.clear_personal_data(state_one()).unwrap();
     assert_eq!(reset.deleted_desired_watches, 2);
-    assert_eq!(reset.deleted_desired_watch_receipts, 1);
+    assert_eq!(reset.deleted_desired_watch_receipts, 2);
 
     // A reset that only deleted rows would leave every pre-reset command
     // still carrying a matching generation, so it would be admitted right
@@ -1216,6 +1364,236 @@ fn receipt_count(store: &PersonalStateStore) -> u64 {
         .desired_watch_receipts
 }
 
+fn batch_start(section: SectionKey, based_on_revision: u64) -> DesiredWatchBatchCommand {
+    DesiredWatchBatchCommand {
+        section,
+        policy: Some(WatchPolicyV1::default()),
+        based_on_revision,
+    }
+}
+
+fn batch_stop(section: SectionKey, based_on_revision: u64) -> DesiredWatchBatchCommand {
+    DesiredWatchBatchCommand {
+        section,
+        policy: None,
+        based_on_revision,
+    }
+}
+
+#[test]
+fn one_batch_receipt_atomically_replays_the_complete_gesture_and_owns_its_id() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    let commands = (1..=40)
+        .map(|index| batch_start(section(index), 0))
+        .collect::<Vec<_>>();
+
+    let first = store
+        .commit_desired_watch_batch(1, trace(9_000), &commands)
+        .unwrap();
+    assert!(!first.replayed);
+    let DesiredWatchBatchOutcome::Committed(batch_committed) = &first.outcome else {
+        panic!("expected the whole batch to commit: {first:?}");
+    };
+    assert_eq!(batch_committed.len(), 40);
+    assert_eq!(store.desired_watches().unwrap().len(), 40);
+    assert_eq!(receipt_count(&store), 1, "one gesture consumes one receipt");
+
+    drop(store);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    let replay = store
+        .commit_desired_watch_batch(1, trace(9_000), &commands)
+        .unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.outcome, first.outcome);
+    assert_eq!(receipt_count(&store), 1, "replay inserts no receipt");
+
+    let mut changed = commands.clone();
+    changed[0].based_on_revision = 1;
+    assert_eq!(
+        store
+            .commit_desired_watch_batch(1, trace(9_000), &changed)
+            .unwrap()
+            .outcome,
+        DesiredWatchBatchOutcome::MutationIdConflict,
+    );
+    assert_eq!(
+        store
+            .commit_desired_watch_mutation(&start(section(50), 0, 9_000))
+            .unwrap(),
+        DesiredWatchMutationOutcome::BatchMutationIdConflict,
+        "a single mutation cannot reuse a batch id",
+    );
+
+    committed(
+        store
+            .commit_desired_watch_mutation(&start(section(50), 0, 9_001))
+            .unwrap(),
+    );
+    assert_eq!(
+        store
+            .commit_desired_watch_batch(1, trace(9_001), &[batch_start(section(51), 0)])
+            .unwrap()
+            .outcome,
+        DesiredWatchBatchOutcome::MutationIdConflict,
+        "a batch cannot reuse a single-mutation id",
+    );
+    assert_eq!(receipt_count(&store), 2);
+}
+
+#[test]
+fn a_batch_sql_failure_rolls_back_every_row_counter_and_receipt() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_second_batch_row
+             BEFORE INSERT ON personal_desired_watches_v1
+             WHEN NEW.section_index = '00002'
+             BEGIN
+                 SELECT RAISE(ABORT, 'injected batch failure');
+             END;",
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(
+        store
+            .commit_desired_watch_batch(
+                1,
+                trace(9_100),
+                &[
+                    batch_start(section(1), 0),
+                    batch_start(section(2), 0),
+                    batch_start(section(3), 0),
+                ],
+            )
+            .is_err(),
+    );
+    let authority = store.desired_watch_authority().unwrap();
+    assert!(authority.entries.is_empty());
+    assert_eq!(authority.counters.revision_counter, 0);
+    assert_eq!(authority.counters.materialization_counter, 0);
+    assert_eq!(receipt_count(&store), 0);
+}
+
+#[test]
+fn batch_generation_and_revision_failures_keep_their_order_and_write_no_authority() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    let stale = vec![batch_start(section(1), 99), batch_start(section(2), 0)];
+
+    let stale_generation = store
+        .commit_desired_watch_batch(7, trace(9_150), &stale)
+        .unwrap();
+    assert_eq!(
+        stale_generation.outcome,
+        DesiredWatchBatchOutcome::StaleGeneration { current: 1 },
+    );
+    assert_eq!(receipt_count(&store), 0);
+
+    let stale_revision = store
+        .commit_desired_watch_batch(1, trace(9_151), &stale)
+        .unwrap();
+    assert_eq!(
+        stale_revision.outcome,
+        DesiredWatchBatchOutcome::StaleRevision { current: 0 },
+    );
+    assert!(!stale_revision.replayed);
+    let authority = store.desired_watch_authority().unwrap();
+    assert!(authority.entries.is_empty());
+    assert_eq!(authority.counters.revision_counter, 0);
+    assert_eq!(authority.counters.materialization_counter, 0);
+    assert_eq!(receipt_count(&store), 1);
+
+    let replay = store
+        .commit_desired_watch_batch(1, trace(9_151), &stale)
+        .unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.outcome, stale_revision.outcome);
+    assert_eq!(receipt_count(&store), 1);
+}
+
+#[test]
+fn a_full_tombstone_budget_allows_an_atomic_reanimate_and_stop_swap() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    seed_tombstones(&path, MAX_DESIRED_WATCH_TOMBSTONES);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+
+    let decision = store
+        .commit_desired_watch_batch(
+            1,
+            trace(9_200),
+            &[batch_start(section(1), 1), batch_stop(section(9_000), 0)],
+        )
+        .unwrap();
+    assert!(matches!(
+        decision.outcome,
+        DesiredWatchBatchOutcome::Committed(_)
+    ));
+    assert_eq!(
+        store.desired_watch_budget().unwrap().tombstones,
+        MAX_DESIRED_WATCH_TOMBSTONES,
+        "post-state accounting removes the reanimated tombstone before adding the stop",
+    );
+    assert_eq!(store.desired_watches().unwrap().len(), 1);
+    let authority = store.desired_watch_authority().unwrap();
+    assert!(
+        !authority
+            .entries
+            .iter()
+            .find(|entry| entry.section == section(1))
+            .unwrap()
+            .is_tombstone()
+    );
+    assert!(
+        authority
+            .entries
+            .iter()
+            .find(|entry| entry.section == section(9_000))
+            .unwrap()
+            .is_tombstone()
+    );
+}
+
+#[test]
+fn maximum_batch_and_terminal_refusal_each_use_one_receipt_without_partial_state() {
+    let directory = TempDir::new().unwrap();
+    let path = database_path(&directory);
+    let mut store = PersonalStateStore::open(&path).unwrap();
+    let commands = (1..=MAX_DESIRED_WATCHES as u16)
+        .map(|index| batch_start(section(index), 0))
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        store
+            .commit_desired_watch_batch(1, trace(9_300), &commands)
+            .unwrap()
+            .outcome,
+        DesiredWatchBatchOutcome::Committed(ref committed)
+            if committed.len() == MAX_DESIRED_WATCHES
+    ));
+    assert_eq!(receipt_count(&store), 1);
+    let before = store.desired_watch_authority().unwrap();
+
+    let refused = store
+        .commit_desired_watch_batch(1, trace(9_301), &[batch_start(section(1_000), 0)])
+        .unwrap();
+    assert_eq!(
+        refused.outcome,
+        DesiredWatchBatchOutcome::LimitExceeded {
+            maximum: MAX_DESIRED_WATCHES,
+        },
+    );
+    let after = store.desired_watch_authority().unwrap();
+    assert_eq!(after, before, "a cap refusal writes no authority prefix");
+    assert_eq!(receipt_count(&store), 2, "each gesture uses one receipt");
+}
+
 /// The ledger row for one mutation id, as it is actually stored.
 fn stored_receipt(path: &Path, mutation: u64) -> (String, String) {
     let connection = Connection::open(path).unwrap();
@@ -1262,8 +1640,8 @@ fn the_cas_refusals_are_ordered_so_one_answer_never_hides_another() {
     );
 
     // The product cap is checked last, so a command that fails the revision
-    // check is never told it is at the cap instead. Nine sections are
-    // desired by the time the last assertion runs, so the cap WOULD fire if
+    // check is never told it is at the cap instead. The maximum number of
+    // sections are desired by the last assertion, so the cap WOULD fire if
     // the two checks were reordered.
     for index in 1..=MAX_DESIRED_WATCHES as u16 {
         committed(
@@ -1272,7 +1650,7 @@ fn the_cas_refusals_are_ordered_so_one_answer_never_hides_another() {
                 .unwrap(),
         );
     }
-    let mut past_the_cap = start(section(50), 4, 3);
+    let mut past_the_cap = start(section((MAX_DESIRED_WATCHES + 1) as u16), 4, 3);
     past_the_cap.policy = Some(loud_policy());
     assert_eq!(
         store.commit_desired_watch_mutation(&past_the_cap).unwrap(),
@@ -1350,37 +1728,43 @@ fn a_freed_slot_cannot_turn_a_recorded_limit_rejection_into_a_commit() {
             .revision,
         );
     }
+    let capped_section = section((MAX_DESIRED_WATCHES + 1) as u16);
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 10))
+            .commit_desired_watch_mutation(&start(capped_section.clone(), 0, 1_000))
             .unwrap(),
-        DesiredWatchMutationOutcome::LimitExceeded { maximum: 9 },
+        DesiredWatchMutationOutcome::LimitExceeded {
+            maximum: MAX_DESIRED_WATCHES,
+        },
     );
 
     // Free a slot, then present the refused mutation again unchanged.
     committed(
         store
-            .commit_desired_watch_mutation(&stop(section(1), revisions[0], 11))
+            .commit_desired_watch_mutation(&stop(section(1), revisions[0], 1_001))
             .unwrap(),
     );
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 10))
+            .commit_desired_watch_mutation(&start(capped_section.clone(), 0, 1_000))
             .unwrap(),
         DesiredWatchMutationOutcome::Replayed(DesiredWatchReceiptOutcome::LimitExceeded {
-            maximum: 9
+            maximum: MAX_DESIRED_WATCHES,
         }),
         "the refusal stands; only a new gesture with a new id may ask again",
     );
-    assert_eq!(store.desired_watches().unwrap().len(), 8);
+    assert_eq!(
+        store.desired_watches().unwrap().len(),
+        MAX_DESIRED_WATCHES - 1,
+    );
 
     // A new gesture, with a new id, is admitted into the slot that opened.
     committed(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 12))
+            .commit_desired_watch_mutation(&start(capped_section, 0, 1_002))
             .unwrap(),
     );
-    assert_eq!(store.desired_watches().unwrap().len(), 9);
+    assert_eq!(store.desired_watches().unwrap().len(), MAX_DESIRED_WATCHES);
 }
 
 /// The authority is blind to the catalog, the term window and the campus
@@ -1629,18 +2013,21 @@ fn the_cap_counts_the_state_a_mutation_leaves_behind() {
     }
     assert_eq!(store.desired_watches().unwrap().len(), MAX_DESIRED_WATCHES);
 
-    // A tenth section is refused, and refused before admission.
+    let section_after_cap = section((MAX_DESIRED_WATCHES + 1) as u16);
+    // The section after the local cap is refused before admission.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 10))
+            .commit_desired_watch_mutation(&start(section_after_cap.clone(), 0, 1_000))
             .unwrap(),
-        DesiredWatchMutationOutcome::LimitExceeded { maximum: 9 },
+        DesiredWatchMutationOutcome::LimitExceeded {
+            maximum: MAX_DESIRED_WATCHES,
+        },
     );
 
-    // Editing the policy of one of the nine still commits: the post-state is
-    // nine either way. Testing the state a mutation FOUND would refuse this
-    // and make a full watch list uneditable.
-    let mut edit = start(section(1), revisions[0], 100);
+    // Editing the policy of one of the existing rows still commits: the
+    // post-state remains at the cap. Testing the state a mutation FOUND would
+    // refuse this and make a full watch list uneditable.
+    let mut edit = start(section(1), revisions[0], 1_001);
     edit.policy = Some(loud_policy());
     let edited = committed(store.commit_desired_watch_mutation(&edit).unwrap());
     assert!(edited.revision > revisions[0]);
@@ -1649,15 +2036,15 @@ fn the_cap_counts_the_state_a_mutation_leaves_behind() {
         "a policy edit must not restart the watch"
     );
 
-    // And stopping one frees the slot for a tenth section.
+    // And stopping one frees the slot for the previously refused section.
     committed(
         store
-            .commit_desired_watch_mutation(&stop(section(2), revisions[1], 101))
+            .commit_desired_watch_mutation(&stop(section(2), revisions[1], 1_002))
             .unwrap(),
     );
     committed(
         store
-            .commit_desired_watch_mutation(&start(section(10), 0, 102))
+            .commit_desired_watch_mutation(&start(section_after_cap, 0, 1_003))
             .unwrap(),
     );
 }
@@ -1736,17 +2123,20 @@ fn a_stop_is_never_refused_for_anything_but_a_stale_read() {
 
     let stopped = committed(
         store
-            .commit_desired_watch_mutation(&stop(section(1), revisions[0], 100))
+            .commit_desired_watch_mutation(&stop(section(1), revisions[0], 1_000))
             .unwrap(),
     );
     assert!(stopped.epoch_changed);
-    assert_eq!(store.desired_watches().unwrap().len(), 8);
+    assert_eq!(
+        store.desired_watches().unwrap().len(),
+        MAX_DESIRED_WATCHES - 1,
+    );
 
     // The only thing that can refuse a stop is a stale read of the row it
     // names, and that is the tombstone doing its job rather than a policy.
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&stop(section(2), revisions[1] + 99, 101))
+            .commit_desired_watch_mutation(&stop(section(2), revisions[1] + 99, 1_001))
             .unwrap(),
         DesiredWatchMutationOutcome::StaleRevision {
             current: revisions[1]
@@ -1903,17 +2293,24 @@ fn the_persisted_receipt_format_is_pinned() {
                 .unwrap(),
         );
     }
+    let cap_mutation_id = 1_000;
     assert_eq!(
         capped_store
-            .commit_desired_watch_mutation(&start(section(10), 0, 10))
+            .commit_desired_watch_mutation(&start(
+                section((MAX_DESIRED_WATCHES + 1) as u16),
+                0,
+                cap_mutation_id,
+            ))
             .unwrap(),
-        DesiredWatchMutationOutcome::LimitExceeded { maximum: 9 },
+        DesiredWatchMutationOutcome::LimitExceeded {
+            maximum: MAX_DESIRED_WATCHES,
+        },
     );
     assert_eq!(
-        stored_receipt(&capped_path, 10),
+        stored_receipt(&capped_path, cap_mutation_id),
         (
-            "66c7083385ca73da083d47194de98fe91ceccea283d171a7a953fec4d2a6c903".to_owned(),
-            r#"{"outcome":"LIMIT_EXCEEDED","maximum":9}"#.to_owned(),
+            "7c74b5e10f95bcc1531c763ff67ea56651347dae7c28877750d2b9a2a0cd3474".to_owned(),
+            r#"{"outcome":"LIMIT_EXCEEDED","maximum":255}"#.to_owned(),
         ),
     );
 }
@@ -1927,9 +2324,9 @@ fn every_recorded_answer_survives_closing_and_reopening_the_database() {
         let mut store = PersonalStateStore::open(&path).unwrap();
         let mut expected = Vec::new();
 
-        // Eight commits, leaving one slot so the stale-revision refusal below
+        // Fill all but one slot so the stale-revision refusal below
         // is the refusal it claims to be rather than the cap firing first.
-        for index in 1..=8_u16 {
+        for index in 1..MAX_DESIRED_WATCHES as u16 {
             let commit = committed(
                 store
                     .commit_desired_watch_mutation(&start(section(index), 0, u64::from(index)))
@@ -1941,7 +2338,7 @@ fn every_recorded_answer_survives_closing_and_reopening_the_database() {
             ));
         }
 
-        let stale = start(section(20), 7, 20);
+        let stale = start(section(1_000), 7, 1_000);
         assert_eq!(
             store.commit_desired_watch_mutation(&stale).unwrap(),
             DesiredWatchMutationOutcome::StaleRevision { current: 0 },
@@ -1951,12 +2348,12 @@ fn every_recorded_answer_survives_closing_and_reopening_the_database() {
             DesiredWatchReceiptOutcome::StaleRevision { current: 0 },
         ));
 
-        // Now fill the last slot, so the tenth section meets the cap.
-        let ninth = start(section(9), 0, 9);
-        let commit = committed(store.commit_desired_watch_mutation(&ninth).unwrap());
-        expected.push((ninth, DesiredWatchReceiptOutcome::committed(commit)));
+        // Now fill the last slot, so the following section meets the cap.
+        let final_slot = start(section(MAX_DESIRED_WATCHES as u16), 0, 1_001);
+        let commit = committed(store.commit_desired_watch_mutation(&final_slot).unwrap());
+        expected.push((final_slot, DesiredWatchReceiptOutcome::committed(commit)));
 
-        let capped = start(section(10), 0, 10);
+        let capped = start(section((MAX_DESIRED_WATCHES + 1) as u16), 0, 1_002);
         assert_eq!(
             store.commit_desired_watch_mutation(&capped).unwrap(),
             DesiredWatchMutationOutcome::LimitExceeded {
@@ -2375,7 +2772,7 @@ fn rotation_carries_intent_into_a_new_generation_and_frees_both_budgets() {
             .commit_desired_watch_mutation(&start(section(1), 0, 1))
             .unwrap(),
     );
-    committed(
+    let second = committed(
         store
             .commit_desired_watch_mutation(&start(section(2), 0, 2))
             .unwrap(),
@@ -2385,6 +2782,13 @@ fn rotation_carries_intent_into_a_new_generation_and_frees_both_budgets() {
             .commit_desired_watch_mutation(&stop(section(1), armed.revision, 3))
             .unwrap(),
     );
+    assert!(matches!(
+        store
+            .commit_desired_watch_batch(1, trace(100), &[batch_start(section(2), second.revision)],)
+            .unwrap()
+            .outcome,
+        DesiredWatchBatchOutcome::Committed(_),
+    ));
     // Give the incarnation a value only a running actor would have. Left at
     // the schema default this assertion compares 1 to 1 and would still pass
     // against a rotation that reset it.
@@ -2409,7 +2813,7 @@ fn rotation_carries_intent_into_a_new_generation_and_frees_both_budgets() {
         .unwrap();
     assert_eq!(rotation.authority_generation, 2);
     assert_eq!(rotation.deleted_tombstones, 1);
-    assert_eq!(rotation.deleted_receipts, 3);
+    assert_eq!(rotation.deleted_receipts, 4);
     assert_eq!(
         rotation
             .retained
@@ -2467,22 +2871,27 @@ fn the_largest_legal_authority_state_is_bounded_by_the_two_caps() {
         authority.entries.len() as u64,
         MAX_DESIRED_WATCH_AUTHORITY_ROWS,
     );
-    assert_eq!(MAX_DESIRED_WATCH_AUTHORITY_ROWS, 521);
+    assert_eq!(MAX_DESIRED_WATCH_AUTHORITY_ROWS, 767);
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&start(section(8000), 0, 100))
+            .commit_desired_watch_mutation(&start(section(8000), 0, 1_000))
             .unwrap(),
-        DesiredWatchMutationOutcome::LimitExceeded { maximum: 9 },
-        "no tenth watch",
+        DesiredWatchMutationOutcome::LimitExceeded {
+            maximum: MAX_DESIRED_WATCHES,
+        },
+        "no 256th watch",
     );
     assert_eq!(
         store
-            .commit_desired_watch_mutation(&stop(section(8000), 0, 101))
+            .commit_desired_watch_mutation(&stop(section(8000), 0, 1_001))
             .unwrap(),
         DesiredWatchMutationOutcome::AuthorityFull(DesiredWatchBudgetKind::Tombstones),
         "no 513th tombstone",
     );
-    assert_eq!(store.desired_watch_authority().unwrap().entries.len(), 521);
+    assert_eq!(
+        store.desired_watch_authority().unwrap().entries.len() as u64,
+        MAX_DESIRED_WATCH_AUTHORITY_ROWS,
+    );
 }
 
 /// Every public read API leaves the connection out of any transaction, and

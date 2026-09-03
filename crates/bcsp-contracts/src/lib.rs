@@ -57,8 +57,9 @@ pub use match_contract::{
     ReasonField,
 };
 pub use open::{
-    OPEN_CONTRACT_VERSION, OpenAppliedClassification, OpenAttemptPointV1, OpenAttemptScheduleV1,
-    OpenBatchKey, OpenCanonicalSetHash, OpenCanonicalSetHashError, OpenCircuitReason,
+    MAX_OPEN_BATCH_STATUS_SECTIONS, OPEN_CONTRACT_VERSION, OpenAppliedClassification,
+    OpenAttemptPointV1, OpenAttemptScheduleV1, OpenBatchKey, OpenBatchStatusRequestV1,
+    OpenBatchStatusV1, OpenCanonicalSetHash, OpenCanonicalSetHashError, OpenCircuitReason,
     OpenCircuitState, OpenCircuitStatusV1, OpenContractVersion, OpenContractVersionError,
     OpenCounterSnapshotV1, OpenDecodedBodySha256, OpenDecodedBodySha256Error, OpenFailureClass,
     OpenFailurePointV1, OpenFreshnessState, OpenFreshnessV1, OpenHttpHeaderValue,
@@ -117,10 +118,11 @@ pub use session::{
 };
 pub use watch::{
     ACTIVE_WATCH_STATE_PERSISTENT, ActiveWatchId, ActiveWatchTargetV1,
-    DEFAULT_CONTINUOUS_DURATION_SECONDS, DEFAULT_MAX_AUDIBLE, MAX_ACTIVE_WATCHES, OpenEpisodeId,
-    OpenEpisodeState, OpenEpisodeV1, OpenEpisodeValidationError, WATCH_CONTRACT_VERSION,
-    WatchAlertDisposition, WatchAlertId, WatchAlertTargetV1, WatchAlertV1, WatchAudioCueV1,
-    WatchAudioDispositionV1, WatchAudioTriggerV1, WatchClientCommandV1, WatchContinuousDurationV1,
+    DEFAULT_CONTINUOUS_DURATION_SECONDS, DEFAULT_MAX_AUDIBLE, MAX_ACTIVE_WATCHES,
+    MAX_WATCH_START_ITEMS, OpenEpisodeId, OpenEpisodeState, OpenEpisodeV1,
+    OpenEpisodeValidationError, WATCH_CONTRACT_VERSION, WatchAlertDisposition, WatchAlertId,
+    WatchAlertTargetV1, WatchAlertV1, WatchAudioCueV1, WatchAudioDispositionV1,
+    WatchAudioTriggerV1, WatchClientCommandV1, WatchContinuousDurationV1,
     WatchContinuousMixerStopReason, WatchContractVersion, WatchContractVersionError,
     WatchCueCancellationReason, WatchCueId, WatchCueOutcome, WatchCueOutcomeReceiptV1,
     WatchCueOutcomeReportV1, WatchEpisodeTargetV1, WatchMaxAudible, WatchNotificationMode,

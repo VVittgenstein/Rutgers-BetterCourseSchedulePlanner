@@ -25,6 +25,7 @@ function noticeText(
   const suffix = [section, detail].filter((value) => value !== null && value !== undefined).join(' · ');
   const title = {
     SELECTION_LIMIT: i18n.t('watch.toast.selection_limit'),
+    SELECTION_SAVE_FAILED: i18n.t('watch.toast.selection_save_failed'),
     SELECTION_BLOCKED: i18n.t('watch.toast.selection_blocked'),
     TERM_OUT_OF_RANGE: i18n.t('watch.toast.term_out_of_range'),
     START_REJECTED: i18n.t('watch.toast.start_rejected'),

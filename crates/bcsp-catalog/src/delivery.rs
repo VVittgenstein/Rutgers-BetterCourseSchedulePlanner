@@ -993,7 +993,7 @@ mod tests {
         );
         let section_type = Presence::Value("T".to_owned());
         // All meetings arranged: the Section keeps the stated value.
-        let (_, only_arranged) = classify_delivery(&section_type, &[arranged.clone()]);
+        let (_, only_arranged) = classify_delivery(&section_type, std::slice::from_ref(&arranged));
         assert_eq!(only_arranged, Synchronicity::ByArrangement);
         // Mixed with a scheduled meeting: neither wholly scheduled nor wholly
         // arranged, and MIXED means synchronous + asynchronous, so UNKNOWN.
