@@ -235,7 +235,7 @@ jobs:
             --source-commit "$REQUESTED_SOURCE_COMMIT" \
             --output-root "$output_root" \
             --build-root "$build_root"
-          archive="$output_root/rbcsp-linux-x86_64-0.1.4.tar.gz"
+          archive="$output_root/rbcsp-linux-x86_64-0.1.5.tar.gz"
           archive_hash="$(sha256sum "$archive" | awk '{print $1}')"
           archive_bytes="$(stat -c '%s' "$archive")"
           printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
@@ -252,7 +252,7 @@ jobs:
       - name: Upload the verified Linux package
         uses: actions/upload-artifact@v4
         with:
-          name: rbcsp-linux-x86_64-0.1.4-${{ steps.source.outputs.short_commit }}
+          name: rbcsp-linux-x86_64-0.1.5-${{ steps.source.outputs.short_commit }}
           path: ${{ steps.candidate.outputs.archive }}
           if-no-files-found: error
           compression-level: 0
@@ -359,7 +359,7 @@ jobs:
             --source-commit "$REQUESTED_SOURCE_COMMIT" \
             --output-root "$output_root" \
             --build-root "$build_root"
-          printf 'archive=%s\n' "$output_root/rbcsp-linux-x86_64-0.1.4.tar.gz" >> "$GITHUB_OUTPUT"
+          printf 'archive=%s\n' "$output_root/rbcsp-linux-x86_64-0.1.5.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Run the 600-second CORE soak against the real stack
         run: |

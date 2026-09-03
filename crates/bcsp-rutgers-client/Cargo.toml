@@ -10,7 +10,7 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-bcsp-contracts = { version = "=0.1.4", path = "../bcsp-contracts" }
+bcsp-contracts = { version = "=0.1.5", path = "../bcsp-contracts" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

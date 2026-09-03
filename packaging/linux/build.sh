@@ -6,8 +6,8 @@ umask 022
 
 readonly PACKAGE_ID='LINUX_PUBLIC_DEPLOYMENT_PACKAGE'
 readonly TARGET='x86_64-unknown-linux-gnu'
-readonly RELEASE_VERSION='0.1.4'
-readonly ARCHIVE_NAME='rbcsp-linux-x86_64-0.1.4.tar.gz'
+readonly RELEASE_VERSION='0.1.5'
+readonly ARCHIVE_NAME='rbcsp-linux-x86_64-0.1.5.tar.gz'
 
 usage() {
   printf 'usage: build.sh --source-root PATH [--source-commit SHA] [--output-root PATH] [--build-root PATH]\n' >&2
@@ -75,7 +75,7 @@ done
 readonly REPOSITORY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 require_command realpath
 SOURCE_ROOT="$(realpath -e -- "$SOURCE_ROOT")"
-OUTPUT_ROOT="$(realpath -m -- "${OUTPUT_ROOT:-$REPOSITORY_ROOT/release/0.1.4}")"
+OUTPUT_ROOT="$(realpath -m -- "${OUTPUT_ROOT:-$REPOSITORY_ROOT/release/0.1.5}")"
 BUILD_ROOT="$(realpath -m -- "${BUILD_ROOT:-$REPOSITORY_ROOT/.cache/product-build/linux}")"
 readonly SOURCE_ROOT OUTPUT_ROOT BUILD_ROOT
 
@@ -146,7 +146,7 @@ const input = JSON.parse(fs.readFileSync(file, 'utf8'));
 const matches = input.packages?.filter((entry) => entry.id === packageId) ?? [];
 if (input.schemaVersion !== 1 || input.packageCount !== 2 || matches.length !== 1) process.exit(10);
 const packageConfig = matches[0];
-if (input.releaseVersion !== '0.1.4' || packageConfig.target !== target || packageConfig.archiveName !== archiveName) process.exit(11);
+if (input.releaseVersion !== '0.1.5' || packageConfig.target !== target || packageConfig.archiveName !== archiveName) process.exit(11);
 if (!Array.isArray(packageConfig.allowlist) || packageConfig.allowlist.length !== 22) process.exit(12);
 const files = [...packageConfig.allowlist].sort();
 if (new Set(files).size !== 22 || files.some((fileName) => fileName.startsWith('/') || fileName.includes('..') || fileName.includes('\\'))) process.exit(13);

@@ -10,8 +10,8 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-bcsp-contracts = { version = "=0.1.4", path = "../bcsp-contracts" }
-bcsp-domain = { version = "=0.1.4", path = "../bcsp-domain" }
+bcsp-contracts = { version = "=0.1.5", path = "../bcsp-contracts" }
+bcsp-domain = { version = "=0.1.5", path = "../bcsp-domain" }
 include_dir.workspace = true
 rusqlite = { workspace = true, features = ["cache"] }
 serde.workspace = true
