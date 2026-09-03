@@ -20,13 +20,13 @@ path = "tests/desired_watch_fixture.rs"
 harness = false
 
 [dependencies]
-bcsp-application = { version = "=0.1.2", path = "../bcsp-application" }
-bcsp-contracts = { version = "=0.1.2", path = "../bcsp-contracts" }
-bcsp-domain = { version = "=0.1.2", path = "../bcsp-domain" }
-bcsp-local-user-state = { version = "=0.1.2", path = "../bcsp-local-user-state" }
-bcsp-open = { version = "=0.1.2", path = "../bcsp-open" }
-bcsp-operational-storage = { version = "=0.1.2", path = "../bcsp-operational-storage" }
-bcsp-watch = { version = "=0.1.2", path = "../bcsp-watch" }
+bcsp-application = { version = "=0.1.3", path = "../bcsp-application" }
+bcsp-contracts = { version = "=0.1.3", path = "../bcsp-contracts" }
+bcsp-domain = { version = "=0.1.3", path = "../bcsp-domain" }
+bcsp-local-user-state = { version = "=0.1.3", path = "../bcsp-local-user-state" }
+bcsp-open = { version = "=0.1.3", path = "../bcsp-open" }
+bcsp-operational-storage = { version = "=0.1.3", path = "../bcsp-operational-storage" }
+bcsp-watch = { version = "=0.1.3", path = "../bcsp-watch" }
 include_dir.workspace = true
 open.workspace = true
 serde.workspace = true
@@ -38,7 +38,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-bcsp-catalog = { version = "=0.1.2", path = "../bcsp-catalog" }
-bcsp-rutgers-client = { version = "=0.1.2", path = "../bcsp-rutgers-client" }
+bcsp-catalog = { version = "=0.1.3", path = "../bcsp-catalog" }
+bcsp-rutgers-client = { version = "=0.1.3", path = "../bcsp-rutgers-client" }
 rusqlite.workspace = true
 tempfile.workspace = true

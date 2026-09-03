@@ -10,8 +10,8 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-bcsp-contracts = { version = "=0.1.2", path = "../bcsp-contracts" }
-bcsp-domain = { version = "=0.1.2", path = "../bcsp-domain" }
+bcsp-contracts = { version = "=0.1.3", path = "../bcsp-contracts" }
+bcsp-domain = { version = "=0.1.3", path = "../bcsp-domain" }
 serde.workspace = true
 thiserror.workspace = true
 time.workspace = true
