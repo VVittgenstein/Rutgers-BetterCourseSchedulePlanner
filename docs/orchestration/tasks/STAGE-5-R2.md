@@ -67,7 +67,7 @@ peak control 仍 GO。
 
 ### A4. 工作方式与验证
 
-使用 Claude Code 官方 dynamic workflow。先让独立调查 agent 分别构造两条反例和 honest control，再由唯一
+使用外部实现工具的官方 dynamic workflow。先让独立调查 agent 分别构造两条反例和 honest control，再由唯一
 writer 修改 provenance/peak classification，最后用独立复核员尝试绕过；不要为普通 minor finding再开
 修复轮。
 
@@ -78,10 +78,10 @@ writer 修改 provenance/peak classification，最后用独立复核员尝试绕
 数量；current-data 数字；GO control；changed files；deferred；Git status；review range
 `b4e93f7..HEAD`。不得宣布 production scheduler 已实现或 Stage 5 已 accepted。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
 ```text
-ultracode: 请继续使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请继续使用外部实现工具的官方 dynamic workflow，只在
 Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage5-s3-evidence 的
 codex/parallel-wave1-stage5-s3-evidence@b4e93f7a009c4ab603b94e427d882cb132e0c29a 上完成 STAGE-5-R2/v1。
 不要写主 checkout，不 reset/rebase/merge/push/tag/release，不修改 docs/orchestration/**，严格离线，不访问

@@ -3,7 +3,7 @@
 状态：**ACCEPTED — 已串行回收到 `feat/s2-alert-delivery@6a35c74`**
 Prompt 版本：`STAGE-2-R1/v2-parallel`
 Orchestrator：Codex
-实现者：Claude
+实现者：实现代理
 产品负责人/转发者：用户
 预期基线：`feat/s2-alert-delivery@553371f`
 
@@ -11,7 +11,7 @@ Orchestrator：Codex
 
 ### A1. Codex 验收结论与本轮目标
 
-Claude 已在 `75cefb0..553371f` 完成 Stage 2 的主体实现：shared 自动重连与显式 Disconnect 屏障、
+实现代理已在 `75cefb0..553371f` 完成 Stage 2 的主体实现：shared 自动重连与显式 Disconnect 屏障、
 公网换票、当前连接/authority stamp 的 Readiness、页面级 Notification、local presence/60 秒退出、L3
 控制台和 target/policy 边界都已接线；S1 与 L1 回归门也通过。
 
@@ -33,7 +33,7 @@ Codex 对该范围的独立结论仍是 `CHANGES_REQUIRED`。只剩四个当前 
 - 该分支从包含本任务包的 orchestration-only anchor 建立；产品代码父基线为
   `feat/s2-alert-delivery@553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`；
 - 不 reset、rebase、改写既有提交，不 merge/tag/release；
-- orchestration anchor 已由 Codex 提交。Claude 不修改或重复提交 `docs/orchestration/**`；
+- orchestration anchor 已由 Codex 提交。实现代理不修改或重复提交 `docs/orchestration/**`；
 - 两个 `docs/conversations/2026-08-23-*` 目录继续未跟踪，不提交、不移动、不删除；
 - 除上述内容外若有与本轮重叠的未知修改，停止并精确回报；
 - 本 worktree 仍由单一 writer/integrator 写入和提交。Dynamic workflow 可用于只读调查、测试设计、
@@ -73,7 +73,7 @@ READY，不能证明下降沿。
 4. 把生产修复回退时，上述测试确定失败。现有“BLOCKED then READY”测试必须断言完整下降/恢复序列，
    不能只检查最终 READY。
 
-具体内部 API、是否复用 preview voice、状态枚举与文件组织由 Claude 根据现有结构决定；不要为此新增音频
+具体内部 API、是否复用 preview voice、状态枚举与文件组织由实现代理根据现有结构决定；不要为此新增音频
 设备管理平台、持久化或新的产品能力。
 
 ### A4. 阻断二：`Exiting` 后任何未完成 HELLO 都不得注册
@@ -163,9 +163,9 @@ check，以及 `git diff --check`。不要在并行 worktree 中运行 `cargo te
 tests 精确结果；能打挂 `553371f` 的判别证据；deferred debt；Git status；`553371f..<head>`、
 `75cefb0..<head>` 与 `a4f8d22..<head>`。不要自行宣布 Stage 2 accepted 或进入 Stage 3。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
-ultracode: 请使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请使用外部实现工具的官方 dynamic workflow，只在
 `Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage2-r1` 的
 `codex/parallel-wave1-stage2-r1` 分支上一次性完成 `STAGE-2-R1/v2-parallel`。该 worktree 从 Codex 的
 orchestration-only anchor 建立，产品代码父基线是

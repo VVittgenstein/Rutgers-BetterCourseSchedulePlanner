@@ -23,9 +23,9 @@ Prompt 版本：`STAGE-4-R1/v1`
 BTreeMap 测试耦合或其他 deferred，不跑全仓门。最后返回 commits、测试、判别证据、API absence 和
 `283a8fe..<head>`。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
-ultracode: 请继续使用最小充分的 Claude Code dynamic workflow，只在
+ultracode: 请继续使用外部实现工具提供的最小充分 dynamic workflow，只在
 `Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage4-s4` 的
 `codex/parallel-wave1-stage4-s4@283a8feeee734abf61af564457d28f1b08e7102f` 上完成 `STAGE-4-R1/v1`。
 不要写主 checkout，不 reset/rebase/merge，不修改 `docs/orchestration/**`。

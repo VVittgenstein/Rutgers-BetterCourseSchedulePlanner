@@ -898,7 +898,7 @@ R2 引入两处新机制，同样单独记：
 
 前端七项修复逐条反转后重跑 `tests/local-desired-watch-integrity.test.tsx`，
 每一项都有对应测试失败；反转项与失败测试一一对应，无"反转后仍全绿"的条目。
-Rust 侧同样逐条反转复验，记录见 Claude 的 R2 回报 Negative proof 一节。
+Rust 侧同样逐条反转复验，记录见实现代理的 R2 回报 Negative proof 一节。
 ## M0-M1-001-R3：reduced S2/L1 组合反例收口
 
 Codex 对 `c50499f..2cd54e2` 的独立结论仍是 `CHANGES_REQUIRED`。R2 的每一项机制单独

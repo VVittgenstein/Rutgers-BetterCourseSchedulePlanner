@@ -2,7 +2,7 @@
 
 状态：**ACTIVE — 用户于 2026-08-25 批准隔离 worktree 并行实现、串行集成**
 Orchestrator：Codex
-实现者：Claude
+实现者：实现代理
 产品负责人：用户
 当前集成基线：`feat/s2-alert-delivery@6a35c74`（Stage 2 accepted；等待 Stage 3/4/5 窄修）
 
@@ -40,7 +40,7 @@ S2（P1/L1/L2/L3） → P2 → S4 → S3
    同步、leader/Web Locks/BroadcastChannel；
 5. 优先使用现有结构和测试接缝。没有现实调用路径、没有失败证据、也不影响主合同的 defensive
    分支，不为它提前扩建架构；
-6. 若实现必须改变已冻结的用户行为、wire/数据库权威合同或政策边界，停止并交由用户决定，Claude
+6. 若实现必须改变已冻结的用户行为、wire/数据库权威合同或政策边界，停止并交由用户决定，实现代理
    与 Codex 都不得自行扩权。
 
 ## 3. 当前固定协作方式
@@ -50,8 +50,8 @@ S2（P1/L1/L2/L3） → P2 → S4 → S3
 
 ```text
 Codex：同时调查各 Stage → 冻结 lane 结果/边界/参数/所有权/可复制 prompt
-用户：把四个 prompt 分别原样粘贴给四个 Claude
-Claude：各自在独立 worktree 用 dynamic workflow 实现并跑 focused tests
+用户：把四个 prompt 分别原样粘贴给四个实现代理
+实现代理：各自在独立 worktree 用 dynamic workflow 实现并跑 focused tests
 Codex：收齐后先分别核对 diff，再按 Stage 2 R1 → 3 → 4 → 5 串行集成
 Codex：只在组合 head 集中跑一次重门并做一次组合审查
        ├─ 无 blocker → ACCEPTED / ACCEPTED_WITH_DEFERRED_DEBT
@@ -61,23 +61,23 @@ Codex：只在组合 head 集中跑一次重门并做一次组合审查
 不再恢复“小 slice 实现一次、全量测试一次、审查一次”的 M2/M3/M4 模式，也不让四个 worktree 同时跑
 workspace/frontend/archive 等重门。完整拓扑、所有权与冲突处理见 `PARALLEL-WAVE-1.md`。
 
-## 4. Claude Dynamic Workflow 使用规则
+## 4. 实现代理动态工作流使用规则
 
-每个 Stage 的可复制 prompt 以人工输入触发词 `ultracode:` 开头，明确要求使用 Claude Code 官方
-dynamic workflow。官方说明见 <https://code.claude.com/docs/en/workflows>。
+每个 Stage 的可复制 prompt 以人工输入触发词 `ultracode:` 开头，明确要求使用外部实现工具的官方
+dynamic workflow。官方说明见外部实现工具的 workflow 文档。
 
-官方最低版本为 Claude Code `2.1.154`；本项目归档记录的当前版本是 `2.1.237`，版本条件满足，
-但具体 plan/config 是否启用仍由 Claude 在启动前核对。
+外部实现工具的官方最低版本为 `2.1.154`；本项目归档记录的当前版本是 `2.1.237`，版本条件满足，
+但具体 plan/config 是否启用仍由实现代理在启动前核对。
 
-工作流的编排由 Claude 根据真实仓库决定：
+工作流的编排由实现代理根据真实仓库决定：
 
-- Claude 自己决定内部 phase、subagent 数量/分工、文件组织、逻辑 commit 和 focused tests；
+- 实现代理自己决定内部 phase、subagent 数量/分工、文件组织、逻辑 commit 和 focused tests；
 - 可并行读取、代码面盘点、测试分析和独立/对抗复核；
 - 当前权威 checkout 的产品写入、`git add/commit` 与最终集成由一个 writer/integrator 串行执行；若
-  Claude 确需并行实现，只能在基线明确的隔离副本中进行，再由 integrator 审查并回收到权威分支；
+  实现代理确需并行实现，只能在基线明确的隔离副本中进行，再由 integrator 审查并回收到权威分支；
 - 形成“理解 → 实现 → focused verification → 集成 → 独立合同复核 → 按失败证据窄修”的闭环；
 - 不手写或钉死 workflow JavaScript，不追求 agent 数量，不把 Dynamic workflows 与 Agent teams 混用；
-- 若当前 Claude Code/version/plan/config 无法使用该正式功能，应在改代码前精确回报，不能假装已经使用。
+- 若当前外部实现工具的 version/plan/config 无法使用该正式功能，应在改代码前精确回报，不能假装已经使用。
 
 Dynamic workflow 会显著增加 token/时间；本项目要求**最小充分并行**，不是无限 fan-out。
 
@@ -147,7 +147,7 @@ analyzer/test/report，并以 `NO_PRODUCTION_CHANGE / DATA_REQUIRED` 正常结�
 
 ## 7. 验证频率
 
-- 并行 lane 内：Claude 自主选择 focused tests，失败即修，不运行 workspace/frontend/archive 重门；
+- 并行 lane 内：实现代理自主选择 focused tests，失败即修，不运行 workspace/frontend/archive 重门；
 - 串行集成 final：Codex 在四个 lane 组合 head 上把 workspace、frontend verify、architecture 与适用的
   Stage 专项门各运行一次；
 - package/soak：只在最终组合产品结果确实需要真实组装证明时运行；不为每个 lane/commit 构建 archive；

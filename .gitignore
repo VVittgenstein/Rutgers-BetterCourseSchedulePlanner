@@ -48,7 +48,6 @@ logs/
 /scripts/
 
 # Local agent and editor state
-.claude/
 .worktrees/
 .ngagent/
 .agents/

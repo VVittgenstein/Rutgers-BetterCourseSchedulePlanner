@@ -3,7 +3,7 @@
 状态：**DELIVERED — CODEX `CHANGES_REQUIRED`；见 `STAGE-3-R1.md`**
 Prompt 版本：`STAGE-3/v1-parallel`
 Orchestrator：Codex
-实现者：Claude
+实现者：实现代理
 产品负责人/转发者：用户
 产品代码父基线：`553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`
 
@@ -16,7 +16,7 @@ Orchestrator：Codex
 真实 Linux systemd+Caddy+浏览器 10 分钟验证入口。
 
 当前 Windows 主机没有 WSL、Docker、bash 或 Caddy。因此本 lane 能完成仓内实现、focused tests 和可运行
-harness，但不能独立关闭 Linux/真实 Caddy 外部门。Claude 的诚实终态应是
+harness，但不能独立关闭 Linux/真实 Caddy 外部门。实现代理的诚实终态应是
 `IMPLEMENTED / PENDING_LINUX_EVIDENCE`，不是 P2 accepted、deployed 或 released。
 
 ### A2. Worktree、分支与边界
@@ -72,7 +72,7 @@ policy 执行语义；不要覆盖整份 workflow。不得把 shared `WebSocketE
 - 64 KiB inbound frame/message 帽保持，不把“256 frames”旧示例复活为内存合同；
 - 只把 per-client cap 做环境可调，拒绝为所有常量建立配置平台。
 
-具体 channel/sink 类型、模块划分和 metric 命名由 Claude 按现有架构决定，但必须能用 deterministic tests
+具体 channel/sink 类型、模块划分和 metric 命名由实现代理按现有架构决定，但必须能用 deterministic tests
 证明 byte accounting、释放、单次 overload 处理和 timeout。
 
 ### A5. H5–H7：保留 session、恢复策略与 Origin
@@ -100,7 +100,7 @@ H9 要实现可在干净 Linux disposable runner 上执行的候选门：
   32 MiB；
 - public START→服务端实际 watch→fixture event→浏览器观察的完整 composition 仍成立。
 
-本机不能运行该门。Claude 应实现脚本/CI 手动入口、做 parser/static/focused 验证，并明确列出在 Linux
+本机不能运行该门。实现代理应实现脚本/CI 手动入口、做 parser/static/focused 验证，并明确列出在 Linux
 runner 上的精确待执行命令。不得把 54 秒测试、mock proxy 或自动重连冒充 10 分钟 H9。
 
 ### A7. 判别测试和 lane 内验证
@@ -135,9 +135,9 @@ runner 上的精确待执行命令。不得把 54 秒测试、mock proxy 或自�
 结果；判别力；`PENDING_LINUX_EVIDENCE` 清单和待执行命令；known limitations；Git status；从
 orchestration anchor 与 `553371f` 的 review range。不要宣布 P2 accepted/deployed/released。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
-ultracode: 请使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请使用外部实现工具的官方 dynamic workflow，只在
 `Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage3-p2` 的
 `codex/parallel-wave1-stage3-p2` 分支上完成 `STAGE-3/v1-parallel`。该 worktree 从 Codex 的
 orchestration-only anchor 建立，产品代码父基线是

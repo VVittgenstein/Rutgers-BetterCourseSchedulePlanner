@@ -3,7 +3,7 @@
 状态：**R2 REVIEWED — Stage 4 accepted；Stage 3/5 进入精确反例 R3**
 日期：2026-08-26
 Orchestrator：Codex
-实现者：四个相互隔离的 Claude 会话
+实现者：四个相互隔离的实现代理会话
 产品代码父基线：`553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`
 
 ## 1. 为什么并行、什么不并行
@@ -11,7 +11,7 @@ Orchestrator：Codex
 用户已批准把余下工作从“完成一个 Stage、审一次、再开始下一个”改为：
 
 ```text
-四个 Claude 在四个 worktree 并行实现
+四个实现代理在四个 worktree 并行实现
                  ↓
 Codex 按冻结顺序串行集成
                  ↓
@@ -38,7 +38,7 @@ Stage 2 R1 → Stage 3 / P2 → Stage 4 / S4 → Stage 5 / S3 evidence
 | D | `.worktrees/parallel-wave-1/stage5-s3-evidence` | `codex/parallel-wave1-stage5-s3-evidence` | `tasks/STAGE-5.md` |
 
 所有路径都相对于仓库根目录
-`Z:\Project\Rutgers-BetterCourseSchedulePlanner`。Claude 必须只写自己被分配的 worktree，不写主 checkout，
+`Z:\Project\Rutgers-BetterCourseSchedulePlanner`。实现代理必须只写自己被分配的 worktree，不写主 checkout，
 不创建更多产品分支，不 merge/rebase/push/tag/release。
 
 ## 3. 写入所有权
@@ -75,12 +75,12 @@ policy、runtime 或 storage schema；不访问 Rutgers。
    ours/theirs。
 4. Lane D 的 `tools/s3/**` 与 `docs/evidence/**` 应与其他 lane 零产品代码重叠。
 
-Claude 不通过修改别的 lane 文件来“提前解决冲突”。不确定时保留自己 lane 的最小实现并在回报中列出
+实现代理不通过修改别的 lane 文件来“提前解决冲突”。不确定时保留自己 lane 的最小实现并在回报中列出
 integration note。
 
 ## 5. 测试资源纪律
 
-并行期间每个 Claude 只跑自己根因的 focused tests、静态检查和 `git diff --check`。以下重门不得在多个
+并行期间每个实现代理只跑自己根因的 focused tests、静态检查和 `git diff --check`。以下重门不得在多个
 worktree 同时运行：
 
 - `cargo test --workspace`；
@@ -98,7 +98,7 @@ Lane B 在当前 Windows 主机无法完成真实 Linux systemd+Caddy 10 分钟 
 
 ## 6. 集成与验收
 
-Codex 收齐四个 Claude 回报后：
+Codex 收齐四个实现代理回报后：
 
 1. 核对每个 worktree 的 branch、base、提交、dirty/untracked 状态和实际 diff；
 2. 独立审查每个 lane 是否越权或遗漏主合同；
@@ -114,7 +114,7 @@ Stage 5 的正常成功结果可以是 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`。
 
 ## 7. 停止条件
 
-任何 Claude 只有在以下情况停止并向用户回报，而不是自行扩权：
+任何实现代理只有在以下情况停止并向用户回报，而不是自行扩权：
 
 - worktree/branch/base 不匹配；
 - 发现不属于自己 lane 的未知修改且无法隔离；
@@ -142,7 +142,7 @@ Stage 5 的正常成功结果可以是 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`。
 | Lane | R1 head | 裁定 | 下一步 |
 |---|---|---|---|
 | B / Stage 3 | `6c7c7cd` | `CHANGES_REQUIRED`；预算/采样/命名已关，实际 SSH、origin-bound Caddy、server ACK 正证仍可 false PASS | `tasks/STAGE-3-R2.md` |
-| C / Stage 4 | `69c7cb1` | `ACCEPTED`；raw connection API 已删除，优化/回滚/API 缺席证据成立 | 等待 B 后串行集成，不再启动 Claude |
+| C / Stage 4 | `69c7cb1` | `ACCEPTED`；raw connection API 已删除，优化/回滚/API 缺席证据成立 | 等待 B 后串行集成，不再启动实现代理 |
 | D / Stage 5 | `b4e93f7` | `CHANGES_REQUIRED`；原四项主要门已关，重叠派生 provenance 与 client-end peak 仍可假 GO | `tasks/STAGE-5-R2.md` |
 
 Codex 独立复跑：Stage 3 Rust focused 116+52+44；Stage 4 operational-storage 61 非 doc + 2 doctest；
@@ -154,7 +154,7 @@ Stage 5 analyzer 96/96、0 skip。两份 R2 只处理表中 blocker；Stage 4 �
 | Lane | R2 head | 裁定 | 下一步 |
 |---|---|---|---|
 | B / Stage 3 | `df79aa4` | `CHANGES_REQUIRED`；SSH actual tuple 与 fresh ACK 计数点已关；同-route handler/listener 仍可让不可达 Caddy proxy PASS，aggregate ACK 未证明只属于 soak socket | `tasks/STAGE-3-R3.md` |
-| C / Stage 4 | `69c7cb1` | `ACCEPTED`，结论不变 | 等待 B 后串行集成，不再启动 Claude |
+| C / Stage 4 | `69c7cb1` | `ACCEPTED`，结论不变 | 等待 B 后串行集成，不再启动实现代理 |
 | D / Stage 5 | `2c7b53a` | `CHANGES_REQUIRED`；119/119 通过但 translated subsample 与 server-contiguous/client-jump 两条反例均在最终 head 实测 GO | `tasks/STAGE-5-R3.md` |
 
 Codex 独立复跑 Stage 3 Rust 117+52、无-jq preflight 7 pass/31 refusal、soak self-test/deploy contracts；

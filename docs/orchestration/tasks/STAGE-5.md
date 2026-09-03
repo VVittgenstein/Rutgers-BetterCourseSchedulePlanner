@@ -3,7 +3,7 @@
 状态：**DELIVERED — CODEX `CHANGES_REQUIRED`；见 `STAGE-5-R1.md`**
 Prompt 版本：`STAGE-5/v1-parallel-evidence`
 Orchestrator：Codex
-实现者：Claude
+实现者：实现代理
 产品代码父基线：`553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`
 
 ## A. 任务包
@@ -90,7 +90,7 @@ soak/security scan，不访问网络。不要为了 analyzer 引入依赖或分�
 92026 的 NB/NK/CM；不登录、不写入、不绕限流；一次仅采一个 target，总速率不快于每 12 秒一请求；
 13s±1s 节奏，至少 6h、最多 24h，必须覆盖 17:00–18:00 ET。6h 已满足 GO 门可早停，24h 仍不足即停止。
 
-这些约束只是 future plan。本 Claude 没有在线授权，不编写/运行隐藏采集，不使用当前时间去碰 Rutgers。
+这些约束只是 future plan。当前实现代理没有在线授权，不编写/运行隐藏采集，不使用当前时间去碰 Rutgers。
 
 ### A7. 回报格式
 
@@ -98,9 +98,9 @@ soak/security scan，不访问网络。不要为了 analyzer 引入依赖或分�
 tests；为何是 `NO_PRODUCTION_CHANGE / DATA_REQUIRED`；未来所缺 evidence；Git status；从 orchestration anchor
 与 `553371f` 的 review range。不要实现或承诺 GridAnchor/RebuildProfile。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
-ultracode: 请使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请使用外部实现工具的官方 dynamic workflow，只在
 `Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage5-s3-evidence` 的
 `codex/parallel-wave1-stage5-s3-evidence` 分支上完成 `STAGE-5/v1-parallel-evidence`。该 worktree 从 Codex
 的 orchestration-only anchor 建立，产品代码父基线是

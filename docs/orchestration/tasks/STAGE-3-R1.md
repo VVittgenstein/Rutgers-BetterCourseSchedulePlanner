@@ -28,7 +28,7 @@ security 报告中 deferred，但它仍直接违反本 Stage 的资源合同，�
   global reservation；失败只断该连接；
 - 不得保留一个先存完整 `String`、后由 pump `try_recv` 才记账的无界中转 channel；
 - local watch/presence 的既有行为不变。可以引入 target-neutral sender abstraction、public-only extension
-  seam 或等价设计；内部类型由 Claude 决定；
+  seam 或等价设计；内部类型由实现代理决定；
 - 若共享 sender API 必须机械影响 `bcsp-local-runtime/presence.rs`，不要重写 presence 语义，并在回报中
   精确列出，Codex 会在已集成 Stage 2 R1 的 head 上手工合并；
 - permit、reservation、write timeout、三类 disconnect metric 和 healthy-socket isolation 保持；
@@ -70,9 +70,9 @@ security 报告中 deferred，但它仍直接违反本 Stage 的资源合同，�
 soak/security scan。每个 blocker 要有能打挂 `37176d2` 的正反例。一次回报 commits、机制、tests、
 negative proof、冲突提示、Git status 和 `37176d2..<head>`。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
-ultracode: 请继续使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请继续使用外部实现工具的官方 dynamic workflow，只在
 `Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage3-p2` 的
 `codex/parallel-wave1-stage3-p2@37176d2c487ecd0366f8d7a50e85cad686f77b01` 上完成
 `STAGE-3-R1/v1`。不要写主 checkout，不 reset/rebase/merge，不修改 `docs/orchestration/**`。

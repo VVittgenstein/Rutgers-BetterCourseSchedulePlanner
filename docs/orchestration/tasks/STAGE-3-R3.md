@@ -90,7 +90,7 @@ socket 恰好补足 aggregate ACK 时仍 FAIL；单一 socket、一次 admission
 
 ### A4. 工作方式、验证与回报
 
-使用 Claude Code 官方 dynamic workflow。先由两个调查 agent 分别钉死 handler/listener 与 soak-exclusive
+使用外部实现工具的官方 dynamic workflow。先由两个调查 agent 分别钉死 handler/listener 与 soak-exclusive
 反例，唯一 writer 串行修改，再由独立复核员只攻击这两项；普通 minor finding 一律记录，不再扩轮。
 
 只跑受影响 Rust、preflight/self-test/static/parser/shell syntax、deploy contracts 与 `git diff --check`。
@@ -99,10 +99,10 @@ socket 恰好补足 aggregate ACK 时仍 FAIL；单一 socket、一次 admission
 一次回报：commits；两个根因的旧/新判别；精确 tests；jq/Linux 哪些实际执行/哪些 pending；changed
 files；保留合同；deferred；Git status；review range `df79aa4..HEAD`。不得宣布 P2 accepted/deployed/released。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
 ```text
-ultracode: 请继续使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请继续使用外部实现工具的官方 dynamic workflow，只在
 Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage3-p2 的
 codex/parallel-wave1-stage3-p2@df79aa4fab0f0e29fdb17fc946a234b5e1a85734 上完成 STAGE-3-R3/v1。
 不要写主 checkout，不 reset/rebase/merge/push/tag/release，不修改 docs/orchestration/**，不访问 Rutgers，

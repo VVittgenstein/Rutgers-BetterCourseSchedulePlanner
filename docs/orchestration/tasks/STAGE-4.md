@@ -3,7 +3,7 @@
 状态：**DELIVERED — CODEX `CHANGES_REQUIRED`；见 `STAGE-4-R1.md`**
 Prompt 版本：`STAGE-4/v1-parallel`
 Orchestrator：Codex
-实现者：Claude
+实现者：实现代理
 产品代码父基线：`553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`
 
 ## A. 任务包
@@ -50,7 +50,7 @@ Orchestrator：Codex
 SQLite authorizer：它只在 statement prepare 时观察 `open_section_current` INSERT。
 
 建议在清空 statement cache 后，对同一连接连续完成两次多行成功提交，并断言 prepare count 为 1：旧
-`transaction.execute` 为 `2N`，只把普通 `prepare` 移到循环外为 2，正确 `prepare_cached` 为 1。若 Claude
+`transaction.execute` 为 `2N`，只把普通 `prepare` 移到循环外为 2，正确 `prepare_cached` 为 1。若实现代理
 找到同等稳定、能同时区分这三种实现且不靠毫秒的现有接缝，可采用等价方案并说明。
 
 同时强化既有 rollback 测试：让第一行先成功、第二个 section 的 trigger 再失败，断言事务回到完整旧 LKG，
@@ -79,9 +79,9 @@ gate-hold 和 projection 回归，不复制整套场景。
 信息性性能数据（若运行）；依赖/lock 变化；known limitations；Git status；从 orchestration anchor 与
 `553371f` 的 review range。不要宣布整个组合 Stage accepted。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
-ultracode: 请使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请使用外部实现工具的官方 dynamic workflow，只在
 `Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage4-s4` 的
 `codex/parallel-wave1-stage4-s4` 分支上完成 `STAGE-4/v1-parallel`。该 worktree 从 Codex 的
 orchestration-only anchor 建立，产品代码父基线是

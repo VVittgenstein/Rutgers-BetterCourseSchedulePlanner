@@ -83,7 +83,7 @@ verdict=GO qualifier=none brackets=60 distinguishable=true
 
 ### A4. 工作方式、验证与回报
 
-使用 Claude Code 官方 dynamic workflow。两个调查 agent 分别构造 translated-subsample 与
+使用外部实现工具的官方 dynamic workflow。两个调查 agent 分别构造 translated-subsample 与
 server-contiguous/client-jump fixture，唯一 writer 实现，独立复核员只攻击这两条；普通 minor finding
 记录后结束，不再扩轮。
 
@@ -94,10 +94,10 @@ honest GO controls 与 `git diff --check`。严格离线。
 files；deferred；Git status；review range `2c7b53a..HEAD`。不得宣布 production scheduler 已实现或 Stage 5
 accepted。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
 ```text
-ultracode: 请继续使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请继续使用外部实现工具的官方 dynamic workflow，只在
 Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage5-s3-evidence 的
 codex/parallel-wave1-stage5-s3-evidence@2c7b53a874714f57c0f905fbc0abeecfb325b387 上完成 STAGE-5-R3/v1。
 不要写主 checkout，不 reset/rebase/merge/push/tag/release，不修改 docs/orchestration/**，严格离线，不访问

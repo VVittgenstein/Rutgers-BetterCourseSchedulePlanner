@@ -3,7 +3,7 @@
 状态：**ACCEPTED — R1 已验收并集成到 `feat/s2-alert-delivery@6a35c74`**
 Prompt 版本：`STAGE-2/v1`
 Orchestrator：Codex
-实现者：Claude
+实现者：实现代理
 产品负责人/转发者：用户
 预期基线：`feat/s2-alert-delivery@75cefb0`
 外部交付：**整个 Stage 完成后一次回报、一次 Codex 集中验收**
@@ -39,7 +39,7 @@ Orchestrator：Codex
 
 ### A2. 权威输入与冲突顺序
 
-Claude 开始前应读取：
+实现代理开始前应读取：
 
 1. `docs/orchestration/CURRENT.md`；
 2. `docs/orchestration/STAGE-EXECUTION-PLAN.md`；
@@ -94,7 +94,7 @@ Claude 开始前应读取：
 
 ### A5. 实现自由度
 
-本文不规定具体类名、内部类型、文件拆分、subagent 数量、commit 数量或逐步测试命令。Claude 应先读取
+本文不规定具体类名、内部类型、文件拆分、subagent 数量、commit 数量或逐步测试命令。实现代理应先读取
 真实代码和历史，再由 dynamic workflow 根据依赖关系决定方案；允许在不改变 A1/A4 的前提下修正文档中
 已经过时的内部实现提示。
 
@@ -105,7 +105,7 @@ Claude 开始前应读取：
 
 ### A6. 验收场景
 
-Claude 可以自行组织测试，但最终证据至少要证明以下用户场景：
+实现代理可以自行组织测试，但最终证据至少要证明以下用户场景：
 
 - 意外 close/error 不会重复排队或并发创建多个连接；持续失败按批准退避恢复，成功后恢复正常节奏；
 - Disconnect、dispose 和已 STOP/Remove 的 section 在任何迟到事件后都不复活；现有产品交互可以明确
@@ -155,7 +155,7 @@ Claude 可以自行组织测试，但最终证据至少要证明以下用户场�
 
 ### A8. 验证与交付边界
 
-开发过程中由 Claude 选择 focused tests。所有功能集成后，在最终 head 集中运行：
+开发过程中由实现代理选择 focused tests。所有功能集成后，在最终 head 集中运行：
 
 ```text
 cargo test --workspace
@@ -190,9 +190,9 @@ git diff --check a4f8d22..<head>
 场景证据；focused/final tests 的精确结果；最高风险合同的判别证据；deferred debt/residual risks；
 Git status 与 `75cefb0..<head>` review range。不要自行宣布公网可部署、项目完成或 Stage 被 Codex 接受。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
-ultracode: 请使用 Claude Code 官方的 dynamic workflow，把 RBCSP 的整个
+ultracode: 请使用外部实现工具的官方 dynamic workflow，把 RBCSP 的整个
 `STAGE-2/v1` 作为一个完整交付单元实施、集成并验证。
 
 仓库是 `Z:\Project\Rutgers-BetterCourseSchedulePlanner`，预期产品代码基线是
@@ -231,7 +231,7 @@ subagent 流程。完成后按 A10 一次性回报；S2 是否 accepted 由 Code
 
 ## C. Codex Stage 2 独立验收记录（2026-08-25）
 
-- Claude 交付 head：`553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`；审查范围：
+- 实现代理交付 head：`553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`；审查范围：
   `75cefb0a27b85495d9b5a6e2c7f93b5590b3ee95..553371f8fa449b8c7cb9a88b5f32e179cb1e57c5`；
 - 结论：`CHANGES_REQUIRED`。Stage 2 主体已落地，但 A1/A4 的音频真值、presence 回归优先、应用内通知
   关闭入口和 A6/A8 policy 执行闭环仍有四个阻断；不得进入 Stage 3；
@@ -248,7 +248,7 @@ subagent 流程。完成后按 A10 一次性回报；S2 是否 accepted 由 Code
 - 通知控制阻断：Provider 有 `setNotificationsEnabled(false)`，但生产 UI 没有调用入口；测试通过直接注入
   false/调用 Provider API 绕开了缺失的用户交互；
 - policy 阻断：`.github/workflows/public-ops.yml` 的新步骤只执行两项 Rust policy tests；全仓唯一 workflow
-  没有安装/执行 frontend `test:guard`。release-set 仅增加 required slug，Claude 只做 parser check，未完成
+  没有安装/执行 frontend `test:guard`。release-set 仅增加 required slug，实现代理只做 parser check，未完成
   A8 要求的 non-archive 正反 self-test；
 - Codex final-head 独立重门：`cargo test --workspace` exit 0；两项 Rust architecture verifier 与两项
   verifier self-test 全绿；串行 `frontend npm run verify` 为 guard 90、Vitest 333/333、typecheck、local/public

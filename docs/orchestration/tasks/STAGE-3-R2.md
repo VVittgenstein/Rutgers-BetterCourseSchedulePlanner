@@ -32,7 +32,7 @@ CORE/full PASS 命名问题；这些实现和已有测试全部保留。Codex �
 #### H8 SSH：评价实际 root connection policy，否则失败
 
 - **本轮没有 Vultr/真实主机，也不取得真实 tuple。** 这里只实现供未来部署使用的只读输入接口、判定逻辑、
-  fixture 与 runbook；Claude 不得向用户索要 IP、hostname、SSH 配置、账号、密码或密钥，不得连接任何
+  fixture 与 runbook；实现代理不得向用户索要 IP、hostname、SSH 配置、账号、密码或密钥，不得连接任何
   主机。真实 tuple 上的执行证据保持 `PENDING_EXTERNAL_DEPLOYMENT`；
 - 不得再把固定 synthetic IP 矩阵当作上线 PASS 证据；
 - preflight 必须让 operator 明确提供实际管理连接所需的 root tuple 信息，或采用能同等可靠地评价该
@@ -41,7 +41,7 @@ CORE/full PASS 命名问题；这些实现和已有测试全部保留。Codex �
 - 如支持多个管理来源，允许重复声明/逐一验证；不得用两个示例地址替代实际来源；
 - 对该 tuple 同时判断 `PermitRootLogin`、`PasswordAuthentication`、
   `KbdInteractiveAuthentication` 及实现实际需要的相关控制。keys-only 可通过，任何密码形态可达必须失败；
-- CLI 形状、参数命名和内部解析由 Claude 决定，但 runbook 与脚本 usage 必须一致，且 preflight 仍只读。
+- CLI 形状、参数命名和内部解析由实现代理决定，但 runbook 与脚本 usage 必须一致，且 preflight 仍只读。
 
 必须有能打挂当前 head 的反例：全局安全，但 `Match User root Address <实际声明来源>` 或实际 host 条件下
 重新打开 root/password；当前 synthetic probes 会漏掉，新实现必须失败。缺实际 tuple/local address 也必须
@@ -87,7 +87,7 @@ CORE/full PASS 命名问题；这些实现和已有测试全部保留。Codex �
 
 ### A4. 工作方式与验证
 
-使用 Claude Code 官方 dynamic workflow。先并行做三项只读根因调查和反例设计，再由唯一 writer 串行修改，
+使用外部实现工具的官方 dynamic workflow。先并行做三项只读根因调查和反例设计，再由唯一 writer 串行修改，
 最后做一次覆盖三项的对抗复核；不要在每个小 finding 后停下来等用户。
 
 只跑受影响的 Rust、ops/static/self-tests、parser、shell syntax 和 `git diff --check`。不得跑 workspace、
@@ -97,10 +97,10 @@ CORE/full PASS 命名问题；这些实现和已有测试全部保留。Codex �
 proof；保留的 external Linux/H8/H9 gates；known limitations；Git status；review range
 `6c7c7cd..HEAD`。不得宣布 P2 accepted/deployed/released。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
 ```text
-ultracode: 请继续使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请继续使用外部实现工具的官方 dynamic workflow，只在
 Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage3-p2 的
 codex/parallel-wave1-stage3-p2@6c7c7cd5c19a550034977bb2ad5ca845e4132648 上完成 STAGE-3-R2/v1。
 不要写主 checkout，不 reset/rebase/merge/push/tag/release，不修改 docs/orchestration/**，不访问 Rutgers，

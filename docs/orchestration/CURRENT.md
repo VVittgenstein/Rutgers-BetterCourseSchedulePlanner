@@ -1,17 +1,17 @@
-# RBCSP 当前工作总账与 Codex–Claude 协作协议
+# RBCSP 当前工作总账与 Codex–实现代理协作协议
 
 状态：**ACTIVE — 当前唯一的工作恢复入口**
-最后更新：2026-08-26（America/New_York）
+最后更新：2026-09-03（America/New_York）
 维护者：Codex（orchestrator）
 产品决策者：用户
-实现者：Claude
+实现者：实现代理
 
 ## 0. 本文用途
 
 本文用于在以下情况发生后恢复稳定上下文：
 
 - Codex 对话被多轮压缩；
-- Claude 开启新会话；
+- 实现代理开启新会话；
 - 工作中断后重新开始；
 - 分支、设计文档或对话记录之间出现冲突；
 - 需要判断“做到了什么、下一步做什么、谁负责什么”。
@@ -37,7 +37,7 @@
 4. 同一 conversation 中 2026-08-20 的九项总表与开工前最终讨论；
 5. `docs/design/2026-08-20-review-package-public.md`；
 6. `docs/design/2026-08-20-review-package-local.md`；
-7. 其余旧设计、旧 checklist 和 Claude/Codex 的历史建议。
+7. 其余旧设计、旧 checklist 和实现代理与 Codex 的历史建议。
 
 旧设计中的某一段被后来的产品决定撤回后，不得因为代码已经写了一部分而复活。
 
@@ -48,13 +48,13 @@
 用户负责：
 
 - 决定产品行为、范围和优先级；
-- 把 Codex 生成的 **Claude Prompt** 原样复制给 Claude；
-- Claude 完成后，把 Claude 的原始回报复制回 Codex；
+- 把 Codex 生成的 **实现任务提示** 原样复制给实现代理；
+- 实现代理完成后，把实现代理的原始回报复制回 Codex；
 - 对真正会改变产品行为的分歧作最终裁定。
 
 用户不负责：
 
-- 自己整理 Claude 与 Codex 的技术分歧；
+- 自己整理实现代理与 Codex 的技术分歧；
 - 从多轮 finding 中判断哪些是阻断；
 - 手工拼装任务说明；
 - 替 Codex 做代码验收。
@@ -67,43 +67,43 @@ Codex 负责：
 - 规划里程碑与依赖；
 - 每次同时生成：
   1. **任务包**（给用户阅读）；
-  2. **Claude Prompt**（可直接复制给 Claude）；
-- Claude 回报后独立检查真实 Git 状态、commit、diff、调用链和测试；
+  2. **实现任务提示**（可直接复制给实现代理）；
+- 实现代理回报后独立检查真实 Git 状态、commit、diff、调用链和测试；
 - 一次性汇总完整 findings；
 - 接受、拒绝或要求窄修；
-- 为窄修再次同时生成修复任务包和 Claude Prompt；
+- 为窄修再次同时生成修复任务包和实现任务提示；
 - 管理合并、迁移、打包和发布门。
 
 除非用户明确改变分工，Codex 不编写产品源码。Codex 可以进行只读审计、运行测试、
-创建隔离测试 worktree，并使用审计子代理；这些子代理不得替代 Claude 编写产品代码。
+创建隔离测试 worktree，并使用审计子代理；这些子代理不得替代实现代理编写产品代码。
 
-### 2.3 Claude：唯一实现者
+### 2.3 实现代理：唯一实现者
 
-Claude 负责：
+实现代理负责：
 
 - 严格按照 Codex Prompt 修改代码、测试和文档；
 - 可以在一个里程碑内创建多个逻辑 commit；
-- 使用仓库已配置的维护者 author/committer 身份，不在 commit message 自动添加 Claude/Anthropic
-  `Co-Authored-By` trailer；
+- 使用仓库已配置的维护者 author/committer 身份，不在 commit message 自动添加与外部实现代理或其工具
+  供应商有关的 `Co-Authored-By` trailer；
 - 不自行扩大范围；
 - 不自行重开已冻结的产品设计；
 - 不因发现非阻断技术债而顺手重构；
 - 完成后提供 commit、文件、测试、已知限制和工作树状态。
 
-Claude 不负责最终验收，也不能自行宣布整个 Stage 完成。
+实现代理不负责最终验收，也不能自行宣布整个 Stage 完成。
 
 ## 3. 实际通信链路
 
-当前没有假定 Codex 能直接向 Claude 会话发送消息。普通单 lane 固定链路是：
+当前没有假定 Codex 能直接向实现代理会话发送消息。普通单 lane 固定链路是：
 
 ```text
-Codex 同时生成「任务包」和「Claude Prompt」
+Codex 同时生成「任务包」和「实现任务提示」
         ↓
-用户把 Claude Prompt 原样复制给 Claude
+用户把实现任务提示原样复制给实现代理
         ↓
-Claude 编码、测试、提交并返回原始回报
+实现代理编码、测试、提交并返回原始回报
         ↓
-用户把 Claude 原始回报复制给 Codex
+用户把实现代理原始回报复制给 Codex
         ↓
 Codex 独立审查仓库，不信任摘要
         ↓
@@ -113,11 +113,11 @@ Codex 独立审查仓库，不信任摘要
 
 用户无需重新组织、缩写或解释双方的输出。为了保留证据，应尽量原样转发。
 
-`PARALLEL-WAVE-1` 的批准例外是：Codex 一次生成四份自包含 prompt；用户分别复制给四个 Claude；Claude
+`PARALLEL-WAVE-1` 的批准例外是：Codex 一次生成四份自包含 prompt；用户分别复制给四个实现代理；实现代理
 各自在 Codex 已建好的隔离 worktree 工作。用户把四份原始回报都交回后，Codex 才按冻结顺序串行集成和
-集中验收。角色不变：Claude 仍只实现，Codex 仍是唯一 orchestrator/验收者。
+集中验收。角色不变：实现代理仍只实现，Codex 仍是唯一 orchestrator/验收者。
 
-## 4. 任务包与 Claude Prompt 的固定格式
+## 4. 任务包与实现任务提示的固定格式
 
 每次开始实现时，Codex 必须在同一条回复中依次给出两部分。
 
@@ -136,9 +136,9 @@ Codex 独立审查仓库，不信任摘要
 9. 停止条件和需要回报给 Codex 的证据；
 10. 发布、迁移和兼容性限制。
 
-### 4.2 Claude Prompt（可直接复制）
+### 4.2 实现任务提示（可直接复制）
 
-Claude Prompt 必须自包含，不能要求 Claude 阅读 Codex 当前对话才能理解任务。
+实现任务提示必须自包含，不能要求实现代理阅读 Codex 当前对话才能理解任务。
 它必须包含任务包的全部约束，并明确：
 
 - 先检查真实代码再行动；
@@ -149,9 +149,9 @@ Claude Prompt 必须自包含，不能要求 Claude 阅读 Codex 当前对话才
 - 最后按固定回报格式返回；
 - 遇到真正需要产品判断的问题时停止，不得擅自拍板。
 
-## 5. Claude 完成后的固定回报格式
+## 5. 实现代理完成后的固定回报格式
 
-Claude 的回报应至少包含：
+实现代理的回报应至少包含：
 
 ```text
 1. Outcome：用户现在能做什么
@@ -165,7 +165,7 @@ Claude 的回报应至少包含：
 9. Review range：Codex 应审查的 base..head
 ```
 
-Claude 的“全部完成”“测试全绿”只是待核验声明。Codex 必须自己读取 Git 和代码。
+实现代理的“全部完成”“测试全绿”只是待核验声明。Codex 必须自己读取 Git 和代码。
 
 ## 6. Codex Stage 级验收方式
 
@@ -174,7 +174,7 @@ Codex 在完整 Stage 边界集中验收，不再把 M2/M3/M4 之类相邻 slice
 默认循环：
 
 ```text
-Stage 任务包 → Claude 内部多 phase 连续实现 → final boundary 集中重门/一次回报
+Stage 任务包 → 实现代理内部多 phase 连续实现 → final boundary 集中重门/一次回报
              → Codex 一轮全 Stage 审查
              → 仅有 blockers 时一轮集中修复 → 最终验收
 ```
@@ -185,7 +185,7 @@ Stage 任务包 → Claude 内部多 phase 连续实现 → final boundary 集�
 Codex 必须：
 
 - 固定审查范围 `base..head`；
-- 区分 Claude 声称运行的测试与 Codex 实际复跑的测试；
+- 区分实现代理声称运行的测试与 Codex 实际复跑的测试；
 - 一轮覆盖完整 diff，不一次只报一个 finding；
 - 先报告阻断，再列非阻断技术债；
 - 对弱测试检查判别力；
@@ -200,7 +200,7 @@ Codex 必须：
 finding 一条一条往返、用户手工重组消息。新的固定规则：
 
 1. 以完整**产品 Stage**切片，不以 helper、PR slice 或单一能力切片；
-2. Claude 在 Stage 内按依赖顺序做多个内部 phase/commit，phase 之间不中途 handoff；
+2. 实现代理在 Stage 内按依赖顺序做多个内部 phase/commit，phase 之间不中途 handoff；
 3. 每 phase 只跑 focused tests；workspace/frontend/architecture 只在 final boundary 集中运行，失败按固定
    transient/受影响复验协议处理；
 4. archive、安全扫描、真机/soak 只在相关 Stage final 边界运行；
@@ -345,7 +345,7 @@ v0.1.1 产品源码与轻量 tag：0988dadeeef2db16bbc2e64bc432125674c60325
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
 L1/R4 accepted head：75cefb0
-Claude Stage 2 主交付 head：553371f；R1 lane head：5af49d9
+实现代理的 Stage 2 主交付 head：553371f；R1 lane head：5af49d9
 Codex Stage 2 最终集成 head：6a35c74
 Stage 2/3/4/5：均已裁定、串行集成并随 v0.1.1 发布
 v0.1.2：真实使用暴露的筛选、可用性、存储与界面缺陷收口，迁移 0007 + derivation stamp 不可回滚
@@ -496,18 +496,31 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ## 18. 不得复活的旧工作模式
 
-- 不让 Claude 同时定义需求、扩展架构、实现并自我验收；
+- 不让实现代理同时定义需求、扩展架构、实现并自我验收；
 - 不让用户自己拼任务 prompt；
 - 不每个 helper/测试修复都停下来进行完整往返；
 - 不为每个小 commit 重跑重型安全扫描；
 - 不先做大量 dormant 地基而长期没有用户可用结果；
 - 不用“Stage 快完成”“地基完成”等模糊说法替代真实用户行为；
-- 不凭 Claude/Codex 的摘要判断完成，必须看 commit、diff、调用链和测试；
+- 不凭实现代理与 Codex 的摘要判断完成，必须看 commit、diff、调用链和测试；
 - 不把 scope cut 已取消的 leader、实时投影或 desired WebSocket 重新加入；
 - 不在没有跨 target 数据前实施 S3；
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-09-03 — 筛选条件按适用组成部分施加约束
+
+- FLT-S04b 只聚合课节的线上/远程组成部分；纯线下课不因同步方式被排除，混合课也不再把
+  线下固定时段错误算进线上 `MIXED`；
+- FLT-S07 只约束需要到场的实体时段；纯在线课不因所选子校区被排除，混合课的线上时段不参与地点判断；
+- 明确不匹配仍优先于缺失证据，`includeIncomplete` 只能接纳真正的 `UNCERTAIN`，不能放行已证明的反例；
+- 真实 `92026 / NB` 快照重放用户组合后，完整条件与移除地点均为 18 门课程 / 42 个课节，证明地点条件
+  不再错误排除这些纯在线结果；另以真实 Hybrid 和纯线下课节验证两个条件的适用范围；
+- 中英文界面补充适用范围和空结果诊断的独立单项测试说明；当前受版本控制的文件中不再保留外部实现
+  工具的品牌归因文字，本机未跟踪的工作目录与用户对话归档保持原样；
+- workspace、frontend、Clippy、fmt、Rust architecture/self-tests 与真实 SQLite 隔离实例验证通过；本轮不改
+  公网运行时的 9 个监看上限，也不发布新版本。
 
 ### 2026-09-02 — v0.1.4 已发布，本地 255 个监看与大批量请求放大收口
 
@@ -580,7 +593,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
   归档，且移动命令把 `--untracked-files=all` 列出的**文件**当作**目录**平铺，导致同名文件互相覆盖。
   已改用分离 worktree 完成打包；6 份归档由仍存的会话转录重建，
   `rbcsp-design-pr-reviews-d0d9c360` 与 `parallel-stage-release-orchestration-ab0cc48a`
-  因源转录已不在 `~/.claude` 且从未被 git 跟踪而永久丢失。
+  因源转录已不在 `旧实现工具的本地转录目录` 且从未被 git 跟踪而永久丢失。
 
 ### 2026-09-02 — v0.1.2 已发布，真实使用缺陷收口
 
@@ -623,13 +636,13 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
   DNS/UFW/SSH/Caddy/systemd 生产主机；旧 `v0.1.0`/`v0.1.1` tag、Release 与资产未变；
 - 按仓库既定归因要求，本轮 7 个提交仍全部由
   `VVittgenstein <158061732+VVittgenstein@users.noreply.github.com>` author/commit，不带任何
-  Claude/Anthropic co-author trailer。
+  与外部实现代理或其工具供应商有关的 co-author trailer。
 
 ### 2026-08-26 — v0.1.1 已发布，归因与双平台 release 收口
 
 - 以 `v0.1.0` 为不可变边界完成 message-only 历史改写：186 个映射提交中 161 个提交消息移除
-  Claude/Anthropic co-author trailer；父拓扑、tree、author/committer 与真实日期逐项一致，最终可达历史中
-  Claude/Anthropic attribution 为 0；远端 `main` 与清理候选随后安全前移，未 squash；
+  与外部实现代理或其工具供应商有关的 co-author trailer；父拓扑、tree、author/committer 与真实日期逐项一致，
+  最终可达历史中相关 attribution 为 0；远端 `main` 与清理候选随后安全前移，未 squash；
 - 首个 release-prep head 的 Linux CORE soak 暴露 Ubuntu 24.04 仓库只提供 Caddy 2.6.2，无法解析
   `stream_close_delay`。最终 release source `0988dadeeef2db16bbc2e64bc432125674c60325` 窄修为官方
   Caddy v2.11.4 固定资产 + SHA-256 校验，并把 H9 归属证据改为 admissions baseline → admitted permit
@@ -654,9 +667,10 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 - 用户批准把已经集成的四条 lane 作为 `v0.1.1` 同时发布 Windows local 与 Linux public 包；仍不连接或
   部署 Vultr；
 - 当前新增的 175 个提交全部由 `VVittgenstein <158061732+VVittgenstein@users.noreply.github.com>`
-  author/commit，但 151 个带自动添加的 Claude `Co-Authored-By`；已公开 `main` 另有 10 个同类 trailer；
-- 用户明确授权以旧 `v0.1.0` tag 为不可变边界，先备份，再仅删除边界之后的 Claude/Anthropic
-  co-author trailer；每个提交的 tree、父拓扑、author/committer、真实日期和独立粒度必须保留，禁止
+  author/commit，但 151 个带自动添加的外部实现代理署名 `Co-Authored-By`；已公开 `main` 另有 10 个同类
+  trailer；
+- 用户明确授权以旧 `v0.1.0` tag 为不可变边界，先备份，再仅删除边界之后与外部实现代理或其工具供应商
+  有关的 co-author trailer；每个提交的 tree、父拓扑、author/committer、真实日期和独立粒度必须保留，禁止
   squash 或为贡献日历伪造日期；
 - 清理候选必须先跑 GitHub CI；通过后才允许 `force-with-lease` 替换远端 `main`。旧 `v0.1.0` tag、
   Release 和资产保持原样；`v0.1.1` 的 Windows/Linux 包必须从清理后的同一个最终 `main` 提交重建并
@@ -681,7 +695,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ### 2026-08-25 — Parallel Wave 1 首轮集中审查与三 lane 窄修
 
-- 四个 Claude 分别交付 R1、P2、S4、S3 evidence；分支/head/status 与回报一致；
+- 四个实现代理分别交付 R1、P2、S4、S3 evidence；分支/head/status 与回报一致；
 - Codex 独立复跑 R1 presence 16、frontend focused 81、policy 92、release self-test；结论 ACCEPTED，
   cherry-pick 为 `48bef74..6a35c74`；
 - S4 operational-storage 61 项、S3 analyzer 58 项独立全绿，但源码审查发现关键测试/决策门假阳性；
@@ -694,7 +708,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ### 2026-08-25 — Parallel Wave 1：隔离并行实现、串行集成
 
-- 用户认为按 Stage 依次实现和依次审查仍过慢，批准多个 Claude 通过 worktree 并行工作；
+- 用户认为按 Stage 依次实现和依次审查仍过慢，批准多个实现代理通过 worktree 并行工作；
 - Codex 对 P2、S4、S3 的真实代码路径、参数缺口、外部环境和交叉文件做了并行只读调查；
 - 冻结四个 lane：Stage 2 R1、Stage 3/P2、Stage 4/S4、Stage 5/S3 evidence；每个 lane 有独立 branch、
   worktree、任务包与 `ultracode:` prompt；
@@ -708,7 +722,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ### 2026-08-25 — Stage 2 主交付独立验收与 R1 窄修
 
-- Claude 在 `75cefb0..553371f` 一次实现 Stage 2 主体；Codex 固定同一范围检查 55 个 changed files，
+- 实现代理在 `75cefb0..553371f` 一次实现 Stage 2 主体；Codex 固定同一范围检查 55 个 changed files，
   独立复跑 workspace、frontend、architecture/self-tests、diff-check 与 PowerShell parser；
 - final-head Rust、architecture 和串行 frontend verify 全绿；第一次 frontend 与 Rust 并跑时出现 20 个
   Vitest worker 启动超时、无断言 failure，按固定预算串行复跑一次即通过，记环境资源观察；
@@ -727,7 +741,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
   `STAGE-2`；
 - 用户最终冻结余下四个产品 Stage：`S2（P1/L1/L2/L3）→ P2 → S4 → S3`；不再把 P2/S4 合并，
   release 也不冒充第五个产品 Stage；
-- 每个 Stage 由 Codex 在真实起点上写一份完整计划，用户一次转发；Claude 使用官方 dynamic workflow
+- 每个 Stage 由 Codex 在真实起点上写一份完整计划，用户一次转发；实现代理使用官方 dynamic workflow
   自主编排内部工作并只在 Stage final 回报一次；
 - Prompt 只钉死范围、用户结果、边界、验收场景和 final gates，不预先规定内部类型/文件/agent 数；
 - 拒绝过早优化：当前 Stage 之外、无现实路径/失败证据且不影响主合同的问题默认延期；
@@ -738,7 +752,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ### 2026-08-24 — M0-M1-001-R4 最终验收
 
-- Claude 在 `b450ed0..75cefb0` 完成 R4；
+- 实现代理在 `b450ed0..75cefb0` 完成 R4；
 - Codex 独立复核 committed-before-reconcile 交错、同一 render turn uncertainty 门与 READ-only cutoff
   release，三个判别测试和 production 机制均成立；
 - workspace 746/1 ignored、frontend 254、architecture、diff-check 与 final-head Windows archive 全绿；
@@ -749,7 +763,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ### 2026-08-24 — M0-M1-001-R3 独立验收
 
-- Claude 在 `2cd54e2..b450ed0` 完成 R3；
+- 实现代理在 `2cd54e2..b450ed0` 完成 R3；
 - Codex 独立复跑 workspace/frontend/architecture/diff-check 与最终 Windows archive，普通门及非空
   三生命周期 E2E 全部通过；
 - 安全差异扫描 `27364bc1-56fd-4f0e-9a3b-b14e69c6c7c7` 覆盖 7/7 authoritative production files，
@@ -760,7 +774,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ### 2026-08-24 — M0-M1-001-R2 独立验收
 
-- Claude 在 `c50499f..2cd54e2` 完成 R2；
+- 实现代理在 `c50499f..2cd54e2` 完成 R2；
 - Codex 独立复跑 workspace/frontend/architecture/diff-check 与真实 Windows archive，普通门均通过；
 - 安全差异扫描 `39c6bf4b-fda3-46a7-afe7-05394bd6921f` 覆盖 9/9 authoritative files，
   传统可报告 finding 为 0；
@@ -769,7 +783,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ### 2026-08-24 — M0-M1-001-R1 独立验收
 
-- Claude 在 `107f3e5..c50499f` 完成 R1；
+- 实现代理在 `107f3e5..c50499f` 完成 R1；
 - Codex 独立复跑 workspace/frontend/architecture/diff-check，并复验真实 Windows archive：
   12 文件、两次重启、desired 成功 attach/materialize、reset 后为空；
 - 完成 16/16 authoritative changed files 的安全差异扫描
@@ -780,7 +794,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ### 2026-08-24 — M0-M1-001 独立验收
 
-- Claude 在 `a4f8d22..107f3e5` 落地 S1 窄修和 desired-watch 纵向实现；
+- 实现代理在 `a4f8d22..107f3e5` 落地 S1 窄修和 desired-watch 纵向实现；
 - Codex 独立复跑 workspace、frontend 和 architecture 门；
 - Codex 使用本机已有锁定工具真实构建并验证 Windows 候选，确认当前脚本能通过但没有证明重启物化；
 - 完成 28 个自动 inventory 文件加 1 个 binary-classified TypeScript 源码的安全差异扫描；
@@ -789,16 +803,16 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ### 2026-08-23 — 初始版本
 
-- 记录 Codex orchestrator / 用户转发 / Claude implementer 的真实通信方式；
+- 记录 Codex orchestrator / 用户转发 / 外部实现代理（implementer）的真实通信方式；
 - 解释九项总案与历史执行顺序；
 - 合并后半段 desired-watch scope cut；
 - 记录 `main@ae65958` 与 `feat/s2-alert-delivery@a4f8d22` 检查点；
 - 记录九项完成度、迁移/发布门和下一里程碑建议；
-- 尚未向 Claude 发出正式实现任务。
+- 尚未向实现代理发出正式实现任务。
 
 ## 20. 新工作模式任务账本
 
-此表只记录采用本文协作协议之后的任务。每次 Codex 发出任务包、收到 Claude 回报、
+此表只记录采用本文协作协议之后的任务。每次 Codex 发出任务包、收到实现代理回报、
 作出验收结论或批准进入下一里程碑时都必须更新。
 
 ```text
@@ -818,7 +832,7 @@ S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT (CORE evidence PASS; deployment-only evidence pending); Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: NONE — v0.1.4 PUBLISHED; production deployment or Rutgers composition requires new explicit authorization
+Next authorized action: NONE — scoped filter fix integrated after validation; a new release, production deployment, or Rutgers composition requires new explicit authorization
 ```
 
 验收结论只允许使用：
@@ -831,4 +845,4 @@ Next authorized action: NONE — v0.1.4 PUBLISHED; production deployment or Rutg
 - `IN_PROGRESS`
 - `PENDING_REVIEW`
 
-未经 Codex 更新本表为 `ACCEPTED` 或 `ACCEPTED_WITH_DEFERRED_DEBT`，Claude 的完成声明不得推进 Stage 状态。
+未经 Codex 更新本表为 `ACCEPTED` 或 `ACCEPTED_WITH_DEFERRED_DEBT`，实现代理的完成声明不得推进 Stage 状态。

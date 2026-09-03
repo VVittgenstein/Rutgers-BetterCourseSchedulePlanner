@@ -23,7 +23,7 @@ Prompt 版本：`STAGE-5-R1/v1`
 - 生产 GO/safe offset 必须基于足够且覆盖 qualifying groups 的 server-clock evidence。comparison fallback 到
   client clock时必须 NO-GO；一个无关 Date 不能解除；
 - A4-6 至少证明 winner 在整 target 留出、target/window group 留出和确定性少量 outlier sensitivity 下保持；
-  采用高效算法还是 bounded rerun 由 Claude 决定，但报告必须分别列出证据，不能继续用 group 代称 target；
+  采用高效算法还是 bounded rerun 由实现代理决定，但报告必须分别列出证据，不能继续用 group 代称 target；
 - 增加四条可打挂 `9582728` 的 end-to-end counterexample；全部 A4 门真实满足的 GO fixture 仍可达；
 - 重新生成 JSON/MD，现有本地 NB 数据仍为 NO_PRODUCTION_CHANGE；
 - 原始 capture 实际位于 gitignored `data/`，不是 committed。修正文案；测试优先找当前 repo root 的
@@ -33,9 +33,9 @@ Prompt 版本：`STAGE-5-R1/v1`
 不改 production scheduler/policy/storage，不联网、不采样，不处理重复 CLI 入参、裸 NUL、一般字段类型等
 deferred，除非修改同一行自然消除且不扩展。只跑 analyzer tests、离线 current-data command、diff-check。
 
-## B. Claude Prompt（请用户从下一行开始原样复制）
+## B. 实现任务提示（请用户从下一行开始原样复制）
 
-ultracode: 请继续使用 Claude Code 官方 dynamic workflow，只在
+ultracode: 请继续使用外部实现工具的官方 dynamic workflow，只在
 `Z:\Project\Rutgers-BetterCourseSchedulePlanner\.worktrees\parallel-wave-1\stage5-s3-evidence` 的
 `codex/parallel-wave1-stage5-s3-evidence@95827285205de68be85fc9711821d25f66f3f1d5` 上完成
 `STAGE-5-R1/v1`。不要写主 checkout，不 reset/rebase/merge，不修改 `docs/orchestration/**`，严格离线。
