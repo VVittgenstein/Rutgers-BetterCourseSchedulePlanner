@@ -1,10 +1,11 @@
 use bcsp_contracts::{
-    CatalogFieldKnowledge, CatalogFieldPresence, CatalogModality, CatalogPrerequisiteState,
-    CatalogRequiredness, CatalogSynchronicity, CourseGroupKey, CreditRangeV1, FilterFieldId,
-    FilterMatchV1, FilterSetModeV1, FilterTokenV1, LiveOpenEvidenceV1, LiveOpenStateV1,
-    MatchExplanation, MatchOutcome, MatchReasonCode, NormalizedCourseVariantV1,
-    NormalizedFilterValuesV1, NormalizedOccurrenceV1, NormalizedSectionV1, PermissionFilterV1,
-    PrerequisiteFilterV1, UserModalityV3, UserSynchronicityV3, course_number_band,
+    CatalogFieldKnowledge, CatalogFieldPresence, CatalogModality, CatalogOccurrenceEvidence,
+    CatalogPrerequisiteState, CatalogRequiredness, CatalogSynchronicity, CourseGroupKey,
+    CreditRangeV1, FilterFieldId, FilterMatchV1, FilterSetModeV1, FilterTokenV1,
+    LiveOpenEvidenceV1, LiveOpenStateV1, MatchExplanation, MatchOutcome, MatchReasonCode,
+    NormalizedCourseVariantV1, NormalizedFilterValuesV1, NormalizedOccurrenceV1,
+    NormalizedSectionV1, PermissionFilterV1, PrerequisiteFilterV1, UserModalityV3,
+    UserSynchronicityV3, course_number_band,
 };
 use time::OffsetDateTime;
 
@@ -147,7 +148,7 @@ fn section_filter_evaluations(
         ),
         (
             FilterFieldId::SectionSynchronicity,
-            evaluate_synchronicity(section.synchronicity, filters.synchronicities()),
+            evaluate_synchronicity(section, occurrences, filters.synchronicities()),
         ),
         (
             FilterFieldId::SectionInstructor,
@@ -163,7 +164,7 @@ fn section_filter_evaluations(
         ),
         (
             FilterFieldId::SectionMeetingLocation,
-            evaluate_meeting_location(occurrences, filters.meeting_locations()),
+            evaluate_meeting_location(section, occurrences, filters.meeting_locations()),
         ),
         (
             FilterFieldId::SectionExam,
@@ -374,12 +375,163 @@ fn evaluate_modality(actual: CatalogModality, selected: &[UserModalityV3]) -> Pr
 }
 
 fn evaluate_synchronicity(
-    actual: CatalogSynchronicity,
+    section: &NormalizedSectionV1,
+    occurrences: Option<&[&NormalizedOccurrenceV1]>,
     selected: &[UserSynchronicityV3],
 ) -> PredicateEvaluation {
     if selected.is_empty() {
         return PredicateEvaluation::matched();
     }
+    let field = FilterFieldId::SectionSynchronicity.wire_name();
+
+    let Some(occurrences) = occurrences.filter(|values| !values.is_empty()) else {
+        return match section.delivery_modality {
+            // A wholly in-person Section has no online component for this
+            // filter to constrain.
+            CatalogModality::OnCampusOrInPerson => PredicateEvaluation::matched(),
+            // When the whole Section is online, the stored aggregate already
+            // describes exactly the applicable component set.
+            CatalogModality::Online => {
+                evaluate_synchronicity_value(section.synchronicity, selected)
+            }
+            // A HYBRID aggregate also contains in-person timing, so it cannot
+            // answer an online-only filter without occurrence evidence.
+            CatalogModality::Hybrid
+            | CatalogModality::Other
+            | CatalogModality::Unknown
+            | CatalogModality::UnknownConflict => {
+                PredicateEvaluation::uncertain(field, MatchReasonCode::MissingReliableData)
+            }
+        };
+    };
+
+    let mut has_sync = false;
+    let mut has_async = false;
+    let mut uncertainties = Vec::new();
+    for occurrence in occurrences {
+        match online_applicability(section.delivery_modality, occurrence) {
+            ComponentApplicability::NotApplicable => continue,
+            ComponentApplicability::Uncertain(code) => {
+                uncertainties.push(PredicateEvaluation::uncertain(field, code));
+            }
+            ComponentApplicability::Applicable => {
+                let remote_by_arrangement = occurrence.evidence
+                    == CatalogOccurrenceEvidence::Remote
+                    && occurrence.kind == bcsp_contracts::CatalogOccurrenceKind::ByArrangement;
+                match &occurrence.synchronicity {
+                    CatalogFieldKnowledge::Known {
+                        presence: CatalogFieldPresence::Present { value },
+                    } => match value {
+                        CatalogSynchronicity::Sync => has_sync = true,
+                        CatalogSynchronicity::Async => has_async = true,
+                        CatalogSynchronicity::Mixed => {
+                            has_sync = true;
+                            has_async = true;
+                        }
+                        CatalogSynchronicity::ByArrangement
+                        | CatalogSynchronicity::Unspecified
+                        | CatalogSynchronicity::Unknown => {
+                            if remote_by_arrangement {
+                                // Rutgers' normalized combination proves
+                                // online asynchronous content when the stored
+                                // synchronicity value itself is inconclusive.
+                                has_async = true;
+                            } else {
+                                uncertainties.push(PredicateEvaluation::uncertain(
+                                    field,
+                                    MatchReasonCode::UnknownValue,
+                                ));
+                            }
+                        }
+                    },
+                    CatalogFieldKnowledge::Known {
+                        presence: CatalogFieldPresence::ExplicitNull | CatalogFieldPresence::Absent,
+                    } => {
+                        if remote_by_arrangement {
+                            has_async = true;
+                        } else {
+                            uncertainties.push(PredicateEvaluation::uncertain(
+                                field,
+                                MatchReasonCode::MissingReliableData,
+                            ));
+                        }
+                    }
+                    CatalogFieldKnowledge::Unknown { reason } => {
+                        if remote_by_arrangement {
+                            has_async = true;
+                        } else {
+                            uncertainties.push(PredicateEvaluation::uncertain(
+                                field,
+                                unknown_reason_code(*reason),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !uncertainties.is_empty() {
+        // Unknown members must not erase facts already proved by known online
+        // components. A known SYNC member means the final category can only
+        // be SYNC or MIXED, never ASYNC; the dual holds for a known ASYNC
+        // member. Once both are known, MIXED is already proved. With only one
+        // known kind, preserve UNCERTAIN whenever at least one selected
+        // category is still possible, so includeIncomplete remains the only
+        // way to admit incomplete evidence; return NO_MATCH when every
+        // selected category is already impossible.
+        if has_sync && has_async {
+            // Both kinds are already proved. Extra unknown components cannot
+            // undo their coexistence, so MIXED is a conclusive result.
+            return bool_result(
+                selected.contains(&UserSynchronicityV3::Mixed),
+                FilterFieldId::SectionSynchronicity,
+            );
+        }
+        let could_match = match (has_sync, has_async) {
+            (true, true) => unreachable!("handled above"),
+            (true, false) => selected.iter().any(|value| {
+                matches!(
+                    value,
+                    UserSynchronicityV3::Sync | UserSynchronicityV3::Mixed
+                )
+            }),
+            (false, true) => selected.iter().any(|value| {
+                matches!(
+                    value,
+                    UserSynchronicityV3::Async | UserSynchronicityV3::Mixed
+                )
+            }),
+            (false, false) => true,
+        };
+        return if could_match {
+            and_all(uncertainties)
+        } else {
+            PredicateEvaluation::no_match(field)
+        };
+    }
+    let applicable = match (has_sync, has_async) {
+        (true, true) => CatalogSynchronicity::Mixed,
+        (true, false) => CatalogSynchronicity::Sync,
+        (false, true) => CatalogSynchronicity::Async,
+        (false, false) => {
+            return if section.delivery_modality == CatalogModality::OnCampusOrInPerson {
+                PredicateEvaluation::matched()
+            } else {
+                // The Section claims an online or uncertain overall format,
+                // but the complete occurrence set cannot identify its online
+                // timing component.
+                PredicateEvaluation::uncertain(field, MatchReasonCode::MissingReliableData)
+            };
+        }
+    };
+    evaluate_synchronicity_value(applicable, selected)
+}
+
+fn evaluate_synchronicity_value(
+    actual: CatalogSynchronicity,
+    selected: &[UserSynchronicityV3],
+) -> PredicateEvaluation {
     let field = FilterFieldId::SectionSynchronicity.wire_name();
     match actual {
         // BY_ARRANGEMENT is a display value with no filter option behind it, so
@@ -403,6 +555,79 @@ fn evaluate_synchronicity(
                 selected.contains(&selected_value),
                 FilterFieldId::SectionSynchronicity,
             )
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComponentApplicability {
+    Applicable,
+    NotApplicable,
+    Uncertain(MatchReasonCode),
+}
+
+/// FLT-S04b constrains only an online component. Remote occurrence evidence
+/// is sufficient even when the occurrence's location creates a modality
+/// conflict; HYBRID is also applicable because it contains an online part.
+fn online_applicability(
+    section_modality: CatalogModality,
+    occurrence: &NormalizedOccurrenceV1,
+) -> ComponentApplicability {
+    if occurrence.evidence == CatalogOccurrenceEvidence::Remote {
+        return ComponentApplicability::Applicable;
+    }
+    match &occurrence.modality {
+        CatalogFieldKnowledge::Known {
+            presence: CatalogFieldPresence::Present { value },
+        } => match value {
+            CatalogModality::Online | CatalogModality::Hybrid => ComponentApplicability::Applicable,
+            _ if occurrence.evidence == CatalogOccurrenceEvidence::Physical => {
+                ComponentApplicability::NotApplicable
+            }
+            CatalogModality::OnCampusOrInPerson => ComponentApplicability::NotApplicable,
+            CatalogModality::UnknownConflict => {
+                ComponentApplicability::Uncertain(MatchReasonCode::ConflictingEvidence)
+            }
+            CatalogModality::Other | CatalogModality::Unknown => match section_modality {
+                CatalogModality::OnCampusOrInPerson => ComponentApplicability::NotApplicable,
+                CatalogModality::Online => ComponentApplicability::Applicable,
+                CatalogModality::Hybrid
+                | CatalogModality::Other
+                | CatalogModality::Unknown
+                | CatalogModality::UnknownConflict => {
+                    ComponentApplicability::Uncertain(MatchReasonCode::UnknownValue)
+                }
+            },
+        },
+        CatalogFieldKnowledge::Known {
+            presence: CatalogFieldPresence::ExplicitNull | CatalogFieldPresence::Absent,
+        } => match (occurrence.evidence, section_modality) {
+            (CatalogOccurrenceEvidence::Physical, _) => ComponentApplicability::NotApplicable,
+            (CatalogOccurrenceEvidence::None, CatalogModality::OnCampusOrInPerson) => {
+                ComponentApplicability::NotApplicable
+            }
+            (CatalogOccurrenceEvidence::None, CatalogModality::Online) => {
+                ComponentApplicability::Applicable
+            }
+            (CatalogOccurrenceEvidence::None, _) => {
+                ComponentApplicability::Uncertain(MatchReasonCode::MissingReliableData)
+            }
+            (CatalogOccurrenceEvidence::Remote, _) => unreachable!("handled above"),
+        },
+        CatalogFieldKnowledge::Unknown { reason } => {
+            match (occurrence.evidence, section_modality) {
+                (CatalogOccurrenceEvidence::Physical, _) => ComponentApplicability::NotApplicable,
+                (CatalogOccurrenceEvidence::None, CatalogModality::OnCampusOrInPerson) => {
+                    ComponentApplicability::NotApplicable
+                }
+                (CatalogOccurrenceEvidence::None, CatalogModality::Online) => {
+                    ComponentApplicability::Applicable
+                }
+                (CatalogOccurrenceEvidence::None, _) => {
+                    ComponentApplicability::Uncertain(unknown_reason_code(*reason))
+                }
+                (CatalogOccurrenceEvidence::Remote, _) => unreachable!("handled above"),
+            }
         }
     }
 }
@@ -473,6 +698,7 @@ fn admit_filter_evaluation(
 /// `MeetingLocationFilterV2::mode` no longer selects between behaviours; it is
 /// retained so stored filter state keeps deserializing.
 fn evaluate_meeting_location(
+    section: &NormalizedSectionV1,
     occurrences: Option<&[&NormalizedOccurrenceV1]>,
     selected: &bcsp_contracts::MeetingLocationFilterV2,
 ) -> PredicateEvaluation {
@@ -480,10 +706,14 @@ fn evaluate_meeting_location(
         return PredicateEvaluation::matched();
     }
     let Some(occurrences) = occurrences.filter(|values| !values.is_empty()) else {
-        return PredicateEvaluation::uncertain(
-            FilterFieldId::SectionMeetingLocation.wire_name(),
-            MatchReasonCode::MissingReliableData,
-        );
+        return if section.delivery_modality == CatalogModality::Online {
+            PredicateEvaluation::matched()
+        } else {
+            PredicateEvaluation::uncertain(
+                FilterFieldId::SectionMeetingLocation.wire_name(),
+                MatchReasonCode::MissingReliableData,
+            )
+        };
     };
     let evaluate_occurrence = |occurrence: &&NormalizedOccurrenceV1| {
         or_active([
@@ -499,41 +729,80 @@ fn evaluate_meeting_location(
             ),
         ])
     };
-    let attended = occurrences
-        .iter()
-        .filter(|occurrence| occurrence.requiredness != CatalogRequiredness::Optional)
-        .collect::<Vec<_>>();
-    let (travelled, remote): (Vec<_>, Vec<_>) = attended
-        .iter()
-        .partition(|occurrence| !imposes_no_travel(occurrence));
-    // Where the student has to be decides it. Only when nothing requires
-    // travel does the Section's own location speak: a wholly online Section
-    // matches a reader who selected ONLINE and no one else.
-    let decisive = if travelled.is_empty() {
-        remote
-    } else {
-        travelled
-    };
-    if decisive.is_empty() {
-        return PredicateEvaluation::uncertain(
-            FilterFieldId::SectionMeetingLocation.wire_name(),
-            MatchReasonCode::MissingReliableData,
-        );
-    }
-    and_all(decisive.into_iter().map(evaluate_occurrence))
+    and_all(occurrences.iter().filter_map(|occurrence| {
+        if occurrence.requiredness == CatalogRequiredness::Optional {
+            return None;
+        }
+        match travel_applicability(section.delivery_modality, occurrence) {
+            ComponentApplicability::Applicable => Some(evaluate_occurrence(occurrence)),
+            ComponentApplicability::NotApplicable => None,
+            ComponentApplicability::Uncertain(code) => Some(PredicateEvaluation::uncertain(
+                FilterFieldId::SectionMeetingLocation.wire_name(),
+                code,
+            )),
+        }
+    }))
 }
 
-/// Whether a meeting can be attended from anywhere, and so says nothing about
-/// where the student has to be.
-fn imposes_no_travel(occurrence: &NormalizedOccurrenceV1) -> bool {
-    matches!(
-        occurrence.modality,
-        CatalogFieldKnowledge::Known {
-            presence: CatalogFieldPresence::Present {
-                value: CatalogModality::Online
+/// Whether FLT-S07 has a physical place to constrain. The normalized evidence
+/// axis is decisive: REMOTE imposes no travel, while PHYSICAL does. Only when
+/// that evidence is absent do we fall back to the occurrence modality.
+fn travel_applicability(
+    section_modality: CatalogModality,
+    occurrence: &NormalizedOccurrenceV1,
+) -> ComponentApplicability {
+    match occurrence.evidence {
+        CatalogOccurrenceEvidence::Remote => ComponentApplicability::NotApplicable,
+        CatalogOccurrenceEvidence::Physical => ComponentApplicability::Applicable,
+        CatalogOccurrenceEvidence::None => match &occurrence.modality {
+            CatalogFieldKnowledge::Known {
+                presence: CatalogFieldPresence::Present { value },
+            } => match value {
+                CatalogModality::Online => ComponentApplicability::NotApplicable,
+                CatalogModality::OnCampusOrInPerson | CatalogModality::Hybrid => {
+                    ComponentApplicability::Applicable
+                }
+                CatalogModality::UnknownConflict => {
+                    ComponentApplicability::Uncertain(MatchReasonCode::ConflictingEvidence)
+                }
+                CatalogModality::Other | CatalogModality::Unknown => match section_modality {
+                    CatalogModality::Online => ComponentApplicability::NotApplicable,
+                    CatalogModality::OnCampusOrInPerson => ComponentApplicability::Applicable,
+                    CatalogModality::Hybrid
+                    | CatalogModality::Other
+                    | CatalogModality::Unknown
+                    | CatalogModality::UnknownConflict => {
+                        ComponentApplicability::Uncertain(MatchReasonCode::UnknownValue)
+                    }
+                },
+            },
+            CatalogFieldKnowledge::Known {
+                presence: CatalogFieldPresence::ExplicitNull | CatalogFieldPresence::Absent,
+            } => match section_modality {
+                CatalogModality::Online => ComponentApplicability::NotApplicable,
+                CatalogModality::OnCampusOrInPerson => ComponentApplicability::Applicable,
+                CatalogModality::Hybrid
+                | CatalogModality::Other
+                | CatalogModality::Unknown
+                | CatalogModality::UnknownConflict => {
+                    ComponentApplicability::Uncertain(MatchReasonCode::MissingReliableData)
+                }
+            },
+            CatalogFieldKnowledge::Unknown { .. }
+                if section_modality == CatalogModality::Online =>
+            {
+                ComponentApplicability::NotApplicable
             }
-        }
-    )
+            CatalogFieldKnowledge::Unknown { .. }
+                if section_modality == CatalogModality::OnCampusOrInPerson =>
+            {
+                ComponentApplicability::Applicable
+            }
+            CatalogFieldKnowledge::Unknown { reason } => {
+                ComponentApplicability::Uncertain(unknown_reason_code(*reason))
+            }
+        },
+    }
 }
 
 fn evaluate_permission(

@@ -226,11 +226,12 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     const view = render(<Harness />);
     const row = view.container.querySelector<HTMLElement>('[data-filter-row="FLT-S04b"]');
     if (row === null) throw new Error('Expected the Meeting timing row.');
-    expect(within(row).getByText('Derived from the Rutgers meeting mode and the listed meeting times.')).toBeTruthy();
-    expect(within(row).getByText('Meets at fixed times (online or in person).')).toBeTruthy();
-    expect(within(row).getByText('Online with no fixed meeting time (Rutgers “hours by arrangement”).')).toBeTruthy();
-    expect(within(row).getByText('Some meetings at fixed times, some by arrangement.')).toBeTruthy();
-    expect(within(row).getByText('Also include sections whose meeting timing Rutgers has not published.')).toBeTruthy();
+    expect(within(row).getByText(/This condition applies only to the online part of a Section/u)).toBeTruthy();
+    expect(within(row).getByText(/a fully in-person Section is not excluded/u)).toBeTruthy();
+    expect(within(row).getByText('The online part meets at fixed times.')).toBeTruthy();
+    expect(within(row).getByText('The online part has no fixed meeting time (Rutgers “hours by arrangement”).')).toBeTruthy();
+    expect(within(row).getByText('The online part includes both fixed-time and by-arrangement meetings.')).toBeTruthy();
+    expect(within(row).getByText('Also include sections whose online-part timing cannot be determined from Rutgers data.')).toBeTruthy();
     expect(within(row).queryByText('When this filter is active, also include records whose value cannot be determined.')).toBeNull();
     expect(within(row).getByRole('checkbox', { name: 'Synchronous' })).toBeTruthy();
     expect(within(row).getByRole('checkbox', { name: 'Asynchronous' })).toBeTruthy();
@@ -247,13 +248,30 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     const view = render(<Harness locale="zh-CN" />);
     const row = view.container.querySelector<HTMLElement>('[data-filter-row="FLT-S04b"]');
     if (row === null) throw new Error('Expected the Meeting timing row.');
-    expect(within(row).getByText('根据 Rutgers 的授课模式与列出的上课时间推断。')).toBeTruthy();
-    expect(within(row).getByText('有固定上课时间（线上或线下）。')).toBeTruthy();
-    expect(within(row).getByText('在线且没有固定上课时间（Rutgers 标注 hours by arrangement）。')).toBeTruthy();
-    expect(within(row).getByText('部分时段固定，部分自行安排。')).toBeTruthy();
-    expect(within(row).getByText('同时包含 Rutgers 未公布上课时间安排的课节。')).toBeTruthy();
+    expect(within(row).getByText(/此条件只约束课节的线上部分/u)).toBeTruthy();
+    expect(within(row).getByText(/纯线下课不会被它排除/u)).toBeTruthy();
+    expect(within(row).getByText('线上部分有固定上课时间。')).toBeTruthy();
+    expect(within(row).getByText('线上部分没有固定上课时间（Rutgers 标注 hours by arrangement）。')).toBeTruthy();
+    expect(within(row).getByText('线上部分既有固定时段，也有自行安排的时段。')).toBeTruthy();
+    expect(within(row).getByText('同时包含无法从 Rutgers 数据确定线上部分同步方式的课节。')).toBeTruthy();
     expect(within(row).getByRole('checkbox', { name: '同步异步混合' })).toBeTruthy();
     expect(within(row).getByRole('checkbox', { name: /包含数据不完整的记录/u })).toBeTruthy();
+  });
+
+  it('explains that meeting location constrains only travel to in-person meetings', () => {
+    const english = render(<Harness />);
+    const englishRow = english.container.querySelector<HTMLElement>('[data-filter-row="FLT-S07"]');
+    if (englishRow === null) throw new Error('Expected the Meeting locations row.');
+    expect(within(englishRow).getByText(/applies only to in-person meetings that require travel/u)).toBeTruthy();
+    expect(within(englishRow).getByText(/A fully online Section is not excluded; use Class format to exclude online Sections/u)).toBeTruthy();
+    english.unmount();
+
+    const chinese = render(<Harness locale="zh-CN" />);
+    const chineseRow = chinese.container.querySelector<HTMLElement>('[data-filter-row="FLT-S07"]');
+    if (chineseRow === null) throw new Error('Expected the 子校区 row.');
+    expect(within(chineseRow).getByText(/只约束需要到场的实体时段/u)).toBeTruthy();
+    expect(within(chineseRow).getByText(/纯在线课不会因子校区条件被排除/u)).toBeTruthy();
+    expect(within(chineseRow).getByText(/如需排除在线课，请使用「授课方式」/u)).toBeTruthy();
   });
 
   it('loads every actual course-number band and stores numeric sorted V3 values', async () => {

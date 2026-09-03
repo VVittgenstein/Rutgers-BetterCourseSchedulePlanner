@@ -920,7 +920,8 @@ describe('empty-result diagnosis', () => {
     ]);
     expect(within(diagnosis).getByRole('button', { name: 'Include records with incomplete Meeting timing data 4 courses' })).toBeTruthy();
     expect(within(diagnosis).queryByRole('button', { name: /Remove Class format/u })).toBeNull();
-    expect(within(diagnosis).getByText('Relaxing one condition would return results:')).toBeTruthy();
+    expect(within(diagnosis).getByText(/Each row is an independent one-change test/u)).toBeTruthy();
+    expect(within(diagnosis).getByText(/Rows are not combined, so their totals cannot be added/u)).toBeTruthy();
     const probes = probeSearches(searchCourses);
     expect(probes).toHaveLength(4);
     expect(probes.every((request) => request.page.page === 1 && request.page.pageSize === 1)).toBe(true);

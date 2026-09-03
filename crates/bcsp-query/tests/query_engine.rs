@@ -5,14 +5,14 @@ use std::sync::Arc;
 
 use bcsp_contracts::{
     AvailabilityWindowV1, CampusCode, CatalogFieldKnowledge, CatalogModality,
-    CatalogPrerequisiteState, CatalogRequiredness, CatalogSubjectCode, CatalogSynchronicity,
-    CatalogUnknownReason, CoreFilterV1, CourseDetailRequestV1, CourseGroupKey,
-    CourseQueryRequestV1, CourseSortFieldV1, CourseSortV1, CourseVariantKey, CreditRangeV1,
-    FilterFieldId, FilterRequestV1, FilterSearchTextV1, FilterSetModeV1, FilterTokenV1,
-    LiveOpenEvidenceV1, LiveOpenStateV1, MatchOutcome, MatchReasonCode, MeetingLocationFilterV2,
-    MeetingLocationMatchModeV2, PageRequestV1, PermissionFilterV1, PrerequisiteFilterV1,
-    SectionDetailRequestV1, SectionQueryRequestV1, SectionSortV1, SortDirectionV1, UserModalityV3,
-    UserSynchronicityV3, WeekdayV1,
+    CatalogOccurrenceEvidence, CatalogPrerequisiteState, CatalogRequiredness, CatalogSubjectCode,
+    CatalogSynchronicity, CatalogUnknownReason, CoreFilterV1, CourseDetailRequestV1,
+    CourseGroupKey, CourseQueryRequestV1, CourseSortFieldV1, CourseSortV1, CourseVariantKey,
+    CreditRangeV1, FilterFieldId, FilterRequestV1, FilterSearchTextV1, FilterSetModeV1,
+    FilterTokenV1, LiveOpenEvidenceV1, LiveOpenStateV1, MatchOutcome, MatchReasonCode,
+    MeetingLocationFilterV2, MeetingLocationMatchModeV2, PageRequestV1, PermissionFilterV1,
+    PrerequisiteFilterV1, SectionDetailRequestV1, SectionQueryRequestV1, SectionSortV1,
+    SortDirectionV1, UserModalityV3, UserSynchronicityV3, WeekdayV1,
 };
 use bcsp_query::{
     CorpusError, PreparedCatalogCorpus, PreparedOpenOverlay, QueryEngine, QueryError, TextHit,
@@ -1109,6 +1109,8 @@ fn delivery_axes_do_not_guess_conflicting_or_unspecified_values() {
     let section = section_mut(&mut catalog, &keys.section);
     section.delivery_modality = CatalogModality::UnknownConflict;
     section.synchronicity = CatalogSynchronicity::Unspecified;
+    occurrence_mut(&mut catalog, &keys.section).synchronicity =
+        CatalogFieldKnowledge::present(CatalogSynchronicity::Unspecified);
     let mut input = neutral_input();
     input.modalities = vec![UserModalityV3::Online];
     input.synchronicities = vec![UserSynchronicityV3::Sync];
@@ -1154,6 +1156,8 @@ fn incomplete_admission_is_additive_and_required_for_each_active_uncertain_axis(
     let section = section_mut(&mut catalog, &keys.section);
     section.delivery_modality = CatalogModality::Other;
     section.synchronicity = CatalogSynchronicity::Unspecified;
+    occurrence_mut(&mut catalog, &keys.section).synchronicity =
+        CatalogFieldKnowledge::present(CatalogSynchronicity::Unspecified);
 
     let request_for = |prerequisite: bool, modality: bool, synchronicity: bool| {
         let mut input = neutral_input();
@@ -1389,6 +1393,498 @@ fn course_number_band_zero_matches_every_actual_ascii_number_from_000_through_09
 }
 
 #[test]
+fn synchronicity_constrains_only_the_online_components_of_one_section() {
+    let judge = |section_modality: CatalogModality,
+                 section_synchronicity: CatalogSynchronicity,
+                 components: &[(
+        CatalogModality,
+        CatalogOccurrenceEvidence,
+        CatalogSynchronicity,
+    )],
+                 selected: UserSynchronicityV3| {
+        let mut catalog = empty_catalog("NB", 1);
+        let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+        let template = catalog.occurrences[0].clone();
+        catalog.occurrences = components
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (modality, evidence, synchronicity))| {
+                let mut occurrence = template.clone();
+                occurrence.key.ordinal = ordinal as u32;
+                occurrence.modality = CatalogFieldKnowledge::present(*modality);
+                occurrence.evidence = *evidence;
+                occurrence.synchronicity = CatalogFieldKnowledge::present(*synchronicity);
+                occurrence
+            })
+            .collect();
+        let occurrence_keys = catalog
+            .occurrences
+            .iter()
+            .map(|occurrence| occurrence.key.clone())
+            .collect();
+        let section = section_mut(&mut catalog, &keys.section);
+        section.delivery_modality = section_modality;
+        section.synchronicity = section_synchronicity;
+        section.occurrence_keys = CatalogFieldKnowledge::present(occurrence_keys);
+        let mut input = neutral_input();
+        input.synchronicities = vec![selected];
+        let filters = normalized(input);
+        let refs = catalog.occurrences.iter().collect::<Vec<_>>();
+        evaluate_section_filters(
+            &catalog.sections[0],
+            Some(&refs),
+            &open_evidence(&keys.section, LiveOpenStateV1::Open).evidence,
+            now(),
+            &filters,
+        )
+        .0
+        .outcome()
+    };
+
+    let in_person = (
+        CatalogModality::OnCampusOrInPerson,
+        CatalogOccurrenceEvidence::Physical,
+        CatalogSynchronicity::Sync,
+    );
+    let online_sync = (
+        CatalogModality::Online,
+        CatalogOccurrenceEvidence::Remote,
+        CatalogSynchronicity::Sync,
+    );
+    let online_async = (
+        CatalogModality::Online,
+        CatalogOccurrenceEvidence::Remote,
+        CatalogSynchronicity::Async,
+    );
+    let online_unknown = (
+        CatalogModality::Online,
+        CatalogOccurrenceEvidence::Remote,
+        CatalogSynchronicity::Unspecified,
+    );
+    let hybrid_sync_occurrence = (
+        CatalogModality::Hybrid,
+        CatalogOccurrenceEvidence::Physical,
+        CatalogSynchronicity::Sync,
+    );
+
+    assert_eq!(
+        judge(
+            CatalogModality::OnCampusOrInPerson,
+            CatalogSynchronicity::Sync,
+            &[in_person],
+            UserSynchronicityV3::Async,
+        ),
+        MatchOutcome::Match,
+        "a timing preference has no online component to constrain"
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::OnCampusOrInPerson,
+            CatalogSynchronicity::ByArrangement,
+            &[(
+                CatalogModality::OnCampusOrInPerson,
+                CatalogOccurrenceEvidence::Physical,
+                CatalogSynchronicity::ByArrangement,
+            )],
+            UserSynchronicityV3::Sync,
+        ),
+        MatchOutcome::Match,
+        "on-site hours by arrangement are outside the online timing filter"
+    );
+    // Rutgers can label the Section T while a finer meetingMode 91 occurrence
+    // explicitly contains an online HYBRID component. The occurrence wins for
+    // applicability; the coarse Section modality must not hide it.
+    assert_eq!(
+        judge(
+            CatalogModality::OnCampusOrInPerson,
+            CatalogSynchronicity::Sync,
+            &[hybrid_sync_occurrence],
+            UserSynchronicityV3::Async,
+        ),
+        MatchOutcome::NoMatch
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::OnCampusOrInPerson,
+            CatalogSynchronicity::Sync,
+            &[hybrid_sync_occurrence],
+            UserSynchronicityV3::Sync,
+        ),
+        MatchOutcome::Match
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            CatalogSynchronicity::Async,
+            &[online_async],
+            UserSynchronicityV3::Async,
+        ),
+        MatchOutcome::Match
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            CatalogSynchronicity::Async,
+            &[online_async],
+            UserSynchronicityV3::Sync,
+        ),
+        MatchOutcome::NoMatch
+    );
+
+    // The stored Section aggregate is MIXED because it includes the physical
+    // scheduled meeting. FLT-S04b must derive ASYNC from its online subset.
+    let hybrid = [in_person, online_async];
+    assert_eq!(
+        judge(
+            CatalogModality::Hybrid,
+            CatalogSynchronicity::Mixed,
+            &hybrid,
+            UserSynchronicityV3::Async,
+        ),
+        MatchOutcome::Match
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::Hybrid,
+            CatalogSynchronicity::Mixed,
+            &hybrid,
+            UserSynchronicityV3::Mixed,
+        ),
+        MatchOutcome::NoMatch
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::Hybrid,
+            CatalogSynchronicity::Mixed,
+            &[in_person, online_sync, online_async],
+            UserSynchronicityV3::Mixed,
+        ),
+        MatchOutcome::Match,
+        "MIXED means both timing kinds occur within the online subset"
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::Hybrid,
+            CatalogSynchronicity::Sync,
+            &[in_person],
+            UserSynchronicityV3::Sync,
+        ),
+        MatchOutcome::Uncertain,
+        "HYBRID promises an online part but no occurrence describes its timing"
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            CatalogSynchronicity::Unknown,
+            &[(
+                CatalogModality::UnknownConflict,
+                CatalogOccurrenceEvidence::Remote,
+                CatalogSynchronicity::Sync,
+            )],
+            UserSynchronicityV3::Sync,
+        ),
+        MatchOutcome::Match,
+        "remote evidence keeps timing applicable despite a location conflict"
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            CatalogSynchronicity::Unknown,
+            &[(
+                CatalogModality::Online,
+                CatalogOccurrenceEvidence::Remote,
+                CatalogSynchronicity::Unspecified,
+            )],
+            UserSynchronicityV3::Sync,
+        ),
+        MatchOutcome::Uncertain
+    );
+
+    // Incomplete members retain known impossibilities. Once a SYNC online
+    // component is known, the final category may be SYNC or MIXED but can no
+    // longer be pure ASYNC. The remaining possible categories stay uncertain.
+    let known_sync_and_unknown = [online_sync, online_unknown];
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            CatalogSynchronicity::Unknown,
+            &known_sync_and_unknown,
+            UserSynchronicityV3::Async,
+        ),
+        MatchOutcome::NoMatch
+    );
+    for possible in [UserSynchronicityV3::Sync, UserSynchronicityV3::Mixed] {
+        assert_eq!(
+            judge(
+                CatalogModality::Online,
+                CatalogSynchronicity::Unknown,
+                &known_sync_and_unknown,
+                possible,
+            ),
+            MatchOutcome::Uncertain,
+            "a still-possible category cannot be proved while one member is unknown"
+        );
+    }
+
+    // A known pair conclusively proves MIXED. An unknown extra component
+    // cannot undo the coexistence of both known kinds.
+    let known_mixed_and_unknown = [online_sync, online_async, online_unknown];
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            CatalogSynchronicity::Unknown,
+            &known_mixed_and_unknown,
+            UserSynchronicityV3::Mixed,
+        ),
+        MatchOutcome::Match
+    );
+    for impossible in [UserSynchronicityV3::Sync, UserSynchronicityV3::Async] {
+        assert_eq!(
+            judge(
+                CatalogModality::Online,
+                CatalogSynchronicity::Unknown,
+                &known_mixed_and_unknown,
+                impossible,
+            ),
+            MatchOutcome::NoMatch
+        );
+    }
+}
+
+#[test]
+fn remote_by_arrangement_repairs_only_inconclusive_stored_synchronicity() {
+    let judge = |section_modality: CatalogModality,
+                 components: &[(
+        CatalogModality,
+        CatalogOccurrenceEvidence,
+        CatalogSynchronicity,
+        bcsp_contracts::CatalogOccurrenceKind,
+    )],
+                 selected: UserSynchronicityV3| {
+        let mut catalog = empty_catalog("NB", 1);
+        let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+        let template = catalog.occurrences[0].clone();
+        catalog.occurrences = components
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (modality, evidence, synchronicity, kind))| {
+                let mut occurrence = template.clone();
+                occurrence.key.ordinal = ordinal as u32;
+                occurrence.modality = CatalogFieldKnowledge::present(*modality);
+                occurrence.evidence = *evidence;
+                occurrence.synchronicity = CatalogFieldKnowledge::present(*synchronicity);
+                occurrence.kind = *kind;
+                occurrence
+            })
+            .collect();
+        let occurrence_keys = catalog
+            .occurrences
+            .iter()
+            .map(|occurrence| occurrence.key.clone())
+            .collect();
+        let section = section_mut(&mut catalog, &keys.section);
+        section.delivery_modality = section_modality;
+        section.synchronicity = CatalogSynchronicity::Unknown;
+        section.occurrence_keys = CatalogFieldKnowledge::present(occurrence_keys);
+        let mut input = neutral_input();
+        input.synchronicities = vec![selected];
+        let filters = normalized(input);
+        let refs = catalog.occurrences.iter().collect::<Vec<_>>();
+        evaluate_section_filters(
+            &catalog.sections[0],
+            Some(&refs),
+            &open_evidence(&keys.section, LiveOpenStateV1::Open).evidence,
+            now(),
+            &filters,
+        )
+        .0
+        .outcome()
+    };
+
+    let physical_sync = (
+        CatalogModality::OnCampusOrInPerson,
+        CatalogOccurrenceEvidence::Physical,
+        CatalogSynchronicity::Sync,
+        bcsp_contracts::CatalogOccurrenceKind::Scheduled,
+    );
+    let remote_arranged_with_old_value = (
+        CatalogModality::Online,
+        CatalogOccurrenceEvidence::Remote,
+        CatalogSynchronicity::Unspecified,
+        bcsp_contracts::CatalogOccurrenceKind::ByArrangement,
+    );
+    let remote_sync = (
+        CatalogModality::Online,
+        CatalogOccurrenceEvidence::Remote,
+        CatalogSynchronicity::Sync,
+        bcsp_contracts::CatalogOccurrenceKind::Scheduled,
+    );
+    let remote_arranged_with_explicit_sync = (
+        CatalogModality::Online,
+        CatalogOccurrenceEvidence::Remote,
+        CatalogSynchronicity::Sync,
+        bcsp_contracts::CatalogOccurrenceKind::ByArrangement,
+    );
+
+    let hybrid = [physical_sync, remote_arranged_with_old_value];
+    assert_eq!(
+        judge(CatalogModality::Hybrid, &hybrid, UserSynchronicityV3::Async,),
+        MatchOutcome::Match,
+        "the physical SYNC component is outside FLT-S04b and remote by-arrangement is ASYNC"
+    );
+    assert_eq!(
+        judge(CatalogModality::Hybrid, &hybrid, UserSynchronicityV3::Mixed,),
+        MatchOutcome::NoMatch
+    );
+
+    let online_mixed = [remote_arranged_with_old_value, remote_sync];
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            &online_mixed,
+            UserSynchronicityV3::Mixed,
+        ),
+        MatchOutcome::Match,
+        "remote by-arrangement plus remote scheduled content proves online MIXED"
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            &online_mixed,
+            UserSynchronicityV3::Async,
+        ),
+        MatchOutcome::NoMatch
+    );
+
+    // An explicit 92-style SYNC value outranks the ByArrangement fallback.
+    // The kind only repairs an otherwise inconclusive stored timing value.
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            &[remote_arranged_with_explicit_sync],
+            UserSynchronicityV3::Sync,
+        ),
+        MatchOutcome::Match
+    );
+    assert_eq!(
+        judge(
+            CatalogModality::Online,
+            &[remote_arranged_with_explicit_sync],
+            UserSynchronicityV3::Async,
+        ),
+        MatchOutcome::NoMatch
+    );
+}
+
+#[test]
+fn synchronicity_uses_section_facts_only_when_the_occurrence_subset_is_unavailable() {
+    let judge = |modality: CatalogModality, actual: CatalogSynchronicity| {
+        let mut catalog = empty_catalog("NB", 1);
+        let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+        let section = section_mut(&mut catalog, &keys.section);
+        section.delivery_modality = modality;
+        section.synchronicity = actual;
+        let mut input = neutral_input();
+        input.synchronicities = vec![UserSynchronicityV3::Async];
+        let filters = normalized(input);
+        evaluate_section_filters(
+            &catalog.sections[0],
+            None,
+            &open_evidence(&keys.section, LiveOpenStateV1::Open).evidence,
+            now(),
+            &filters,
+        )
+        .0
+        .outcome()
+    };
+
+    assert_eq!(
+        judge(
+            CatalogModality::OnCampusOrInPerson,
+            CatalogSynchronicity::Sync,
+        ),
+        MatchOutcome::Match
+    );
+    assert_eq!(
+        judge(CatalogModality::Online, CatalogSynchronicity::Async),
+        MatchOutcome::Match
+    );
+    assert_eq!(
+        judge(CatalogModality::Online, CatalogSynchronicity::Sync),
+        MatchOutcome::NoMatch
+    );
+    assert_eq!(
+        judge(CatalogModality::Hybrid, CatalogSynchronicity::Mixed),
+        MatchOutcome::Uncertain,
+        "a whole-Hybrid aggregate cannot identify the online subset"
+    );
+}
+
+#[test]
+fn incomplete_synchronicity_never_admits_a_category_disproved_by_known_members() {
+    let mut catalog = empty_catalog("NB", 1);
+    let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+    let mut unknown = catalog.occurrences[0].clone();
+    unknown.key.ordinal = 1;
+    unknown.synchronicity = CatalogFieldKnowledge::present(CatalogSynchronicity::Unspecified);
+    catalog.occurrences.push(unknown);
+    let occurrence_keys = catalog
+        .occurrences
+        .iter()
+        .map(|occurrence| occurrence.key.clone())
+        .collect();
+    let section = section_mut(&mut catalog, &keys.section);
+    section.synchronicity = CatalogSynchronicity::Unknown;
+    section.occurrence_keys = CatalogFieldKnowledge::present(occurrence_keys);
+    let catalogs = vec![catalog];
+    let engine = QueryEngine::try_new(&catalogs, now(), []).unwrap();
+    let search = |selected: Vec<UserSynchronicityV3>, include_incomplete: bool| {
+        let mut input = neutral_input();
+        input.synchronicities = selected;
+        input.include_incomplete.synchronicity = include_incomplete;
+        engine
+            .course_search(
+                &course_request(input, PageRequestV1::default(), CourseSortV1::default()),
+                None,
+            )
+            .unwrap()
+            .page
+            .total
+    };
+
+    assert_eq!(
+        search(vec![UserSynchronicityV3::Async], true),
+        0,
+        "includeIncomplete cannot override a known SYNC/ASYNC-only contradiction"
+    );
+    assert_eq!(search(vec![UserSynchronicityV3::Sync], false), 0);
+    assert_eq!(search(vec![UserSynchronicityV3::Sync], true), 1);
+    assert_eq!(
+        search(
+            vec![
+                UserSynchronicityV3::Sync,
+                UserSynchronicityV3::Async,
+                UserSynchronicityV3::Mixed,
+            ],
+            false,
+        ),
+        0,
+        "selecting every known category does not turn incomplete evidence into MATCH"
+    );
+    assert_eq!(
+        search(
+            vec![
+                UserSynchronicityV3::Sync,
+                UserSynchronicityV3::Async,
+                UserSynchronicityV3::Mixed,
+            ],
+            true,
+        ),
+        1
+    );
+}
+
+#[test]
 fn availability_windows_exclude_scheduled_meetings_of_unknown_requiredness() {
     fn outcome(
         catalog: &bcsp_contracts::NormalizedCatalogV1,
@@ -1451,22 +1947,41 @@ fn a_selected_location_excludes_the_sections_that_also_meet_elsewhere() {
     // Choosing BUSCH says where the student can be, so a Section that also
     // meets on another campus is excluded; an online component asks for no
     // travel and never decides the answer.
-    let judge = |occurrences: &[(&str, CatalogModality)]| {
+    let judge = |occurrences: &[(&str, CatalogModality, CatalogOccurrenceEvidence)]| {
         let mut catalog = empty_catalog("NB", 1);
         let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
         let template = catalog.occurrences[0].clone();
         catalog.occurrences = occurrences
             .iter()
             .enumerate()
-            .map(|(ordinal, (campus, modality))| {
+            .map(|(ordinal, (campus, modality, evidence))| {
                 let mut occurrence = template.clone();
                 occurrence.key.ordinal = ordinal as u32;
                 occurrence.campus = CatalogFieldKnowledge::present((*campus).to_owned());
                 occurrence.campus_name = CatalogFieldKnowledge::present((*campus).to_owned());
                 occurrence.modality = CatalogFieldKnowledge::present(*modality);
+                occurrence.evidence = *evidence;
                 occurrence
             })
             .collect();
+        let has_unknown_applicability = occurrences
+            .iter()
+            .any(|(_, _, evidence)| *evidence == CatalogOccurrenceEvidence::None);
+        let has_physical = occurrences
+            .iter()
+            .any(|(_, _, evidence)| *evidence == CatalogOccurrenceEvidence::Physical);
+        let has_remote = occurrences
+            .iter()
+            .any(|(_, _, evidence)| *evidence == CatalogOccurrenceEvidence::Remote);
+        section_mut(&mut catalog, &keys.section).delivery_modality = if has_unknown_applicability {
+            CatalogModality::Unknown
+        } else if has_physical && has_remote {
+            CatalogModality::Hybrid
+        } else if has_physical {
+            CatalogModality::OnCampusOrInPerson
+        } else {
+            CatalogModality::Online
+        };
         let mut input = neutral_input();
         input.meeting_locations = MeetingLocationFilterV2 {
             locations: vec![token("BUSCH")],
@@ -1485,30 +2000,93 @@ fn a_selected_location_excludes_the_sections_that_also_meet_elsewhere() {
     };
 
     let in_person = CatalogModality::OnCampusOrInPerson;
-    assert_eq!(judge(&[("BUSCH", in_person)]), MatchOutcome::Match);
+    let physical = CatalogOccurrenceEvidence::Physical;
+    let remote = CatalogOccurrenceEvidence::Remote;
+    assert_eq!(
+        judge(&[("BUSCH", in_person, physical)]),
+        MatchOutcome::Match
+    );
     // The case the reader cares about: one meeting drags them to Newark.
     assert_eq!(
-        judge(&[("BUSCH", in_person), ("NEWARK", in_person)]),
+        judge(&[
+            ("BUSCH", in_person, physical),
+            ("NEWARK", in_person, physical),
+        ]),
         MatchOutcome::NoMatch
     );
     // An online component travels nowhere, so it does not spoil the match.
     assert_eq!(
-        judge(&[("BUSCH", in_person), ("ONLINE", CatalogModality::Online)]),
+        judge(&[
+            ("BUSCH", in_person, physical),
+            ("ONLINE", CatalogModality::Online, remote),
+        ]),
         MatchOutcome::Match
     );
-    // With nothing to travel to, the Section is judged on its own location.
+    // With nothing to travel to, there is no applicable location constraint.
     assert_eq!(
-        judge(&[("ONLINE", CatalogModality::Online)]),
-        MatchOutcome::NoMatch
+        judge(&[("ONLINE", CatalogModality::Online, remote)]),
+        MatchOutcome::Match
+    );
+    // Explicit remote evidence remains non-travelling even when the raw
+    // location produced an occurrence-level modality conflict.
+    assert_eq!(
+        judge(&[(
+            "NEWARK",
+            CatalogModality::UnknownConflict,
+            CatalogOccurrenceEvidence::Remote,
+        )]),
+        MatchOutcome::Match
+    );
+    // With neither remote nor physical evidence, applicability is unknown;
+    // the location must not fabricate a confident mismatch from the code.
+    assert_eq!(
+        judge(&[(
+            "NEWARK",
+            CatalogModality::Unknown,
+            CatalogOccurrenceEvidence::None,
+        )]),
+        MatchOutcome::Uncertain
+    );
+    assert_eq!(
+        judge(&[
+            ("BUSCH", in_person, physical),
+            (
+                "NEWARK",
+                CatalogModality::Unknown,
+                CatalogOccurrenceEvidence::None,
+            ),
+        ]),
+        MatchOutcome::Uncertain,
+        "a matching physical component cannot erase unknown applicability"
+    );
+    assert_eq!(
+        judge(&[
+            ("NEWARK", in_person, physical),
+            (
+                "BUSCH",
+                CatalogModality::Unknown,
+                CatalogOccurrenceEvidence::None,
+            ),
+        ]),
+        MatchOutcome::NoMatch,
+        "a known physical mismatch remains decisive alongside uncertainty"
     );
     // The stored mode no longer selects a behaviour.
-    assert_eq!(judge(&[("BUSCH", in_person)]), MatchOutcome::Match);
+    assert_eq!(
+        judge(&[("BUSCH", in_person, physical)]),
+        MatchOutcome::Match
+    );
 }
 
 #[test]
 fn all_required_meeting_locations_treat_unknown_requiredness_as_required() {
     let mut catalog = empty_catalog("NB", 1);
     let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+    section_mut(&mut catalog, &keys.section).delivery_modality =
+        CatalogModality::OnCampusOrInPerson;
+    let occurrence = occurrence_mut(&mut catalog, &keys.section);
+    occurrence.modality = CatalogFieldKnowledge::present(CatalogModality::OnCampusOrInPerson);
+    occurrence.evidence = CatalogOccurrenceEvidence::Physical;
     let section = catalog.sections[0].clone();
     let open = open_evidence(&keys.section, LiveOpenStateV1::Open);
     let mut input = neutral_input();
@@ -1581,5 +2159,9 @@ fn all_required_meeting_locations_treat_unknown_requiredness_as_required() {
         now(),
         &filters,
     );
-    assert_eq!(only_optional.outcome(), MatchOutcome::Uncertain);
+    assert_eq!(
+        only_optional.outcome(),
+        MatchOutcome::Match,
+        "an explicitly optional meeting leaves no applicable location constraint"
+    );
 }

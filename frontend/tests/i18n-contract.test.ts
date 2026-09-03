@@ -100,4 +100,32 @@ describe('shared i18n contract', () => {
     expect(isMessageKey(rawRutgersValue)).toBe(false);
     expect(lookupMessage('zh-CN', rawRutgersValue)).toBeUndefined();
   });
+
+  it('states the conditional filter scopes and independent diagnosis totals in both locales', () => {
+    expect(lookupMessage('en-US', 'filter.flt-s04b_help')).toContain(
+      'only to the online part of a Section',
+    );
+    expect(lookupMessage('en-US', 'filter.flt-s04b_incomplete_help')).toContain(
+      'online-part timing',
+    );
+    expect(lookupMessage('en-US', 'filter.meeting_location_helper')).toContain(
+      'A fully online Section is not excluded',
+    );
+    expect(lookupMessage('en-US', 'search.diagnosis.intro')).toContain(
+      'totals cannot be added',
+    );
+
+    expect(lookupMessage('zh-CN', 'filter.flt-s04b_help')).toContain(
+      '只约束课节的线上部分',
+    );
+    expect(lookupMessage('zh-CN', 'filter.flt-s04b_incomplete_help')).toContain(
+      '线上部分同步方式',
+    );
+    expect(lookupMessage('zh-CN', 'filter.meeting_location_helper')).toContain(
+      '纯在线课不会因子校区条件被排除',
+    );
+    expect(lookupMessage('zh-CN', 'search.diagnosis.intro')).toContain(
+      '数量不能相加',
+    );
+  });
 });
