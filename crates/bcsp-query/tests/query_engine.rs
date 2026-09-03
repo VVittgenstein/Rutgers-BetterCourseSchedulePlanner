@@ -1447,6 +1447,65 @@ fn availability_windows_exclude_scheduled_meetings_of_unknown_requiredness() {
 }
 
 #[test]
+fn a_selected_location_excludes_the_sections_that_also_meet_elsewhere() {
+    // Choosing BUSCH says where the student can be, so a Section that also
+    // meets on another campus is excluded; an online component asks for no
+    // travel and never decides the answer.
+    let judge = |occurrences: &[(&str, CatalogModality)]| {
+        let mut catalog = empty_catalog("NB", 1);
+        let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');
+        let template = catalog.occurrences[0].clone();
+        catalog.occurrences = occurrences
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (campus, modality))| {
+                let mut occurrence = template.clone();
+                occurrence.key.ordinal = ordinal as u32;
+                occurrence.campus = CatalogFieldKnowledge::present((*campus).to_owned());
+                occurrence.campus_name = CatalogFieldKnowledge::present((*campus).to_owned());
+                occurrence.modality = CatalogFieldKnowledge::present(*modality);
+                occurrence
+            })
+            .collect();
+        let mut input = neutral_input();
+        input.meeting_locations = MeetingLocationFilterV2 {
+            locations: vec![token("BUSCH")],
+            mode: MeetingLocationMatchModeV2::AnyMeeting,
+        };
+        let filters = normalized(input);
+        let refs = catalog.occurrences.iter().collect::<Vec<_>>();
+        let (evaluation, _) = evaluate_section_filters(
+            &catalog.sections[0],
+            Some(&refs),
+            &open_evidence(&keys.section, LiveOpenStateV1::Open).evidence,
+            now(),
+            &filters,
+        );
+        evaluation.outcome()
+    };
+
+    let in_person = CatalogModality::OnCampusOrInPerson;
+    assert_eq!(judge(&[("BUSCH", in_person)]), MatchOutcome::Match);
+    // The case the reader cares about: one meeting drags them to Newark.
+    assert_eq!(
+        judge(&[("BUSCH", in_person), ("NEWARK", in_person)]),
+        MatchOutcome::NoMatch
+    );
+    // An online component travels nowhere, so it does not spoil the match.
+    assert_eq!(
+        judge(&[("BUSCH", in_person), ("ONLINE", CatalogModality::Online)]),
+        MatchOutcome::Match
+    );
+    // With nothing to travel to, the Section is judged on its own location.
+    assert_eq!(
+        judge(&[("ONLINE", CatalogModality::Online)]),
+        MatchOutcome::NoMatch
+    );
+    // The stored mode no longer selects a behaviour.
+    assert_eq!(judge(&[("BUSCH", in_person)]), MatchOutcome::Match);
+}
+
+#[test]
 fn all_required_meeting_locations_treat_unknown_requiredness_as_required() {
     let mut catalog = empty_catalog("NB", 1);
     let keys = add_course(&mut catalog, "01:198:111", "00001", 'a');

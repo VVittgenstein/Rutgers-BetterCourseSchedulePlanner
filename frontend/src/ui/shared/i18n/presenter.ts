@@ -61,6 +61,7 @@ export const synchronicityMessageKeys = {
   SYNC: 'filter.option.sync',
   ASYNC: 'filter.option.async',
   MIXED: 'filter.option.mixed',
+  BY_ARRANGEMENT: 'filter.option.by_arrangement',
   UNSPECIFIED: 'filter.option.unspecified',
   UNKNOWN: 'common.unknown',
 } as const satisfies Readonly<Record<CatalogSynchronicity, MessageKey>>;

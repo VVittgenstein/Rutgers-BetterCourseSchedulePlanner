@@ -140,6 +140,21 @@ pub(crate) fn normalize_occurrence(
             time,
             TimeKnowledge::Empty | TimeKnowledge::Missing | TimeKnowledge::Null
         );
+    // The other half of Rutgers' own split. The Schedule of Classes shows a
+    // by-arrangement meeting as "Asynchronous content" only when it is online
+    // or remote; otherwise it shows "Hours by arrangement"
+    // (`ByArrangementUtils.isOnlineOrRemoteMeetingTime`). That second case is a
+    // stated fact about WHEN the meeting happens -- research, independent
+    // project, individual instruction -- and calling it UNKNOWN claims less
+    // than Rutgers published. Derivation changes here require a
+    // CATALOG_DERIVATION_VERSION bump.
+    let onsite_hours_by_arrangement = matches!(trimmed_value(&raw.ba_class_hours), Some("B"))
+        && !location_remote
+        && !mode_remote
+        && matches!(
+            time,
+            TimeKnowledge::Empty | TimeKnowledge::Missing | TimeKnowledge::Null
+        );
     let synchronicity = match code {
         Some("92") => Synchronicity::Synchronous,
         Some("93") => Synchronicity::Asynchronous,
@@ -150,6 +165,7 @@ pub(crate) fn normalize_occurrence(
             Synchronicity::Synchronous
         }
         _ if observed_code && by_arrangement => Synchronicity::Unspecified,
+        _ if observed_code && onsite_hours_by_arrangement => Synchronicity::ByArrangement,
         _ => Synchronicity::Unknown,
     };
     let modality = if !observed_code {
@@ -177,6 +193,7 @@ pub(crate) fn normalize_occurrence(
         (Some("92"), _, _, _) => "EXPLICIT_REMOTE_SYNCHRONOUS",
         (Some("93"), _, _, _) => "EXPLICIT_REMOTE_ASYNCHRONOUS",
         (_, _, true, _) => "OFFICIAL_BY_ARRANGEMENT",
+        (_, _, false, _) if onsite_hours_by_arrangement => "OFFICIAL_BY_ARRANGEMENT_ONSITE",
         (_, TimeKnowledge::Known { .. }, false, _) => "SCHEDULED_DAY_TIME",
         (_, TimeKnowledge::Partial, false, _) => "PARTIAL_TIME",
         (_, TimeKnowledge::Invalid, false, _) => "INVALID_TIME",
@@ -240,6 +257,12 @@ pub(crate) fn classify_delivery(
     // Rutgers shape behind that value.  Any UNKNOWN or UNSPECIFIED occurrence
     // still makes the section UNKNOWN, because occurrence requiredness is
     // UNKNOWN_REQUIREDNESS and an unreliable member cannot be discounted.
+    // BY_ARRANGEMENT is deliberately outside the MIXED pair: a Section that
+    // holds both a scheduled meeting and an on-site by-arrangement meeting is
+    // neither wholly scheduled nor wholly arranged, and MIXED means exactly
+    // "synchronous and asynchronous", so such a Section stays UNKNOWN. A
+    // Section whose meetings are all by arrangement keeps BY_ARRANGEMENT
+    // through the homogeneous arm.
     let synchronicity = match occurrences.first().map(|first| first.synchronicity) {
         None => Synchronicity::Unknown,
         Some(first)
@@ -879,5 +902,102 @@ mod tests {
             "OFFICIAL_BY_ARRANGEMENT"
         );
         assert_eq!(official_by_arrangement.kind, OccurrenceKind::ByArrangement);
+    }
+
+    #[test]
+    fn on_site_hours_by_arrangement_is_stated_not_unknown() {
+        // Rutgers shows this exact row as "Hours by arrangement": a traditional
+        // LEC with baClassHours "B", no time, and no remote location.
+        let research = occurrence(
+            json!({
+                "meetingModeCode": "23",
+                "meetingDay": "",
+                "startTimeMilitary": "",
+                "endTimeMilitary": "",
+                "baClassHours": "B",
+                "campusLocation": ""
+            }),
+            0,
+        );
+        assert_eq!(research.synchronicity, Synchronicity::ByArrangement);
+        assert_eq!(
+            research.normalization_reason,
+            "OFFICIAL_BY_ARRANGEMENT_ONSITE"
+        );
+
+        // A physical campus code reaches the same conclusion: the code says
+        // WHERE, and "B" says WHEN.
+        let on_campus = occurrence(
+            json!({
+                "meetingModeCode": "02",
+                "meetingDay": "",
+                "startTimeMilitary": "",
+                "endTimeMilitary": "",
+                "baClassHours": "B",
+                "campusLocation": "1"
+            }),
+            0,
+        );
+        assert_eq!(on_campus.synchronicity, Synchronicity::ByArrangement);
+
+        // A row with a real time is scheduled, "B" or not.
+        let scheduled = occurrence(
+            json!({
+                "meetingModeCode": "02",
+                "meetingDay": "W",
+                "startTimeMilitary": "1000",
+                "endTimeMilitary": "1120",
+                "baClassHours": "B",
+                "campusLocation": "1"
+            }),
+            0,
+        );
+        assert_eq!(scheduled.synchronicity, Synchronicity::Synchronous);
+
+        // Without "B" the row stays unknown: Rutgers stated nothing about when.
+        let silent = occurrence(
+            json!({
+                "meetingModeCode": "23",
+                "meetingDay": "",
+                "startTimeMilitary": "",
+                "endTimeMilitary": "",
+                "campusLocation": ""
+            }),
+            0,
+        );
+        assert_eq!(silent.synchronicity, Synchronicity::Unknown);
+    }
+
+    #[test]
+    fn a_section_mixing_scheduled_and_arranged_meetings_stays_unknown() {
+        let arranged = occurrence(
+            json!({
+                "meetingModeCode": "23",
+                "meetingDay": "",
+                "startTimeMilitary": "",
+                "endTimeMilitary": "",
+                "baClassHours": "B",
+                "campusLocation": "1"
+            }),
+            0,
+        );
+        let scheduled = occurrence(
+            json!({
+                "meetingModeCode": "02",
+                "meetingDay": "W",
+                "startTimeMilitary": "1000",
+                "endTimeMilitary": "1120",
+                "campusLocation": "1"
+            }),
+            1,
+        );
+        let section_type = Presence::Value("T".to_owned());
+        // All meetings arranged: the Section keeps the stated value.
+        let (_, only_arranged) = classify_delivery(&section_type, &[arranged.clone()]);
+        assert_eq!(only_arranged, Synchronicity::ByArrangement);
+        // Mixed with a scheduled meeting: neither wholly scheduled nor wholly
+        // arranged, and MIXED means synchronous + asynchronous, so UNKNOWN.
+        let (_, both) = classify_delivery(&section_type, &[arranged, scheduled]);
+        assert_eq!(both, Synchronicity::Unknown);
     }
 }

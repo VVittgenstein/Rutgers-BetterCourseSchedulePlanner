@@ -949,7 +949,7 @@ describe('empty-result diagnosis', () => {
     });
     const timingRow = view.container.querySelector<HTMLElement>('[data-filter-row="FLT-S04b"]');
     if (timingRow === null) throw new Error('Expected the Meeting timing row.');
-    expect((within(timingRow).getByRole('checkbox', { name: /Complete data display/u }) as HTMLInputElement).checked).toBe(true);
+    expect((within(timingRow).getByRole('checkbox', { name: /Include incomplete data/u }) as HTMLInputElement).checked).toBe(true);
     await waitFor(() => expect(readSearchSessionProbe()).toMatchObject({
       hasSuccessfulQuery: true,
       successfulIncludeIncomplete: { prerequisite: false, modality: false, synchronicity: true },

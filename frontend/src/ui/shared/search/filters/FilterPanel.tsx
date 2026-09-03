@@ -149,12 +149,15 @@ function hasCoreCode(codes: readonly string[], code: string): boolean {
   return codes.some((candidate) => canonicalCoreCode(candidate) === canonical);
 }
 
-/** Dictionary label for a stored Core code (any case), or the stored code
- * itself when the dictionary does not know it. */
-type CoreLabels = ReadonlyMap<string, string>;
+/** Dictionary spelling for a stored Core code (any case), or the stored code
+ * itself when the dictionary does not know it. The applied-condition chip
+ * carries codes only: a Core description may itself contain a comma
+ * ("WCr · Writing and Communication, Revision"), so a chip that joined
+ * descriptions with a comma read as one more selected code. */
+type CoreSpellings = ReadonlyMap<string, string>;
 
-function coreCodeLabel(code: string, labels: CoreLabels): string {
-  return labels.get(canonicalCoreCode(code)) ?? code;
+function coreCodeSpelling(code: string, spellings: CoreSpellings): string {
+  return spellings.get(canonicalCoreCode(code)) ?? code;
 }
 
 function formatCredit(value: number | null): string {
@@ -190,7 +193,7 @@ function fieldSummary(
   field: FilterFieldSchemaV1,
   state: FilterStateV1,
   i18n: BcspI18nRuntime,
-  coreLabels: CoreLabels,
+  coreSpellings: CoreSpellings,
 ): string | null {
   switch (field.requestField) {
     case 'term': return state.term;
@@ -212,7 +215,7 @@ function fieldSummary(
       return `${minimum}–${maximum}`;
     }
     case 'core': return state.core.codes.length > 0
-      ? `${state.core.mode}: ${unique(state.core.codes.map((code) => coreCodeLabel(code, coreLabels))).join(', ')}`
+      ? `${optionText(state.core.mode, i18n)}: ${unique(state.core.codes.map((code) => coreCodeSpelling(code, coreSpellings))).join(', ')}`
       : null;
     case 'prerequisite': return state.prerequisite === 'ANY' ? null : [
       optionText(state.prerequisite, i18n),
@@ -241,7 +244,7 @@ function fieldSummary(
         .join(', ')
       : null;
     case 'meetingLocations': return state.meetingLocations.locations.length > 0
-      ? `${optionText(state.meetingLocations.mode, i18n)}: ${state.meetingLocations.locations.join(', ')}`
+      ? state.meetingLocations.locations.join(', ')
       : null;
     case 'examCodes': return state.examCodes.length > 0 ? state.examCodes.join(', ') : null;
     case 'permission': return state.permission === 'ANY' ? null : optionText(state.permission, i18n);
@@ -1916,8 +1919,8 @@ export function FilterPanel({
       }));
   }, [selectedCoreDictionaries]);
   const validCoreCodes = useMemo(() => new Set(coreDictionary.map(({ code }) => code)), [coreDictionary]);
-  const coreLabels = useMemo<CoreLabels>(
-    () => new Map(coreDictionary.map(({ code, label }) => [code, label])),
+  const coreSpellings = useMemo<CoreSpellings>(
+    () => new Map(coreDictionary.map(({ code, displayCode }) => [code, displayCode])),
     [coreDictionary],
   );
   const coreOptions = coreDictionary;
@@ -1934,7 +1937,7 @@ export function FilterPanel({
     });
   }, [coreDictionaryLoading, validCoreCodes, value.core.codes]);
 
-  const summaries = fields.map((field) => ({ field, summary: fieldSummary(field, value, i18n, coreLabels) }))
+  const summaries = fields.map((field) => ({ field, summary: fieldSummary(field, value, i18n, coreSpellings) }))
     .filter((entry): entry is { field: FilterFieldSchemaV1; summary: string } => entry.summary !== null);
   const clearable = summaries.filter(({ field }) => field.requestField !== 'term' && field.requestField !== 'campuses');
 
@@ -2141,14 +2144,14 @@ export function FilterPanel({
         return <AvailabilityControl value={value.availability}
           onChange={(next) => update('availability', next)} disabled={disabled} />;
       case 'meetingLocations':
+        // One behaviour: every meeting the student travels to must be in the
+        // chosen locations, so there is no match mode left to pick.
         return (
           <div className="filter-panel__control">
-            <EnumSelect label={i18n.t('filter.meeting_location_mode')} value={value.meetingLocations.mode}
-              options={['ANY_MEETING', 'ALL_REQUIRED_MEETINGS']} disabled={disabled}
-              onChange={(mode) => update('meetingLocations', { ...value.meetingLocations, mode })} />
             <DictionaryPicker disabled={disabled} field="MEETING_LOCATION" label={label}
               loadOptions={loadOptions} values={value.meetingLocations.locations}
               onChange={(locations) => update('meetingLocations', { ...value.meetingLocations, locations })} />
+            <p className="bcsp-field__helper">{i18n.t('filter.meeting_location_helper')}</p>
           </div>
         );
       case 'examCodes':

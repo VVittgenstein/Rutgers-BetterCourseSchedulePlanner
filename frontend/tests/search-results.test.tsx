@@ -554,6 +554,29 @@ describe('typed search result and detail views', () => {
     expect(screen.getAllByText('数据不完整').length).toBeGreaterThan(0);
   });
 
+  it('names an on-site by-arrangement Section after Rutgers instead of calling it unknown', () => {
+    const arranged = structuredClone(COURSE_RESPONSE) as typeof COURSE_RESPONSE;
+    for (const item of arranged.items) {
+      for (const variant of item.variants) {
+        for (const section of variant.sections) {
+          (section.section as { synchronicity: string }).synchronicity = 'BY_ARRANGEMENT';
+        }
+      }
+    }
+    render(
+      <CourseResultsView
+        onCourseDetail={() => undefined}
+        onPageChange={() => undefined}
+        response={arranged}
+        sectionHref={(key) => `/sections/${key.index}`}
+      />,
+      'zh-CN',
+    );
+    expandCourseSections('显示 1 个课节');
+    expect(screen.getAllByText(/上课时间另行约定/u).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/BY_ARRANGEMENT/u)).toBeNull();
+  });
+
   it('keeps a direct Section URL, delegates unmodified primary navigation, and pages with one-based callbacks', () => {
     const navigate = vi.fn();
     const page = vi.fn();

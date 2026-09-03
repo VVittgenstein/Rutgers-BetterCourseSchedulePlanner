@@ -864,6 +864,11 @@ pub enum CatalogSynchronicity {
     Sync,
     Async,
     Mixed,
+    /// Rutgers published "hours by arrangement" for a meeting that is not
+    /// online or remote. The Schedule of Classes shows exactly this case as
+    /// "Hours by arrangement" rather than "Asynchronous content", so it is a
+    /// stated fact about WHEN the Section meets, not an absence of evidence.
+    ByArrangement,
     Unspecified,
     Unknown,
 }
@@ -1019,6 +1024,7 @@ impl CatalogSynchronicity {
         Self::Sync,
         Self::Async,
         Self::Mixed,
+        Self::ByArrangement,
         Self::Unspecified,
         Self::Unknown,
     ];
@@ -1028,6 +1034,7 @@ impl CatalogSynchronicity {
             Self::Sync => "SYNC",
             Self::Async => "ASYNC",
             Self::Mixed => "MIXED",
+            Self::ByArrangement => "BY_ARRANGEMENT",
             Self::Unspecified => "UNSPECIFIED",
             Self::Unknown => "UNKNOWN",
         }

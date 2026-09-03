@@ -133,7 +133,8 @@ export type CatalogModality =
   | 'OTHER'
   | 'UNKNOWN'
   | 'UNKNOWN_CONFLICT';
-export type CatalogSynchronicity = 'SYNC' | 'ASYNC' | 'MIXED' | 'UNSPECIFIED' | 'UNKNOWN';
+export type CatalogSynchronicity =
+  | 'SYNC' | 'ASYNC' | 'MIXED' | 'BY_ARRANGEMENT' | 'UNSPECIFIED' | 'UNKNOWN';
 
 export interface NormalizedCourseVariantV1 {
   readonly key: CourseVariantKey;

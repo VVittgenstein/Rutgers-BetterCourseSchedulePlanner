@@ -2592,7 +2592,14 @@ const MODALITY_WIRE_VALUES: &[&str] = &[
     "UNKNOWN",
     "UNKNOWN_CONFLICT",
 ];
-const SYNCHRONICITY_WIRE_VALUES: &[&str] = &["SYNC", "ASYNC", "UNSPECIFIED", "UNKNOWN", "MIXED"];
+const SYNCHRONICITY_WIRE_VALUES: &[&str] = &[
+    "SYNC",
+    "ASYNC",
+    "UNSPECIFIED",
+    "UNKNOWN",
+    "MIXED",
+    "BY_ARRANGEMENT",
+];
 
 fn validate_wire_token(field: &'static str, value: &str, allowed: &[&str]) -> StorageResult<()> {
     if !allowed.contains(&value) {

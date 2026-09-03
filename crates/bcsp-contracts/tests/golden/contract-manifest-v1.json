@@ -1163,6 +1163,7 @@
         "SYNC",
         "ASYNC",
         "MIXED",
+        "BY_ARRANGEMENT",
         "UNSPECIFIED",
         "UNKNOWN"
       ]

@@ -147,6 +147,8 @@ pub enum Synchronicity {
     Synchronous,
     Asynchronous,
     Mixed,
+    /// "Hours by arrangement" on a meeting that is not online or remote.
+    ByArrangement,
     Unspecified,
     Unknown,
 }
@@ -329,6 +331,7 @@ impl From<Synchronicity> for bcsp_contracts::CatalogSynchronicity {
             Synchronicity::Synchronous => Self::Sync,
             Synchronicity::Asynchronous => Self::Async,
             Synchronicity::Mixed => Self::Mixed,
+            Synchronicity::ByArrangement => Self::ByArrangement,
             Synchronicity::Unspecified => Self::Unspecified,
             Synchronicity::Unknown => Self::Unknown,
         }

@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn embedded_migration_ids_are_contiguous_and_checksums_are_lower_hex() {
         let migrations = embedded_migrations().expect("valid embedded migrations");
-        assert_eq!(migrations.len(), 7);
+        assert_eq!(migrations.len(), 8);
         for (index, migration) in migrations.iter().enumerate() {
             assert_eq!(migration.id, (index + 1) as u32);
         }
@@ -257,7 +257,7 @@ mod tests {
                     .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
         }));
         // The foreign-keys-off marker is parsed from the SQL itself and only
-        // the table-rebuild migration carries it.
+        // the table-rebuild migrations carry it.
         assert!(
             migrations
                 .iter()
@@ -270,6 +270,7 @@ mod tests {
                     (5, true),
                     (6, false),
                     (7, false),
+                    (8, true),
                 ])
         );
     }
@@ -359,7 +360,7 @@ mod tests {
                 &connection,
                 "SELECT COUNT(*) FROM bcsp_operational_migrations"
             ),
-            7
+            8
         );
         assert_eq!(
             count(&connection, "SELECT COUNT(*) FROM open_pull_attempts"),
@@ -486,7 +487,7 @@ mod tests {
                 &connection,
                 "SELECT COUNT(*) FROM bcsp_operational_migrations"
             ),
-            7
+            8
         );
         assert_eq!(
             count(

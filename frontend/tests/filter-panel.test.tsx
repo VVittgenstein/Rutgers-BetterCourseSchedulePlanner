@@ -101,6 +101,8 @@ const CORE_DISCOVERY: CatalogDiscoveryResponseV1 = {
       { code: 'AHo', description: known('Arts and Humanities (o)') },
       { code: 'WCd', description: known('Writing and Communication (d)') },
       { code: 'QQ', description: known('Quantitative Reasoning') },
+      // Rutgers publishes this description with a comma inside it.
+      { code: 'WCr', description: known('Writing and Communication, Revision') },
     ],
   }],
 };
@@ -197,10 +199,12 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     expect(screen.getByText('课程层次')).toBeTruthy();
     expect(screen.getByRole('radio', { name: '有先修要求' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: '无先修要求' })).toBeTruthy();
-    expect(screen.getAllByRole('checkbox', { name: /完整数据显示/u })).toHaveLength(3);
+    expect(screen.getAllByRole('checkbox', { name: /包含数据不完整的记录/u })).toHaveLength(3);
     expect(screen.getByRole('checkbox', { name: '线下' })).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: '在线' })).toBeTruthy();
-    expect(screen.getAllByRole('checkbox', { name: '混合' })).toHaveLength(2);
+    // 授课方式 and 同步方式 each have a "mixed" option; zh must not spell both the same.
+    expect(screen.getByRole('checkbox', { name: '线上线下混合' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: '同步异步混合' })).toBeTruthy();
     expect(screen.queryByRole('checkbox', { name: '其他' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: '未知' })).toBeNull();
     await waitFor(() => expect(screen.getByRole('checkbox', { name: '000级' })).toBeTruthy());
@@ -231,7 +235,7 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     expect(within(row).getByRole('checkbox', { name: 'Synchronous' })).toBeTruthy();
     expect(within(row).getByRole('checkbox', { name: 'Asynchronous' })).toBeTruthy();
     expect(within(row).getByRole('checkbox', { name: 'Mixed' })).toBeTruthy();
-    expect(within(row).getByRole('checkbox', { name: /Complete data display/u })).toBeTruthy();
+    expect(within(row).getByRole('checkbox', { name: /Include incomplete data/u })).toBeTruthy();
 
     const formatRow = view.container.querySelector<HTMLElement>('[data-filter-row="FLT-S04a"]');
     if (formatRow === null) throw new Error('Expected the Class format row.');
@@ -248,8 +252,8 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     expect(within(row).getByText('在线且没有固定上课时间（Rutgers 标注 hours by arrangement）。')).toBeTruthy();
     expect(within(row).getByText('部分时段固定，部分自行安排。')).toBeTruthy();
     expect(within(row).getByText('同时包含 Rutgers 未公布上课时间安排的课节。')).toBeTruthy();
-    expect(within(row).getByRole('checkbox', { name: '混合' })).toBeTruthy();
-    expect(within(row).getByRole('checkbox', { name: /完整数据显示/u })).toBeTruthy();
+    expect(within(row).getByRole('checkbox', { name: '同步异步混合' })).toBeTruthy();
+    expect(within(row).getByRole('checkbox', { name: /包含数据不完整的记录/u })).toBeTruthy();
   });
 
   it('loads every actual course-number band and stores numeric sorted V3 values', async () => {
@@ -304,7 +308,7 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
   it('implements 09 as a clearable single selection with an independent additive switch', () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole('radio', { name: 'Has prerequisite' }));
-    fireEvent.click(screen.getAllByRole('checkbox', { name: /Complete data display/u })[0] as HTMLElement);
+    fireEvent.click(screen.getAllByRole('checkbox', { name: /Include incomplete data/u })[0] as HTMLElement);
     let state = JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1;
     expect(state.prerequisite).toBe('HAS');
     expect(state.includeIncomplete.prerequisite).toBe(true);
@@ -319,7 +323,7 @@ describe('RC I Round 4 flat 03–18 FilterPanel', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Online' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Hybrid' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Synchronous' }));
-    const incomplete = screen.getAllByRole('checkbox', { name: /Complete data display/u });
+    const incomplete = screen.getAllByRole('checkbox', { name: /Include incomplete data/u });
     fireEvent.click(incomplete[1] as HTMLElement);
     fireEvent.click(incomplete[2] as HTMLElement);
     const state = JSON.parse(screen.getByTestId('state').textContent ?? '{}') as FilterStateV1;
@@ -378,7 +382,7 @@ describe('FilterPanel Core codes are case-insensitive', () => {
     expect(screen.queryByText('Saved incompatible Core codes')).toBeNull();
     expect(screen.queryByRole('button', { name: /Remove incompatible Core code/u })).toBeNull();
     const chip = document.querySelector('[data-filter-chip="FLT-C08"]')?.textContent ?? '';
-    expect(chip).toContain(AHO_LABEL);
+    expect(chip).toContain('AHo');
     expect(chip).not.toMatch(/AHO/u);
     expect(readCodes()).toEqual(['AHO']);
   });
@@ -410,11 +414,21 @@ describe('FilterPanel Core codes are case-insensitive', () => {
     expect((aho as HTMLInputElement).checked).toBe(true);
     expect(screen.queryByText('Saved incompatible Core codes')).toBeNull();
     const chip = document.querySelector('[data-filter-chip="FLT-C08"]')?.textContent ?? '';
-    expect(chip.match(/Arts and Humanities/gu)).toHaveLength(1);
+    expect(chip.match(/AHo/gu)).toHaveLength(1);
     fireEvent.click(aho);
     expect(readCodes()).toEqual(['QQ']);
     fireEvent.click(within(group).getByRole('checkbox', { name: AHO_LABEL }));
     expect(readCodes()).toEqual(['QQ', 'AHO']);
+  });
+
+  it('summarises Core as codes alone so a comma inside a description cannot read as one more code', () => {
+    render(<Harness discovery={CORE_DISCOVERY} initial={coreState(['WCR', 'QQ'])} />);
+    const chip = document.querySelector('[data-filter-chip="FLT-C08"]')?.textContent ?? '';
+    expect(chip).toContain('Any: WCr, QQ');
+    expect(chip).not.toContain('Revision');
+    // The full description still reaches the reader in the option list itself.
+    const group = screen.getByRole('group', { name: 'Published Core codes' });
+    expect(within(group).getByRole('checkbox', { name: 'WCr · Writing and Communication, Revision' })).toBeTruthy();
   });
 
   it('detects incompatible codes by canonical form and removes every case variant at once', () => {

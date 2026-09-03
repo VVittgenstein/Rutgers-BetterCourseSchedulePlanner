@@ -31,8 +31,10 @@ use crate::projection::{ProjectionError, decode_facts};
 /// a different result for identical canonical facts. Version 1 is the v0.1.1
 /// rule (every mode-90 occurrence UNSPECIFIED, heterogeneous sections
 /// UNKNOWN); version 2 derives mode-90 synchronicity from the time facts and
-/// synthesizes MIXED from reliable SYNC+ASYNC sets.
-pub const CATALOG_DERIVATION_VERSION: u32 = 2;
+/// synthesizes MIXED from reliable SYNC+ASYNC sets. Version 3 adds
+/// BY_ARRANGEMENT for a meeting Rutgers published as "hours by arrangement"
+/// that is not online or remote, which version 2 could only call UNKNOWN.
+pub const CATALOG_DERIVATION_VERSION: u32 = 3;
 
 /// The version assumed for a target without a derivation stamp.
 pub const LEGACY_CATALOG_DERIVATION_VERSION: u32 = 1;

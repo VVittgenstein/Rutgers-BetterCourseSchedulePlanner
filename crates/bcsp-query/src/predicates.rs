@@ -2,7 +2,7 @@ use bcsp_contracts::{
     CatalogFieldKnowledge, CatalogFieldPresence, CatalogModality, CatalogPrerequisiteState,
     CatalogRequiredness, CatalogSynchronicity, CourseGroupKey, CreditRangeV1, FilterFieldId,
     FilterMatchV1, FilterSetModeV1, FilterTokenV1, LiveOpenEvidenceV1, LiveOpenStateV1,
-    MatchExplanation, MatchOutcome, MatchReasonCode, MeetingLocationMatchModeV2,
+    MatchExplanation, MatchOutcome, MatchReasonCode,
     NormalizedCourseVariantV1, NormalizedFilterValuesV1, NormalizedOccurrenceV1,
     NormalizedSectionV1, PermissionFilterV1, PrerequisiteFilterV1, UserModalityV3,
     UserSynchronicityV3, course_number_band,
@@ -383,7 +383,12 @@ fn evaluate_synchronicity(
     }
     let field = FilterFieldId::SectionSynchronicity.wire_name();
     match actual {
-        CatalogSynchronicity::Unknown | CatalogSynchronicity::Unspecified => {
+        // BY_ARRANGEMENT is a display value with no filter option behind it, so
+        // it evaluates exactly as UNKNOWN did before it existed: the reader can
+        // still admit these Sections through the include-incomplete switch.
+        CatalogSynchronicity::Unknown
+        | CatalogSynchronicity::Unspecified
+        | CatalogSynchronicity::ByArrangement => {
             PredicateEvaluation::uncertain(field, MatchReasonCode::UnknownValue)
         }
         known => {
@@ -391,7 +396,9 @@ fn evaluate_synchronicity(
                 CatalogSynchronicity::Sync => UserSynchronicityV3::Sync,
                 CatalogSynchronicity::Async => UserSynchronicityV3::Async,
                 CatalogSynchronicity::Mixed => UserSynchronicityV3::Mixed,
-                CatalogSynchronicity::Unspecified | CatalogSynchronicity::Unknown => unreachable!(),
+                CatalogSynchronicity::ByArrangement
+                | CatalogSynchronicity::Unspecified
+                | CatalogSynchronicity::Unknown => unreachable!(),
             };
             bool_result(
                 selected.contains(&selected_value),
@@ -448,10 +455,24 @@ fn admit_filter_evaluation(
     }
 }
 
-/// FLT-S07. `ALL_REQUIRED_MEETINGS` evaluates every meeting the student
-/// attends: required ones and, because the Rutgers feed never states
-/// requiredness and lists no skippable meetings, those of unknown
-/// requiredness too. Only an explicit `OPTIONAL` occurrence is left out.
+/// FLT-S07: every meeting the student has to travel to must be in a selected
+/// location.
+///
+/// Choosing College Avenue states where the student can be, so a Section that
+/// also meets on another campus is excluded rather than admitted on the
+/// strength of its one College Avenue meeting. The Rutgers feed never states
+/// requiredness and lists no skippable meetings, so an occurrence of unknown
+/// requiredness counts exactly like a required one; only an explicit
+/// `OPTIONAL` occurrence is left out.
+///
+/// An online or remote meeting imposes no travel, so it is skipped instead of
+/// being treated as a location the student failed to select -- the same
+/// principle that exempts an asynchronous occurrence from FLT-S06. A Section
+/// whose in-person meetings are all on College Avenue therefore still matches
+/// when it also carries an online component.
+///
+/// `MeetingLocationFilterV2::mode` no longer selects between behaviours; it is
+/// retained so stored filter state keeps deserializing.
 fn evaluate_meeting_location(
     occurrences: Option<&[&NormalizedOccurrenceV1]>,
     selected: &bcsp_contracts::MeetingLocationFilterV2,
@@ -479,30 +500,37 @@ fn evaluate_meeting_location(
             ),
         ])
     };
-    match selected.mode {
-        MeetingLocationMatchModeV2::AnyMeeting => {
-            or_active(occurrences.iter().map(evaluate_occurrence))
-        }
-        MeetingLocationMatchModeV2::AllRequiredMeetings => {
-            let required = occurrences
-                .iter()
-                .filter_map(|occurrence| match occurrence.requiredness {
-                    CatalogRequiredness::Required | CatalogRequiredness::UnknownRequiredness => {
-                        Some(evaluate_occurrence(occurrence))
-                    }
-                    CatalogRequiredness::Optional => None,
-                })
-                .collect::<Vec<_>>();
-            if required.is_empty() {
-                PredicateEvaluation::uncertain(
-                    FilterFieldId::SectionMeetingLocation.wire_name(),
-                    MatchReasonCode::MissingReliableData,
-                )
-            } else {
-                and_all(required)
+    let attended = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.requiredness != CatalogRequiredness::Optional)
+        .collect::<Vec<_>>();
+    let (travelled, remote): (Vec<_>, Vec<_>) = attended
+        .iter()
+        .partition(|occurrence| !imposes_no_travel(occurrence));
+    // Where the student has to be decides it. Only when nothing requires
+    // travel does the Section's own location speak: a wholly online Section
+    // matches a reader who selected ONLINE and no one else.
+    let decisive = if travelled.is_empty() { remote } else { travelled };
+    if decisive.is_empty() {
+        return PredicateEvaluation::uncertain(
+            FilterFieldId::SectionMeetingLocation.wire_name(),
+            MatchReasonCode::MissingReliableData,
+        );
+    }
+    and_all(decisive.into_iter().map(|occurrence| evaluate_occurrence(occurrence)))
+}
+
+/// Whether a meeting can be attended from anywhere, and so says nothing about
+/// where the student has to be.
+fn imposes_no_travel(occurrence: &NormalizedOccurrenceV1) -> bool {
+    matches!(
+        occurrence.modality,
+        CatalogFieldKnowledge::Known {
+            presence: CatalogFieldPresence::Present {
+                value: CatalogModality::Online
             }
         }
-    }
+    )
 }
 
 fn evaluate_permission(

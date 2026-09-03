@@ -860,6 +860,10 @@ export function CourseDetailView({
           </div>
           <OutcomeBadge explanation={course.explanation} />
         </header>
+        {/* Course detail is fetched by key alone, so the Sections below are the
+            course's complete list rather than the ones the search kept. Saying so
+            stops a reader from reading an excluded Section as a filter failure. */}
+        <p className="search-results__note">{i18n.t('result.detail_unfiltered')}</p>
         {course.variants.map((variant, index) => {
           const label = i18n.t('result.offering_label', { number: i18n.formatNumber(index + 1) });
           const headline = variantHeadline(variant.variant, label);
