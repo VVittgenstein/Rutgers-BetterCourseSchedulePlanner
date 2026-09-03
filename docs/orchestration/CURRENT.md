@@ -332,10 +332,12 @@ PUT /api/v1/local/desired-watch
 
 ## 12. 当前仓库检查点
 
-记录日期：2026-09-02。
+记录日期：2026-09-03。
 
 ```text
-当前检出：main（v0.1.4 发布后的编排文档收口）
+当前检出：main（v0.1.5 发布后的编排文档收口）
+v0.1.5 产品源码与轻量 tag：db9a16c5844cf4550ce18b184a0cb5aea9f580ed
+GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.5
 v0.1.4 产品源码与轻量 tag：379d262da288c0d947629f16e6dbc804c451a17c
 GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.4
 v0.1.3 产品源码与轻量 tag：f4117b521aff452717e1b9dde3534d4571b38b76
@@ -351,8 +353,9 @@ Stage 2/3/4/5：均已裁定、串行集成并随 v0.1.1 发布
 v0.1.2：真实使用暴露的筛选、可用性、存储与界面缺陷收口，迁移 0007 + derivation stamp 不可回滚
 v0.1.3：BY_ARRANGEMENT 同步性取值与上课地点单一语义，迁移 0008 不可回滚
 v0.1.4：本地桌面版监看上限 255、批量 desired/telemetry/revalidation 与选择持久化收口；公网/Linux 仍为 9
+v0.1.5：筛选条件按适用组成部分施加约束；同步方式只看线上部分，地点只看需要到场的实体部分
 当前产品源码工作树：无未提交源码；conversation 归档目录保持未跟踪
-v0.1.0/v0.1.1/v0.1.2/v0.1.3：tag/Release/资产保持不可变；v0.1.4 为当前 Latest
+v0.1.0/v0.1.1/v0.1.2/v0.1.3/v0.1.4：tag/Release/资产保持不可变；v0.1.5 为当前 Latest
 ```
 
 恢复时必须重新核实这些值，不得永久假设它们仍然成立。
@@ -432,8 +435,8 @@ v0.1.0/v0.1.1/v0.1.2/v0.1.3：tag/Release/资产保持不可变；v0.1.4 为当�
 
 ## 16. 当前 Parallel Wave
 
-状态：**Parallel Wave 1 与 v0.1.1–v0.1.4 发布均已完成。v0.1.4 收口了本地大批量监看时暴露的
-选择持久化、请求放大和服务锁竞争。Stage 2 → P2 → S4 → S3 evidence 已串行回收；
+状态：**Parallel Wave 1 与 v0.1.1–v0.1.5 发布均已完成。v0.1.4 收口了本地大批量监看时暴露的
+选择持久化、请求放大和服务锁竞争；v0.1.5 收口了条件适用范围。Stage 2 → P2 → S4 → S3 evidence 已串行回收；
 Windows/Linux 同源归档、联合验证与 Linux 600 秒 CORE soak 全部通过。**
 
 Stage 2（已完成）：**S2 提醒生命周期完整收口（同时完成 P1、守住 L1、完成 L2/L3 与通知政策修订）。**
@@ -509,7 +512,7 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 
 ## 19. 变更日志
 
-### 2026-09-03 — 筛选条件按适用组成部分施加约束
+### 2026-09-03 — v0.1.5 已发布，筛选条件按适用组成部分施加约束
 
 - FLT-S04b 只聚合课节的线上/远程组成部分；纯线下课不因同步方式被排除，混合课也不再把
   线下固定时段错误算进线上 `MIXED`；
@@ -519,8 +522,17 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
   不再错误排除这些纯在线结果；另以真实 Hybrid 和纯线下课节验证两个条件的适用范围；
 - 中英文界面补充适用范围和空结果诊断的独立单项测试说明；当前受版本控制的文件中不再保留外部实现
   工具的品牌归因文字，本机未跟踪的工作目录与用户对话归档保持原样；
-- workspace、frontend、Clippy、fmt、Rust architecture/self-tests 与真实 SQLite 隔离实例验证通过；本轮不改
-  公网运行时的 9 个监看上限，也不发布新版本。
+- workspace、frontend 31 文件 476 项、Clippy、fmt、Rust architecture/self-tests 与 release contract
+  self-test 全绿；真实 SQLite 隔离实例与正式 Windows 候选均通过 Chrome 验收，浏览器控制台无错误；
+- 正式 source/tag 为 `db9a16c5844cf4550ce18b184a0cb5aea9f580ed`。Windows 12 文件，SHA-256
+  `f581344b4b90a32afdb8648fa095438d3de0d6407e2efabbc5cfe7685803dbf6`；Linux 22 文件，SHA-256
+  `67dbf3bf64ce5871a49fb32973a15713781bb47746b6095e6764f372b48eb868`；联合门核对 172 个共享组件、
+  10 个前端组件、12 项共享前端能力和相同 source epoch；
+- push 合同 run `33739022752`、Linux 构建 run `33739069267`、tag 合同 run `33739959538` 均通过。
+  GitHub 上传后重新下载两份资产，大小与 SHA-256 全部一致；Release：
+  `https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.5`；
+- 本轮无数据库迁移；本地监看上限仍为 255，公网/Linux 仍为 9。只发布 Linux 包，不连接或部署 Vultr，
+  不改 DNS/UFW/SSH/Caddy/systemd；未重跑 600 秒公网 soak。
 
 ### 2026-09-02 — v0.1.4 已发布，本地 255 个监看与大批量请求放大收口
 
@@ -820,6 +832,7 @@ Active wave: PARALLEL-WAVE-1 COMPLETE
 Accepted/integrated: Stage 2; STAGE-3-R3/P2; STAGE-4-R1/S4; STAGE-5-R3/S3 evidence
 Published v0.1.1 product source/tag: 0988dadeeef2db16bbc2e64bc432125674c60325
 Published v0.1.4 product source/tag: 379d262da288c0d947629f16e6dbc804c451a17c
+Published v0.1.5 product source/tag: db9a16c5844cf4550ce18b184a0cb5aea9f580ed
 Integration order completed: P2 → S4 → S3 evidence
 Integration-only commits: 5efeaa5 (presence sender); 882f230 (architecture feature snapshot)
 Heavy gates: final source push/tag contracts, Windows verifier, Linux verifier, joint release-set and 600s CORE soak PASS
@@ -827,12 +840,14 @@ Windows v0.1.1 release: 12 files; SHA256 a3a23bafdcc42dc3f88d6ad90a0775b92bbdf95
 Linux v0.1.1 release: 22 files; SHA256 77546e4615b148963d2de92f75a0628c3323ae679066b88edfd79ed756b7e2ac
 Windows v0.1.4 release: 12 files; SHA256 005b1f5813f87dab4c9e4aa248ad4808c1a673915a9dc07208c6b7aed358f0fe; Chrome 40/40 and packaged NON_EMPTY_MATERIALIZED PASS
 Linux v0.1.4 release: 22 files; SHA256 104064baac82640e568a14d226014d3bf7fdd779ab5dec061472f5d3e7a4e2f9; public watch limit remains 9
+Windows v0.1.5 release: 12 files; SHA256 f581344b4b90a32afdb8648fa095438d3de0d6407e2efabbc5cfe7685803dbf6; Chrome scoped-filter and packaged NON_EMPTY_MATERIALIZED PASS
+Linux v0.1.5 release: 22 files; SHA256 67dbf3bf64ce5871a49fb32973a15713781bb47746b6095e6764f372b48eb868; public watch limit remains 9
 External gates: P2 Linux/systemd/Caddy 600s CORE PASS; full Rutgers composition and real H8 deployment remain separately authorized
 S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT (CORE evidence PASS; deployment-only evidence pending); Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: NONE — scoped filter fix integrated after validation; a new release, production deployment, or Rutgers composition requires new explicit authorization
+Next authorized action: NONE — v0.1.5 PUBLISHED; production deployment or Rutgers composition requires new explicit authorization
 ```
 
 验收结论只允许使用：
