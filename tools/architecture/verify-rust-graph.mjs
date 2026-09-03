@@ -129,6 +129,7 @@ export const GRAPH_SPEC = Object.freeze({
     dir: 'crates/bcsp-local-user-state',
     kind: 'lib',
     internal: ['bcsp-contracts', 'bcsp-domain'],
+    internalDev: ['bcsp-operational-storage'],
     external: [['rusqlite', NORMAL], ['serde', NORMAL], ['serde_json', NORMAL], ['sha2', NORMAL], ['tempfile', DEV], ['thiserror', NORMAL], ['tracing', NORMAL]],
   },
   'bcsp-local-runtime': {
