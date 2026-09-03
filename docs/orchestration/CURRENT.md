@@ -335,9 +335,10 @@ PUT /api/v1/local/desired-watch
 记录日期：2026-09-02。
 
 ```text
-当前检出：main（v0.1.2 发布后的编排文档收口）
+当前检出：main（v0.1.3 发布后的编排文档收口）
+v0.1.3 产品源码与轻量 tag：f4117b521aff452717e1b9dde3534d4571b38b76
+GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.3
 v0.1.2 产品源码与轻量 tag：76316dd2eedae844bd48fabc75c6b48e343c6d61
-GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.2
 v0.1.1 产品源码与轻量 tag：0988dadeeef2db16bbc2e64bc432125674c60325
 S1 分支：feat/s1-snapshot-gate@a4b35bc（已合入 main）
 M0-M1 实现基线：feat/s2-alert-delivery@a4f8d22
@@ -346,8 +347,9 @@ Claude Stage 2 主交付 head：553371f；R1 lane head：5af49d9
 Codex Stage 2 最终集成 head：6a35c74
 Stage 2/3/4/5：均已裁定、串行集成并随 v0.1.1 发布
 v0.1.2：真实使用暴露的筛选、可用性、存储与界面缺陷收口，迁移 0007 + derivation stamp 不可回滚
+v0.1.3：BY_ARRANGEMENT 同步性取值与上课地点单一语义，迁移 0008 不可回滚
 当前产品源码工作树：无未提交源码；conversation 归档目录保持未跟踪
-v0.1.0/v0.1.1：tag/Release/资产保持不可变；v0.1.2 为当前 Latest
+v0.1.0/v0.1.1/v0.1.2：tag/Release/资产保持不可变；v0.1.3 为当前 Latest
 ```
 
 恢复时必须重新核实这些值，不得永久假设它们仍然成立。
@@ -503,6 +505,43 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-09-02 — v0.1.3 已发布，按 Rutgers 口径命名"时间另行约定"并收紧上课地点
+
+- 用户逐条推敲 v0.1.2 的筛选语义，提出两点：勾"同步 + 异步"应当就是同步与异步的并集，
+  以及"都线下了还有什么未知"。第二问指向真缺陷；
+- 依用户要求核对 Rutgers 官方 Schedule of Classes 的实现（`soc_utils.js`/`soc_app.js`）：
+  `isByArrangementMeetingTime` 判 `baClassHours == "B"`，`isOnlineOrRemoteMeetingTime` 判
+  `campusLocation` 为 `O`/`T`，二者同时成立才显示 "Asynchronous content"，否则显示
+  "Hours by arrangement"。本产品的 `by_arrangement` 判据与官方一致，无需改动；缺陷在另一头：
+  非线上的那一类被归入 `Synchronicity::Unknown`，界面显示"未知"，比官方口径更少信息；
+- 派生 v3 为该类时段引入 `BY_ARRANGEMENT`（reason `OFFICIAL_BY_ARRANGEMENT_ONSITE`）。
+  92026/NB 的 4,575 个"线下 · 未知"课节中 4,461 个取得官方说法，114 个（既有固定时段又有
+  另行约定时段，或时间字段非法）仍为未知；全库 5,979 个时段带上新 reason。该取值不可勾选，
+  在筛选中的行为与原 `UNKNOWN` 完全相同，**不改变任何筛选结果**；
+- 四张目录表的 `synchronicity` CHECK 早于该取值，写入直接触发约束失败。迁移 0008 按 0005 的
+  十二步形式重建 `catalog_sections`/`catalog_occurrences` 与两张 staging 表，仅放宽该 CHECK。
+  迁移账本因此使升级单向：0.1.2 二进制遇到 id=8 会 `UnknownMigration` 失败关闭；
+- FLT-S07 原先只要有一次课命中就放行，选 College Avenue 会返回 78 个还需跑另一实体校区的课节。
+  改为"所有需要到场的上课都必须在所选地点内"，线上/远程时段因不产生通勤要求而跳过（与 FLT-S06
+  跳过异步时段同一原则），完全无需到场的课节按自身地点判定。College Avenue 由 1,592 变为 1,514；
+  "子校区匹配方式"下拉随第二种行为一并移除，`mode` 字段保留仅为让已存筛选状态继续反序列化；
+- 界面文案纠正：可上课时间说明原先陈述的是与引擎相反的量词；核心课程体系条件摘要用逗号拼接
+  含逗号的字典标签（"WCr · Writing and Communication, Revision"）而读作多出一个代码，改为只列代码
+  并本地化 ANY/ALL；"完整数据显示"复选框的字面含义与功能相反，改为"包含数据不完整的记录"；
+  中文 `混合` 同时用于授课方式 HYBRID 与同步方式 MIXED，拆为"线上线下混合"/"同步异步混合"；
+  课程详情接口不接收筛选条件却列出被筛掉的课节并标 MATCH，改为明示本页不应用搜索条件；
+- 语义裁定（产品所有者）：相邻时间段不合并、上课时间待定一律放行、学分保持完全包含——
+  三项均维持现状，理由记于 `docs/design/2026-09-02-filter-semantics-and-by-arrangement.md`；
+- 验证：Rust 全量 852 项、前端 31 文件 459 项、类型检查与双目标构建全过；用户 452 MB 真实数据库
+  副本上迁移 0008 + 派生 v3 重算 5.5 秒 / 6 个 target。Windows 发布门 PASS（12 文件、两次重启、
+  `NON_EMPTY_MATERIALIZED`），archive `fad1ca8f71c230be4a8e0a0511989381f90393ac4b16ee8e192b06082e1cb477`；
+- 发布过程记录一次流程事故：打包门要求检出连未跟踪文件都干净，正确解法是本仓库既有的
+  `git worktree add --detach` 分离检出（v0.1.2 即如此）。本轮先尝试临时移走未跟踪的 conversation
+  归档，且移动命令把 `--untracked-files=all` 列出的**文件**当作**目录**平铺，导致同名文件互相覆盖。
+  已改用分离 worktree 完成打包；6 份归档由仍存的会话转录重建，
+  `rbcsp-design-pr-reviews-d0d9c360` 与 `parallel-stage-release-orchestration-ab0cc48a`
+  因源转录已不在 `~/.claude` 且从未被 git 跟踪而永久丢失。
 
 ### 2026-09-02 — v0.1.2 已发布，真实使用缺陷收口
 
