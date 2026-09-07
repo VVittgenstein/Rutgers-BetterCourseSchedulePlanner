@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -66,7 +66,7 @@ fn sqlite_open_path(path: &Path) -> Cow<'_, Path> {
                 && bytes[1] == b':'
                 && bytes[2] == b'\\'
             {
-                return Cow::Owned(PathBuf::from(rest));
+                return Cow::Owned(std::path::PathBuf::from(rest));
             }
         }
     }
