@@ -535,8 +535,10 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 - Linux 的 Pong 背压测试又暴露了“固定 20,000 个 Ping 必然填满内核缓冲”的夹具假设。
   `9d06cea` 在测试客户端/监听器上显式限定收发缓冲，生产发送逻辑不变；宿主 23 项通过，
   临时移除 Pong timeout 后测试按预期失败，恢复后约 0.5 秒通过。
-- packaging contract 和 S3 CI 已通过；最新 Product verification 运行中：
+- packaging contract 和 S3 CI 已通过；最终 Product verification 在 Linux/Windows 均通过：
   `https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/actions/runs/34106149718`。
+  验证源码为 `9d06cea`，后续只有记录文档；Windows Rust 872/0 failed/1 ignored，Linux Rust
+  871/0 failed/1 ignored。两端 frontend 476、typecheck/build、Clippy 和实际架构门均通过。
 - 实现提交：`4fdbecd`（CI）、`6303c6b`（Rust）、`157baac`（frontend）；审查范围
   `7168ab2..157baac`。导航及证据文档另行提交。
 
@@ -875,7 +877,7 @@ S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT (CORE evidence PASS; deployment-only evidence pending); Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Current request: ARCH-001 and CI follow-ups pushed to origin/main through 9d06cea; remote branches cleaned to main only; product CI run 34106149718 in progress
+Current request: ARCH-001 and CI follow-ups merged/pushed; remote branches cleaned to main only; product CI 34106149718 PASS on Linux and Windows (source 9d06cea)
 Next implementation proposal: Stage B / R04-R06 remains proposed; production deployment or Rutgers composition requires new explicit authorization
 ```
 

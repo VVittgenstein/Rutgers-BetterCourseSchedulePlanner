@@ -343,7 +343,10 @@ Clippy（all-targets/all-features、locked、-D warnings）通过。
 `76896aa` 把 PathBuf 引用限定到实际使用的 Windows 分支，保持运行行为。定向测试分别为 12/12、10/10。
 `9d06cea` 修正 Pong 背压测试对内核默认缓冲大小的假设，只在测试连接两端设置缓冲预算；
 23 项宿主测试通过。临时移除生产 Pong timeout 时原断言失败，恢复后通过，证明拒绝能力仍在。
-packaging contract 和 S3 CI 已通过，最新 Product verification
-[运行中](https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/actions/runs/34106149718)。
+packaging contract 和 S3 CI 已通过，最终 Product verification
+[Linux/Windows 均通过](https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/actions/runs/34106149718)。
+该 run 验证源码 `9d06cea`：Windows Rust 872 passed/1 ignored，Linux Rust 871 passed/1 ignored，
+两端均无失败；frontend 476、类型检查、双目标构建、Clippy 和实际架构门均通过。
+后续提交仅更新记录文档，与此验证源码相比没有产品或测试代码变化。
 远端非 main 分支已清理；未发布新安装包或部署。用户原有未跟踪对话归档保持不变，
 实施日志位于 `%TEMP%/rbcsp-arch-001/`。
