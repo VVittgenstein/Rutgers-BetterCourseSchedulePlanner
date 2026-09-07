@@ -337,8 +337,8 @@ PUT /api/v1/local/desired-watch
 记录日期：2026-09-07。
 
 ```text
-当前检出：codex/architecture-foundation（ARCH-001 本地实现与验证完成）
-ARCH-001 产品/CI 源码 head：157baac；基线：7168ab2；未 push、未发布
+当前检出：main（ARCH-001 已按用户授权合入并推送）
+ARCH-001 产品/CI 源码 head：157baac；基线：7168ab2；1536cd9 已推送 origin/main；未发布新安装包
 v0.1.5 产品源码与轻量 tag：db9a16c5844cf4550ce18b184a0cb5aea9f580ed
 GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.5
 v0.1.4 产品源码与轻量 tag：379d262da288c0d947629f16e6dbc804c451a17c
@@ -525,7 +525,11 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
   退场，rusqlite 的一个测试专用声明移至 dev；补 Linux/Windows 产品 CI 和独立 S3 CI。
 - ARCH-001 本地实现与验证完成：Rust 872/0 failed/1 ignored；frontend 476 + guard 92、
   typecheck/build、S3 168、fmt/Clippy 与 actual/self-test 架构门通过。SQL/wire/产品范围未改。
-- 后续阶段仍为建议，未实施；新 workflow 未推送至 GitHub 执行，未发布或部署。
+- 后续阶段仍为建议，未实施。用户随后授权推送并合入远端 main、删除其余远端分支；
+  `1536cd9` 已快进合入并推送，远端仅保留 main。本地本轮实现分支和对应的已合并 UI 分支已删除；
+  历史审计 worktree 与用户对话归档保持原样。未发布新安装包或部署。
+- 此次 push 的 packaging contract 和 S3 CI 已通过；Product verification 运行中：
+  `https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/actions/runs/34103938012`。
 - 实现提交：`4fdbecd`（CI）、`6303c6b`（Rust）、`157baac`（frontend）；审查范围
   `7168ab2..157baac`。导航及证据文档另行提交。
 
@@ -864,7 +868,7 @@ S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT (CORE evidence PASS; deployment-only evidence pending); Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Current request: ARCH-001 local implementation and verification complete on codex/architecture-foundation; GitHub workflow runs not yet executed
+Current request: ARCH-001 merged and pushed to origin/main at 1536cd9; remote branches cleaned to main only; product CI in progress
 Next implementation proposal: Stage B / R04-R06 remains proposed; production deployment or Rutgers composition requires new explicit authorization
 ```
 

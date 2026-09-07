@@ -302,7 +302,8 @@ node --test tools/architecture/verify-rust-graph.test.mjs tools/architecture/ver
 ## ARCH-001 实施记录
 
 用户在审计后明确批准执行；本次由 Codex 直接实施第一阶段，后续阶段与发布/部署不包含在此次交付中。
-分支：`codex/architecture-foundation`；基线仍为 `7168ab2`。
+实施分支：`codex/architecture-foundation`；基线为 `7168ab2`。随后按用户授权快进合入 main，
+`1536cd9` 已推送远端；实现分支已清理。
 
 实现提交：`4fdbecd`（CI）、`6303c6b`（Rust/依赖/路由测试）、`157baac`（frontend）。
 源码交付范围为 `7168ab2..157baac`；后续文档提交记录导航与本次证据。
@@ -337,5 +338,7 @@ node --test tools/architecture/verify-rust-graph.test.mjs tools/architecture/ver
 Clippy（all-targets/all-features、locked、-D warnings）通过。
 
 新 workflow 的 YAML、触发路径、权限、矩阵、步骤顺序及 Bash 语法已在本机检查。
-本机没有可用 Linux/WSL 环境；新 GitHub workflow 尚未推送执行，不能把本地验证称为远端 CI 成功。
-源码未发布，用户原有未跟踪对话归档保持不变。实施日志位于 `%TEMP%/rbcsp-arch-001/`。
+本机没有可用 Linux/WSL 环境。随后用户授权推送 main：packaging contract 和 S3 CI 已通过，
+Product verification [运行中](https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/actions/runs/34103938012)。
+远端非 main 分支已清理；未发布新安装包或部署。用户原有未跟踪对话归档保持不变，
+实施日志位于 `%TEMP%/rbcsp-arch-001/`。
