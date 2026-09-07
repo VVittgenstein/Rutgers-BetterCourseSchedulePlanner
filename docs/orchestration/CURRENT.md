@@ -338,7 +338,7 @@ PUT /api/v1/local/desired-watch
 
 ```text
 当前检出：main（ARCH-001 已按用户授权合入并推送）
-ARCH-001 主实现 head：157baac；CI 收尾 head：76896aa；基线：7168ab2；均已推送 origin/main；未发布新安装包
+ARCH-001 主实现 head：157baac；CI 收尾 head：9d06cea；基线：7168ab2；均已推送 origin/main；未发布新安装包
 v0.1.5 产品源码与轻量 tag：db9a16c5844cf4550ce18b184a0cb5aea9f580ed
 GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.5
 v0.1.4 产品源码与轻量 tag：379d262da288c0d947629f16e6dbc804c451a17c
@@ -532,8 +532,11 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
   预算设为 15 秒，全部断言和单步 DOM 等待限制保持，定向 12 项通过，后续两平台前端阶段均通过。
 - Linux workspace 随后发现仅供 Windows 分支使用的 PathBuf 无条件导入；`76896aa` 只限定该类型引用，
   不改变路径处理行为。本地定向 10 项、Clippy、架构门通过。
+- Linux 的 Pong 背压测试又暴露了“固定 20,000 个 Ping 必然填满内核缓冲”的夹具假设。
+  `9d06cea` 在测试客户端/监听器上显式限定收发缓冲，生产发送逻辑不变；宿主 23 项通过，
+  临时移除 Pong timeout 后测试按预期失败，恢复后约 0.5 秒通过。
 - packaging contract 和 S3 CI 已通过；最新 Product verification 运行中：
-  `https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/actions/runs/34105002554`。
+  `https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/actions/runs/34106149718`。
 - 实现提交：`4fdbecd`（CI）、`6303c6b`（Rust）、`157baac`（frontend）；审查范围
   `7168ab2..157baac`。导航及证据文档另行提交。
 
@@ -872,7 +875,7 @@ S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT (CORE evidence PASS; deployment-only evidence pending); Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Current request: ARCH-001 and CI follow-ups pushed to origin/main through 76896aa; remote branches cleaned to main only; product CI run 34105002554 in progress
+Current request: ARCH-001 and CI follow-ups pushed to origin/main through 9d06cea; remote branches cleaned to main only; product CI run 34106149718 in progress
 Next implementation proposal: Stage B / R04-R06 remains proposed; production deployment or Rutgers composition requires new explicit authorization
 ```
 
