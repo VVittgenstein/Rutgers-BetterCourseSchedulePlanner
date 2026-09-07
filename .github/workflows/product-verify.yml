@@ -1,0 +1,88 @@
+name: Product verification
+
+on:
+  push:
+    paths:
+      - '.github/workflows/product-verify.yml'
+      - '.node-version'
+      - 'rust-toolchain.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'apps/**'
+      - 'crates/**'
+      - 'frontend/**'
+      - 'tools/architecture/**'
+      - 'packaging/release-inputs.json'
+  pull_request:
+    paths:
+      - '.github/workflows/product-verify.yml'
+      - '.node-version'
+      - 'rust-toolchain.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'apps/**'
+      - 'crates/**'
+      - 'frontend/**'
+      - 'tools/architecture/**'
+      - 'packaging/release-inputs.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  product:
+    name: Product tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the event revision
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Select Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Select npm and install frontend dependencies
+        run: |
+          npm install --global "$(node -p "require('./frontend/package.json').packageManager")"
+          npm --prefix frontend ci
+
+      - name: Select the repository Rust toolchain and components
+        run: rustup show
+
+      - name: Verify Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Verify frontend behavior, types and both embedded targets
+        run: npm --prefix frontend run verify
+
+      - name: Verify Rust behavior
+        run: cargo test --workspace --locked
+
+      - name: Check Rust warnings and all target features
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Verify the actual Rust product boundaries
+        run: |
+          node tools/architecture/verify-rust-graph.mjs
+          node tools/architecture/verify-public-rust-zero-surface.mjs
+
+      - name: Verify Rust boundary rejection cases
+        run: node --test tools/architecture/verify-rust-graph.test.mjs tools/architecture/verify-public-rust-zero-surface.test.mjs

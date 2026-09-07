@@ -1,0 +1,32 @@
+name: Offline cadence verification
+
+on:
+  push:
+    paths:
+      - '.github/workflows/s3-verify.yml'
+      - '.node-version'
+      - 'tools/s3/**'
+  pull_request:
+    paths:
+      - '.github/workflows/s3-verify.yml'
+      - '.node-version'
+      - 'tools/s3/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyzer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Verify the offline analyzer
+        run: node --test tools/s3/test/*.test.mjs
