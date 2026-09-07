@@ -1413,9 +1413,18 @@ mod tests {
         nonce: &str,
         timeout: Duration,
     ) -> Option<TcpStream> {
-        let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
-            return None;
-        };
+        let stream = TcpStream::connect_timeout(&address, timeout).ok()?;
+        upgrade_connected_websocket(stream, path, authority, origin, nonce, timeout)
+    }
+
+    fn upgrade_connected_websocket(
+        mut stream: TcpStream,
+        path: &str,
+        authority: &str,
+        origin: &str,
+        nonce: &str,
+        timeout: Duration,
+    ) -> Option<TcpStream> {
         if stream.set_read_timeout(Some(timeout)).is_err()
             || stream.set_write_timeout(Some(timeout)).is_err()
         {
@@ -2320,9 +2329,14 @@ mod tests {
         extension: Arc<dyn WebSocketExtension>,
         config: BoundedOutboundConfig,
     ) -> (SocketAddr, oneshot::Sender<()>) {
-        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .await
+        // Bound the transport buffers as well as the application queues, so a
+        // non-reading peer creates backpressure on every supported test host.
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_send_buffer_size(8 * 1024).unwrap();
+        socket
+            .bind((std::net::Ipv4Addr::LOCALHOST, 0).into())
             .unwrap();
+        let listener = socket.listen(128).unwrap();
         let address = listener.local_addr().unwrap();
         let router = Router::new().route(
             "/bounded",
@@ -2357,9 +2371,17 @@ mod tests {
     }
 
     async fn bounded_client(address: SocketAddr) -> TcpStream {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.set_recv_buffer_size(8 * 1024).unwrap();
+        let stream = tokio::time::timeout(Duration::from_secs(5), socket.connect(address))
+            .await
+            .expect("bounded client connect deadline")
+            .expect("bounded client connect");
         tokio::task::spawn_blocking(move || {
-            upgraded_websocket(
-                address,
+            let stream = stream.into_std().unwrap();
+            stream.set_nonblocking(false).unwrap();
+            upgrade_connected_websocket(
+                stream,
                 "/bounded",
                 "127.0.0.1",
                 "http://127.0.0.1",
