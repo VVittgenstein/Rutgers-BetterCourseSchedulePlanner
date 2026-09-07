@@ -338,7 +338,7 @@ PUT /api/v1/local/desired-watch
 
 ```text
 当前检出：main（ARCH-001 已按用户授权合入并推送）
-ARCH-001 产品/CI 源码 head：157baac；基线：7168ab2；1536cd9 已推送 origin/main；未发布新安装包
+ARCH-001 主实现 head：157baac；CI 收尾 head：76896aa；基线：7168ab2；均已推送 origin/main；未发布新安装包
 v0.1.5 产品源码与轻量 tag：db9a16c5844cf4550ce18b184a0cb5aea9f580ed
 GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.5
 v0.1.4 产品源码与轻量 tag：379d262da288c0d947629f16e6dbc804c451a17c
@@ -528,8 +528,12 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 - 后续阶段仍为建议，未实施。用户随后授权推送并合入远端 main、删除其余远端分支；
   `1536cd9` 已快进合入并推送，远端仅保留 main。本地本轮实现分支和对应的已合并 UI 分支已删除；
   历史审计 worktree 与用户对话归档保持原样。未发布新安装包或部署。
-- 此次 push 的 packaging contract 和 S3 CI 已通过；Product verification 运行中：
-  `https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/actions/runs/34103938012`。
+- 首次真实 CI 在两平台均暴露一个长流程测试的 5 秒总时限不足；`653f265` 仅将该多页面流程
+  预算设为 15 秒，全部断言和单步 DOM 等待限制保持，定向 12 项通过，后续两平台前端阶段均通过。
+- Linux workspace 随后发现仅供 Windows 分支使用的 PathBuf 无条件导入；`76896aa` 只限定该类型引用，
+  不改变路径处理行为。本地定向 10 项、Clippy、架构门通过。
+- packaging contract 和 S3 CI 已通过；最新 Product verification 运行中：
+  `https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/actions/runs/34105002554`。
 - 实现提交：`4fdbecd`（CI）、`6303c6b`（Rust）、`157baac`（frontend）；审查范围
   `7168ab2..157baac`。导航及证据文档另行提交。
 
@@ -868,7 +872,7 @@ S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT (CORE evidence PASS; deployment-only evidence pending); Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Current request: ARCH-001 merged and pushed to origin/main at 1536cd9; remote branches cleaned to main only; product CI in progress
+Current request: ARCH-001 and CI follow-ups pushed to origin/main through 76896aa; remote branches cleaned to main only; product CI run 34105002554 in progress
 Next implementation proposal: Stage B / R04-R06 remains proposed; production deployment or Rutgers composition requires new explicit authorization
 ```
 
