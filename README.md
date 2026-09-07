@@ -99,6 +99,13 @@ cargo build --release --locked --bin bcsp-server
 
 ## Development
 
+Use [AGENTS.md](AGENTS.md) to locate the implementation and tests for a change.
+
+Source changes run product tests, type checks, both frontend builds, and Rust
+boundary checks on Linux and Windows in `product-verify.yml`. Offline S3 analyzer
+changes run their own suite in `s3-verify.yml`; packaging and deployment checks
+remain in `public-ops.yml`.
+
 Start either frontend target with Vite:
 
 ```bash

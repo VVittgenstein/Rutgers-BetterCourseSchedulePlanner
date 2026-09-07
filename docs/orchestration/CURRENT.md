@@ -1,7 +1,7 @@
 # RBCSP 当前工作总账与 Codex–实现代理协作协议
 
 状态：**ACTIVE — 当前唯一的工作恢复入口**
-最后更新：2026-09-03（America/New_York）
+最后更新：2026-09-07（America/New_York）
 维护者：Codex（orchestrator）
 产品决策者：用户
 实现者：实现代理
@@ -74,8 +74,10 @@ Codex 负责：
 - 为窄修再次同时生成修复任务包和实现任务提示；
 - 管理合并、迁移、打包和发布门。
 
-除非用户明确改变分工，Codex 不编写产品源码。Codex 可以进行只读审计、运行测试、
-创建隔离测试 worktree，并使用审计子代理；这些子代理不得替代实现代理编写产品代码。
+除非用户明确改变分工，Codex 不编写产品源码。2026-09-07 用户在架构审计后明确批准执行，
+本次 ARCH-001 由 Codex 直接实施；此授权限定于第一阶段清理及产品 CI。
+其他任务仍遵循既定分工。Codex 可以进行只读审计、运行测试、创建隔离测试 worktree，
+并使用审计子代理；这些子代理不得替代实现代理编写产品代码。
 
 ### 2.3 实现代理：唯一实现者
 
@@ -332,10 +334,11 @@ PUT /api/v1/local/desired-watch
 
 ## 12. 当前仓库检查点
 
-记录日期：2026-09-03。
+记录日期：2026-09-07。
 
 ```text
-当前检出：main（v0.1.5 发布后的编排文档收口）
+当前检出：codex/architecture-foundation（ARCH-001 本地实现与验证完成）
+ARCH-001 产品/CI 源码 head：157baac；基线：7168ab2；未 push、未发布
 v0.1.5 产品源码与轻量 tag：db9a16c5844cf4550ce18b184a0cb5aea9f580ed
 GitHub Release：https://github.com/VVittgenstein/Rutgers-BetterCourseSchedulePlanner/releases/tag/v0.1.5
 v0.1.4 产品源码与轻量 tag：379d262da288c0d947629f16e6dbc804c451a17c
@@ -354,7 +357,7 @@ v0.1.2：真实使用暴露的筛选、可用性、存储与界面缺陷收口�
 v0.1.3：BY_ARRANGEMENT 同步性取值与上课地点单一语义，迁移 0008 不可回滚
 v0.1.4：本地桌面版监看上限 255、批量 desired/telemetry/revalidation 与选择持久化收口；公网/Linux 仍为 9
 v0.1.5：筛选条件按适用组成部分施加约束；同步方式只看线上部分，地点只看需要到场的实体部分
-当前产品源码工作树：无未提交源码；conversation 归档目录保持未跟踪
+当前产品源码工作树：实现已提交；conversation 归档目录保持未跟踪
 v0.1.0/v0.1.1/v0.1.2/v0.1.3/v0.1.4：tag/Release/资产保持不可变；v0.1.5 为当前 Latest
 ```
 
@@ -511,6 +514,20 @@ Stage 5 — STAGE-5（已完成；结论为零 production change）
 - 不发布迁移已升级但产品路径未闭合的本地构建。
 
 ## 19. 变更日志
+
+### 2026-09-07 — 架构清理审计与渐进式实施建议
+
+- 用户要求遍历代码库，寻找无用代码、低价值测试与不必要包装，并改善 Agent 工作时的定位成本。
+- 基线 `7168ab2`；完成全仓文件/符号/重复片段扫描和热点调用链检查，报告见
+  [架构审计](../design/2026-09-07-agent-friendly-architecture-audit.md)。报告内含第一阶段任务包和可转发提示。
+- 新增根 `AGENTS.md` 导航。用户随后批准执行 ARCH-001，本次由 Codex 直接实施。
+- 分支 `codex/architecture-foundation`：清除旧状态投影及无调用入口、依赖脚手架；23 条无用依赖
+  退场，rusqlite 的一个测试专用声明移至 dev；补 Linux/Windows 产品 CI 和独立 S3 CI。
+- ARCH-001 本地实现与验证完成：Rust 872/0 failed/1 ignored；frontend 476 + guard 92、
+  typecheck/build、S3 168、fmt/Clippy 与 actual/self-test 架构门通过。SQL/wire/产品范围未改。
+- 后续阶段仍为建议，未实施；新 workflow 未推送至 GitHub 执行，未发布或部署。
+- 实现提交：`4fdbecd`（CI）、`6303c6b`（Rust）、`157baac`（frontend）；审查范围
+  `7168ab2..157baac`。导航及证据文档另行提交。
 
 ### 2026-09-03 — v0.1.5 已发布，筛选条件按适用组成部分施加约束
 
@@ -847,7 +864,8 @@ S3 production verdict remains: NO_PRODUCTION_CHANGE / DATA_REQUIRED
 Codex current verdict: Stage 2 ACCEPTED; Stage 3/P2 ACCEPTED_WITH_DEFERRED_DEBT (CORE evidence PASS; deployment-only evidence pending); Stage 4 ACCEPTED; Stage 5 ACCEPTED_WITH_DEFERRED_DEBT / NO_PRODUCTION_CHANGE
 Prior milestone: M0-M1-001-R4/v1 at 75cefb0 — ACCEPTED
 Superseded task: M2-001/v1 — SUPERSEDED BEFORE IMPLEMENTATION
-Next authorized action: NONE — v0.1.5 PUBLISHED; production deployment or Rutgers composition requires new explicit authorization
+Current request: ARCH-001 local implementation and verification complete on codex/architecture-foundation; GitHub workflow runs not yet executed
+Next implementation proposal: Stage B / R04-R06 remains proposed; production deployment or Rutgers composition requires new explicit authorization
 ```
 
 验收结论只允许使用：
