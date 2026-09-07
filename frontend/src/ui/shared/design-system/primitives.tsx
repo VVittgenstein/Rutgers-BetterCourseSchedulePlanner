@@ -1,5 +1,4 @@
 import {
-  useId,
   type ButtonHTMLAttributes,
   type ReactNode,
 } from 'react';
@@ -110,51 +109,4 @@ export function Metric({ detail, label, unit, value }: MetricProps) {
       {detail === undefined ? null : <dd className="bcsp-metric__detail">{detail}</dd>}
     </dl>
   );
-}
-
-export interface FieldRenderProps {
-  readonly controlProps: {
-    readonly 'aria-describedby'?: string;
-    readonly 'aria-errormessage'?: string;
-    readonly 'aria-invalid'?: true;
-    readonly id: string;
-    readonly required?: true;
-  };
-}
-
-export interface FieldFrameProps {
-  readonly children: (props: FieldRenderProps) => ReactNode;
-  readonly error?: ReactNode;
-  readonly helper?: ReactNode;
-  readonly label: ReactNode;
-  readonly required?: boolean;
-}
-
-export function FieldFrame({ children, error, helper, label, required = false }: FieldFrameProps) {
-  const id = useId();
-  const helperId = helper === undefined ? undefined : `${id}-helper`;
-  const errorId = error === undefined ? undefined : `${id}-error`;
-  const describedBy = [helperId, errorId].filter(Boolean).join(' ') || undefined;
-  return (
-    <div className="bcsp-field">
-      <label className="bcsp-field__label" htmlFor={id}>{label}</label>
-      {children({
-        controlProps: {
-          ...(describedBy === undefined ? {} : { 'aria-describedby': describedBy }),
-          ...(errorId === undefined ? {} : {
-            'aria-errormessage': errorId,
-            'aria-invalid': true,
-          }),
-          id,
-          ...(required ? { required: true } : {}),
-        },
-      })}
-      {helper === undefined ? null : <p className="bcsp-field__helper" id={helperId}>{helper}</p>}
-      {error === undefined ? null : <p className="bcsp-field__error" id={errorId}>{error}</p>}
-    </div>
-  );
-}
-
-export function VisuallyHidden({ children }: { readonly children: ReactNode }) {
-  return <span className="bcsp-visually-hidden">{children}</span>;
 }

@@ -233,10 +233,6 @@ export interface DuplicateSavedViewRequest {
   readonly name: string;
 }
 
-export interface PrepareUserDataResetRequest {
-  readonly expectedUserStateRevision: number;
-}
-
 export interface PreparedUserDataReset {
   readonly confirmationToken: TraceId;
   readonly expectedUserStateRevision: number;

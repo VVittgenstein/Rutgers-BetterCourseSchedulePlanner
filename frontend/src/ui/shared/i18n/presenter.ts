@@ -4,7 +4,6 @@ import type {
   CatalogUnknownReason,
   FilterSerializationIssue,
   LiveOpenStateV1,
-  MatchOutcome,
   MatchReasonCode,
   OpenCircuitState,
   OpenEpisodeState,
@@ -13,8 +12,6 @@ import type {
   OpenSchedulerLane,
   OpenState,
   OpenUncertaintyReason,
-  PermissionFilterV1,
-  PrerequisiteFilterV1,
   WatchNotificationMode,
   WeekdayV1,
 } from '../product';
@@ -29,18 +26,6 @@ export const weekdayMessageKeys = {
   SATURDAY: 'filter.option.saturday',
   SUNDAY: 'filter.option.sunday',
 } as const satisfies Readonly<Record<WeekdayV1, MessageKey>>;
-
-export const prerequisiteMessageKeys = {
-  ANY: 'filter.option.any',
-  HAS: 'filter.option.has_prerequisite',
-  NONE_REPORTED: 'filter.option.none_reported',
-} as const satisfies Readonly<Record<PrerequisiteFilterV1, MessageKey>>;
-
-export const permissionMessageKeys = {
-  ANY: 'filter.option.any',
-  REQUIRED: 'filter.option.required',
-  NOT_REQUIRED: 'filter.option.not_required',
-} as const satisfies Readonly<Record<PermissionFilterV1, MessageKey>>;
 
 export const openStateMessageKeys = {
   OPEN: 'open.state.open',
@@ -75,12 +60,6 @@ export const catalogUnknownReasonMessageKeys = {
   SOURCE_UNAVAILABLE: 'catalog.unknown.source_unavailable',
   CONFLICTING_EVIDENCE: 'catalog.unknown.conflicting_evidence',
 } as const satisfies Readonly<Record<CatalogUnknownReason, MessageKey>>;
-
-export const matchOutcomeMessageKeys = {
-  MATCH: 'match.outcome.match',
-  UNCERTAIN: 'match.outcome.uncertain',
-  NO_MATCH: 'match.outcome.no_match',
-} as const satisfies Readonly<Record<MatchOutcome, MessageKey>>;
 
 export const matchReasonMessageKeys = {
   KNOWN_MISMATCH: 'match.reason.known_mismatch',

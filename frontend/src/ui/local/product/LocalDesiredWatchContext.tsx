@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 
 import type { WatchIntentPort } from '../../shared/watch';
 
@@ -21,9 +21,8 @@ export function LocalDesiredWatchProvider({
   readonly children: ReactNode;
   readonly watchIntent: WatchIntentPort;
 }) {
-  const value = useMemo(() => watchIntent, [watchIntent]);
   return (
-    <LocalWatchIntentContext.Provider value={value}>
+    <LocalWatchIntentContext.Provider value={watchIntent}>
       {children}
     </LocalWatchIntentContext.Provider>
   );

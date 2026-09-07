@@ -30,7 +30,7 @@ import type {
   WatchStartItemV1,
   WsServerEnvelope,
 } from '../product';
-import { ProductClientError, WATCH_CONTACT_STALE_MILLISECONDS } from '../product';
+import { ProductClientError } from '../product';
 import {
   WatchAudioController,
   type WatchAudioUnlockResult,

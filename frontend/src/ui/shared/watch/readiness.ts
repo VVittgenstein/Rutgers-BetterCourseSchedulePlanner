@@ -22,14 +22,6 @@ export type WatchReadinessRing =
   /** ⑤ The user has not silenced it. */
   | 'SOUND';
 
-export const WATCH_READINESS_RINGS: readonly WatchReadinessRing[] = [
-  'CONNECTION',
-  'ARMED',
-  'AUDIO',
-  'DELIVERY',
-  'SOUND',
-];
-
 export type WatchReadinessLevel =
   /** Every ring holds. */
   | 'READY'
