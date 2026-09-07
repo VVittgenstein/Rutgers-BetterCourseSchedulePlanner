@@ -467,5 +467,7 @@ describe('search focus continuity', () => {
     expect(screen.getByRole('button', { name: 'Toggle Section disclosure' })
       .getAttribute('aria-expanded')).toBe('true');
     expect(searchCourses).toHaveBeenCalledTimes(3);
-  });
+    // Four page round-trips plus failure, pagination, and detail recovery can
+    // exceed Vitest's 5s default on CI. Individual DOM waits keep their bounds.
+  }, 15_000);
 });
