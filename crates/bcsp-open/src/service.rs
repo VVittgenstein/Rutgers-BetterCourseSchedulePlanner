@@ -19,7 +19,7 @@ use bcsp_operational_storage::{
 use bcsp_rutgers_client::{
     OpenResponseMetadata, OpenSectionsError, OpenSectionsFailure, OpenSectionsRequest,
     OpenSectionsResponse, RedirectScope, RetryAfterHeader, RetryAfterValue,
-    RutgersOpenSectionsClient, canonical_open_set_sha256,
+    canonical_open_set_sha256,
 };
 use jiff::{Timestamp, tz::TimeZone};
 use thiserror::Error;
@@ -135,15 +135,6 @@ impl OpenPullPersistence for OperationalStorage {
 
 pub trait OpenPullClock {
     fn now(&mut self) -> OffsetDateTime;
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemOpenPullClock;
-
-impl OpenPullClock for SystemOpenPullClock {
-    fn now(&mut self) -> OffsetDateTime {
-        OffsetDateTime::now_utc()
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -745,27 +736,6 @@ where
             reconcile: None,
             observations: Vec::new(),
         })
-    }
-}
-
-impl SharedOpenService<'_, OperationalStorage> {
-    pub async fn execute_official<W>(
-        &mut self,
-        command: OpenPullCommand,
-        client: &RutgersOpenSectionsClient,
-        current_watched_sections: W,
-    ) -> Result<OpenPullExecution, SharedOpenServiceError>
-    where
-        W: FnOnce(&TermCampusKey) -> Vec<SectionKey>,
-    {
-        let mut clock = SystemOpenPullClock;
-        self.execute_with(
-            command,
-            &mut clock,
-            |request| async move { client.fetch(&request).await },
-            current_watched_sections,
-        )
-        .await
     }
 }
 

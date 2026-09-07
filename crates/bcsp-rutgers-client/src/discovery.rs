@@ -297,13 +297,6 @@ impl DiscoverySnapshot {
         Self::try_from_bundle(vec![DiscoverySourceInput::selector(raw, provenance)])
     }
 
-    pub fn try_from_bootstrap(
-        raw: RawDiscoveryDocument,
-        provenance: SourceProvenance,
-    ) -> Result<Self, DiscoveryError> {
-        Self::try_from_bundle(vec![DiscoverySourceInput::bootstrap(raw, provenance)])
-    }
-
     pub fn try_from_bundle(inputs: Vec<DiscoverySourceInput>) -> Result<Self, DiscoveryError> {
         if inputs.is_empty() {
             return Err(DiscoveryError::EmptySourceBundle);

@@ -430,13 +430,6 @@ fn secondary_route_path_rejection(path: &str) -> Option<SecondaryRoutePathReject
     None
 }
 
-pub async fn spawn_loopback_server(
-    extension: Arc<dyn RouteExtension>,
-    nonce: SessionNonce,
-) -> Result<LoopbackServer, LoopbackServerError> {
-    spawn_loopback_server_internal(extension, None, Vec::new(), nonce).await
-}
-
 pub async fn spawn_loopback_server_with_socket(
     extension: Arc<dyn RouteExtension>,
     socket: Arc<dyn WebSocketExtension>,

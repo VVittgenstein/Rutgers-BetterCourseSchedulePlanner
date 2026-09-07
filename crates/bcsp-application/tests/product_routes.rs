@@ -27,14 +27,15 @@ use bcsp_contracts::{
     OpenSectionStatusRequestV1, OpenSectionStatusV1, OpenState, OpenStatusRequestV1, PageRequestV1,
     QUERY_CONTRACT_VERSION, SectionDetailRequestV1, SectionDetailResponseV1, SectionKey,
     SectionQueryRequestV1, SectionQueryResponseV1, SectionSortV1, ServiceLevelV1,
-    ServiceOperationStageV2, ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceStatusV2,
-    ServiceTargetErrorV2, ServiceTermPublicationV2, ServiceWorkStateV2, TermCampusKey, TermId,
-    TraceId,
+    ServiceOperationStageV2, ServiceRuntimeV1, ServiceSnapshotAvailabilityV2, ServiceStatusV1,
+    ServiceStatusV2, ServiceTargetErrorV2, ServiceTermPublicationV2, ServiceWorkStateV2,
+    TermCampusKey, TermId, TraceId,
 };
 use bcsp_open::{GeneralOpenInterval, OpenCounterAudience};
 use bcsp_operational_storage::{
-    BeginOpenPullAttemptCommand, EmptySnapshotDecision, FinishOpenPullSuccessCommand,
-    OpenCacheStatus, OpenHttpAuditMetadata, OpenRequestLane, OperationalStorage, PublishOutcome,
+    BeginOpenPullAttemptCommand, EmptySnapshotDecision, FinishOpenPullFailureCommand,
+    FinishOpenPullSuccessCommand, OpenCacheStatus, OpenHttpAuditMetadata, OpenRequestLane,
+    OperationalStorage, PublishOutcome,
 };
 use bcsp_rutgers_client::{
     DiscoverySnapshot, DiscoverySourceInput, SourceProvenance, decode_catalog_payload,
@@ -798,6 +799,191 @@ fn batch_status_projects_once_and_keeps_valid_sections_when_one_saved_key_is_mis
     assert_eq!(status.sections.len(), 1);
     assert_eq!(status.sections[0].section_key, fixture.section);
     assert_eq!(status.sections[0].state, OpenState::Open);
+}
+
+#[test]
+fn service_status_v2_requires_complete_snapshots_before_reporting_ready() {
+    let directory = TempDir::new().expect("temporary directory");
+    let storage = Arc::new(Mutex::new(
+        OperationalStorage::open(directory.path().join("status-readiness.sqlite"))
+            .expect("file-backed storage"),
+    ));
+    let policy = RefreshPolicy::try_new(Duration::from_secs(600), GeneralOpenInterval::public())
+        .expect("public policy");
+    let routes = SharedProductRoutes::new(
+        Arc::clone(&storage),
+        SharedRuntimeContext::new(
+            OpenCounterAudience::Public,
+            FixedClock(OffsetDateTime::from_unix_timestamp(WINDOW_NOW_UNIX).expect("clock")),
+            FixedRefreshPolicyProvider::new(policy),
+        ),
+        Arc::new(OpenRuntimeSnapshotRegistry::default()),
+    )
+    .with_service_status(Arc::new(ServiceStatusRegistry::new(
+        ServiceRuntimeV1::Public,
+    )));
+
+    let initial: ServiceStatusV2 = get(&routes, PRODUCT_SERVICE_STATUS_PATH);
+    assert_eq!(initial.level, ServiceLevelV1::Initializing);
+    assert!(initial.targets.iter().all(|target| !target.usable));
+
+    for (position, target) in initial.targets.iter().enumerate() {
+        let suffix = 10 + u8::try_from(position).expect("six automatic targets") * 3;
+        let section = SectionKey::new(
+            target.target.term().clone(),
+            target.target.campus().clone(),
+            "10001".parse().expect("index"),
+        );
+        let version = {
+            let mut storage = storage.lock().expect("storage");
+            publish_catalog_subject(
+                &mut storage,
+                &target.target,
+                "198",
+                "Computer Science",
+                suffix,
+                STARTED,
+                COMPLETED,
+            )
+        };
+        let catalog_only: ServiceStatusV2 = get(&routes, PRODUCT_SERVICE_STATUS_PATH);
+        let pending = catalog_only
+            .targets
+            .iter()
+            .find(|item| item.target == target.target)
+            .expect("catalog-only target");
+        assert_eq!(
+            pending.snapshot_availability,
+            ServiceSnapshotAvailabilityV2::NoCompleteSnapshot
+        );
+        assert!(
+            !pending.usable,
+            "a Catalog without Open is not a complete snapshot"
+        );
+        assert_ne!(catalog_only.level, ServiceLevelV1::Ready);
+
+        publish_open_with_suffix(
+            &mut storage.lock().expect("storage"),
+            &target.target,
+            &section,
+            version,
+            suffix + 1,
+            suffix + 2,
+        );
+        let completed: ServiceStatusV2 = get(&routes, PRODUCT_SERVICE_STATUS_PATH);
+        assert_eq!(
+            completed.level,
+            if position + 1 == initial.targets.len() {
+                ServiceLevelV1::Ready
+            } else {
+                ServiceLevelV1::PartiallyReady
+            },
+        );
+    }
+
+    routes
+        .service_status_registry()
+        .publish_target_activity(TargetWorkActivity {
+            target: initial.targets[0].target.clone(),
+            work_state: ServiceWorkStateV2::RetryWait,
+            stage: Some(ServiceOperationStageV2::OpenFetch),
+            started_at: None,
+            next_retry_at: Some(
+                OffsetDateTime::from_unix_timestamp(WINDOW_NOW_UNIX + 30).expect("retry"),
+            ),
+            error: None,
+        });
+    let retrying: ServiceStatusV2 = get(&routes, PRODUCT_SERVICE_STATUS_PATH);
+    assert_eq!(retrying.level, ServiceLevelV1::Degraded);
+    assert!(retrying.targets.iter().all(|target| target.usable));
+}
+
+#[test]
+fn service_status_keeps_the_v1_error_payload_when_storage_is_unavailable() {
+    let fixture = fixture();
+    let storage = Arc::clone(&fixture.storage);
+    let poisoned = std::thread::spawn(move || {
+        let _guard = storage.lock().expect("storage");
+        panic!("simulate a failed storage owner");
+    });
+    assert!(poisoned.join().is_err());
+
+    let status: ServiceStatusV1 = get(&fixture.routes, PRODUCT_SERVICE_STATUS_PATH);
+    assert_eq!(status.contract_version, 1);
+    assert_eq!(status.level, ServiceLevelV1::Error);
+    assert!(status.targets.is_empty());
+    assert_eq!(status.issues.len(), 1);
+    assert_eq!(status.issues[0].code, "SERVICE_STATUS_STORAGE_UNAVAILABLE");
+}
+
+#[test]
+fn service_status_v2_reports_the_latest_open_failure_and_clears_it_after_success() {
+    let fixture = fixture();
+    {
+        let mut storage = fixture.storage.lock().expect("storage");
+        storage
+            .begin_open_pull_attempt(&BeginOpenPullAttemptCommand {
+                attempt_id: trace(30),
+                run_id: trace(31),
+                target: fixture.target.clone(),
+                captured_catalog_content_version: fixture.content_version,
+                rutgers_day: "2026-07-17".to_owned(),
+                started_at: STARTED.to_owned(),
+                lane: OpenRequestLane::ActiveWatch,
+                requested_interval_seconds: Some(30),
+                effective_interval_seconds: Some(10),
+                schedule_lag_ms: None,
+            })
+            .expect("begin failing pull");
+        storage
+            .finish_open_pull_failure(&FinishOpenPullFailureCommand {
+                attempt_id: trace(30),
+                completed_at: COMPLETED.to_owned(),
+                http: OpenHttpAuditMetadata {
+                    http_status: Some(503),
+                    content_type: Some("application/json".to_owned()),
+                    ..OpenHttpAuditMetadata::default()
+                },
+                error_code: "OPEN_UPSTREAM_TRANSPORT".to_owned(),
+                diagnostic_token: None,
+            })
+            .expect("record failing pull");
+    }
+
+    let failed: ServiceStatusV2 = get(&fixture.routes, PRODUCT_SERVICE_STATUS_PATH);
+    let target = failed
+        .targets
+        .iter()
+        .find(|target| target.target == fixture.target)
+        .expect("target after failure");
+    assert!(
+        target.usable,
+        "a failed refresh retains the last complete snapshot"
+    );
+    let error = target.error.as_ref().expect("latest failure is visible");
+    assert_eq!(error.code, "OPEN_UPSTREAM_TRANSPORT");
+    assert_eq!(error.http_status, Some(503));
+    assert_eq!(error.trace_id, Some(trace(30)));
+
+    publish_open_with_suffix(
+        &mut fixture.storage.lock().expect("storage"),
+        &fixture.target,
+        &fixture.section,
+        fixture.content_version,
+        32,
+        33,
+    );
+    let recovered: ServiceStatusV2 = get(&fixture.routes, PRODUCT_SERVICE_STATUS_PATH);
+    let target = recovered
+        .targets
+        .iter()
+        .find(|target| target.target == fixture.target)
+        .expect("target after recovery");
+    assert!(target.usable);
+    assert!(
+        target.error.is_none(),
+        "a historical failure is not the current failure"
+    );
 }
 
 #[test]

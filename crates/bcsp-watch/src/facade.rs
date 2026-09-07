@@ -258,21 +258,6 @@ where
         })
     }
 
-    pub fn start_with_current<F>(
-        &mut self,
-        connection_id: TraceId,
-        message_id: TraceId,
-        items: WatchStartItemsV1,
-        mut current_observation: F,
-    ) -> Result<WatchStartOutcome, WatchManagerError>
-    where
-        F: FnMut(&SectionKey) -> Option<OpenObservationV1>,
-    {
-        self.start_with_admission(connection_id, message_id, items, |section| {
-            WatchStartAdmission::admitted(current_observation(section))
-        })
-    }
-
     pub fn start_with_admission<F>(
         &mut self,
         connection_id: TraceId,

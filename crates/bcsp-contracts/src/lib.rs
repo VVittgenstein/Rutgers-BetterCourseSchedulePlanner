@@ -131,13 +131,3 @@ pub use watch::{
     WatchStartRejectionReason, WatchStartResultError, WatchStartResultV1, WatchStopReason,
     WatchStoppedV1,
 };
-
-pub const PACKAGE_BOUNDARY: &str = "bcsp-contracts";
-
-mod dependency_contract {
-    use serde as _;
-    use serde_json as _;
-    use thiserror as _;
-    use time as _;
-    use uuid as _;
-}

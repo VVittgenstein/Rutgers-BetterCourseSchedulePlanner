@@ -54,7 +54,6 @@ pub use model::{
 };
 pub use store::PersonalStateStore;
 
-pub const PACKAGE_BOUNDARY: &str = "bcsp-local-user-state";
 /// Upper bound SQLite keeps the `-wal` file at after a checkpoint that resets
 /// the log. Set on every writer connection this crate opens, because the
 /// connection that resets the log is the one that truncates the file.
@@ -107,21 +106,3 @@ pub const DESIRED_WATCH_RECEIPT_ROTATION_THRESHOLD: u64 = MAX_DESIRED_WATCH_RECE
 /// writer rather than left to a reconciler that might miss a round.
 pub const MAX_DESIRED_WATCH_AUTHORITY_ROWS: u64 =
     MAX_DESIRED_WATCH_TOMBSTONES + MAX_DESIRED_WATCHES as u64;
-
-pub fn boundary_marker() -> &'static str {
-    let _ = (
-        bcsp_contracts::PACKAGE_BOUNDARY,
-        bcsp_domain::PACKAGE_BOUNDARY,
-    );
-    PACKAGE_BOUNDARY
-}
-
-mod dependency_contract {
-    use tracing as _;
-}
-
-#[cfg(test)]
-mod dev_dependency_contract {
-    use bcsp_operational_storage as _;
-    use tempfile as _;
-}

@@ -3,8 +3,6 @@
 #![forbid(unsafe_code)]
 #![deny(warnings)]
 
-pub const PACKAGE_BOUNDARY: &str = "bcsp-application";
-
 mod discovery_runtime;
 mod host;
 mod official_refresh_runtime;
@@ -39,7 +37,7 @@ pub use host::{
     OutboundByteBudget, OutboundSendError, OutboundSender, RequestMethod, RouteExtension,
     SHARED_WATCH_SUBPROTOCOL, SecondaryRoutePathRejection, SecondaryWebSocketRoute, SessionNonce,
     WebSocketExtension, serve_websocket, serve_websocket_with_bounded_outbound,
-    shared_websocket_upgrade, spawn_loopback_server, spawn_loopback_server_with_socket,
+    shared_websocket_upgrade, spawn_loopback_server_with_socket,
     spawn_loopback_server_with_sockets,
 };
 pub use official_refresh_runtime::{
@@ -100,27 +98,3 @@ pub use watch_socket::{
     NoopWatchDispatchSink, SharedWatchSocket, SystemWatchClock, WATCH_APP_PING_INTERVAL,
     WatchAdmissionSource, WatchDispatchSink,
 };
-
-pub fn boundary_marker() -> &'static str {
-    let _ = (
-        bcsp_catalog::PACKAGE_BOUNDARY,
-        bcsp_contracts::PACKAGE_BOUNDARY,
-        bcsp_domain::PACKAGE_BOUNDARY,
-        bcsp_open::PACKAGE_BOUNDARY,
-        bcsp_operational_storage::PACKAGE_BOUNDARY,
-        bcsp_query::PACKAGE_BOUNDARY,
-        bcsp_rutgers_client::PACKAGE_BOUNDARY,
-        bcsp_watch::PACKAGE_BOUNDARY,
-    );
-    PACKAGE_BOUNDARY
-}
-
-mod dependency_contract {
-    use axum as _;
-    use rusqlite as _;
-    use serde_json as _;
-    use tokio as _;
-    use tower as _;
-    use tower_http as _;
-    use tracing as _;
-}

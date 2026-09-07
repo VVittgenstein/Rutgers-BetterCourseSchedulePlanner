@@ -11,8 +11,6 @@ path = "src/lib.rs"
 
 [dependencies]
 bcsp-contracts = { version = "=0.1.5", path = "../bcsp-contracts" }
-bcsp-domain = { version = "=0.1.5", path = "../bcsp-domain" }
-serde.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tracing.workspace = true

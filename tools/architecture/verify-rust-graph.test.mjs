@@ -133,11 +133,9 @@ assert.deepEqual(GRAPH_SPEC['bcsp-catalog'].external, [
   ['tempfile', 'dev'],
   ['thiserror', 'normal'],
   ['time', 'normal'],
-  ['tokio', 'normal'],
   ['tracing', 'normal'],
 ]);
 assert.deepEqual(GRAPH_SPEC['bcsp-operational-storage'].external, [
-  ['include_dir', 'normal'],
   ['rusqlite', 'normal', ['bundled', 'cache']],
   ['rusqlite', 'dev', ['bundled', 'hooks']],
   ['serde', 'normal'],
@@ -146,11 +144,9 @@ assert.deepEqual(GRAPH_SPEC['bcsp-operational-storage'].external, [
   ['tempfile', 'dev'],
   ['thiserror', 'normal'],
   ['time', 'normal'],
-  ['tracing', 'normal'],
 ]);
 assert.deepEqual(GRAPH_SPEC['bcsp-query'].external, [
   ['proptest', 'dev'],
-  ['serde', 'normal'],
   ['thiserror', 'normal'],
   ['time', 'normal'],
   ['tracing', 'normal'],
@@ -166,7 +162,6 @@ assert.deepEqual(GRAPH_SPEC['bcsp-application'].external, [
   ['time', 'normal'],
   ['tokio', 'normal'],
   ['tower', 'normal'],
-  ['tower-http', 'normal'],
   ['tracing', 'normal'],
   ['tracing-subscriber', 'dev'],
 ]);

@@ -34,23 +34,3 @@ pub use status::{
     SharedPublicOperationalStore, SystemPublicClock,
 };
 pub use watch::create_public_watch_socket;
-
-pub const PACKAGE_BOUNDARY: &str = "bcsp-public-runtime";
-
-pub fn boundary_marker() -> &'static str {
-    let _ = (
-        bcsp_application::PACKAGE_BOUNDARY,
-        bcsp_contracts::PACKAGE_BOUNDARY,
-        bcsp_open::PACKAGE_BOUNDARY,
-        bcsp_operational_storage::PACKAGE_BOUNDARY,
-        bcsp_public_operations::PACKAGE_BOUNDARY,
-        bcsp_watch::PACKAGE_BOUNDARY,
-    );
-    PACKAGE_BOUNDARY
-}
-
-mod dependency_contract {
-    use include_dir as _;
-    use tracing as _;
-    use tracing_subscriber as _;
-}

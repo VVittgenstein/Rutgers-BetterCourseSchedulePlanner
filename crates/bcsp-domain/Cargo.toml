@@ -12,10 +12,8 @@ path = "src/lib.rs"
 [dependencies]
 bcsp-contracts = { version = "=0.1.5", path = "../bcsp-contracts" }
 jiff.workspace = true
-serde.workspace = true
 thiserror.workspace = true
 time.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

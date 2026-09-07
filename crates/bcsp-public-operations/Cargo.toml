@@ -11,9 +11,8 @@ path = "src/lib.rs"
 
 [dependencies]
 bcsp-operational-storage = { version = "=0.1.5", path = "../bcsp-operational-storage" }
-rusqlite.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile.workspace = true

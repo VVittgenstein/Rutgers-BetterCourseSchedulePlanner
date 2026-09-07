@@ -225,26 +225,6 @@ impl PersonalStateStore {
         })
     }
 
-    pub fn remove_selected_section(
-        &mut self,
-        expected_state_revision: UserStateRevision,
-        section: &SectionKey,
-    ) -> PersonalStateResult<bool> {
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require_user_state_revision(&transaction, expected_state_revision)?;
-        let mut selected = load_selected_sections(&transaction)?;
-        let original_len = selected.len();
-        selected.retain(|value| value != section);
-        if selected.len() == original_len {
-            return Ok(false);
-        }
-        replace_selection(&transaction, &selected)?;
-        transaction.commit()?;
-        Ok(true)
-    }
-
     /// The desired-watch intents a bootstrap should show, ordered by section
     /// key. Tombstones (`desired = 0`) are excluded, so this stays the exact
     /// shape protocol v1 already ships -- the authority state below is not on

@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use bcsp_operational_storage::{OpenAttemptCounters, OperationalStorage, StorageError};
 use thiserror::Error;
 
-pub const PACKAGE_BOUNDARY: &str = "bcsp-public-operations";
 pub const PUBLIC_STATE_ROOT: &str = "/var/lib/bcsp";
 pub const PUBLIC_DATABASE_FILENAME: &str = "rbcsp.sqlite";
 pub const PUBLIC_DATABASE_PATH: &str = "/var/lib/bcsp/rbcsp.sqlite";
@@ -122,14 +121,4 @@ impl PublicOperationsError {
             Self::ReadServiceState { .. } => "PUBLIC_OPERATIONAL_STATE_UNAVAILABLE",
         }
     }
-}
-
-pub fn boundary_marker() -> &'static str {
-    let _ = bcsp_operational_storage::PACKAGE_BOUNDARY;
-    PACKAGE_BOUNDARY
-}
-
-mod dependency_contract {
-    use rusqlite as _;
-    use tracing as _;
 }

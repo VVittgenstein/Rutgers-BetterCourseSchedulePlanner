@@ -11,11 +11,9 @@ path = "src/lib.rs"
 
 [dependencies]
 bcsp-contracts = { version = "=0.1.5", path = "../bcsp-contracts" }
-bcsp-domain = { version = "=0.1.5", path = "../bcsp-domain" }
 bcsp-operational-storage = { version = "=0.1.5", path = "../bcsp-operational-storage" }
 bcsp-rutgers-client = { version = "=0.1.5", path = "../bcsp-rutgers-client" }
 jiff.workspace = true
-serde.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
