@@ -4,7 +4,8 @@ Evidence-only tooling for Stage 5 / S3: it re-analyzes previously captured
 openSections observation data to characterize the origin's rebuild cadence
 (30 s vs 60 s grid hypotheses) and evaluates the A4 GO gate. It implements **no
 production feature** (no GridAnchor, no RebuildProfile); its only outputs are
-the two committed evidence documents under `docs/evidence/`.
+two evidence documents, written to the paths given by `--out-json` and
+`--out-md`.
 
 - **Zero dependencies**: `node:` builtins only (`node:fs`, `node:sqlite`,
   `node:crypto`, …). Node ≥ 24 (uses `node:sqlite` `DatabaseSync`).
@@ -23,9 +24,9 @@ node tools/s3/rebuild-profile-analyzer.mjs \
   --out-md   docs/evidence/S3-REBUILD-PROFILE.md
 ```
 
-`<DATA_ROOT>` is `data/open-sections-repro` under the repo root — local,
-gitignored, never committed (only the derived evidence documents under
-`docs/evidence/` are committed). Exit codes: `0`
+`<DATA_ROOT>` is `data/open-sections-repro` under the repo root. It is local,
+gitignored and never committed. The derived evidence documents are not
+published in this repository. Exit codes: `0`
 analysis completed (any verdict), `1` usage error, `2` fail-closed structural
 error (`E_INPUT_MISSING`, `E_NDJSON_PARSE`, `E_SCHEMA_VERSION`,
 `E_MISSING_FIELD`, `E_SEQUENCE_ORDER`, `E_TIME_PARSE`, `E_TIME_REGRESSION`,

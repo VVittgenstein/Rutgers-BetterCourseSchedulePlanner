@@ -1,0 +1,17 @@
+.gitattributes
+.gitignore
+.githooks/
+.github/
+.node-version
+Cargo.lock
+Cargo.toml
+LICENSE
+README.md
+apps/
+crates/
+deny.toml
+deploy/
+frontend/
+packaging/
+rust-toolchain.toml
+tools/

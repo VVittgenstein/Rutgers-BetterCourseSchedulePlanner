@@ -99,7 +99,12 @@ cargo build --release --locked --bin bcsp-server
 
 ## Development
 
-Use [AGENTS.md](AGENTS.md) to locate the implementation and tests for a change.
+The source tree above shows where each area lives. Tests sit next to the code
+they cover: Rust tests in the crates' `src/` and `tests/` folders, frontend
+tests in `frontend/tests/`, and tool, deployment and packaging tests in
+`tools/s3/test/`, `deploy/public/tests/` and `packaging/tests/`. Guard
+self-tests are the `*.test.mjs` files under `frontend/tools/` and
+`tools/architecture/`.
 
 Source changes run product tests, type checks, both frontend builds, and Rust
 boundary checks on Linux and Windows in `product-verify.yml`. Offline S3 analyzer

@@ -8,3 +8,10 @@
 /.github/workflows/*.yml text eol=lf
 /LICENSE text eol=lf
 *.sql text eol=lf
+
+.githooks/pre-push text eol=lf
+.githooks/public-paths.txt text eol=lf
+
+# Preserve archived conversations and reference originals byte-for-byte.
+docs/** -text
+references/items/** -text

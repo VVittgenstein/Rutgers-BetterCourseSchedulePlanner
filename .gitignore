@@ -40,12 +40,14 @@ logs/
 *.zip
 
 # Local artifacts retained outside the product source tree
+/archive/.secrets/
+/archive/data/
+/archive/HumanTest/
+/archive/configs/
+/archive/scripts/poller_checkpoint.json
 /HumanTest/
-/chat-log-codex-*.md
 /configs/
 /data/
-/project-governance/
-/scripts/
 
 # Local agent and editor state
 .worktrees/
